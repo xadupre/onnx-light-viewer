@@ -42,6 +42,14 @@ checks JavaScript/C++ formatting on pull requests and pushes to ``main``.
 Its documentation job also builds Sphinx with warnings treated as errors.
 Results appear in the PR's **Checks** tab and the repository's **Actions** tab.
 
+Releases
+--------
+
+Push a new tag to create a GitHub release automatically. The **Release** workflow
+runs for all tag names and generates release notes from the repository history.
+GitHub includes the tagged source code as ZIP and tar.gz archives; the workflow
+does not publish to the VS Code Marketplace or attach compiled extensions.
+
 Test models
 -----------
 
