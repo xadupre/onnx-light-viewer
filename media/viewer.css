@@ -249,6 +249,9 @@ a:focus-visible {
 #graph.selecting {
   cursor: crosshair;
 }
+#graph.overview text {
+  display: none;
+}
 .selection-rectangle {
   fill: var(--mint);
   fill-opacity: 0.12;
@@ -361,6 +364,14 @@ li > .tensor-info {
 }
 .zoom-controls button:hover {
   background: #293c4e;
+}
+.zoom-controls svg {
+  display: block;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 aside {
   border-left: 1px solid var(--border);

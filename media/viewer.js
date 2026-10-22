@@ -11,6 +11,8 @@ let nodeViews = new Map();
 let selected = new Set();
 let renderedSelection = new Set();
 let connectionsByPosition = new Map();
+let connections = [];
+let camera;
 let hasOperators = false;
 let gesture;
 let inspectedNode;
@@ -697,6 +699,50 @@ function updateConnection(connection) {
   information.setAttribute("y", middle + 14);
 }
 
+function setVisible(view, group, visible) {
+  if (view.visible === visible) return;
+  view.visible = visible;
+  group.setAttribute("display", visible ? "inline" : "none");
+}
+
+function intersectsCamera(left, top, right, bottom) {
+  return (
+    !camera ||
+    (right >= camera.x - 240 &&
+      left <= camera.x + camera.width + 240 &&
+      bottom >= camera.y - 80 &&
+      top <= camera.y + camera.height + 80)
+  );
+}
+
+function updateNodeVisibility(view) {
+  const { position, halfWidth, halfHeight } = view;
+  setVisible(
+    view,
+    view.group,
+    intersectsCamera(
+      position.x - halfWidth,
+      position.y - halfHeight,
+      position.x + halfWidth,
+      position.y + halfHeight,
+    ),
+  );
+}
+
+function updateConnectionVisibility(connection) {
+  const { from, to, fromHeight, toHeight } = connection;
+  setVisible(
+    connection,
+    connection.group,
+    intersectsCamera(
+      Math.min(from.x, to.x),
+      Math.min(from.y + fromHeight, to.y - toHeight),
+      Math.max(from.x, to.x) + 240,
+      Math.max(from.y + fromHeight, to.y - toHeight) + 28,
+    ),
+  );
+}
+
 function moveNodes(origins, dx, dy) {
   const affected = new Set();
   for (const [id, origin] of origins) {
@@ -713,11 +759,15 @@ function moveNodes(origins, dx, dy) {
       "transform",
       `translate(${view.position.x - view.initial.x} ${view.position.y - view.initial.y})`,
     );
+    updateNodeVisibility(view);
     for (const connection of connectionsByPosition.get(view.position) ?? []) {
       affected.add(connection);
     }
   }
-  affected.forEach(updateConnection);
+  for (const connection of affected) {
+    updateConnection(connection);
+    updateConnectionVisibility(connection);
+  }
 }
 
 function endGesture(cancel = false) {
@@ -818,15 +868,41 @@ function fit() {
     zoom;
   const width = viewport.width * scale;
   const height = viewport.height * scale;
-  svg.setAttribute(
-    "viewBox",
-    `${bounds.x + (bounds.width - width) / 2 + pan.x} ${bounds.y + (bounds.height - height) / 2 + pan.y} ${width} ${height}`,
-  );
+  camera = {
+    x: bounds.x + (bounds.width - width) / 2 + pan.x,
+    y: bounds.y + (bounds.height - height) / 2 + pan.y,
+    width,
+    height,
+  };
+  svg.classList.toggle("overview", scale > 2);
+  for (const view of nodeViews.values()) updateNodeVisibility(view);
+  for (const connection of connections) updateConnectionVisibility(connection);
+  svg.setAttribute("viewBox", `${camera.x} ${camera.y} ${width} ${height}`);
 }
 
 function changeZoom(factor) {
   endGesture();
   zoom = Math.max(0.25, zoom * factor);
+  fit();
+}
+
+function readableZoom() {
+  if (!hasModel) return;
+  const viewport = byId("canvas").getBoundingClientRect();
+  if (!viewport.width || !viewport.height) return;
+  endGesture();
+  zoom = Math.max(
+    bounds.width / viewport.width,
+    bounds.height / viewport.height,
+  );
+  const position = inspectedView?.position ?? {
+    x: bounds.x + bounds.width / 2 + pan.x,
+    y: bounds.y + bounds.height / 2 + pan.y,
+  };
+  pan = {
+    x: position.x - bounds.x - bounds.width / 2,
+    y: position.y - bounds.y - bounds.height / 2,
+  };
   fit();
 }
 
@@ -869,6 +945,8 @@ function render(graph, metadata) {
   selected = new Set();
   renderedSelection = new Set();
   connectionsByPosition = new Map();
+  connections = [];
+  camera = undefined;
   hasOperators = graph.nodes.length > 0;
   graphMetadata = undefined;
   nodeMetadata = new Map();
@@ -958,18 +1036,21 @@ function render(graph, metadata) {
   );
   const connect = (from, to, name, fromHeight, toHeight) => {
     if (!from || !to) return;
+    const group = element("g", {});
+    edges.append(group);
     const path = element("path", { class: "edge" });
-    edges.append(path);
+    group.append(path);
     const text = label(
-      edges,
+      group,
       0,
       0,
       shortName(name, 15),
       "tensor-label",
       "start",
     );
-    const information = tensorLabel(edges, 0, 0, name, 34, "start");
+    const information = tensorLabel(group, 0, 0, name, 34, "start");
     const connection = {
+      group,
       from,
       to,
       fromHeight,
@@ -978,6 +1059,7 @@ function render(graph, metadata) {
       text,
       information,
     };
+    connections.push(connection);
     if (!connectionsByName.has(name)) connectionsByName.set(name, []);
     connectionsByName.get(name).push(connection);
     for (const position of new Set([from, to])) {
@@ -1252,6 +1334,7 @@ byId("zoom-in").addEventListener("click", () => {
 byId("zoom-out").addEventListener("click", () => {
   changeZoom(1 / 1.25);
 });
+byId("zoom-readable").addEventListener("click", readableZoom);
 byId("zoom-fit").addEventListener("click", () => {
   endGesture();
   reframe();

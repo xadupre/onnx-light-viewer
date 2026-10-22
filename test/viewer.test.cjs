@@ -1751,6 +1751,65 @@ test("zooms large graphs to a readable scale beyond four times Fit with buttons 
   }
 });
 
+test("jumps to readable zoom and culls offscreen SVG content without rebuilding a large graph", (t) => {
+  const { document, window, load } = openViewer(t);
+  const model = chainGraph(400);
+  model.nodes.at(-1).inputs = ["tensor_0"];
+  load(model);
+  const graph = document.getElementById("graph");
+  const initial = graph.getAttribute("viewBox");
+  const positions = nodePositions(document);
+  const nodes = [...document.querySelectorAll(".graph-node")];
+  const edges = [...document.querySelectorAll(".edge")];
+  const crossingEdge = edges.at(-2).parentElement;
+  assert.equal(graph.classList.contains("overview"), true);
+  document.getElementById("zoom-readable").click();
+  const [x, y, width, height] = graph
+    .getAttribute("viewBox")
+    .split(" ")
+    .map(Number);
+  assert.equal(width, 1060);
+  assert.equal(height, 350);
+  assert.ok(Math.abs(x + width / 2 - positions[0].x) < 1e-9);
+  assert.ok(Math.abs(y + height / 2 - positions[0].y) < 1e-9);
+  assert.equal(graph.classList.contains("overview"), false);
+  assert.equal(nodes[0].getAttribute("display"), "inline");
+  assert.equal(nodes.at(-1).getAttribute("display"), "none");
+  assert.ok(
+    nodes.filter((node) => node.getAttribute("display") !== "none").length < 10,
+  );
+  assert.ok(
+    edges.filter(
+      (edge) => edge.parentElement.getAttribute("display") !== "none",
+    ).length < 10,
+  );
+  const observer = new window.MutationObserver(() => {});
+  observer.observe(graph, { subtree: true, attributes: true });
+  document.getElementById("zoom-in").click();
+  const changes = observer.takeRecords();
+  observer.disconnect();
+  assert.ok(changes.length < 30);
+  assert.ok(
+    changes.every(
+      ({ target, attributeName }) =>
+        target === graph || attributeName === "display",
+    ),
+  );
+  graph.dispatchEvent(
+    new window.WheelEvent("wheel", { deltaY: 10000, cancelable: true }),
+  );
+  assert.equal(nodes[0].getAttribute("display"), "none");
+  assert.equal(nodes.at(-1).getAttribute("display"), "none");
+  assert.equal(crossingEdge.getAttribute("display"), "inline");
+  assert.ok(nodes.some((node) => node.getAttribute("display") === "inline"));
+  document.getElementById("zoom-fit").click();
+  assert.equal(graph.getAttribute("viewBox"), initial);
+  assert.equal(graph.classList.contains("overview"), true);
+  assert.ok(nodes.every((node) => node.getAttribute("display") === "inline"));
+  assert.deepEqual([...document.querySelectorAll(".graph-node")], nodes);
+  assert.deepEqual(nodePositions(document), positions);
+});
+
 test("wheel scrolling pans vertically and Shift+wheel pans horizontally without zooming", (t) => {
   const { document, window, load, resize } = openViewer(t);
   load(chainGraph());
