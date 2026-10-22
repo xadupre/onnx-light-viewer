@@ -70,6 +70,29 @@ Defines structured action entries, retains each panel's history and publishes
 status updates. It validates incoming operation events and correlates native
 operations with the webview's action IDs.
 
+``src/huggingface.ts``
+~~~~~~~~~~~~~~~~~~~~~~
+
+:download:`Source: huggingface.ts <../src/huggingface.ts>`.
+
+``parseHuggingFaceInput`` accepts public repository IDs, repository URLs and ONNX
+file URLs. ``listHuggingFaceModels`` queries the Hub model API for ONNX files;
+the host offers a variant picker when several files are present.
+``parseHuggingFaceUrl`` normalizes blob file links to resolve links.
+``cachedHuggingFaceModel`` keys an
+extension-owned cache by the normalized URL's SHA-256 hash. Downloads follow
+Hub/CDN redirects and stream to a uniquely named temporary file; the host's
+native loading callback must succeed before an atomic rename publishes it.
+Failed or cancelled transfers remove their temporary file. Cache hits are
+loaded directly without a network request. Repository inputs still require a
+network request to list files; direct cached file URLs work offline.
+
+Cache storage is under ``context.globalStorageUri/huggingface`` in the extension
+host. The original remote basename is passed to the native loader, not the
+temporary cache name. Retained model bytes still provide native failure recovery
+without another download. Authentication, external weight downloads and model
+execution are outside this action's scope.
+
 ``src/graph.ts``
 ~~~~~~~~~~~~~~~~
 
@@ -212,8 +235,9 @@ replies with ``panel.webview.postMessage``.
      - Retain a timestamped explicit operation or viewer error.
      - ``log-entry``.
    * - ``open``
-     - Choose and load a local model.
-     - ``graph`` on success; cancellation leaves the view unchanged.
+     - Choose a local file or a public Hugging Face URL; load the file or
+       download/reuse the persistent cache.
+     - ``graph`` or ``load-error``; cancellation leaves the view unchanged.
    * - ``open-backend-test``
      - Search the released native catalog and load a case.
      - ``graph`` on success; cancellation leaves the view unchanged.

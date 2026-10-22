@@ -156,6 +156,44 @@ test("shows the compiled onnx-light release before loading a graph and after mod
   assert.equal(release.textContent, `onnx-light ${version}`);
 });
 
+test("requests model opening without a separate Hugging Face button and clears busy state after cancellation or failure", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  load(demoGraph);
+  assert.equal(document.getElementById("open-huggingface"), null);
+  const button = document.getElementById("open-model");
+  button.click();
+  const request = messages.at(-1);
+  assert.equal(request.type, "open");
+  assert.equal(button.disabled, true);
+  document.getElementById("logs-tab").click();
+  assert.equal(document.getElementById("logs-tab").textContent, "Logs");
+  assert.equal(document.getElementById("logs-view").hidden, false);
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: {
+        type: "log-entry",
+        entry: {
+          id: request.actionId,
+          timestamp: new Date().toISOString(),
+          action: "Open ONNX model",
+          status: "CANCELLED",
+        },
+      },
+    }),
+  );
+  assert.equal(button.disabled, false);
+  assert.equal(document.getElementById("logs-tab").textContent, "Logs");
+  document.getElementById("model-tab").click();
+  button.click();
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: { type: "load-error", error: "HTTP 403" },
+    }),
+  );
+  assert.equal(button.disabled, false);
+  assert.match(document.getElementById("load-status").textContent, /HTTP 403/);
+  assert.equal(document.querySelector(".graph-node text").textContent, "Relu");
+});
 test("updates one action row, safely renders errors and retains history across model replacement", async (t) => {
   const { document, window, messages, load } = openViewer(t);
   load(demoGraph);
@@ -1711,6 +1749,65 @@ test("zooms large graphs to a readable scale beyond four times Fit with buttons 
     assert.equal(graph.getAttribute("viewBox"), initial);
     assert.deepEqual(nodePositions(document), positions);
   }
+});
+
+test("jumps to readable zoom and culls offscreen SVG content without rebuilding a large graph", (t) => {
+  const { document, window, load } = openViewer(t);
+  const model = chainGraph(400);
+  model.nodes.at(-1).inputs = ["tensor_0"];
+  load(model);
+  const graph = document.getElementById("graph");
+  const initial = graph.getAttribute("viewBox");
+  const positions = nodePositions(document);
+  const nodes = [...document.querySelectorAll(".graph-node")];
+  const edges = [...document.querySelectorAll(".edge")];
+  const crossingEdge = edges.at(-2).parentElement;
+  assert.equal(graph.classList.contains("overview"), true);
+  document.getElementById("zoom-readable").click();
+  const [x, y, width, height] = graph
+    .getAttribute("viewBox")
+    .split(" ")
+    .map(Number);
+  assert.equal(width, 1060);
+  assert.equal(height, 350);
+  assert.ok(Math.abs(x + width / 2 - positions[0].x) < 1e-9);
+  assert.ok(Math.abs(y + height / 2 - positions[0].y) < 1e-9);
+  assert.equal(graph.classList.contains("overview"), false);
+  assert.equal(nodes[0].getAttribute("display"), "inline");
+  assert.equal(nodes.at(-1).getAttribute("display"), "none");
+  assert.ok(
+    nodes.filter((node) => node.getAttribute("display") !== "none").length < 10,
+  );
+  assert.ok(
+    edges.filter(
+      (edge) => edge.parentElement.getAttribute("display") !== "none",
+    ).length < 10,
+  );
+  const observer = new window.MutationObserver(() => {});
+  observer.observe(graph, { subtree: true, attributes: true });
+  document.getElementById("zoom-in").click();
+  const changes = observer.takeRecords();
+  observer.disconnect();
+  assert.ok(changes.length < 30);
+  assert.ok(
+    changes.every(
+      ({ target, attributeName }) =>
+        target === graph || attributeName === "display",
+    ),
+  );
+  graph.dispatchEvent(
+    new window.WheelEvent("wheel", { deltaY: 10000, cancelable: true }),
+  );
+  assert.equal(nodes[0].getAttribute("display"), "none");
+  assert.equal(nodes.at(-1).getAttribute("display"), "none");
+  assert.equal(crossingEdge.getAttribute("display"), "inline");
+  assert.ok(nodes.some((node) => node.getAttribute("display") === "inline"));
+  document.getElementById("zoom-fit").click();
+  assert.equal(graph.getAttribute("viewBox"), initial);
+  assert.equal(graph.classList.contains("overview"), true);
+  assert.ok(nodes.every((node) => node.getAttribute("display") === "inline"));
+  assert.deepEqual([...document.querySelectorAll(".graph-node")], nodes);
+  assert.deepEqual(nodePositions(document), positions);
 });
 
 test("wheel scrolling pans vertically and Shift+wheel pans horizontally without zooming", (t) => {

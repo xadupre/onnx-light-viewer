@@ -1,13 +1,19 @@
 const assert = require("node:assert/strict");
 const { readFileSync } = require("node:fs");
-const { readFile } = require("node:fs/promises");
+const { copyFile, mkdir, mkdtemp, readFile, rm } = require("node:fs/promises");
+const { createHash } = require("node:crypto");
+const { tmpdir } = require("node:os");
 const { createRequire } = require("node:module");
 const path = require("node:path");
 const vm = require("node:vm");
 const { test } = require("node:test");
 const { JSDOM } = require("jsdom");
 
-async function openExtension(customModel, command = "onnxLightViewer.open") {
+async function openExtension(
+  customModel,
+  command = "onnxLightViewer.open",
+  storage,
+) {
   const messages = [];
   const errors = [];
   const reads = [];
@@ -22,6 +28,12 @@ async function openExtension(customModel, command = "onnxLightViewer.open") {
   let editor;
   let backendSelection;
   let client;
+  let huggingFaceInput;
+  let cancelDownload = false;
+  let modelSource = "local";
+  let repositoryFiles;
+  let repositoryFileSelection;
+  const listedRepositories = [];
   const disposable = () => ({ dispose() {} });
   const root = path.resolve(__dirname, "..");
   const webview = {
@@ -56,11 +68,13 @@ async function openExtension(customModel, command = "onnxLightViewer.open") {
   };
   const vscode = {
     Uri: {
+      file: (filePath) => ({ path: filePath, fsPath: filePath }),
       joinPath: (base, ...parts) => ({
         path: path.posix.join(base.path, ...parts),
       }),
     },
     ViewColumn: { One: 1 },
+    ProgressLocation: { Notification: 15 },
     commands: {
       registerCommand: (name, callback) => {
         commands.set(name, callback);
@@ -82,8 +96,21 @@ async function openExtension(customModel, command = "onnxLightViewer.open") {
         return disposable();
       },
       showOpenDialog: async () => selection,
+      showInputBox: async () => huggingFaceInput,
+      withProgress: async (_options, work) =>
+        work(
+          { report() {} },
+          {
+            isCancellationRequested: cancelDownload,
+            onCancellationRequested: disposable,
+          },
+        ),
       showQuickPick: async (items, options) => {
         picks.push({ items, options });
+        if (options.title === "Open an ONNX model")
+          return items.find(({ id }) => id === modelSource);
+        if (options.title === "Choose an ONNX file")
+          return items.find(({ label }) => label === repositoryFileSelection);
         return backendSelection === undefined
           ? undefined
           : {
@@ -98,6 +125,15 @@ async function openExtension(customModel, command = "onnxLightViewer.open") {
   const filename = path.join(root, "dist", "extension.js");
   const requireExtension = createRequire(filename);
   const graph = { ...requireExtension("./graph") };
+  const huggingface = {
+    ...requireExtension("./huggingface"),
+    listHuggingFaceModels: async (repository) => {
+      listedRepositories.push(repository);
+      if (!repositoryFiles)
+        throw new Error("Repository files were not provided.");
+      return repositoryFiles;
+    },
+  };
   for (const name of ["loadModel", "loadBackendTest"]) {
     const load = graph[name];
     graph[name] = (...args) => {
@@ -117,11 +153,17 @@ async function openExtension(customModel, command = "onnxLightViewer.open") {
         ? vscode
         : name === "./graph"
           ? graph
-          : requireExtension(name),
+          : name === "./huggingface"
+            ? huggingface
+            : requireExtension(name),
     module,
     module.exports,
   );
-  module.exports.activate({ extensionUri: { path: root }, subscriptions: [] });
+  module.exports.activate({
+    extensionUri: { path: root },
+    globalStorageUri: { fsPath: storage },
+    subscriptions: [],
+  });
   if (customModel) {
     await editor.resolveCustomEditor(
       { uri: { path: path.join(__dirname, "models", customModel) } },
@@ -143,9 +185,11 @@ async function openExtension(customModel, command = "onnxLightViewer.open") {
       client = callback;
     },
     nativeModels,
+    listedRepositories,
     showLogs: () => commands.get("onnxLightViewer.showLogs")(),
     receive: (message) => receive(message),
     open: async (name) => {
+      modelSource = "local";
       selection = [{ path: path.join(__dirname, "models", name) }];
       await receive({ type: "open" });
     },
@@ -153,9 +197,99 @@ async function openExtension(customModel, command = "onnxLightViewer.open") {
       backendSelection = name;
       await receive({ type: "open-backend-test" });
     },
+    openHuggingFace: async (input, cancel = false, repository) => {
+      modelSource = "huggingface";
+      huggingFaceInput = input;
+      cancelDownload = cancel;
+      repositoryFiles = repository?.files;
+      repositoryFileSelection = repository?.selectedFile;
+      await receive({ type: "open" });
+    },
+    cancelOpen: async () => {
+      modelSource = undefined;
+      await receive({ type: "open" });
+    },
   };
 }
 
+test("opens a cached Hugging Face model and preserves the display on invalid input or cancellation", async (t) => {
+  const storage = await mkdtemp(path.join(tmpdir(), "onnx-viewer-hf-host-"));
+  t.after(() => rm(storage, { recursive: true }));
+  const url =
+    "https://huggingface.co/viewer-tests/fixtures/resolve/main/inference.onnx";
+  const key = createHash("sha256").update(url).digest("hex");
+  const cache = path.join(storage, "huggingface", key);
+  await mkdir(cache, { recursive: true });
+  await copyFile(
+    path.join(__dirname, "models/inference.onnx"),
+    path.join(cache, "model.onnx"),
+  );
+  const extension = await openExtension(
+    undefined,
+    "onnxLightViewer.open",
+    storage,
+  );
+  await extension.openHuggingFace(url.replace("/resolve/", "/blob/"));
+  assert.deepEqual(
+    extension.picks.at(-1).items.map(({ label }) => label),
+    ["Local file", "Hugging Face"],
+  );
+  const graph = extension.messages.at(-1).graph;
+  const repository = {
+    files: [
+      { url, fileName: "inference.onnx", path: "inference.onnx" },
+      {
+        url: url.replace("inference.onnx", "other.onnx"),
+        fileName: "other.onnx",
+        path: "other.onnx",
+      },
+    ],
+    selectedFile: "inference.onnx",
+  };
+  await extension.openHuggingFace("viewer-tests/fixtures", false, repository);
+  assert.equal(extension.messages.at(-1).graph.name, graph.name);
+  assert.equal(extension.picks.at(-1).options.title, "Choose an ONNX file");
+  await extension.openHuggingFace(
+    "https://huggingface.co/viewer-tests/fixtures",
+    false,
+    { files: [repository.files[0]] },
+  );
+  assert.deepEqual(extension.listedRepositories, [
+    { url: "https://huggingface.co/viewer-tests/fixtures" },
+    { url: "https://huggingface.co/viewer-tests/fixtures" },
+  ]);
+  assert.ok(graph.nodes.some(({ opType }) => opType === "Reshape"));
+  assert.ok(
+    extension.logs.some((line) =>
+      line.includes(`[SUCCEEDED] Cache hit: ${url}`),
+    ),
+  );
+  await extension.receive({ type: "refresh-shapes" });
+  assert.equal(extension.messages.at(-1).type, "shape-info");
+  assert.ok(
+    extension.reads.some((file) => file === path.join(cache, "model.onnx")),
+  );
+  await extension.openHuggingFace("https://example.com/model.onnx");
+  assert.equal(extension.messages.at(-1).type, "load-error");
+  await extension.receive({ type: "ready" });
+  assert.equal(extension.messages.at(-1).graph.name, graph.name);
+  const errors = extension.errors.length;
+  await extension.openHuggingFace(undefined);
+  await extension.openHuggingFace(url, true);
+  await extension.openHuggingFace("viewer-tests/fixtures", false, {
+    files: repository.files,
+  });
+  await extension.cancelOpen();
+  await extension.receive({ type: "ready" });
+  assert.equal(extension.messages.at(-1).graph.name, graph.name);
+  assert.equal(extension.errors.length, errors);
+  assert.equal(
+    extension.logs.filter((line) =>
+      line.includes("[CANCELLED] Open ONNX model"),
+    ).length,
+    4,
+  );
+});
 test("keeps operation logs quiet and exposes real native exception recovery in Status", async (t) => {
   const extension = await openExtension();
   const dom = new JSDOM(extension.webview.html, { runScripts: "outside-only" });

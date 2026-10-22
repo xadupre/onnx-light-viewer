@@ -7,6 +7,10 @@ Zoom, navigation and moving nodes
 
 * **+**, **-** or Ctrl+wheel zoom without rearranging nodes. **Fit** recenters
   the view and includes nodes moved outside the original layout.
+* The **Zoom to readable size** icon beside **Fit** jumps directly to 100%,
+  centered on the inspected node, without repeated **+** clicks.
+  Large graphs omit unreadable text in overview and only paint nodes and
+  connections intersecting the viewport, with a small margin for panning.
 * Wheel scrolling moves the view vertically; Shift+wheel moves it horizontally.
   Horizontal trackpad scrolling is supported.
 * Drag an operator, input or output to move it. Connections and tensor labels
