@@ -67,7 +67,7 @@ also have dedicated webview responses.
 :download:`Source: log.ts <../src/log.ts>`.
 
 Defines structured action entries, retains each panel's history and publishes
-status updates. It validates incoming click events and correlates native
+status updates. It validates incoming operation events and correlates native
 operations with the webview's action IDs.
 
 ``src/graph.ts``
@@ -110,7 +110,7 @@ raw tensor bytes by default, without retaining a model for future refreshes.
 
 :download:`Source: webview.ts <../src/webview.ts>`.
 
-``webviewHtml`` generates the Model/Logs tabs, toolbar, SVG canvas, inspector,
+``webviewHtml`` generates the Model/Logs/Status tabs, toolbar, SVG canvas, inspector,
 breadcrumbs and operator-documentation dialog. Its resource callback converts
 bundled media filenames to webview URIs. The content security policy permits
 local images/styles and authorizes the viewer script with a per-panel nonce.
@@ -206,10 +206,10 @@ replies with ``panel.webview.postMessage``.
      - Response
    * - ``ready``
      - Resend current snapshots.
-     - ``log-history`` and ``graph`` with optional cached metadata,
-       or ``load-state`` before a model is available.
+     - ``log-history``, ``application-status`` and ``graph`` with optional
+       cached metadata, or ``load-state`` before a model is available.
    * - ``interaction`` with ``entry``
-     - Retain a timestamped local click event.
+     - Retain a timestamped explicit operation or viewer error.
      - ``log-entry``.
    * - ``open``
      - Choose and load a local model.
@@ -247,15 +247,17 @@ timestamp, action, status and optional error details. ``ActionLog.run`` publishe
 error handlers. The panel exists before initial loading so even loading
 failures are inspectable.
 
-The webview captures clicks before target handlers, immediately displays an
-entry and sends ``interaction``. Native requests carry the same ``actionId``:
+Explicit model operations immediately display an entry and send
+``interaction``. Native requests carry the same ``actionId``:
 host ``log-entry`` updates replace that row rather than adding duplicate
-click/completion rows. Local actions finish in the webview. ``ready`` replays
+start/completion rows. Refresh positions finishes in the webview. Tabs, node
+selection, zoom and arbitrary clicks are not logged. ``ready`` replays
 the history after webview recreation. Model replacement does not clear it.
 
-The **Model** and **Logs** tab panels hide/show existing DOM; switching tabs
-does not render the graph again or reset browser-side state. The **Show Logs**
-command reveals the viewer and sends ``show-logs`` to select its Logs tab.
+The **Model**, **Logs** and **Status** tab panels hide/show existing DOM;
+switching tabs does not render the graph again or reset browser-side state.
+The **Show Logs** command reveals the viewer and sends ``show-logs`` to select
+its Logs tab.
 
 A failed shape or metadata refresh invalidates the native handle, not the
 last displayed snapshots. Before the next native action, ``nativeModel``
@@ -263,6 +265,15 @@ logs and recreates that handle from the original bytes or backend case.
 It does not reread or save the source file. This discards potentially partial
 native inference state; previously inferred information may need refreshing
 after recovery. Reload failures are logged and surfaced like other failures.
+
+``application-status`` is sent on action updates, model replacement, native
+handle recreation and ``ready``. It reports the imported library/version,
+native handle state (``none``, ``ready`` or ``invalidated``), running operations
+and last failure. A caught C++ exception becomes a JavaScript error; it does
+not unload the native addon. Status distinguishes the still-loaded library
+from a discarded model handle and retains the last failure after recovery.
+An addon import failure prevents activation, and native process crashes are
+not covered by this exception-recovery mechanism.
 
 Browser-side state and layout
 -----------------------------

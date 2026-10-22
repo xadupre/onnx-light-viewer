@@ -26,7 +26,6 @@ let connectionsByName = new Map();
 let releasedValues = new Set();
 let unusedLabels = [];
 let hasModel = false;
-let clickAction;
 let nextAction = 0;
 const logSession = crypto.randomUUID();
 const logRows = new Map();
@@ -38,10 +37,11 @@ const statusLabels = {
   CANCELLED: "Cancelled",
   INVALIDATED: "Reload required",
 };
+const tabs = ["model", "logs", "status"];
 
 function showTab(name, focus = false) {
   endGesture();
-  for (const tab of ["model", "logs"]) {
+  for (const tab of tabs) {
     const active = tab === name;
     byId(`${tab}-view`).hidden = !active;
     byId(`${tab}-tab`).setAttribute("aria-selected", String(active));
@@ -49,7 +49,8 @@ function showTab(name, focus = false) {
   }
   if (focus) byId(`${name}-tab`).focus();
   if (name === "model") fit();
-  else byId("logs-view").scrollTop = byId("logs-view").scrollHeight;
+  else if (name === "logs")
+    byId("logs-view").scrollTop = byId("logs-view").scrollHeight;
 }
 
 function displayLog(entry) {
@@ -103,17 +104,14 @@ function newAction(action) {
   };
   displayLog(entry);
   vscode.postMessage({ type: "interaction", entry: { ...entry } });
-  return { entry, pending: false };
+  return entry;
 }
 
 function requestAction(type, action, parameters = {}) {
-  const current = clickAction ?? newAction(action);
-  current.pending = true;
-  current.entry.action = action;
-  displayLog(current.entry);
-  pendingActions.set(current.entry.id, type);
+  const entry = newAction(action);
+  pendingActions.set(entry.id, type);
   if (type === "open" || type === "open-backend-test") setLoading(true);
-  vscode.postMessage({ type, ...parameters, actionId: current.entry.id });
+  vscode.postMessage({ type, ...parameters, actionId: entry.id });
 }
 
 function setLoading(pending, message = "") {
@@ -131,59 +129,58 @@ function setLoading(pending, message = "") {
     message || (pending ? "Loading model…" : "");
 }
 
-document.addEventListener(
-  "click",
-  (event) => {
-    const target =
-      event.target.closest?.(
-        "button, a, summary, .graph-node, .port, #graph, [role='button']",
-      ) ?? event.target;
-    const name =
-      target.getAttribute?.("aria-label") ||
-      target.getAttribute?.("title") ||
-      target.textContent?.trim().slice(0, 160) ||
-      target.tagName;
-    const current = newAction(`Click: ${name}`);
-    clickAction = current;
-    queueMicrotask(() => {
-      if (clickAction === current) clickAction = undefined;
-      if (current.pending) return;
-      current.entry.status =
-        current.entry.status === "FAILED" ? "FAILED" : "SUCCEEDED";
-      displayLog(current.entry);
-      vscode.postMessage({ type: "interaction", entry: { ...current.entry } });
-    });
-  },
-  true,
-);
 window.addEventListener("error", (event) => {
-  const current =
-    clickAction && !clickAction.pending
-      ? clickAction
-      : newAction("Viewer error");
-  current.entry.status = "FAILED";
-  current.entry.details = event.error?.stack ?? event.message;
-  displayLog(current.entry);
-  vscode.postMessage({ type: "interaction", entry: { ...current.entry } });
+  const entry = newAction("Viewer error");
+  entry.status = "FAILED";
+  entry.details = event.error?.stack ?? event.message;
+  displayLog(entry);
+  vscode.postMessage({ type: "interaction", entry: { ...entry } });
 });
-for (const name of ["model", "logs"]) {
+for (const name of tabs) {
   byId(`${name}-tab`).addEventListener("click", () => showTab(name));
   byId(`${name}-tab`).addEventListener("keydown", (event) => {
-    const next =
-      event.key === "Home"
-        ? "model"
-        : event.key === "End"
-          ? "logs"
-          : ["ArrowLeft", "ArrowRight"].includes(event.key)
-            ? name === "model"
-              ? "logs"
-              : "model"
-            : undefined;
-    if (!next) return;
+    let index = tabs.indexOf(name);
+    if (event.key === "Home") index = 0;
+    else if (event.key === "End") index = tabs.length - 1;
+    else if (event.key === "ArrowLeft")
+      index = (index + tabs.length - 1) % tabs.length;
+    else if (event.key === "ArrowRight") index = (index + 1) % tabs.length;
+    else return;
     event.preventDefault();
+    const next = tabs[index];
     byId(`${next}-tab`).click();
     byId(`${next}-tab`).focus();
   });
+}
+
+function displayStatus(status) {
+  byId("status-library").textContent = status.library.loaded
+    ? `Loaded — onnx-light ${status.library.version}`
+    : "Not loaded";
+  byId("status-model").textContent = status.model.name ?? "No model loaded";
+  const states = {
+    none: "No native model",
+    ready: "Ready",
+    invalidated: "Discarded after a failed analysis",
+  };
+  byId("status-handle").textContent = states[status.model.state];
+  byId("status-running").textContent = status.running.length
+    ? status.running.join("\n")
+    : "Idle";
+  const recovery = {
+    none: "Open a model to create a native handle.",
+    ready: "No model recovery pending.",
+    invalidated:
+      "The next native action recreates the model from its original in-memory bytes or backend case. The previous display is preserved; shapes and metadata may need refreshing.",
+  };
+  byId("status-recovery").textContent = recovery[status.model.state];
+  byId("status-failure").hidden = !status.lastFailure;
+  if (status.lastFailure) {
+    byId("status-failure-action").textContent = status.lastFailure.action;
+    byId("status-failure-time").textContent = status.lastFailure.timestamp;
+    byId("status-failure-details").textContent =
+      status.lastFailure.details ?? "";
+  }
 }
 
 function element(tag, attributes, text) {
@@ -1210,7 +1207,19 @@ byId("refresh-shapes").addEventListener("click", () => {
   refreshStatus(true, "Inferring shapes/types…");
   requestAction("refresh-shapes", "Refresh shapes");
 });
-byId("refresh-positions").addEventListener("click", refreshPositions);
+byId("refresh-positions").addEventListener("click", () => {
+  const entry = newAction("Refresh positions");
+  try {
+    refreshPositions();
+    entry.status = "SUCCEEDED";
+  } catch (error) {
+    entry.status = "FAILED";
+    entry.details =
+      error instanceof Error ? (error.stack ?? error.message) : String(error);
+  }
+  displayLog(entry);
+  vscode.postMessage({ type: "interaction", entry: { ...entry } });
+});
 byId("zoom-in").addEventListener("click", () => {
   changeZoom(1.25);
 });
@@ -1264,7 +1273,9 @@ window.addEventListener("resize", () => {
   fit();
 });
 window.addEventListener("message", (event) => {
-  if (event.data?.type === "log-entry") {
+  if (event.data?.type === "application-status") {
+    displayStatus(event.data);
+  } else if (event.data?.type === "log-entry") {
     displayLog(event.data.entry);
   } else if (event.data?.type === "log-history") {
     for (const entry of event.data.entries) displayLog(entry);

@@ -35,7 +35,9 @@ async function openExtension(customModel, command = "onnxLightViewer.open") {
         );
       } else if (message.type === "show-logs") {
         logViews.push(true);
-      } else if (message.type !== "log-history") {
+      } else if (
+        !["log-history", "application-status"].includes(message.type)
+      ) {
         messages.push(message);
       }
       return true;
@@ -154,7 +156,7 @@ async function openExtension(customModel, command = "onnxLightViewer.open") {
   };
 }
 
-test("shows actual load, refresh and click outcomes in the viewer's Logs tab", async (t) => {
+test("keeps operation logs quiet and exposes real native exception recovery in Status", async (t) => {
   const extension = await openExtension();
   const dom = new JSDOM(extension.webview.html, { runScripts: "outside-only" });
   t.after(() => dom.window.close());
@@ -183,6 +185,12 @@ test("shows actual load, refresh and click outcomes in the viewer's Logs tab", a
   };
   await flush();
   const entries = () => [...document.querySelectorAll(".log-entry")];
+  assert.match(
+    document.getElementById("status-library").textContent,
+    /Loaded.*onnx-light/,
+  );
+  assert.equal(document.getElementById("status-handle").textContent, "Ready");
+  assert.equal(document.getElementById("status-running").textContent, "Idle");
   assert.ok(
     entries().some(
       (row) =>
@@ -199,11 +207,17 @@ test("shows actual load, refresh and click outcomes in the viewer's Logs tab", a
     document.getElementById(id).click();
     const row = entries().at(-1);
     assert.equal(row.dataset.status, "RUNNING");
+    document.getElementById("status-tab").click();
+    assert.match(
+      document.getElementById("status-running").textContent,
+      /Refresh/,
+    );
     document.getElementById("logs-tab").click();
     assert.equal(document.getElementById("model-view").hidden, true);
     await flush();
     assert.equal(row.dataset.status, "SUCCEEDED");
     assert.equal(row.querySelector(".log-status").textContent, "OK");
+    assert.equal(document.getElementById("status-running").textContent, "Idle");
     document.getElementById("model-tab").click();
     await flush();
   }
@@ -211,21 +225,68 @@ test("shows actual load, refresh and click outcomes in the viewer's Logs tab", a
   document.getElementById("refresh-positions").click();
   const positions = entries().at(-1);
   await flush();
-  assert.match(positions.textContent, /OKClick: Refresh node positions/);
+  assert.match(positions.textContent, /OKRefresh positions/);
+  const count = entries().length;
   document
     .querySelector(".graph-node")
     .dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
-  const selection = entries().at(-1);
+  document.getElementById("logs-tab").click();
+  document.getElementById("logs-view").click();
+  document.getElementById("log-entries").click();
+  for (const id of ["status-tab", "model-tab", "zoom-in"])
+    document.getElementById(id).click();
+  document
+    .getElementById("graph")
+    .dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  extension.showLogs();
   await flush();
-  assert.equal(selection.dataset.status, "SUCCEEDED");
-  assert.match(selection.textContent, /Relu/);
+  assert.equal(entries().length, count);
 
-  await extension.open("invalid-graph.onnx");
+  await extension.open("custom.onnx");
+  const reads = extension.reads.length;
+  const failedHandle = extension.nativeModels.at(-1);
+  document.getElementById("model-tab").click();
   document.getElementById("refresh-shapes").click();
   const failure = entries().at(-1);
   await flush();
   assert.equal(failure.dataset.status, "FAILED");
-  assert.match(failure.querySelector("pre").textContent, /Error: VerifyModel:/);
+  assert.match(
+    failure.querySelector("pre").textContent,
+    /Error: ComputeShapeModel:/,
+  );
+  document.getElementById("status-tab").click();
+  assert.match(
+    document.getElementById("status-library").textContent,
+    /Loaded.*onnx-light/,
+  );
+  assert.match(
+    document.getElementById("status-handle").textContent,
+    /Discarded/,
+  );
+  assert.match(
+    document.getElementById("status-recovery").textContent,
+    /next native action recreates/,
+  );
+  assert.match(
+    document.getElementById("status-failure-details").textContent,
+    /ComputeShapeModel:/,
+  );
+  assert.equal(document.getElementById("status-running").textContent, "Idle");
+  document.getElementById("model-tab").click();
+  document.getElementById("refresh-metadata").click();
+  document.getElementById("status-tab").click();
+  await flush();
+  assert.notEqual(extension.nativeModels.at(-1), failedHandle);
+  assert.equal(extension.reads.length, reads);
+  assert.equal(document.getElementById("status-handle").textContent, "Ready");
+  assert.equal(
+    document.getElementById("status-recovery").textContent,
+    "No model recovery pending.",
+  );
+  assert.match(
+    document.getElementById("status-failure-details").textContent,
+    /ComputeShapeModel:/,
+  );
   await extension.receive({ type: "ready" });
   const replay = extension.events
     .filter(({ type }) => type === "log-history")
@@ -244,6 +305,11 @@ test("keeps failed initial loading inspectable and can open Logs before any mode
   assert.equal(history[0].status, "FAILED");
   assert.match(history[0].details, /ONNX model graph/);
   assert.match(failed.messages.at(-1).error, /ONNX model graph/);
+  const failedStatus = failed.events
+    .filter(({ type }) => type === "application-status")
+    .at(-1);
+  assert.equal(failedStatus.library.loaded, true);
+  assert.equal(failedStatus.model.state, "none");
   failed.showLogs();
   assert.deepEqual(failed.logViews, [true]);
   await failed.open("inference.onnx");
@@ -254,6 +320,12 @@ test("keeps failed initial loading inspectable and can open Logs before any mode
   await empty.receive({ type: "ready" });
   assert.equal(empty.messages.at(-1).type, "load-state");
   assert.equal(empty.messages.at(-1).pending, false);
+  assert.equal(
+    empty.events.filter(({ type }) => type === "application-status").at(-1)
+      .model.state,
+    "none",
+  );
+  assert.deepEqual(empty.logs, []);
   await empty.receive({ type: "open", actionId: "ui:cancelled-file-picker" });
   assert.ok(
     empty.events.some(

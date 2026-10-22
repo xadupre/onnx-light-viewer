@@ -16,7 +16,7 @@ import {
   GraphPath,
 } from "./graph";
 import { webviewHtml } from "./webview";
-import { ActionLog } from "./log";
+import { ActionLog, LogEntry } from "./log";
 
 const viewType = "onnxLightViewer.graph";
 
@@ -30,12 +30,14 @@ interface LoadedModel {
 async function nativeModel(
   model: LoadedModel,
   log: ActionLog,
+  changed: () => void,
 ): Promise<NativeModel> {
   if (!model.native) {
     model.native = await log.run(
       `Reload native model: ${model.graph.name}`,
       model.reload,
     );
+    changed();
   }
   return model.native;
 }
@@ -159,12 +161,27 @@ async function configurePanel(
   let showLogsRequested = false;
   let initialLoading = !!uri;
   let initialError: string | undefined;
+  let lastFailure: LogEntry | undefined;
+  const sendStatus = () =>
+    panel.webview.postMessage({
+      type: "application-status",
+      library: { loaded: true, version: onnxLightVersion },
+      model: {
+        name: model?.graph.name,
+        state: !model ? "none" : model.native ? "ready" : "invalidated",
+      },
+      running: log
+        .snapshot()
+        .filter((entry) => entry.status === "RUNNING")
+        .map((entry) => entry.action),
+      lastFailure,
+    });
   const log = new ActionLog((entry) => {
+    if (entry.status === "FAILED") lastFailure = entry;
     void panel.webview.postMessage({ type: "log-entry", entry });
+    void sendStatus();
   });
-  if (initialTab === "logs") log.record("SUCCEEDED", "Open Logs tab");
   const showLogs = () => {
-    log.record("SUCCEEDED", "Open Logs tab");
     showLogsRequested = true;
     if (ready) {
       void panel.webview.postMessage({ type: "show-logs" });
@@ -181,6 +198,7 @@ async function configurePanel(
   };
   const sendGraph = () => {
     const current = requireModel();
+    void sendStatus();
     return panel.webview.postMessage({
       type: "graph",
       graph: current.graph,
@@ -206,6 +224,7 @@ async function configurePanel(
           type: "log-history",
           entries: log.snapshot(),
         });
+        await sendStatus();
         if (model) await sendGraph();
         else
           await panel.webview.postMessage({
@@ -316,7 +335,9 @@ async function configurePanel(
               if (!isGraphPath(message.path))
                 throw new Error("Invalid subgraph path.");
               const current = requireModel();
-              const native = await nativeModel(current, log);
+              const native = await nativeModel(current, log, () => {
+                void sendStatus();
+              });
               return native.graph(false, message.path);
             },
             message.actionId,
@@ -342,7 +363,9 @@ async function configurePanel(
             `Refresh metadata: ${model?.graph.name ?? "no model loaded"}`,
             async () => {
               const current = requireModel();
-              const native = await nativeModel(current, log);
+              const native = await nativeModel(current, log, () => {
+                void sendStatus();
+              });
               return native.metadata(current.graph.breadcrumbs.at(-1)?.path);
             },
             message.actionId,
@@ -368,7 +391,9 @@ async function configurePanel(
             `Refresh shapes: ${model?.graph.name ?? "no model loaded"}`,
             async () => {
               const current = requireModel();
-              const native = await nativeModel(current, log);
+              const native = await nativeModel(current, log, () => {
+                void sendStatus();
+              });
               return native.graph(true, current.graph.breadcrumbs.at(-1)?.path);
             },
             message.actionId,
@@ -413,6 +438,7 @@ async function configurePanel(
       model = await readGraph(uri, log);
       initialLoading = false;
       if (ready) await sendGraph();
+      else void sendStatus();
     } catch (error) {
       initialLoading = false;
       initialError = error instanceof Error ? error.message : String(error);

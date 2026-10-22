@@ -97,8 +97,8 @@ function openViewer(t) {
   };
 }
 
-test("switches between Model and Logs without changing graph, selection or camera", async (t) => {
-  const { document, load, window } = openViewer(t);
+test("switches all tabs without logging clicks or changing graph, selection or camera", async (t) => {
+  const { document, load, window, events } = openViewer(t);
   load(demoGraph);
   document.getElementById("zoom-in").click();
   const graph = document.getElementById("nodes").innerHTML;
@@ -108,10 +108,17 @@ test("switches between Model and Logs without changing graph, selection or camer
   await Promise.resolve();
   assert.equal(document.getElementById("model-view").hidden, true);
   assert.equal(document.getElementById("logs-view").hidden, false);
-  assert.match(
-    document.getElementById("log-entries").textContent,
-    /OK.*Click: Zoom in/,
-  );
+  document.getElementById("logs-view").click();
+  document.getElementById("status-tab").click();
+  assert.equal(document.getElementById("status-view").hidden, false);
+  assert.equal(document.getElementById("logs-view").hidden, true);
+  document
+    .getElementById("status-tab")
+    .dispatchEvent(
+      new window.KeyboardEvent("keydown", { key: "End", bubbles: true }),
+    );
+  assert.equal(document.activeElement.id, "status-tab");
+  document.getElementById("logs-tab").click();
   document
     .getElementById("logs-tab")
     .dispatchEvent(
@@ -120,6 +127,8 @@ test("switches between Model and Logs without changing graph, selection or camer
   await Promise.resolve();
   assert.equal(document.activeElement.id, "model-tab");
   assert.equal(document.getElementById("logs-view").hidden, true);
+  assert.equal(document.getElementById("log-entries").children.length, 0);
+  assert.equal(events.filter(({ type }) => type === "interaction").length, 0);
   assert.equal(document.getElementById("nodes").innerHTML, graph);
   assert.equal(document.querySelector("aside").textContent, inspector);
   assert.equal(

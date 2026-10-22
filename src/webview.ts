@@ -27,6 +27,7 @@ export function webviewHtml(
     <nav class="viewer-tabs" role="tablist" aria-label="Viewer">
       <button id="model-tab" role="tab" aria-controls="model-view" aria-selected="${initialTab === "model"}" tabindex="${initialTab === "model" ? 0 : -1}">Model</button>
       <button id="logs-tab" role="tab" aria-controls="logs-view" aria-selected="${initialTab === "logs"}" tabindex="${initialTab === "logs" ? 0 : -1}">Logs <span id="log-count">0</span></button>
+      <button id="status-tab" role="tab" aria-controls="status-view" aria-selected="false" tabindex="-1">Status</button>
     </nav>
     <section id="model-view" role="tabpanel" aria-labelledby="model-tab"${initialTab === "logs" ? " hidden" : ""}>
       <header class="graph-toolbar">
@@ -67,9 +68,27 @@ export function webviewHtml(
     </section>
     <section id="logs-view" role="tabpanel" aria-labelledby="logs-tab" tabindex="0"${initialTab === "model" ? " hidden" : ""}>
       <h2>Action history</h2>
-      <p>Every click is recorded. Operations show Running, OK, Failed or Cancelled.</p>
+      <p>Model operations and errors only. Operations show Running, OK, Failed or Cancelled.</p>
       <p id="logs-empty">No actions yet.</p>
       <ol id="log-entries" aria-label="Action history"></ol>
+    </section>
+    <section id="status-view" role="tabpanel" aria-labelledby="status-tab" tabindex="0" hidden>
+      <h2>Application status</h2>
+      <dl class="status-details" aria-live="polite">
+        <dt>Native library</dt><dd id="status-library">Waiting for extension host</dd>
+        <dt>Current graph</dt><dd id="status-model">Waiting for extension host</dd>
+        <dt>Native model handle</dt><dd id="status-handle">Waiting for extension host</dd>
+        <dt>Current operations</dt><dd id="status-running">Waiting for extension host</dd>
+        <dt>Recovery</dt><dd id="status-recovery">Waiting for extension host</dd>
+      </dl>
+      <h3>What happens after an exception?</h3>
+      <p>A caught C++ exception becomes a JavaScript error and is recorded in Logs. It does not unload onnx-light. A failed shape or metadata refresh discards only the native model handle; the next native action recreates it. The displayed graph is kept.</p>
+      <section id="status-failure" hidden>
+        <h3>Last failed action</h3>
+        <strong id="status-failure-action"></strong>
+        <p id="status-failure-time"></p>
+        <pre id="status-failure-details"></pre>
+      </section>
     </section>
   </main>
   <dialog id="operator-doc" aria-labelledby="doc-title">

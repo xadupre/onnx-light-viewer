@@ -108,9 +108,10 @@ to browse these cases, and external weight files are not downloaded or opened.
 Action logs and failures
 ------------------------
 
-The viewer has **Model** and **Logs** tabs. Switching tabs preserves the graph,
-selection, positions and zoom. Every click adds a timestamped event, including
-node selection, zoom and **Refresh positions**. Loading, navigation,
+The viewer has **Model**, **Logs** and **Status** tabs. Switching tabs preserves
+the graph, selection, positions and zoom. Logs record operations, not clicks:
+tab switching, selecting nodes, zooming and clicking empty space or the log
+panel do not add entries. **Refresh positions**, loading, navigation,
 **Refresh shapes** and **Refresh metadata** show **Running**, then **OK** or
 **Failed** with full error details. Cancelled file/backend pickers show
 **Cancelled**.
@@ -127,3 +128,14 @@ After a failed refresh, the native handle is discarded and recreated from
 the original in-memory bytes (or backend case) before the next native action.
 The previous display remains visible; inferred information may need refreshing
 after this reload. The source file is never modified or reread for recovery.
+
+**Status** shows the loaded native library and its version, the current graph,
+native model handle, running operations and the last failed action with its
+complete error. A caught C++ exception is converted into a JavaScript error;
+it does not unload onnx-light. After failed analysis, the handle is marked
+discarded until the next native action recreates it. The status then returns
+to **Ready**, while retaining the last failure for inspection.
+
+This recovery applies to caught exceptions, not native process crashes.
+If the addon cannot be imported at all, VS Code reports an extension activation
+failure; the viewer cannot open to display its Status tab.
