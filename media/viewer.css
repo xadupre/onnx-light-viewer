@@ -225,6 +225,21 @@ li > .tensor-info {
   fill: #98c1b7;
   font-size: 10px;
 }
+.graph-node .subgraph-link {
+  cursor: pointer;
+}
+.graph-node .subgraph-link rect {
+  fill: transparent;
+  stroke: none;
+}
+.graph-node .subgraph-link:hover rect,
+.graph-node .subgraph-link:focus-visible rect {
+  fill: #244b46;
+}
+.graph-node .subgraph-label {
+  fill: var(--mint);
+  font-size: 10px;
+}
 .port rect {
   fill: #17232f;
   stroke: #42576d;

@@ -49,6 +49,10 @@ function shortName(value, length = 22) {
   return value.length > length ? `${value.slice(0, length - 1)}…` : value;
 }
 
+function subgraphLabel(attribute, index) {
+  return `${attribute.name}${attribute.graphs.length > 1 ? ` [${index}]` : ""}`;
+}
+
 function operatorSizes(nodes) {
   const context = document.createElement("canvas").getContext("2d");
   const family = getComputedStyle(svg).fontFamily;
@@ -64,14 +68,30 @@ function operatorSizes(nodes) {
     nodes.map((node) => {
       const typeWidth = widths.get(node.opType);
       const nameWidth = context.measureText(node.name).width;
+      const subgraphs = (node.attributes ?? []).flatMap((attribute) =>
+        (attribute.graphs ?? []).map((graph, index) => {
+          const text = subgraphLabel(attribute, index);
+          return {
+            ...graph,
+            label: text,
+            textWidth: context.measureText(text).width,
+          };
+        }),
+      );
       const width = Math.min(
         280,
-        Math.max(160, Math.ceil(Math.max(typeWidth, nameWidth) + 32)),
+        Math.max(
+          160,
+          Math.ceil(Math.max(typeWidth, nameWidth) + 32),
+          ...subgraphs.map((graph) => Math.ceil(graph.textWidth + 48)),
+        ),
       );
       return [
         node.id,
         {
           width,
+          height: 94 + subgraphs.length * 22,
+          subgraphs,
           typeFontSize: Math.min(19, (19 * (width - 32)) / (typeWidth || 1)),
           nameFontSize: Math.min(10, (10 * (width - 32)) / (nameWidth || 1)),
         },
@@ -358,7 +378,7 @@ function acceptMetadata(metadata) {
     const text = label(
       view.group,
       view.initial.x,
-      view.initial.y - 30,
+      view.initial.y - view.halfHeight + 17,
       `Unused: ${unusedOutputs.length}`,
       "unused-label",
     );
@@ -417,7 +437,7 @@ function parameterList(id, parameters, countId) {
       for (const [index, graph] of (parameter.graphs ?? []).entries()) {
         const button = document.createElement("button");
         button.className = "icon-button";
-        button.textContent = `Open ${parameter.name}${parameter.graphs.length > 1 ? ` [${index}]` : ""}: ${graph.name} (${graph.nodeCount} nodes)`;
+        button.textContent = `Open ${subgraphLabel(parameter, index)}: ${graph.name} (${graph.nodeCount} nodes)`;
         button.addEventListener("click", () => navigate(graph.path));
         item.append(button);
       }
@@ -430,9 +450,16 @@ function updateSelection(activeId, forceInspect = false) {
   for (const id of new Set([...renderedSelection, ...selected])) {
     const isSelected = selected.has(id);
     if (isSelected === renderedSelection.has(id)) continue;
-    const { group } = nodeViews.get(id);
+    const { group, node, subgraphs } = nodeViews.get(id);
     group.classList.toggle("selected", isSelected);
-    group.setAttribute("aria-pressed", String(isSelected));
+    if (subgraphs?.length) {
+      group.setAttribute(
+        "aria-label",
+        `${isSelected ? "Selected " : ""}${node.opType}: ${node.name}`,
+      );
+    } else {
+      group.setAttribute("aria-pressed", String(isSelected));
+    }
   }
   renderedSelection = new Set(selected);
   const view = nodeViews.get(activeId ?? [...selected].at(-1));
@@ -444,8 +471,8 @@ function registerNode(id, view) {
   nodeViews.set(id, view);
   const { group } = view;
   group.setAttribute("tabindex", "0");
-  group.setAttribute("role", "button");
-  group.setAttribute("aria-pressed", "false");
+  group.setAttribute("role", view.subgraphs?.length ? "group" : "button");
+  if (!view.subgraphs?.length) group.setAttribute("aria-pressed", "false");
   group.setAttribute("data-id", id);
   group.addEventListener("click", (event) => {
     if (event.detail === 0) {
@@ -472,10 +499,10 @@ function selectNode(id, additive) {
 }
 
 function updateConnection(connection) {
-  const { from, to, fromOperator, toOperator, path, text, information } =
+  const { from, to, fromHeight, toHeight, path, text, information } =
     connection;
-  const y1 = from.y + (fromOperator ? 47 : 26);
-  const y2 = to.y - (toOperator ? 47 : 26);
+  const y1 = from.y + fromHeight;
+  const y2 = to.y - toHeight;
   const middle = (y1 + y2) / 2;
   path.setAttribute(
     "d",
@@ -693,14 +720,21 @@ function render(graph, metadata) {
       500,
       40 + Math.max(graph.inputs.length, graph.outputs.length) * 140,
     ),
-    height: Math.max(650, 250 + graph.nodes.length * 145),
+    height: Math.max(
+      650,
+      250 +
+        [...sizes.values()].reduce((sum, size) => sum + size.height + 51, 0),
+    ),
   };
   layoutBounds = bounds;
-  graph.nodes.forEach((node, index) => {
+  let rowTop = 133;
+  graph.nodes.forEach((node) => {
+    const size = sizes.get(node.id);
     positions.set(node.id, {
-      x: randomNodeX(sizes.get(node.id).width / 2),
-      y: 180 + index * 145,
+      x: randomNodeX(size.width / 2),
+      y: rowTop + size.height / 2,
     });
+    rowTop += size.height + 51;
   });
   const addPort = (name, index, output) => {
     const count = output ? graph.outputs.length : graph.inputs.length;
@@ -737,7 +771,7 @@ function render(graph, metadata) {
   const inputPositions = new Map(
     graph.inputs.map((name, index) => [name, addPort(name, index, false)]),
   );
-  const connect = (from, to, name, fromOperator, toOperator) => {
+  const connect = (from, to, name, fromHeight, toHeight) => {
     if (!from || !to) return;
     const path = element("path", { class: "edge" });
     edges.append(path);
@@ -753,8 +787,8 @@ function render(graph, metadata) {
     const connection = {
       from,
       to,
-      fromOperator,
-      toOperator,
+      fromHeight,
+      toHeight,
       path,
       text,
       information,
@@ -772,6 +806,7 @@ function render(graph, metadata) {
   for (const node of graph.nodes) {
     const position = positions.get(node.id);
     const size = sizes.get(node.id);
+    const top = position.y - size.height / 2;
     const group = element("g", {
       class: "graph-node",
       "aria-label": `${node.opType}: ${node.name}`,
@@ -780,16 +815,16 @@ function render(graph, metadata) {
       element("title", {}, `${node.name} (${node.opType})`),
       element("rect", {
         x: position.x - size.width / 2,
-        y: position.y - 47,
+        y: top,
         width: size.width,
-        height: 94,
+        height: size.height,
         rx: 12,
       }),
     );
     const typeLabel = label(
       group,
       position.x,
-      position.y - 6,
+      top + 41,
       node.opType,
       "operator-label",
     );
@@ -797,7 +832,7 @@ function render(graph, metadata) {
     const nameLabel = label(
       group,
       position.x,
-      position.y + 14,
+      top + 61,
       node.name,
       "operator-name",
     );
@@ -806,18 +841,68 @@ function render(graph, metadata) {
       const information = tensorLabel(
         group,
         position.x,
-        position.y + 34,
+        top + 81,
         node.outputs,
         26,
       );
       information.classList.add("node-tensor-info");
     }
+    size.subgraphs.forEach((graph, index) => {
+      const y = top + 94 + index * 22;
+      const link = element("g", {
+        class: "subgraph-link",
+        role: "button",
+        tabindex: "0",
+        "aria-label": `Open ${graph.label}: ${graph.name}`,
+      });
+      link.append(
+        element("title", {}, `${graph.name} (${graph.nodeCount} nodes)`),
+        element("rect", {
+          x: position.x - size.width / 2 + 3,
+          y,
+          width: size.width - 6,
+          height: 21,
+          rx: 4,
+        }),
+      );
+      const text = label(
+        link,
+        position.x - size.width / 2 + 12,
+        y + 15,
+        graph.label,
+        "subgraph-label",
+        "start",
+      );
+      text.style.fontSize = `${Math.min(10, (10 * (size.width - 48)) / (graph.textWidth || 1))}px`;
+      label(
+        link,
+        position.x + size.width / 2 - 12,
+        y + 15,
+        ">",
+        "subgraph-label",
+        "end",
+      );
+      link.addEventListener("pointerdown", (event) => event.stopPropagation());
+      link.addEventListener("click", (event) => {
+        event.stopPropagation();
+        if (svg.getAttribute("aria-busy") !== "true") navigate(graph.path);
+      });
+      link.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          event.stopPropagation();
+          if (svg.getAttribute("aria-busy") !== "true") navigate(graph.path);
+        }
+      });
+      group.append(link);
+    });
     registerNode(node.id, {
       node,
       group,
       position,
       halfWidth: size.width / 2,
-      halfHeight: 47,
+      halfHeight: size.height / 2,
+      subgraphs: size.subgraphs,
     });
     nodes.append(group);
     for (const input of [...node.inputs, ...(node.captures ?? [])]) {
@@ -826,8 +911,8 @@ function render(graph, metadata) {
         producer ? positions.get(producer) : inputPositions.get(input),
         position,
         input,
-        Boolean(producer),
-        true,
+        producer ? sizes.get(producer).height / 2 : 26,
+        size.height / 2,
       );
     }
   }
@@ -837,8 +922,8 @@ function render(graph, metadata) {
       producer ? positions.get(producer) : inputPositions.get(name),
       addPort(name, index, true),
       name,
-      Boolean(producer),
-      false,
+      producer ? sizes.get(producer).height / 2 : 26,
+      26,
     );
   });
   zoom = 1;

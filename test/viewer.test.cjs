@@ -156,6 +156,119 @@ test("opens graph attributes and nested breadcrumbs, including empty graphs and 
   assert.equal(document.getElementById("navigation-status").textContent, "");
 });
 
+test("opens every subgraph from its operator rectangle with pointer and keyboard controls", (t) => {
+  const { document, window, messages, load, pointer } = openViewer(t);
+  const model = loadModel(
+    readFileSync(require.resolve("./models/subgraphs.onnx")),
+    "subgraphs.onnx",
+  );
+  const root = model.graph();
+  for (const [nodeIndex, linkIndex, key] of [
+    [0, 0, null],
+    [0, 1, "Enter"],
+    [1, 0, " "],
+    [1, 1, "Enter"],
+  ]) {
+    load(root);
+    const group = document.querySelector(`[data-id="node-${nodeIndex}"]`);
+    const link = group.querySelectorAll(".subgraph-link")[linkIndex];
+    assert.equal(group.getAttribute("role"), "group");
+    assert.equal(link.getAttribute("role"), "button");
+    assert.equal(link.getAttribute("tabindex"), "0");
+    const body = group.querySelector("rect");
+    const row = link.querySelector("rect");
+    assert.ok(
+      Number(row.getAttribute("y")) >= Number(body.getAttribute("y")) + 94,
+    );
+    assert.ok(
+      Number(row.getAttribute("y")) + Number(row.getAttribute("height")) <=
+        Number(body.getAttribute("y")) + Number(body.getAttribute("height")),
+    );
+    const count = messages.length;
+    const positions = nodePositions(document);
+    if (key) {
+      link.dispatchEvent(
+        new window.KeyboardEvent("keydown", { key, bubbles: true }),
+      );
+    } else {
+      const x = Number(row.getAttribute("x")) + 10;
+      const y = Number(row.getAttribute("y")) + 10;
+      pointer(link.querySelector("text"), "pointerdown", x, y);
+      pointer(document.getElementById("graph"), "pointermove", x + 10, y + 10);
+      pointer(document.getElementById("graph"), "pointerup", x + 10, y + 10);
+      assert.deepEqual(nodePositions(document), positions);
+      assert.equal(messages.length, count);
+      link
+        .querySelector("text")
+        .dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+    }
+    assert.equal(messages.length, count + 1);
+    assert.equal(messages.at(-1).type, "navigate");
+    const expected = root.nodes[nodeIndex].attributes.flatMap(
+      (attribute) => attribute.graphs ?? [],
+    )[linkIndex];
+    assert.deepEqual(
+      JSON.parse(JSON.stringify(messages.at(-1).path)),
+      expected.path,
+    );
+    load(model.graph(false, messages.at(-1).path));
+    assert.equal(document.getElementById("graph-navigation").hidden, false);
+  }
+  load(root);
+  document.getElementById("show-metadata").click();
+  document
+    .querySelector(".subgraph-link")
+    .dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  assert.equal(messages.at(-1).type, "navigate");
+  load(demoGraph);
+  assert.equal(document.querySelectorAll(".subgraph-link").length, 0);
+});
+
+test("sizes subgraph operators for their links and preserves dragging, selection and connection anchors", (t) => {
+  const { document, window, messages, load, pointer } = openViewer(t);
+  const model = loadModel(
+    readFileSync(require.resolve("./models/subgraphs.onnx")),
+    "subgraphs.onnx",
+  );
+  load(model.graph());
+  const graph = document.getElementById("graph");
+  const group = document.querySelector('[data-id="node-0"]');
+  const body = group.querySelector("rect");
+  const next = document.querySelector('[data-id="node-1"] > rect');
+  const top = Number(body.getAttribute("y"));
+  const bottom = top + Number(body.getAttribute("height"));
+  assert.ok(Number(next.getAttribute("y")) > bottom);
+  assert.ok(
+    document.querySelector(".edge").getAttribute("d").endsWith(`,${top}`),
+  );
+  const before = nodePositions(document);
+  pointer(
+    group.querySelector(".operator-label"),
+    "pointerdown",
+    before[0].x,
+    top + 41,
+  );
+  pointer(graph, "pointermove", before[0].x + 30, top + 61);
+  pointer(graph, "pointerup", before[0].x + 30, top + 61);
+  assertMoved(before, nodePositions(document), [0], 30, 20);
+  assert.ok(
+    document
+      .querySelector(".edge")
+      .getAttribute("d")
+      .endsWith(`,${top + 20}`),
+  );
+  assert.equal(messages.filter(({ type }) => type === "navigate").length, 0);
+  const left = Number(body.getAttribute("x")) + 30;
+  pointer(graph, "pointerdown", left - 4, bottom + 16);
+  pointer(graph, "pointermove", left + 4, bottom + 24);
+  pointer(graph, "pointerup", left + 4, bottom + 24);
+  assert.equal(group.classList.contains("selected"), true);
+  group.dispatchEvent(
+    new window.MouseEvent("click", { ctrlKey: true, bubbles: true }),
+  );
+  assert.equal(group.classList.contains("selected"), false);
+});
+
 test("refreshes whole-model metadata from the global toolbar with the inspector closed", (t) => {
   const { document, window, messages, load } = openViewer(t);
   const refresh = document.getElementById("refresh-metadata");
@@ -881,7 +994,7 @@ function chainGraph(length = 6) {
   };
 }
 
-function nodePositions(document, selector = ".graph-node rect") {
+function nodePositions(document, selector = ".graph-node > rect") {
   return Array.from(document.querySelectorAll(selector), (rect) => {
     const [dx, dy] = rect.parentElement
       .getAttribute("transform")
