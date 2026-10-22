@@ -92,7 +92,7 @@ test("renders the demo, inspects its operator and requests a real file", (t) => 
   load(demoGraph);
   assert.doesNotMatch(
     document.body.textContent,
-    /A LITTLE CLARITY|Your model, connected|Explore the graph|A first ONNX graph|ONNX MODEL/,
+    /A LITTLE CLARITY|Your model, connected|Explore the graph|A first ONNX graph|ONNX MODEL|All connected initializers are listed|Attribute arrays show up to 8 elements/,
   );
   assert.equal(document.querySelectorAll(".graph-node").length, 1);
   assert.equal(document.querySelectorAll(".port").length, 2);
@@ -108,6 +108,11 @@ test("renders the demo, inspects its operator and requests a real file", (t) => 
   );
   document.getElementById("open-model").click();
   assert.equal(messages.filter((message) => message.type === "open").length, 1);
+  document.getElementById("open-backend-test").click();
+  assert.equal(
+    messages.filter((message) => message.type === "open-backend-test").length,
+    1,
+  );
   const graph = document.getElementById("graph");
   const initialViewBox = graph.getAttribute("viewBox");
   document.getElementById("zoom-in").click();

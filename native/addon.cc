@@ -1,10 +1,12 @@
 #include <napi.h>
+#include <onnx_core/backend_test/test_case.h>
 #include <onnx_core/shapes/shape_inference.h>
 #include <onnx_extensions/shapes/dispatch_table.h>
 #include <onnx_op/operator_sets.h>
 #include <onnx_proto/onnx.h>
 
 #include <algorithm>
+#include <cmath>
 #include <map>
 #include <memory>
 #include <sstream>
@@ -442,11 +444,36 @@ Napi::Value DecodeGraph(const Napi::CallbackInfo &info) {
 }
 
 struct StoredModel {
-  // Tensor buffers borrow this array for the lifetime of the native model.
+  // Borrowed tensor buffers must outlive the native model.
   Napi::Reference<Napi::Uint8Array> source;
-  ol::ModelProto model;
+  std::shared_ptr<ol::core::backend_test::TestCase> backend_case;
+  std::shared_ptr<ol::ModelProto> model;
   std::string file_name;
 };
+
+Napi::Object ModelHandle(Napi::Env env, std::shared_ptr<StoredModel> model) {
+  auto result = Napi::Object::New(env);
+  result.Set(
+      "graph", Napi::Function::New(env, [model](const Napi::CallbackInfo &call) -> Napi::Value {
+        const auto env = call.Env();
+        if (call.Length() > 1 ||
+            (call.Length() == 1 && !call[0].IsUndefined() && !call[0].IsBoolean())) {
+          Napi::TypeError::New(env, "Expected an optional inference flag.")
+              .ThrowAsJavaScriptException();
+          return env.Undefined();
+        }
+        try {
+          if (call.Length() == 1 && call[0].IsBoolean() && call[0].As<Napi::Boolean>().Value()) {
+            InferShapes(*model->model);
+          }
+          return ModelGraph(env, *model->model, model->file_name);
+        } catch (const std::exception &error) {
+          Napi::Error::New(env, error.what()).ThrowAsJavaScriptException();
+          return env.Undefined();
+        }
+      }));
+  return result;
+}
 
 Napi::Value LoadModel(const Napi::CallbackInfo &info) {
   const auto env = info.Env();
@@ -460,28 +487,60 @@ Napi::Value LoadModel(const Napi::CallbackInfo &info) {
     auto model = std::make_shared<StoredModel>();
     model->source = Napi::Persistent(info[0].As<Napi::Uint8Array>());
     model->file_name = info[1].As<Napi::String>().Utf8Value();
-    ReadModel(model->model, model->source.Value(), false);
-    auto result = Napi::Object::New(env);
-    result.Set(
-        "graph", Napi::Function::New(env, [model](const Napi::CallbackInfo &call) -> Napi::Value {
-          const auto env = call.Env();
-          if (call.Length() > 1 ||
-              (call.Length() == 1 && !call[0].IsUndefined() && !call[0].IsBoolean())) {
-            Napi::TypeError::New(env, "Expected an optional inference flag.")
-                .ThrowAsJavaScriptException();
-            return env.Undefined();
-          }
-          try {
-            if (call.Length() == 1 && call[0].IsBoolean() && call[0].As<Napi::Boolean>().Value()) {
-              InferShapes(model->model);
-            }
-            return ModelGraph(env, model->model, model->file_name);
-          } catch (const std::exception &error) {
-            Napi::Error::New(env, error.what()).ThrowAsJavaScriptException();
-            return env.Undefined();
-          }
-        }));
+    model->model = std::make_shared<ol::ModelProto>();
+    ReadModel(*model->model, model->source.Value(), false);
+    return ModelHandle(env, model);
+  } catch (const std::exception &error) {
+    Napi::Error::New(env, error.what()).ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+}
+
+Napi::Value ListBackendTests(const Napi::CallbackInfo &info) {
+  const auto env = info.Env();
+  try {
+    const auto cases = ol::core::backend_test::CollectTestCases();
+    auto result = Napi::Array::New(env);
+    uint32_t index = 0;
+    for (const auto &test : cases) {
+      auto item = Napi::Object::New(env);
+      item.Set("id", index);
+      item.Set("name", test.name);
+      item.Set("modelName", test.model_name);
+      item.Set("kind", Text(env, ol::core::backend_test::TestCaseKindName(test.kind)));
+      item.Set("tag", Text(env, ol::core::backend_test::TestCaseTagName(test.tag)));
+      result.Set(index++, item);
+    }
     return result;
+  } catch (const std::exception &error) {
+    Napi::Error::New(env, error.what()).ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+}
+
+Napi::Value LoadBackendTest(const Napi::CallbackInfo &info) {
+  const auto env = info.Env();
+  if (info.Length() != 1 || !info[0].IsNumber()) {
+    Napi::TypeError::New(env, "Expected a backend test ID.").ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  const auto id = info[0].As<Napi::Number>().DoubleValue();
+  if (!std::isfinite(id) || id < 0 || std::floor(id) != id) {
+    Napi::RangeError::New(env, "Invalid onnx-light backend test ID.").ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  try {
+    auto cases = ol::core::backend_test::CollectTestCases();
+    if (id >= cases.size()) {
+      throw std::runtime_error("Unknown onnx-light backend test ID: " + std::to_string(id));
+    }
+    auto model = std::make_shared<StoredModel>();
+    model->backend_case = std::make_shared<ol::core::backend_test::TestCase>(
+        std::move(cases[static_cast<size_t>(id)]));
+    model->backend_case->set_expected_outputs_generated(false);
+    model->model = model->backend_case->model_handle();
+    model->file_name = model->backend_case->name;
+    return ModelHandle(env, model);
   } catch (const std::exception &error) {
     Napi::Error::New(env, error.what()).ThrowAsJavaScriptException();
     return env.Undefined();
@@ -492,6 +551,8 @@ Napi::Object Initialize(Napi::Env env, Napi::Object exports) {
   exports.Set("decodeGraph", Napi::Function::New(env, DecodeGraph));
   exports.Set("getSchema", Napi::Function::New(env, GetSchema));
   exports.Set("loadModel", Napi::Function::New(env, LoadModel));
+  exports.Set("listBackendTests", Napi::Function::New(env, ListBackendTests));
+  exports.Set("loadBackendTest", Napi::Function::New(env, LoadBackendTest));
   return exports;
 }
 

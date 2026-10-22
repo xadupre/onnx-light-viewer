@@ -16,6 +16,7 @@ export function webviewHtml(
   <main class="workspace" aria-label="ONNX graph explorer">
       <header class="graph-toolbar">
         <div><a id="repository-link" href="https://github.com/xadupre/onnx-light-viewer" title="ONNX Light Viewer on GitHub" aria-label="Open the ONNX Light Viewer GitHub repository"><img src="${resource("logo.svg")}" alt="" width="24" height="24"></a><button id="open-model" class="primary">Open ONNX model</button><button id="refresh-shapes" class="icon-button" disabled title="Refresh shape and type information with onnx-light" aria-label="Refresh shape and type information"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2 6M20 4v7h-7"/></svg>Refresh shapes</button><button id="refresh-positions" class="icon-button" disabled title="Reset the portrait layout with new random horizontal positions" aria-label="Refresh node positions"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2 6M20 4v7h-7"/></svg>Refresh positions</button></div>
+        <button id="open-backend-test" class="icon-button" title="Search and open an onnx-light backend test">Backend test</button>
         <div class="graph-stats" aria-live="polite"><span id="graph-summary">1 node / 2 tensors</span><span id="initializer-count">0 initializers</span><span id="shape-status" role="status"></span></div>
       </header>
       <div class="graph-body">
@@ -31,7 +32,6 @@ export function webviewHtml(
           <section id="node-parameters" hidden>
             <h3>Attributes <span id="attribute-count">0</span></h3><ul id="node-attributes"></ul>
             <h3>Initializers <span id="parameter-count">0</span></h3><ul id="node-initializers"></ul>
-            <p>All connected initializers are listed with their shape, type and storage location. Weight values are not displayed; external files are not loaded. Attribute arrays show up to 8 elements.</p>
           </section>
         </aside>
       </div>

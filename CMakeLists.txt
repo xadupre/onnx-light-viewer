@@ -40,7 +40,8 @@ target_compile_features(onnx_light_viewer PRIVATE cxx_std_20)
 target_compile_definitions(onnx_light_viewer PRIVATE NAPI_VERSION=8)
 target_include_directories(onnx_light_viewer PRIVATE ${CMAKE_JS_INC})
 target_link_libraries(onnx_light_viewer PRIVATE
-  onnx_light::lib_onnx_op onnx_light::lib_onnx_shape ${CMAKE_JS_LIB}
+  onnx_light::lib_onnx_op onnx_light::lib_onnx_shape
+  onnx_light::lib_onnx_backend_test ${CMAKE_JS_LIB}
 )
 set(_output "${CMAKE_CURRENT_SOURCE_DIR}/dist/native")
 set_target_properties(onnx_light_viewer PROPERTIES

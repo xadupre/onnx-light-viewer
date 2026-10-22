@@ -663,6 +663,9 @@ byId("close-doc").addEventListener("click", () => byId("operator-doc").close());
 byId("open-model").addEventListener("click", () =>
   vscode.postMessage({ type: "open" }),
 );
+byId("open-backend-test").addEventListener("click", () =>
+  vscode.postMessage({ type: "open-backend-test" }),
+);
 byId("refresh-shapes").addEventListener("click", () => {
   refreshStatus(true, "Inferring shapes/types…");
   vscode.postMessage({ type: "refresh-shapes" });
