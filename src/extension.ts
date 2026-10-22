@@ -46,9 +46,7 @@ function configurePanel(
   };
   panel.iconPath = vscode.Uri.joinPath(mediaRoot, "logo.svg");
   let graph = initialGraph;
-  let isDemo = graph === demoGraph;
-  const sendGraph = () =>
-    panel.webview.postMessage({ type: "graph", graph, isDemo });
+  const sendGraph = () => panel.webview.postMessage({ type: "graph", graph });
   const messages = panel.webview.onDidReceiveMessage(
     async (message: { type?: string } | null) => {
       if (message?.type === "ready") {
@@ -70,7 +68,6 @@ function configurePanel(
             return;
           }
           graph = loadedGraph;
-          isDemo = false;
           panel.title = `ONNX: ${posix.basename(selection[0].path)}`;
           await sendGraph();
         }

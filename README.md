@@ -76,6 +76,8 @@ the extension; Python is not needed to build or run it.
 ## Prototype scope
 
 - Original SVG logo, dark graph canvas, and keyboard-accessible node inspector.
+- Full-window workspace with a compact toolbar. The canvas and inspector adapt
+  to the editor size; resizing preserves node positions and the current zoom.
 - Native onnx-light model loading, operator connections, graph inputs/outputs, and
   initializer count.
 - A random horizontal position for each operator on every model load; vertical
