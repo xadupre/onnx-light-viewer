@@ -63,23 +63,23 @@ the node indices.
 The workspace fills the editor and adapts when it is resized. Resizing and
 zooming preserve node positions.
 
-Moving and selecting operators
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Moving and selecting nodes
+~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Drag an operator to move it. Connections and tensor labels follow its position,
-including while zoomed in or out. These changes affect only the current view;
-they do not modify or save the ONNX model.
+Drag an operator, input or output to move it. Connections and tensor labels
+follow its position, including while zoomed in or out. These changes affect only
+the current view; they do not modify or save the ONNX model.
 
-Hold Ctrl, Cmd or Shift while clicking operators to toggle their selection.
-Alternatively, drag a rectangle on the graph background to select operators;
+Hold Ctrl, Cmd or Shift while clicking nodes to toggle their selection.
+Alternatively, drag a rectangle on the graph background to select nodes;
 hold a selection modifier to add to the existing selection. Drag any selected
-operator to move the entire selection, preserving relative positions.
+node to move the entire selection, preserving relative positions.
 
 Click the background to clear the selection. Ctrl+A (Cmd+A on macOS) selects
-all operators when the graph has focus. Enter or Space selects a focused
-operator, with the same modifiers for multi-selection. Escape cancels an active
-drag or selection rectangle; otherwise it clears the selection.
-**Fit** includes operators moved outside the original layout.
+all operators, inputs and outputs when the graph has focus. Enter or Space
+selects a focused node, with the same modifiers for multi-selection. Escape
+cancels an active drag or selection rectangle; otherwise it clears the selection.
+**Fit** includes all nodes moved outside the original layout.
 
 Opening an ``.onnx`` file directly in VS Code also uses the viewer. Choose
 **Reopen Editor With...** if another installed ONNX editor handles the file.

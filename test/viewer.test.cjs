@@ -169,8 +169,8 @@ function chainGraph() {
   };
 }
 
-function nodePositions(document) {
-  return Array.from(document.querySelectorAll(".graph-node rect"), (rect) => {
+function nodePositions(document, selector = ".graph-node rect") {
+  return Array.from(document.querySelectorAll(selector), (rect) => {
     const [dx, dy] = rect.parentElement
       .getAttribute("transform")
       ?.match(/-?\d+(?:\.\d+)?(?:e[+-]?\d+)?/gi)
@@ -551,4 +551,151 @@ test("Fit includes operators dragged beyond the original bounds without snapping
   assert.ok(moved.x - 80 >= x && moved.x + 80 <= x + width);
   assert.ok(moved.y - 47 >= y && moved.y + 47 <= y + height);
   assert.notEqual(graph.getAttribute("viewBox"), viewBoxBefore);
+});
+
+test("drags graph inputs and outputs independently at zoom and updates their edges", (t) => {
+  const { document, load, pointer } = openViewer(t);
+  load(demoGraph);
+  document.getElementById("zoom-in").click();
+  const graph = document.getElementById("graph");
+  for (const [selector, index, title, name, edgeIndex] of [
+    [".port:not(.output)", 0, "Graph input", "input", 0],
+    [".port.output", 2, "Graph output", "output", 1],
+  ]) {
+    const before = nodePositions(document, "#nodes rect");
+    const paths = Array.from(document.querySelectorAll(".edge"), (edge) =>
+      edge.getAttribute("d"),
+    );
+    const start = before[index];
+    pointer(document.querySelector(selector), "pointerdown", start.x, start.y);
+    pointer(graph, "pointermove", start.x + 45, start.y - 30);
+    assertMoved(
+      before,
+      nodePositions(document, "#nodes rect"),
+      [index],
+      45,
+      -30,
+    );
+    assert.notEqual(
+      document.querySelectorAll(".edge")[edgeIndex].getAttribute("d"),
+      paths[edgeIndex],
+    );
+    assert.equal(
+      document.querySelectorAll(".edge")[1 - edgeIndex].getAttribute("d"),
+      paths[1 - edgeIndex],
+    );
+    pointer(graph, "pointerup", start.x + 45, start.y - 30);
+    assert.equal(
+      document.querySelector(selector).getAttribute("aria-pressed"),
+      "true",
+    );
+    assert.equal(document.getElementById("node-title").textContent, title);
+    assert.equal(document.getElementById("node-name").textContent, name);
+    assert.equal(document.getElementById("node-domain").textContent, "—");
+  }
+});
+
+test("rectangle and modifier selections mix ports with operators and move as one group", (t) => {
+  const { document, load, pointer, window } = openViewer(t);
+  load(demoGraph);
+  const graph = document.getElementById("graph");
+  const before = nodePositions(document, "#nodes rect");
+  const input = before[0];
+  pointer(graph, "pointerdown", input.x + 75, input.y - 5);
+  pointer(graph, "pointerup", input.x + 61, input.y + 5);
+  assert.equal(document.querySelectorAll("#nodes .selected").length, 0);
+  pointer(graph, "pointerdown", input.x + 75, input.y - 5);
+  pointer(graph, "pointerup", input.x + 59, input.y + 5);
+  assert.equal(
+    document.querySelector(".port:not(.output)").getAttribute("aria-pressed"),
+    "true",
+  );
+  for (const [index, selector, key] of [
+    [1, ".graph-node", "ctrlKey"],
+    [2, ".port.output", "shiftKey"],
+  ]) {
+    pointer(
+      document.querySelector(selector),
+      "pointerdown",
+      before[index].x,
+      before[index].y,
+      { [key]: true },
+    );
+    pointer(graph, "pointerup", before[index].x, before[index].y, {
+      [key]: true,
+    });
+  }
+  assert.equal(document.querySelectorAll("#nodes .selected").length, 3);
+  pointer(
+    document.querySelector(".port.output"),
+    "pointerdown",
+    before[2].x,
+    before[2].y,
+  );
+  pointer(graph, "pointerup", before[2].x - 40, before[2].y + 25);
+  assertMoved(
+    before,
+    nodePositions(document, "#nodes rect"),
+    [0, 1, 2],
+    -40,
+    25,
+  );
+  graph.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape" }));
+  graph.dispatchEvent(
+    new window.KeyboardEvent("keydown", { key: "a", ctrlKey: true }),
+  );
+  assert.equal(document.querySelectorAll("#nodes .selected").length, 3);
+  document.querySelector(".port.output").dispatchEvent(
+    new window.KeyboardEvent("keydown", {
+      key: " ",
+      shiftKey: true,
+      bubbles: true,
+    }),
+  );
+  assert.equal(document.querySelectorAll("#nodes .selected").length, 2);
+});
+
+test("same-name input/output nodes remain distinct and Fit includes moved ports without operators", (t) => {
+  const { document, load, pointer, window } = openViewer(t);
+  load({
+    name: "passthrough",
+    nodes: [],
+    inputs: ["x"],
+    outputs: ["x"],
+    initializerCount: 0,
+  });
+  const graph = document.getElementById("graph");
+  const before = nodePositions(document, ".port rect");
+  const input = document.querySelector(".port:not(.output)");
+  const output = document.querySelector(".port.output");
+  assert.notEqual(input.dataset.id, output.dataset.id);
+  graph.dispatchEvent(
+    new window.KeyboardEvent("keydown", { key: "a", metaKey: true }),
+  );
+  assert.equal(document.querySelectorAll(".port.selected").length, 2);
+  pointer(input, "pointerdown", before[0].x, before[0].y);
+  pointer(graph, "pointerup", before[0].x - 1000, before[0].y - 1000);
+  const after = nodePositions(document, ".port rect");
+  assertMoved(before, after, [0, 1], -1000, -1000);
+  const endpoints = document
+    .querySelector(".edge")
+    .getAttribute("d")
+    .match(/-?\d+(?:\.\d+)?(?:e[+-]?\d+)?/gi)
+    .map(Number);
+  assert.ok(Math.abs(endpoints[0] - after[0].x) < 1e-8);
+  assert.ok(Math.abs(endpoints[1] - after[0].y - 26) < 1e-8);
+  assert.ok(Math.abs(endpoints[6] - after[1].x) < 1e-8);
+  assert.ok(Math.abs(endpoints[7] - after[1].y + 26) < 1e-8);
+  document.getElementById("zoom-fit").click();
+  const [x, y, width, height] = graph
+    .getAttribute("viewBox")
+    .split(" ")
+    .map(Number);
+  for (const port of after) {
+    assert.ok(port.x - 60 >= x && port.x + 60 <= x + width);
+    assert.ok(port.y - 26 >= y && port.y + 26 <= y + height);
+  }
+  load(demoGraph);
+  assert.equal(document.querySelectorAll(".port.selected").length, 0);
+  assert.equal(document.querySelectorAll(".graph-node.selected").length, 1);
 });

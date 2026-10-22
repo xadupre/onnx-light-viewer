@@ -103,7 +103,8 @@ p {
   user-select: none;
 }
 #graph.dragging,
-#graph.dragging .graph-node {
+#graph.dragging .graph-node,
+#graph.dragging .port {
   cursor: grabbing;
 }
 #graph.selecting {
@@ -130,7 +131,8 @@ p {
   fill: var(--muted);
   font-size: 10px;
 }
-.graph-node {
+.graph-node,
+.port {
   cursor: grab;
 }
 .graph-node rect {
@@ -169,6 +171,11 @@ p {
 .port.output rect {
   stroke: #45698b;
   fill: #17283a;
+}
+.port.selected rect,
+.port:hover rect {
+  stroke: var(--mint);
+  stroke-width: 2;
 }
 .port .port-type {
   fill: var(--muted);
@@ -276,7 +283,8 @@ li {
     fill: Canvas;
     stroke: CanvasText;
   }
-  .graph-node.selected rect {
+  .graph-node.selected rect,
+  .port.selected rect {
     stroke: Highlight;
   }
   .selection-rectangle {

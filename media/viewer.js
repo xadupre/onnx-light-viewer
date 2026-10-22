@@ -34,20 +34,36 @@ function shortName(value, length = 22) {
   return value.length > length ? `${value.slice(0, length - 1)}…` : value;
 }
 
-function inspect(node) {
+function inspect(view) {
+  const node = view?.node;
+  const port = view?.port;
+  const hasOperators = [...nodeViews.values()].some((view) => view.node);
   byId("node-title").textContent =
-    node?.opType ?? (nodeViews.size ? "No selection" : "No operator");
+    node?.opType ??
+    (port
+      ? port.output
+        ? "Graph output"
+        : "Graph input"
+      : hasOperators
+        ? "No selection"
+        : "No operator");
   byId("node-description").textContent = node
     ? node.opType === "Relu" && node.domain === "ai.onnx"
       ? "Rectified linear activation: max(0, x)."
       : `${node.opType} operator`
-    : nodeViews.size
-      ? "Select an operator to inspect its inputs and outputs."
-      : "This graph contains no operator nodes.";
-  byId("node-name").textContent = node?.name ?? "—";
+    : port
+      ? `Graph ${port.output ? "output" : "input"} tensor.`
+      : hasOperators
+        ? "Select a node to inspect its inputs and outputs."
+        : "This graph contains no operator nodes.";
+  byId("node-name").textContent = node?.name ?? port?.name ?? "—";
   byId("node-domain").textContent = node?.domain ?? "—";
   for (const direction of ["inputs", "outputs"]) {
-    const names = node?.[direction] ?? [];
+    const names =
+      node?.[direction] ??
+      (port && direction === (port.output ? "inputs" : "outputs")
+        ? [port.name]
+        : []);
     byId(`${direction === "inputs" ? "input" : "output"}-count`).textContent =
       names.length;
     byId(`node-${direction}`).replaceChildren(
@@ -65,7 +81,27 @@ function updateSelection(activeId) {
     group.classList.toggle("selected", selected.has(id));
     group.setAttribute("aria-pressed", String(selected.has(id)));
   }
-  inspect(nodeViews.get(activeId ?? [...selected].at(-1))?.node);
+  inspect(nodeViews.get(activeId ?? [...selected].at(-1)));
+}
+
+function registerNode(id, view) {
+  view.initial = { ...view.position };
+  nodeViews.set(id, view);
+  const { group } = view;
+  group.setAttribute("tabindex", "0");
+  group.setAttribute("role", "button");
+  group.setAttribute("data-id", id);
+  group.addEventListener("click", (event) => {
+    if (event.detail === 0) {
+      selectNode(id, event.ctrlKey || event.metaKey || event.shiftKey);
+    }
+  });
+  group.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      selectNode(id, event.ctrlKey || event.metaKey || event.shiftKey);
+    }
+  });
 }
 
 function selectNode(id, additive) {
@@ -167,12 +203,12 @@ function moveGesture(event) {
       gesture.rectangle.setAttribute(key, value);
     }
     selected = new Set(gesture.baseSelected);
-    for (const [id, { position }] of nodeViews) {
+    for (const [id, { position, halfWidth, halfHeight }] of nodeViews) {
       if (
-        position.x + 80 >= x &&
-        position.x - 80 <= x + width &&
-        position.y + 47 >= y &&
-        position.y - 47 <= y + height
+        position.x + halfWidth >= x &&
+        position.x - halfWidth <= x + width &&
+        position.y + halfHeight >= y &&
+        position.y - halfHeight <= y + height
       ) {
         selected.add(id);
       }
@@ -186,11 +222,11 @@ function reframe() {
   let y = 0;
   let right = layoutBounds.width;
   let bottom = layoutBounds.height;
-  for (const { position } of nodeViews.values()) {
-    x = Math.min(x, position.x - 100);
-    y = Math.min(y, position.y - 67);
-    right = Math.max(right, position.x + 100);
-    bottom = Math.max(bottom, position.y + 67);
+  for (const { position, halfWidth, halfHeight } of nodeViews.values()) {
+    x = Math.min(x, position.x - halfWidth - 20);
+    y = Math.min(y, position.y - halfHeight - 20);
+    right = Math.max(right, position.x + halfWidth + 20);
+    bottom = Math.max(bottom, position.y + halfHeight + 20);
   }
   bounds = { x, y, width: right - x, height: bottom - y };
 }
@@ -261,7 +297,10 @@ function render(graph) {
       x: ((index + 1) * bounds.width) / (count + 1),
       y: output ? bounds.height - 60 : 60,
     };
-    const group = element("g", { class: `port${output ? " output" : ""}` });
+    const group = element("g", {
+      class: `port${output ? " output" : ""}`,
+      "aria-label": `${output ? "Output" : "Input"}: ${name}`,
+    });
     group.append(
       element("title", {}, name),
       element("rect", {
@@ -280,6 +319,13 @@ function render(graph) {
       "port-type",
     );
     label(group, position.x, position.y + 12, shortName(name, 16), "port-name");
+    registerNode(`${output ? "output" : "input"}-${index}`, {
+      port: { name, output },
+      group,
+      position,
+      halfWidth: 60,
+      halfHeight: 26,
+    });
     nodes.append(group);
     return position;
   };
@@ -306,10 +352,7 @@ function render(graph) {
     const position = positions.get(node.id);
     const group = element("g", {
       class: "graph-node",
-      tabindex: 0,
-      role: "button",
       "aria-label": `${node.opType}: ${node.name}`,
-      "data-id": node.id,
     });
     group.append(
       element("title", {}, `${node.name} (${node.opType})`),
@@ -336,22 +379,12 @@ function render(graph) {
       shortName(node.name),
       "operator-name",
     );
-    nodeViews.set(node.id, {
+    registerNode(node.id, {
       node,
       group,
       position,
-      initial: { ...position },
-    });
-    group.addEventListener("click", (event) => {
-      if (event.detail === 0) {
-        selectNode(node.id, event.ctrlKey || event.metaKey || event.shiftKey);
-      }
-    });
-    group.addEventListener("keydown", (event) => {
-      if (event.key === "Enter" || event.key === " ") {
-        event.preventDefault();
-        selectNode(node.id, event.ctrlKey || event.metaKey || event.shiftKey);
-      }
+      halfWidth: 80,
+      halfHeight: 47,
     });
     nodes.append(group);
     for (const input of node.inputs) {
@@ -385,10 +418,9 @@ svg.addEventListener("pointerdown", (event) => {
   if (event.button !== 0 || gesture || !svg.hasAttribute("viewBox")) return;
   const start = graphPoint(event);
   if (!start) return;
-  const group = event.target.closest(".graph-node");
+  const group = event.target.closest(".graph-node, .port");
   const additive = event.ctrlKey || event.metaKey || event.shiftKey;
   const originalSelected = new Set(selected);
-  if (!group && event.target.closest(".port")) return;
   event.preventDefault();
   if (group) {
     selectNode(group.dataset.id, additive);
