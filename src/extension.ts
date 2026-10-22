@@ -9,6 +9,7 @@ import {
   listBackendTests,
   loadBackendTest,
   loadModel,
+  onnxLightVersion,
   Graph,
   NativeModel,
   GraphMetadata,
@@ -326,5 +327,10 @@ function configurePanel(
   const resource = (name: string) =>
     panel.webview.asWebviewUri(vscode.Uri.joinPath(mediaRoot, name)).toString();
   const nonce = randomBytes(16).toString("hex");
-  panel.webview.html = webviewHtml(resource, panel.webview.cspSource, nonce);
+  panel.webview.html = webviewHtml(
+    resource,
+    panel.webview.cspSource,
+    nonce,
+    onnxLightVersion,
+  );
 }

@@ -869,6 +869,7 @@ Napi::Value LoadBackendTest(const Napi::CallbackInfo &info) {
 }
 
 Napi::Object Initialize(Napi::Env env, Napi::Object exports) {
+  exports.Set("onnxLightVersion", ONNX_LIGHT_VERSION);
   exports.Set("decodeGraph", Napi::Function::New(env, DecodeGraph));
   exports.Set("getSchema", Napi::Function::New(env, GetSchema));
   exports.Set("loadModel", Napi::Function::New(env, LoadModel));

@@ -131,6 +131,7 @@ export interface BackendTest {
 }
 
 const native: {
+  onnxLightVersion: string;
   decodeGraph(bytes: Uint8Array, fileName: string, inferShapes: boolean): Graph;
   getSchema(
     opType: string,
@@ -141,6 +142,8 @@ const native: {
   listBackendTests(): BackendTest[];
   loadBackendTest(id: number): NativeModel;
 } = require("./native/onnx_light_viewer.node");
+
+export const onnxLightVersion = native.onnxLightVersion;
 
 export const demoGraph: Graph = {
   name: "A first ONNX graph",
