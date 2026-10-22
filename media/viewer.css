@@ -106,13 +106,15 @@ a:focus-visible {
   stroke-linecap: round;
   stroke-linejoin: round;
 }
-#shape-status {
+#shape-status,
+#metadata-status {
   max-width: 38ch;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
 }
-#shape-status:empty {
+#shape-status:empty,
+#metadata-status:empty {
   display: none;
 }
 .graph-stats {
@@ -350,9 +352,6 @@ button:disabled {
 #metadata-analysis dt,
 #metadata-analysis dd {
   margin: 0;
-}
-#metadata-status:empty {
-  display: none;
 }
 #metadata-panel details {
   margin-top: 10px;

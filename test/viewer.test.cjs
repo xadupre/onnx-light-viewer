@@ -86,6 +86,62 @@ function openViewer(t) {
   };
 }
 
+test("refreshes whole-model metadata from the global toolbar with the inspector closed", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const refresh = document.getElementById("refresh-metadata");
+  assert.equal(refresh.disabled, true);
+  const model = loadModel(
+    readFileSync(require.resolve("./models/analysis.onnx")),
+    "analysis.onnx",
+  );
+  load(model.graph());
+  assert.ok(refresh.closest(".graph-toolbar"));
+  assert.ok(
+    document.getElementById("metadata-status").closest(".graph-toolbar"),
+  );
+  assert.equal(refresh.disabled, false);
+  refresh.click();
+  assert.equal(messages.at(-1).type, "metadata");
+  assert.equal(refresh.disabled, true);
+  assert.equal(document.getElementById("metadata-panel").hidden, true);
+  assert.match(
+    document.getElementById("metadata-status").textContent,
+    /Analyzing/,
+  );
+  document.getElementById("canvas").getBoundingClientRect = () =>
+    new window.DOMRect(0, 0, 1060, 300);
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: { type: "metadata-info", metadata: model.metadata() },
+    }),
+  );
+  assert.equal(
+    document.getElementById("metadata-status").textContent,
+    "Metadata refreshed",
+  );
+  assert.equal(document.getElementById("metadata-panel").hidden, true);
+  assert.equal(refresh.disabled, false);
+  const [, , width, height] = document
+    .getElementById("graph")
+    .getAttribute("viewBox")
+    .split(" ")
+    .map(Number);
+  assert.ok(Math.abs(width / height - 1060 / 300) < 1e-9);
+  const count = messages.length;
+  document.getElementById("show-metadata").click();
+  assert.equal(messages.length, count);
+  document
+    .querySelector('[data-id="node-5"]')
+    .dispatchEvent(
+      new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+    );
+  assert.equal(
+    document.getElementById("metadata-releases").textContent,
+    "shared;activationconstant_sum",
+  );
+  assert.equal(document.querySelectorAll(".edge.released").length, 4);
+});
+
 test("shows native metadata in the sidebar and marks released and never-used results without changing the layout", (t) => {
   const { document, window, messages, load, pointer } = openViewer(t);
   const model = loadModel(
@@ -277,7 +333,10 @@ test("reports metadata errors, allows retry and clears stale metadata and releas
     }),
   );
   assert.equal(refresh.disabled, false);
-  assert.equal(document.getElementById("metadata-status").textContent, "");
+  assert.equal(
+    document.getElementById("metadata-status").textContent,
+    "Metadata refreshed",
+  );
   assert.notEqual(
     document.getElementById("metadata-analysis").firstElementChild,
     content,

@@ -318,14 +318,22 @@ function inspectMetadata() {
   );
 }
 
+function metadataStatus(pending, message = "") {
+  metadataPending = pending;
+  byId("show-metadata").setAttribute("aria-busy", String(pending));
+  byId("refresh-metadata").disabled = pending;
+  byId("refresh-metadata").setAttribute("aria-busy", String(pending));
+  byId("metadata-status").textContent = message;
+  byId("metadata-status").title = message;
+  if (gesture) gesture.viewport = undefined;
+  if (svg.hasAttribute("viewBox")) fit();
+}
+
 function acceptMetadata(metadata) {
   graphMetadata = metadata;
   nodeMetadata = new Map(metadata.nodes.map((node) => [node.id, node]));
   valueMetadata = new Map(metadata.values.map((value) => [value.name, value]));
-  metadataPending = false;
-  byId("show-metadata").setAttribute("aria-busy", "false");
-  byId("refresh-metadata").disabled = false;
-  byId("metadata-status").textContent = "";
+  metadataStatus(false, "Metadata refreshed");
   byId("metadata-content").hidden = false;
   metadataEntries(byId("metadata-model"), metadata.model);
   metadataEntries(byId("metadata-graph"), metadata.graph);
@@ -352,11 +360,8 @@ function acceptMetadata(metadata) {
 
 function requestMetadata() {
   if (metadataPending) return;
-  metadataPending = true;
-  byId("show-metadata").setAttribute("aria-busy", "true");
-  byId("refresh-metadata").disabled = true;
+  metadataStatus(true, "Analyzing metadata…");
   byId("metadata-content").hidden = !graphMetadata;
-  byId("metadata-status").textContent = "Analyzing metadata…";
   vscode.postMessage({ type: "metadata" });
 }
 
@@ -607,16 +612,13 @@ function render(graph, metadata) {
   connectionsByPosition = new Map();
   hasOperators = graph.nodes.length > 0;
   graphMetadata = undefined;
-  metadataPending = false;
   nodeMetadata = new Map();
   valueMetadata = new Map();
   connectionsByName = new Map();
   releasedValues = new Set();
   unusedLabels = [];
   byId("metadata-content").hidden = true;
-  byId("metadata-status").textContent = "";
-  byId("show-metadata").setAttribute("aria-busy", "false");
-  byId("refresh-metadata").disabled = false;
+  metadataStatus(false);
   const tensors = new Set([
     ...graph.inputs,
     ...graph.outputs,
@@ -968,11 +970,7 @@ window.addEventListener("message", (event) => {
   } else if (event.data?.type === "metadata-info") {
     acceptMetadata(event.data.metadata);
   } else if (event.data?.type === "metadata-error") {
-    metadataPending = false;
-    byId("show-metadata").setAttribute("aria-busy", "false");
-    byId("refresh-metadata").disabled = false;
-    byId("metadata-status").textContent =
-      `Metadata analysis failed: ${event.data.error}`;
+    metadataStatus(false, `Metadata analysis failed: ${event.data.error}`);
   } else if (event.data?.type === "shape-info") {
     updateTensorInformation(event.data.tensors);
     inspect(inspectedView);
