@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 430" role="img" aria-labelledby="title description">
+  <title id="title">The onnx-light projects</title>
+  <desc id="description">onnx-light decodes ONNX models for the viewer. onnx-light-cpu supplies CPU kernels for onnx-light. onnx-light-ort connects onnx-light and ONNX Runtime in both directions.</desc>
+  <style>
+    @media (prefers-color-scheme: dark) {
+      [fill="#f8fafc"] { fill: #0f172a; }
+      [fill="#475569"] { fill: #94a3b8; }
+      [stroke="#475569"] { stroke: #94a3b8; }
+      [fill="#334155"] { fill: #e2e8f0; }
+      [fill="#dbeafe"] { fill: #172554; }
+      [stroke="#2563eb"] { stroke: #60a5fa; }
+      [fill="#1e3a8a"] { fill: #bfdbfe; }
+      [fill="#dcfce7"] { fill: #052e16; }
+      [stroke="#15803d"] { stroke: #4ade80; }
+      [fill="#14532d"] { fill: #bbf7d0; }
+      [fill="#f3e8ff"] { fill: #3b0764; }
+      [stroke="#9333ea"] { stroke: #c084fc; }
+      [fill="#581c87"] { fill: #e9d5ff; }
+    }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 Z" fill="#475569"/>
+    </marker>
+  </defs>
+  <rect width="800" height="430" rx="16" fill="#f8fafc"/>
+  <g fill="none" stroke="#475569" stroke-width="2" marker-end="url(#arrow)">
+    <path d="M 400 162 V 112"/>
+    <path d="M 200 320 L 320 258"/>
+    <path d="M 600 320 L 480 258" marker-start="url(#arrow)"/>
+  </g>
+  <g font-family="sans-serif" text-anchor="middle">
+    <g fill="#334155" font-size="15">
+      <text x="490" y="140">model decoding</text>
+      <text x="215" y="282">CPU kernels</text>
+      <text x="598" y="282">interoperability</text>
+    </g>
+    <rect x="250" y="22" width="300" height="90" rx="10" fill="#dbeafe" stroke="#2563eb" stroke-width="2"/>
+    <text x="400" y="57" fill="#1e3a8a" font-size="21" font-weight="bold">onnx-light-viewer</text>
+    <text x="400" y="85" fill="#334155" font-size="16">Inspect graphs in VS Code</text>
+    <rect x="250" y="162" width="300" height="96" rx="10" fill="#dbeafe" stroke="#2563eb" stroke-width="2"/>
+    <text x="400" y="199" fill="#1e3a8a" font-size="21" font-weight="bold">onnx-light</text>
+    <text x="400" y="229" fill="#334155" font-size="16">ONNX without protobuf</text>
+    <rect x="35" y="320" width="330" height="90" rx="10" fill="#dcfce7" stroke="#15803d" stroke-width="2"/>
+    <text x="200" y="355" fill="#14532d" font-size="21" font-weight="bold">onnx-light-cpu</text>
+    <text x="200" y="383" fill="#334155" font-size="16">Optimized CPU kernels</text>
+    <rect x="435" y="320" width="330" height="90" rx="10" fill="#f3e8ff" stroke="#9333ea" stroke-width="2"/>
+    <text x="600" y="355" fill="#581c87" font-size="21" font-weight="bold">onnx-light-ort</text>
+    <text x="600" y="383" fill="#334155" font-size="16">Bridge to / from ONNX Runtime</text>
+  </g>
+</svg>
