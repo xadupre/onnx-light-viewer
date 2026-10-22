@@ -1,7 +1,6 @@
 from pathlib import Path
 
-import onnx
-from onnx import TensorProto, helper
+from onnx_light.onnx import TensorProto, checker, helper, save_model
 
 
 graph = helper.make_graph(
@@ -16,5 +15,5 @@ model = helper.make_model(
     ir_version=9,
     opset_imports=[helper.make_opsetid("", 13)],
 )
-onnx.checker.check_model(model)
-onnx.save_model(model, Path(__file__).with_name("relu.onnx"))
+checker.check_model(model)
+save_model(model, Path(__file__).with_name("relu.onnx"))
