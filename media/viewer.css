@@ -183,6 +183,21 @@ a:focus-visible {
 .icon-button:hover:not(:disabled) {
   background: #293c4e;
 }
+.icon-button[data-refresh-status]:not([data-refresh-status="idle"]) {
+  border-color: currentColor;
+}
+.icon-button[data-refresh-status="pending"] {
+  color: #f3d080;
+}
+.icon-button[data-refresh-status="updated"] {
+  color: var(--mint);
+}
+.icon-button[data-refresh-status="unchanged"] {
+  color: #9cc9ff;
+}
+.icon-button[data-refresh-status="failed"] {
+  color: #ff9e9e;
+}
 .icon-button svg {
   fill: none;
   stroke: currentColor;

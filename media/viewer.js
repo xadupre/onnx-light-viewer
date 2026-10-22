@@ -331,9 +331,21 @@ function refreshPositions() {
   fit();
 }
 
-function refreshStatus(pending, message = "") {
+function refreshButtonStatus(id, status, message) {
+  const button = byId(id);
+  button.dataset.defaultTitle ??= button.title;
+  button.dataset.refreshStatus = status;
+  button.title = message || button.dataset.defaultTitle;
+}
+
+function refreshStatus(
+  pending,
+  message = "",
+  status = pending ? "pending" : "idle",
+) {
   byId("refresh-shapes").disabled = pending;
   byId("refresh-shapes").setAttribute("aria-busy", String(pending));
+  refreshButtonStatus("refresh-shapes", status, message);
   byId("shape-status").textContent = message;
   byId("shape-status").title = message;
   // Status changes can wrap the toolbar and resize the canvas.
@@ -528,11 +540,17 @@ function inspectMetadata() {
   );
 }
 
-function metadataStatus(pending, message = "") {
+function metadataStatus(
+  pending,
+  message = "",
+  status = pending ? "pending" : "idle",
+) {
   metadataPending = pending;
   byId("show-metadata").setAttribute("aria-busy", String(pending));
   byId("refresh-metadata").disabled = pending;
   byId("refresh-metadata").setAttribute("aria-busy", String(pending));
+  refreshButtonStatus("show-metadata", status, message);
+  refreshButtonStatus("refresh-metadata", status, message);
   byId("metadata-status").textContent = message;
   byId("metadata-status").title = message;
   if (gesture) gesture.viewport = undefined;
@@ -551,6 +569,7 @@ function acceptMetadata(metadata) {
   metadataStatus(
     false,
     `Metadata refreshed: ${updates} update${updates === 1 ? "" : "s"}`,
+    updates ? "updated" : "unchanged",
   );
   byId("metadata-content").hidden = false;
   metadataEntries(byId("metadata-model"), metadata.model);
@@ -1409,16 +1428,25 @@ window.addEventListener("message", (event) => {
   } else if (event.data?.type === "metadata-info") {
     acceptMetadata(event.data.metadata);
   } else if (event.data?.type === "metadata-error") {
-    metadataStatus(false, `Metadata analysis failed: ${event.data.error}`);
+    metadataStatus(
+      false,
+      `Metadata analysis failed: ${event.data.error}`,
+      "failed",
+    );
   } else if (event.data?.type === "shape-info") {
     const updates = updateTensorInformation(event.data.tensors);
     inspect(inspectedView);
     refreshStatus(
       false,
       `Shapes/types refreshed: ${updates} tensor${updates === 1 ? "" : "s"} updated`,
+      updates ? "updated" : "unchanged",
     );
   } else if (event.data?.type === "shape-error") {
-    refreshStatus(false, `Shape/type inference failed: ${event.data.error}`);
+    refreshStatus(
+      false,
+      `Shape/type inference failed: ${event.data.error}`,
+      "failed",
+    );
   }
 });
 setLoading(true);
