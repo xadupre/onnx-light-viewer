@@ -10,7 +10,7 @@ const {
 } = require("../dist/graph");
 const { webviewHtml } = require("../dist/webview");
 
-function openViewer(t) {
+function openViewer(t, initialTab = "model") {
   const messages = [];
   const events = [];
   const dom = new JSDOM(
@@ -19,6 +19,7 @@ function openViewer(t) {
       "https://viewer.invalid",
       "test-nonce",
       onnxLightVersion,
+      initialTab,
     ),
     { runScripts: "outside-only" },
   );
@@ -188,6 +189,67 @@ test("updates one action row, safely renders errors and retains history across m
   await Promise.resolve();
   assert.equal(row.dataset.status, "FAILED");
 });
+
+for (const initialTab of ["model", "logs"]) {
+  test(`opens logs at the latest event with ${initialTab} initially selected`, (t) => {
+    const { document, window } = openViewer(t, initialTab);
+    const panel = document.getElementById("logs-view");
+    Object.defineProperties(panel, {
+      clientHeight: { get: () => (panel.hidden ? 0 : 100) },
+      scrollHeight: {
+        get: () =>
+          panel.hidden
+            ? 0
+            : 160 +
+              document.getElementById("log-entries").children.length * 100,
+      },
+    });
+    const entries = Array.from({ length: 20 }, (_, i) => ({
+      id: `host:${i}`,
+      timestamp: "2026-10-22T20:00:00.000Z",
+      action: `Action ${i}`,
+      status: "SUCCEEDED",
+    }));
+    const receive = (data) =>
+      window.dispatchEvent(new window.MessageEvent("message", { data }));
+    receive({ type: "log-history", entries });
+    assert.equal(panel.scrollTop, panel.hidden ? 0 : panel.scrollHeight);
+
+    document.getElementById("logs-tab").click();
+    assert.equal(panel.scrollTop, panel.scrollHeight);
+
+    panel.scrollTop = 0;
+    receive({
+      type: "log-entry",
+      entry: { ...entries[0], id: "host:live" },
+    });
+    assert.equal(panel.scrollTop, 0);
+
+    document.getElementById("model-tab").click();
+    document.getElementById("model-tab").dispatchEvent(
+      new window.KeyboardEvent("keydown", {
+        key: "ArrowRight",
+        bubbles: true,
+      }),
+    );
+    assert.equal(panel.hidden, false);
+    assert.equal(panel.scrollTop, panel.scrollHeight);
+
+    panel.scrollTop = panel.scrollHeight - panel.clientHeight;
+    receive({
+      type: "log-entry",
+      entry: { ...entries[0], id: "host:follow" },
+    });
+    assert.equal(panel.scrollTop, panel.scrollHeight);
+
+    panel.scrollTop = 0;
+    document.getElementById("status-tab").click();
+    receive({ type: "show-logs" });
+    assert.equal(panel.hidden, false);
+    assert.equal(panel.scrollTop, panel.scrollHeight);
+    assert.equal(document.activeElement.id, "logs-tab");
+  });
+}
 
 test("opens graph attributes and nested breadcrumbs, including empty graphs and failed navigation", (t) => {
   const { document, window, messages, load } = openViewer(t);
