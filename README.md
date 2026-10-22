@@ -6,6 +6,8 @@
 
 An interactive ONNX graph viewer for VS Code, using native onnx-light decoding.
 
+![ONNX Light Viewer showing a graph with symbolic tensor shapes and the Reshape node's parameters](docs/_static/viewer-snapshot.png)
+
 ## Quick start
 
 Requires Node.js 22+, npm, VS Code 1.96+ with `code` on `PATH`, CMake 3.24+,
