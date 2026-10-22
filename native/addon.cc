@@ -75,6 +75,11 @@ struct ChildProto {
   bool repeated;
 };
 
+struct LimitScope {
+  bool child = false;
+  bool packed = false;
+};
+
 std::optional<ChildProto> ChildMessage(ProtoKind parent, uint32_t field) {
   switch (parent) {
   case ProtoKind::Model:
@@ -211,7 +216,7 @@ public:
 
   void LimitToNext(uint64_t len) override {
     stream_.LimitToNext(len);
-    limit_scopes_.push_back(false);
+    limit_scopes_.push_back({});
     auto &frame = frames_.back();
     if (const auto child = ChildMessage(frame.kind, frame.field); child && frame.wire_type == 2) {
       const size_t index = child->repeated ? frame.child_counts[frame.field]++ : 0;
@@ -221,26 +226,22 @@ public:
       child_frame.kind = child->kind;
       child_frame.path = std::move(path);
       frames_.push_back(std::move(child_frame));
-      limit_scopes_.back() = true;
+      limit_scopes_.back().child = true;
     } else if (frame.kind == ProtoKind::Tensor && frame.packed_values) {
-      packed_limits_.push_back(true);
-    } else {
-      packed_limits_.push_back(false);
+      limit_scopes_.back().packed = true;
     }
   }
 
   void Restore() override {
-    if (limit_scopes_.back()) {
+    const auto scope = limit_scopes_.back();
+    if (scope.child) {
       auto &frame = frames_.back();
       if (frame.kind == ProtoKind::Tensor && !frame.skipped_fields.empty())
         skipped_.push_back({frame.path, std::move(frame.skipped_fields)});
       frames_.pop_back();
     }
-    if (!packed_limits_.empty()) {
-      if (packed_limits_.back() && frames_.back().kind == ProtoKind::Tensor)
-        frames_.back().packed_values = false;
-      packed_limits_.pop_back();
-    }
+    if (scope.packed && frames_.back().kind == ProtoKind::Tensor)
+      frames_.back().packed_values = false;
     limit_scopes_.pop_back();
     stream_.Restore();
   }
@@ -259,8 +260,7 @@ private:
   ol::utils::BinaryStream &stream_;
   uint64_t threshold_;
   std::vector<ProtoFrame> frames_;
-  std::vector<bool> limit_scopes_;
-  std::vector<bool> packed_limits_;
+  std::vector<LimitScope> limit_scopes_;
   std::vector<SkippedTensorPayload> skipped_;
 };
 
@@ -501,6 +501,13 @@ std::string PreviewCount(size_t count) {
   return count ? " ... (" + std::to_string(count) + " elements)" : "";
 }
 
+bool IsPayloadOmitted(const ol::TensorProto &tensor) {
+  return std::any_of(tensor.external_data().begin(), tensor.external_data().end(),
+                     [](const auto &entry) {
+                       return entry.key() == "location" && entry.value() == skippedPayloadLocation;
+                     });
+}
+
 std::string TensorPreview(const ol::TensorProto &tensor) {
   ol::TensorProto preview;
   preview.set_name(tensor.name());
@@ -508,10 +515,13 @@ std::string TensorPreview(const ol::TensorProto &tensor) {
   for (const auto dimension : tensor.dims()) {
     preview.add_dims(dimension);
   }
-  for (const auto &entry : tensor.external_data()) {
-    *preview.add_external_data() = entry;
+  const bool payload_omitted = IsPayloadOmitted(tensor);
+  if (!payload_omitted) {
+    for (const auto &entry : tensor.external_data()) {
+      *preview.add_external_data() = entry;
+    }
   }
-  if (tensor.has_data_location()) {
+  if (!payload_omitted && tensor.has_data_location()) {
     preview.set_data_location(tensor.data_location());
   }
   size_t count = 0;
@@ -733,10 +743,7 @@ Napi::Array ValueNames(Napi::Env env, const Values &values,
 
 Napi::Object StorageInformation(Napi::Env env, const ol::TensorProto &tensor) {
   auto result = Napi::Object::New(env);
-  const bool payload_omitted = std::any_of(
-      tensor.external_data().begin(), tensor.external_data().end(), [](const auto &entry) {
-        return entry.key() == "location" && entry.value() == skippedPayloadLocation;
-      });
+  const bool payload_omitted = IsPayloadOmitted(tensor);
   result.Set("external", !payload_omitted && (tensor.data_location() == ol::TensorProto::EXTERNAL ||
                                               !tensor.external_data().empty()));
   result.Set("location", env.Null());

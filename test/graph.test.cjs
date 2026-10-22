@@ -44,7 +44,7 @@ function bytesField(number, value) {
   return Buffer.concat([varint(number * 8 + 2), varint(bytes.length), bytes]);
 }
 
-function matmulWithRawWeight() {
+function matmulWithWeight(dataField) {
   const dimension = (size) =>
     bytesField(
       1,
@@ -69,7 +69,7 @@ function matmulWithRawWeight() {
     varintField(1, 4),
     varintField(2, 1),
     bytesField(8, "weight"),
-    bytesField(9, Buffer.alloc(64)),
+    bytesField(dataField, Buffer.alloc(64)),
   ]);
   const node = Buffer.concat([
     bytesField(1, "x"),
@@ -226,18 +226,23 @@ test("skips a large packed float initializer without allocating its payload", as
   assert.ok(process.memoryUsage().rss - rss < 64 * 1024 * 1024);
 });
 
-test("allows shape and metadata analysis after omitting a large raw initializer", async (t) => {
+test("allows shape and metadata analysis after omitting raw or typed initializers", async (t) => {
   const directory = mkdtempSync(path.join(tmpdir(), "onnx-light-viewer-"));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
-  const file = path.join(directory, "matmul.onnx");
-  writeFileSync(file, matmulWithRawWeight());
 
-  const model = await loadModelFile(file, "matmul.onnx");
-  assert.deepEqual(
-    model.graph(true).tensors.find(({ name }) => name === "y").shape,
-    ["N", "4"],
-  );
-  assert.equal(model.metadata().nodes.length, 1);
+  for (const [name, dataField] of [
+    ["raw", 9],
+    ["typed", 4],
+  ]) {
+    const file = path.join(directory, `matmul-${name}.onnx`);
+    writeFileSync(file, matmulWithWeight(dataField));
+    const model = await loadModelFile(file, `matmul-${name}.onnx`);
+    assert.deepEqual(
+      model.graph(true).tensors.find(({ name }) => name === "y").shape,
+      ["N", "4"],
+    );
+    assert.equal(model.metadata().nodes.length, 1);
+  }
 });
 
 test("verifies invalid graph connectivity before inference and metadata without changing the model", () => {
