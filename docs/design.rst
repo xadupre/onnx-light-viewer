@@ -70,6 +70,25 @@ Defines structured action entries, retains each panel's history and publishes
 status updates. It validates incoming operation events and correlates native
 operations with the webview's action IDs.
 
+``src/huggingface.ts``
+~~~~~~~~~~~~~~~~~~~~~~
+
+:download:`Source: huggingface.ts <../src/huggingface.ts>`.
+
+``parseHuggingFaceUrl`` accepts public HTTPS Hugging Face ONNX file links and
+normalizes blob links to resolve links. ``cachedHuggingFaceModel`` keys an
+extension-owned cache by the normalized URL's SHA-256 hash. Downloads follow
+Hub/CDN redirects and stream to a uniquely named temporary file; the host's
+native loading callback must succeed before an atomic rename publishes it.
+Failed or cancelled transfers remove their temporary file. Cache hits are
+loaded directly without a network request.
+
+Cache storage is under ``context.globalStorageUri/huggingface`` in the extension
+host. The original remote basename is passed to the native loader, not the
+temporary cache name. Retained model bytes still provide native failure recovery
+without another download. Authentication, external weight downloads and model
+execution are outside this action's scope.
+
 ``src/graph.ts``
 ~~~~~~~~~~~~~~~~
 
@@ -217,6 +236,9 @@ replies with ``panel.webview.postMessage``.
    * - ``open-backend-test``
      - Search the released native catalog and load a case.
      - ``graph`` on success; cancellation leaves the view unchanged.
+   * - ``open-huggingface``
+     - Prompt for a public file URL, download or reuse the cache, then load it.
+     - ``graph`` or ``load-error``; cancellation leaves the view unchanged.
    * - ``navigate`` with ``path``
      - Project the selected graph and discard cached metadata.
      - ``graph`` or ``navigation-error``.

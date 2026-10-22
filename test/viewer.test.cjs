@@ -156,6 +156,42 @@ test("shows the compiled onnx-light release before loading a graph and after mod
   assert.equal(release.textContent, `onnx-light ${version}`);
 });
 
+test("requests Hugging Face loading, keeps tabs usable and clears busy state after cancellation or failure", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  load(demoGraph);
+  const button = document.getElementById("open-huggingface");
+  button.click();
+  const request = messages.at(-1);
+  assert.equal(request.type, "open-huggingface");
+  assert.equal(button.disabled, true);
+  assert.equal(document.getElementById("open-model").disabled, true);
+  document.getElementById("logs-tab").click();
+  assert.equal(document.getElementById("logs-view").hidden, false);
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: {
+        type: "log-entry",
+        entry: {
+          id: request.actionId,
+          timestamp: new Date().toISOString(),
+          action: "Open Hugging Face model",
+          status: "CANCELLED",
+        },
+      },
+    }),
+  );
+  assert.equal(button.disabled, false);
+  document.getElementById("model-tab").click();
+  button.click();
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: { type: "load-error", error: "HTTP 403" },
+    }),
+  );
+  assert.equal(button.disabled, false);
+  assert.match(document.getElementById("load-status").textContent, /HTTP 403/);
+  assert.equal(document.querySelector(".graph-node text").textContent, "Relu");
+});
 test("updates one action row, safely renders errors and retains history across model replacement", async (t) => {
   const { document, window, messages, load } = openViewer(t);
   load(demoGraph);

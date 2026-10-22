@@ -4,7 +4,7 @@
  */
 import * as vscode from "vscode";
 import { randomBytes } from "node:crypto";
-import { posix } from "node:path";
+import { join, posix } from "node:path";
 import {
   listBackendTests,
   loadBackendTest,
@@ -17,6 +17,7 @@ import {
 } from "./graph";
 import { webviewHtml } from "./webview";
 import { ActionLog, LogEntry } from "./log";
+import { cachedHuggingFaceModel, parseHuggingFaceUrl } from "./huggingface";
 
 const viewType = "onnxLightViewer.graph";
 
@@ -127,15 +128,16 @@ export function activate(context: vscode.ExtensionContext): void {
 /**
  * Reads a model through VS Code's filesystem and logs its initial projection.
  * The reload closure retains these bytes for recovery without rereading the URI.
+ * @param fileName Original basename when the URI points to a temporary/cache file.
  * @returns Root snapshot, retained handle and its recovery factory.
  */
 async function readGraph(
   uri: vscode.Uri,
   log: ActionLog,
+  fileName = posix.basename(uri.path),
 ): Promise<LoadedModel> {
   return log.run(`Load model: ${uri.path}`, async () => {
     const bytes = await vscode.workspace.fs.readFile(uri);
-    const fileName = posix.basename(uri.path);
     const reload = () => loadModel(bytes, fileName);
     const native = reload();
     return { graph: native.graph(), native, reload };
@@ -164,13 +166,13 @@ function isGraphPath(path: unknown): path is GraphPath {
  * Retains the model, current graph and optional metadata snapshot for this panel.
  * Installs the message router before loading so initial errors remain inspectable.
  *
- * ready replays snapshots/history; open and open-backend-test replace the model
- * only on success. navigate replaces the graph and clears cached metadata.
+ * ready replays snapshots/history; local, backend and Hugging Face opens replace
+ * the model only on success. navigate replaces the graph and clears cached metadata.
  * refresh-shapes returns tensor labels in shape-info; metadata returns a separate
  * metadata-info snapshot. Both refresh failures discard the native handle, not
  * the last display. actionId correlates requests with their UI log entries.
  *
- * @param context Supplies bundled media resources.
+ * @param context Supplies bundled media resources and persistent download storage.
  * @param panel Panel whose message and view-state subscriptions are disposed on close.
  * @param uri Optional model to load initially; omitted leaves the viewer empty.
  * @param initialTab Tab selected in the initial HTML shell.
@@ -268,6 +270,93 @@ async function configurePanel(
         if (showLogsRequested) {
           await panel.webview.postMessage({ type: "show-logs" });
           showLogsRequested = false;
+        }
+      } else if (message?.type === "open-huggingface") {
+        try {
+          const loaded = await log.run(
+            "Open Hugging Face model",
+            async (id) => {
+              const input = await vscode.window.showInputBox({
+                title: "Open a Hugging Face ONNX model",
+                prompt:
+                  "Paste a public ONNX file URL. External weight files are not downloaded.",
+                placeHolder:
+                  "https://huggingface.co/owner/repository/blob/main/onnx/model.onnx",
+                ignoreFocusOut: true,
+                validateInput: (value) => {
+                  try {
+                    parseHuggingFaceUrl(value);
+                    return undefined;
+                  } catch (error) {
+                    return error instanceof Error
+                      ? error.message
+                      : String(error);
+                  }
+                },
+              });
+              if (input === undefined) {
+                log.record("CANCELLED", "Open Hugging Face model", id);
+                return;
+              }
+              const source = parseHuggingFaceUrl(input);
+              return vscode.window.withProgress(
+                {
+                  location: vscode.ProgressLocation.Notification,
+                  title: `Hugging Face: ${source.fileName}`,
+                  cancellable: true,
+                },
+                async (_progress, token) => {
+                  const controller = new AbortController();
+                  const cancellation = token.onCancellationRequested(() =>
+                    controller.abort(),
+                  );
+                  if (token.isCancellationRequested) controller.abort();
+                  try {
+                    const result = await cachedHuggingFaceModel(
+                      source,
+                      join(context.globalStorageUri.fsPath, "huggingface"),
+                      (path) =>
+                        readGraph(vscode.Uri.file(path), log, source.fileName),
+                      controller.signal,
+                    );
+                    log.record(
+                      "SUCCEEDED",
+                      `${result.cached ? "Cache hit" : "Downloaded and cached"}: ${source.url}`,
+                      undefined,
+                      result.filePath,
+                    );
+                    return { model: result.value, name: source.fileName };
+                  } catch (error) {
+                    if (
+                      controller.signal.aborted &&
+                      error instanceof Error &&
+                      error.name === "AbortError"
+                    ) {
+                      log.record("CANCELLED", "Open Hugging Face model", id);
+                      return;
+                    }
+                    throw error;
+                  } finally {
+                    cancellation.dispose();
+                  }
+                },
+              );
+            },
+            message.actionId,
+          );
+          if (!loaded) return;
+          model = loaded.model;
+          panel.title = `ONNX: ${loaded.name}`;
+          await sendGraph();
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error);
+          await panel.webview.postMessage({
+            type: "load-error",
+            error: detail,
+          });
+          await vscode.window.showErrorMessage(
+            `Could not open Hugging Face model: ${detail}`,
+          );
         }
       } else if (message?.type === "open-backend-test") {
         let loaded: { model: LoadedModel; name: string } | undefined;

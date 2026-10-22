@@ -91,7 +91,8 @@ function displayLog(entry) {
   if (entry.status !== "RUNNING" && pendingActions.has(entry.id)) {
     const type = pendingActions.get(entry.id);
     pendingActions.delete(entry.id);
-    if (type === "open" || type === "open-backend-test") setLoading(false);
+    if (["open", "open-backend-test", "open-huggingface"].includes(type))
+      setLoading(false);
   }
 }
 
@@ -110,12 +111,13 @@ function newAction(action) {
 function requestAction(type, action, parameters = {}) {
   const entry = newAction(action);
   pendingActions.set(entry.id, type);
-  if (type === "open" || type === "open-backend-test") setLoading(true);
+  if (["open", "open-backend-test", "open-huggingface"].includes(type))
+    setLoading(true);
   vscode.postMessage({ type, ...parameters, actionId: entry.id });
 }
 
 function setLoading(pending, message = "") {
-  for (const id of ["open-model", "open-backend-test"])
+  for (const id of ["open-model", "open-backend-test", "open-huggingface"])
     byId(id).disabled = pending;
   for (const id of [
     "refresh-shapes",
@@ -1217,6 +1219,9 @@ byId("open-model").addEventListener("click", () =>
 );
 byId("open-backend-test").addEventListener("click", () =>
   requestAction("open-backend-test", "Open backend test"),
+);
+byId("open-huggingface").addEventListener("click", () =>
+  requestAction("open-huggingface", "Open Hugging Face model"),
 );
 byId("show-metadata").addEventListener("click", () => {
   metadataVisible = !metadataVisible;

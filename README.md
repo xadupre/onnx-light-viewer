@@ -35,8 +35,9 @@ From a Bash terminal in this checkout:
 
 `start.sh` installs dependencies when needed, builds the extension, and opens a
 new VS Code development window with the small Relu model already displayed.
-Choose **Open ONNX model** to load your own file. After editing the application,
-close the development window and run `./start.sh` again.
+Choose **Open ONNX model** to load your own file, or **Hugging Face** to download
+and cache a public ONNX file by URL. After editing the application, close the
+development window and run `./start.sh` again.
 
 ## Documentation
 
