@@ -67,10 +67,10 @@ npm run format:check
 npm run watch
 ```
 
-The tests load [`test/fixtures/relu.onnx`](test/fixtures/relu.onnx), a small,
+The tests load [`test/models/relu.onnx`](test/models/relu.onnx), a small,
 valid ONNX model containing one Relu operator with float32 input/output tensors
 of shape `[1, 3]` (IR 9, opset 13). It can also be opened manually in the viewer.
-To regenerate it, run `python3 test/fixtures/generate_relu.py` with the Python
+To regenerate it, run `python3 test/models/generate_relu.py` with the Python
 `onnx` package installed; Python is not required to run the JavaScript tests.
 
 The logo is in [`media/logo.svg`](media/logo.svg), the VS Code integration in

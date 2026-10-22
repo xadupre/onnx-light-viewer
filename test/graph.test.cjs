@@ -11,8 +11,8 @@ function encode(graph) {
   ).finish();
 }
 
-test("loads a real one-node ONNX fixture matching the demo", () => {
-  const bytes = readFileSync(path.join(__dirname, "fixtures", "relu.onnx"));
+test("loads a real one-node ONNX model file matching the demo", () => {
+  const bytes = readFileSync(path.join(__dirname, "models", "relu.onnx"));
   assert.deepEqual(decodeGraph(bytes, "relu.onnx"), demoGraph);
 });
 
