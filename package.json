@@ -4,7 +4,7 @@
   "description": "A lightweight, interactive ONNX graph viewer for VS Code.",
   "version": "0.0.1",
   "publisher": "xadupre",
-  "license": "UNLICENSED",
+  "license": "Apache-2.0",
   "repository": {
     "type": "git",
     "url": "https://github.com/xadupre/onnx-light-viewer"

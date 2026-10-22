@@ -67,3 +67,52 @@ missing_operator = helper.make_model(
     ir_version=9,
 )
 save_model(missing_operator, Path(__file__).with_name("missing-operator.onnx"))
+
+parameter_graph = helper.make_graph(
+    [
+        helper.make_node(
+            "Conv", ["x", "kernel"], ["conv"], kernel_shape=[3, 3], strides=[2, 2]
+        ),
+        helper.make_node("LeakyRelu", ["conv"], ["activation"], alpha=0.125),
+        helper.make_node(
+            "Softmax",
+            ["activation", "sparse"],
+            ["y"],
+            domain="example",
+            threshold=2**60 + 1,
+            text="<b>model text</b>",
+            ratios=[0.5, 1.5],
+            labels=["left", "right"],
+            value=helper.make_tensor("constant", TensorProto.INT64, [2], [3, 7]),
+            long_list=list(range(2000)),
+        ),
+    ],
+    "Operator parameters",
+    [helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 1, 5, 5])],
+    [value_info("y")],
+    initializer=[
+        helper.make_tensor("kernel", TensorProto.FLOAT, [1, 1, 3, 3], [0.5] * 9)
+    ],
+    sparse_initializer=[sparse],
+)
+parameter_model = helper.make_model(
+    parameter_graph,
+    ir_version=9,
+    opset_imports=[helper.make_opsetid("", 13), helper.make_opsetid("example", 1)],
+)
+checker.check_model(parameter_model)
+save_model(parameter_model, Path(__file__).with_name("parameters.onnx"))
+
+for version in (11, 13):
+    softmax = helper.make_model(
+        helper.make_graph(
+            [helper.make_node("Softmax", ["x"], ["y"])],
+            "Versioned schema",
+            [value_info("x")],
+            [value_info("y")],
+        ),
+        ir_version=9,
+        opset_imports=[helper.make_opsetid("", version)],
+    )
+    checker.check_model(softmax)
+    save_model(softmax, Path(__file__).with_name(f"softmax-{version}.onnx"))

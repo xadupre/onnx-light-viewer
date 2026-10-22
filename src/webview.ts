@@ -24,13 +24,22 @@ export function webviewHtml(
           <div class="zoom-controls" aria-label="Graph zoom"><button id="zoom-out" aria-label="Zoom out">−</button><button id="zoom-fit" title="Fit graph">Fit</button><button id="zoom-in" aria-label="Zoom in">+</button></div>
         </div>
         <aside aria-label="Node inspector">
-          <div class="eyebrow">INSPECTOR</div><h2 id="node-title">Relu</h2><p id="node-description">Select a node to explore its connections.</p>
-          <dl><dt>NODE NAME</dt><dd id="node-name">activation</dd><dt>DOMAIN</dt><dd id="node-domain">ai.onnx</dd></dl>
+          <div class="eyebrow">INSPECTOR</div><div class="inspector-heading"><h2 id="node-title">Relu</h2><button id="show-doc" disabled aria-haspopup="dialog">Doc</button></div><p id="node-description">Select a node to explore its connections.</p>
+          <dl><dt>NODE NAME</dt><dd id="node-name">activation</dd><dt>DOMAIN</dt><dd id="node-domain">ai.onnx</dd><dt>OPSET</dt><dd id="node-opset">—</dd></dl>
           <h3>Inputs <span id="input-count">1</span></h3><ul id="node-inputs"></ul>
           <h3>Outputs <span id="output-count">1</span></h3><ul id="node-outputs"></ul>
+          <section id="node-parameters" hidden>
+            <h3>Attributes <span id="attribute-count">0</span></h3><ul id="node-attributes"></ul>
+            <h3>Initializers <span id="parameter-count">0</span></h3><ul id="node-initializers"></ul>
+            <p>Tensor raw_data and external weights are not loaded. Long previews are truncated.</p>
+          </section>
         </aside>
       </div>
   </main>
+  <dialog id="operator-doc" aria-labelledby="doc-title">
+    <header class="inspector-heading"><h2 id="doc-title"></h2><button id="close-doc" autofocus>Close</button></header>
+    <p id="doc-version"></p><div id="doc-body"></div>
+  </dialog>
   <script nonce="${nonce}" src="${resource("viewer.js")}"></script>
 </body>
 </html>`;

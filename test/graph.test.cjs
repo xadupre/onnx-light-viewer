@@ -77,3 +77,63 @@ test("native input errors are JavaScript exceptions, not process crashes", () =>
   );
   assert.throws(() => decodeGraph(modelBytes("relu.onnx"), null), TypeError);
 });
+
+test("loads typed attributes and dense/sparse initializer parameters without losing int64 precision", () => {
+  const graph = decodeGraph(modelBytes("parameters.onnx"), "parameters.onnx");
+  const [conv, activation, custom] = graph.nodes;
+  assert.deepEqual(
+    conv.attributes.map(({ name, type }) => ({ name, type })),
+    [
+      { name: "kernel_shape", type: "INTS" },
+      { name: "strides", type: "INTS" },
+    ],
+  );
+  assert.match(conv.attributes[1].value, /\[2, 2\]/);
+  assert.match(activation.attributes[0].value, /0\.125/);
+  assert.equal(conv.parameters[0].name, "kernel");
+  assert.equal(conv.parameters[0].type, "FLOAT");
+  assert.match(conv.parameters[0].value, /dims: \[1, 1, 3, 3\]/);
+  assert.match(conv.parameters[0].value, /0\.5/);
+  assert.equal(custom.parameters[0].name, "sparse");
+  assert.equal(custom.parameters[0].type, "SPARSE FLOAT");
+  const attributes = Object.fromEntries(
+    custom.attributes.map((a) => [a.name, a]),
+  );
+  assert.match(attributes.threshold.value, /1152921504606846977/);
+  assert.match(attributes.ratios.value, /\[0\.5, 1\.5\]/);
+  assert.match(attributes.labels.value, /"left", "right"/);
+  assert.match(attributes.text.value, /<b>model text<\/b>/);
+  assert.match(attributes.value.value, /int64_data: \[3, 7\]/);
+  assert.ok(attributes.long_list.value.length <= 4096);
+  assert.match(attributes.long_list.value, /\.\.\.$/);
+});
+
+test("uses the model domain and opset to select LightOpSchema documentation and defaults", () => {
+  for (const [version, axis] of [
+    [11, "1"],
+    [13, "-1"],
+  ]) {
+    const node = decodeGraph(
+      modelBytes(`softmax-${version}.onnx`),
+      "softmax.onnx",
+    ).nodes[0];
+    assert.equal(node.opset, String(version));
+    assert.equal(node.schema.sinceVersion, version);
+    assert.match(node.schema.doc, /normalized exponential/);
+    assert.match(node.schema.doc, /Inputs[\s\S]*Outputs[\s\S]*Attributes/);
+    assert.deepEqual(
+      node.schema.defaults.find((a) => a.name === "axis"),
+      {
+        name: "axis",
+        type: "INT",
+        value: axis,
+        default: true,
+      },
+    );
+  }
+  const custom = decodeGraph(modelBytes("parameters.onnx"), "parameters.onnx")
+    .nodes[2];
+  assert.equal(custom.opType, "Softmax");
+  assert.equal(custom.domain, "example");
+  assert.equal(custom.schema, null);
+});
