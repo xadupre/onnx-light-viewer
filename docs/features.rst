@@ -89,12 +89,3 @@ and shape refresh. Escape cancels the selector.
 The viewer opens the test model; it does not run the test, compare reference
 outputs, report pass/fail or benchmark it. No Python or network access is needed
 to browse these cases, and external weight files are not downloaded or opened.
-
-Current limits
---------------
-
-The viewer is read-only: moving nodes changes only the current layout.
-Nested subgraphs are not visualized.
-External weight payloads are not loaded or displayed. Shape inference follows
-the operators supported by the pinned onnx-light release. The canvas palette
-is fixed to dark colors.
