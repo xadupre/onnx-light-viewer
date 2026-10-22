@@ -74,15 +74,18 @@ test("lists the released native backend tests and opens node and model cases on 
   for (const invalid of [-1, NaN, Infinity, 0.5]) {
     assert.throws(() => loadBackendTest(invalid), RangeError);
   }
-  const duplicated = tests.filter(
-    ({ name }) => name === "test_cc_greater_or_equal_float16",
-  );
-  assert.ok(duplicated.length > 1);
-  for (const test of duplicated) {
-    assert.equal(
-      loadBackendTest(test.id).graph().nodes[0].opType,
-      "GreaterOrEqual",
-    );
+  for (const op of ["greater_or_equal", "less_or_equal"]) {
+    for (const type of ["float16", "bfloat16"]) {
+      for (const suffix of ["", "_2d"]) {
+        const name = `test_cc_${op}_${type}${suffix}`;
+        const matches = tests.filter((test) => test.name === name);
+        assert.equal(matches.length, 1, `Expected one backend case: ${name}`);
+        assert.equal(
+          loadBackendTest(matches[0].id).graph().nodes[0].opType,
+          op === "greater_or_equal" ? "GreaterOrEqual" : "LessOrEqual",
+        );
+      }
+    }
   }
 });
 
