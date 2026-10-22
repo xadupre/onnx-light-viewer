@@ -17,20 +17,386 @@
 #include <onnx_proto/onnx_verify.h>
 
 #include <algorithm>
+#include <cerrno>
 #include <cmath>
+#include <filesystem>
 #include <limits>
 #include <map>
 #include <memory>
+#include <optional>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <unordered_set>
 #include <vector>
+
+#ifdef _WIN32
+#include <fcntl.h>
+#include <io.h>
+#else
+#include <fcntl.h>
+#include <unistd.h>
+#endif
 
 namespace ol = ONNX_LIGHT_NAMESPACE;
 
 namespace {
+
+constexpr std::string_view skippedPayloadLocation = "onnx-light-viewer:payload-omitted";
+
+enum class ProtoKind { Model, Graph, Node, Attribute, SparseTensor, Function, Tensor };
+
+struct ProtoPathStep {
+  uint32_t field;
+  size_t index;
+};
+
+struct SkippedTensorPayload {
+  std::vector<ProtoPathStep> path;
+  std::set<uint32_t> fields;
+};
+
+struct ProtoFrame {
+  ProtoKind kind;
+  std::vector<ProtoPathStep> path;
+  uint32_t field = 0;
+  uint8_t wire_type = 0;
+  std::map<uint32_t, size_t> child_counts;
+  std::map<uint32_t, uint64_t> payload_sizes;
+  std::set<uint32_t> skipped_fields;
+  bool packed_values = false;
+};
+
+struct ChildProto {
+  ProtoKind kind;
+  bool repeated;
+};
+
+std::optional<ChildProto> ChildMessage(ProtoKind parent, uint32_t field) {
+  switch (parent) {
+  case ProtoKind::Model:
+    if (field == 7)
+      return ChildProto{ProtoKind::Graph, false};
+    if (field == 25)
+      return ChildProto{ProtoKind::Function, true};
+    break;
+  case ProtoKind::Graph:
+    if (field == 1)
+      return ChildProto{ProtoKind::Node, true};
+    if (field == 5)
+      return ChildProto{ProtoKind::Tensor, true};
+    if (field == 15)
+      return ChildProto{ProtoKind::SparseTensor, true};
+    break;
+  case ProtoKind::Node:
+    if (field == 5)
+      return ChildProto{ProtoKind::Attribute, true};
+    break;
+  case ProtoKind::Attribute:
+    if (field == 5)
+      return ChildProto{ProtoKind::Tensor, false};
+    if (field == 6)
+      return ChildProto{ProtoKind::Graph, false};
+    if (field == 10)
+      return ChildProto{ProtoKind::Tensor, true};
+    if (field == 11)
+      return ChildProto{ProtoKind::Graph, true};
+    if (field == 22)
+      return ChildProto{ProtoKind::SparseTensor, false};
+    if (field == 23)
+      return ChildProto{ProtoKind::SparseTensor, true};
+    break;
+  case ProtoKind::SparseTensor:
+    if (field == 1 || field == 2)
+      return ChildProto{ProtoKind::Tensor, false};
+    break;
+  case ProtoKind::Function:
+    if (field == 7)
+      return ChildProto{ProtoKind::Node, true};
+    if (field == 11)
+      return ChildProto{ProtoKind::Attribute, true};
+    break;
+  case ProtoKind::Tensor:
+    break;
+  }
+  return std::nullopt;
+}
+
+bool IsTensorPayloadField(uint32_t field) {
+  return (field >= 4 && field <= 7) || field == 9 || field == 10 || field == 11;
+}
+
+bool IsPackedTensorField(uint32_t field) {
+  return field == 4 || field == 5 || field == 7 || field == 10 || field == 11;
+}
+
+/** Adapts a buffered descriptor stream to omit large TensorProto payloads. */
+class PayloadSkippingStream : public ol::utils::BinaryStream {
+public:
+  PayloadSkippingStream(ol::utils::BinaryStream &stream, uint64_t threshold)
+      : stream_(stream), threshold_(threshold) {
+    ProtoFrame root;
+    root.kind = ProtoKind::Model;
+    frames_.push_back(std::move(root));
+  }
+
+  uint64_t next_uint64() override {
+    auto &frame = frames_.back();
+    if (frame.kind != ProtoKind::Tensor || !IsTensorPayloadField(frame.field))
+      return stream_.next_uint64();
+
+    if (frame.wire_type == 0 && !frame.packed_values) {
+      const auto before = stream_.tell();
+      const auto value = stream_.next_uint64();
+      RecordScalarBytes(frame, static_cast<uint64_t>(stream_.tell() - before));
+      return value;
+    }
+    if (frame.packed_values || frame.wire_type != 2)
+      return stream_.next_uint64();
+
+    const auto before = stream_.tell();
+    const uint64_t length = stream_.next_uint64();
+    const uint64_t prefix_size =
+        frame.field == 6 ? static_cast<uint64_t>(stream_.tell() - before) : 0;
+    const uint64_t size = length + prefix_size;
+    const bool skip = frame.field == 9 ? length >= threshold_
+                                       : frame.payload_sizes[frame.field] + size >= threshold_;
+    frame.payload_sizes[frame.field] += size;
+    if (!skip) {
+      if (IsPackedTensorField(frame.field))
+        frame.packed_values = true;
+      return length;
+    }
+
+    stream_.skip_bytes(length);
+    frame.skipped_fields.insert(frame.field);
+    return 0;
+  }
+
+  ol::utils::FieldNumber next_field() override {
+    auto field = stream_.next_field();
+    auto &frame = frames_.back();
+    frame.field = static_cast<uint32_t>(field.field_number);
+    frame.wire_type = static_cast<uint8_t>(field.wire_type);
+    if (frame.kind == ProtoKind::Tensor && frame.skipped_fields.contains(frame.field)) {
+      field.field_number = 0x1fffffff;
+    }
+    return field;
+  }
+
+  void CanRead(uint64_t len, const char *msg) override { stream_.CanRead(len, msg); }
+  bool NotEnd() const override { return stream_.NotEnd(); }
+  ol::utils::offset_t tell() const override { return stream_.tell(); }
+  std::string tell_around() const override { return stream_.tell_around(); }
+
+  const uint8_t *read_bytes(ol::utils::offset_t len, uint8_t *buffer = nullptr) override {
+    const auto before = stream_.tell();
+    const auto *result = stream_.read_bytes(len, buffer);
+    auto &frame = frames_.back();
+    if (frame.kind == ProtoKind::Tensor && !frame.packed_values &&
+        IsTensorPayloadField(frame.field) && frame.wire_type != 2) {
+      RecordScalarBytes(frame, static_cast<uint64_t>(stream_.tell() - before));
+    }
+    if (frame.kind == ProtoKind::Tensor && frame.packed_values)
+      frame.packed_values = false;
+    return result;
+  }
+
+  void skip_bytes(ol::utils::offset_t len) override { stream_.skip_bytes(len); }
+  int64_t size() const override { return stream_.size(); }
+  int64_t ByteCount() const override { return stream_.ByteCount(); }
+
+  void LimitToNext(uint64_t len) override {
+    stream_.LimitToNext(len);
+    limit_scopes_.push_back(false);
+    auto &frame = frames_.back();
+    if (const auto child = ChildMessage(frame.kind, frame.field); child && frame.wire_type == 2) {
+      const size_t index = child->repeated ? frame.child_counts[frame.field]++ : 0;
+      auto path = frame.path;
+      path.push_back({frame.field, index});
+      ProtoFrame child_frame;
+      child_frame.kind = child->kind;
+      child_frame.path = std::move(path);
+      frames_.push_back(std::move(child_frame));
+      limit_scopes_.back() = true;
+    } else if (frame.kind == ProtoKind::Tensor && frame.packed_values) {
+      packed_limits_.push_back(true);
+    } else {
+      packed_limits_.push_back(false);
+    }
+  }
+
+  void Restore() override {
+    if (limit_scopes_.back()) {
+      auto &frame = frames_.back();
+      if (frame.kind == ProtoKind::Tensor && !frame.skipped_fields.empty())
+        skipped_.push_back({frame.path, std::move(frame.skipped_fields)});
+      frames_.pop_back();
+    }
+    if (!packed_limits_.empty()) {
+      if (packed_limits_.back() && frames_.back().kind == ProtoKind::Tensor)
+        frames_.back().packed_values = false;
+      packed_limits_.pop_back();
+    }
+    limit_scopes_.pop_back();
+    stream_.Restore();
+  }
+
+  const std::vector<SkippedTensorPayload> &skipped() const { return skipped_; }
+
+private:
+  void LimitTo(uint64_t) override {}
+
+  void RecordScalarBytes(ProtoFrame &frame, uint64_t size) {
+    frame.payload_sizes[frame.field] += size;
+    if (frame.payload_sizes[frame.field] >= threshold_)
+      frame.skipped_fields.insert(frame.field);
+  }
+
+  ol::utils::BinaryStream &stream_;
+  uint64_t threshold_;
+  std::vector<ProtoFrame> frames_;
+  std::vector<bool> limit_scopes_;
+  std::vector<bool> packed_limits_;
+  std::vector<SkippedTensorPayload> skipped_;
+};
+
+ol::TensorProto *FindTensor(ol::ModelProto &model, const SkippedTensorPayload &payload) {
+  ProtoKind kind = ProtoKind::Model;
+  ol::GraphProto *graph = nullptr;
+  ol::NodeProto *node = nullptr;
+  ol::AttributeProto *attribute = nullptr;
+  ol::SparseTensorProto *sparse = nullptr;
+  ol::FunctionProto *function = nullptr;
+  ol::TensorProto *tensor = nullptr;
+
+  for (const auto &step : payload.path) {
+    switch (kind) {
+    case ProtoKind::Model:
+      if (step.field == 7)
+        graph = &model.ref_graph();
+      else if (step.field == 25)
+        function = &model.ref_functions()[step.index];
+      break;
+    case ProtoKind::Graph:
+      if (step.field == 1)
+        node = &graph->ref_node()[step.index];
+      else if (step.field == 5)
+        tensor = &graph->ref_initializer()[step.index];
+      else if (step.field == 15)
+        sparse = &graph->ref_sparse_initializer()[step.index];
+      break;
+    case ProtoKind::Node:
+      attribute = &node->ref_attribute()[step.index];
+      break;
+    case ProtoKind::Attribute:
+      if (step.field == 5)
+        tensor = &attribute->ref_t();
+      else if (step.field == 6)
+        graph = &attribute->ref_g();
+      else if (step.field == 10)
+        tensor = &attribute->ref_tensors()[step.index];
+      else if (step.field == 11)
+        graph = &attribute->ref_graphs()[step.index];
+      else if (step.field == 22)
+        sparse = &attribute->ref_sparse_tensor();
+      else if (step.field == 23)
+        sparse = &attribute->ref_sparse_tensors()[step.index];
+      break;
+    case ProtoKind::SparseTensor:
+      tensor = step.field == 1 ? &sparse->ref_values() : &sparse->ref_indices();
+      break;
+    case ProtoKind::Function:
+      if (step.field == 7)
+        node = &function->ref_node()[step.index];
+      else
+        attribute = &function->ref_attribute_proto()[step.index];
+      break;
+    case ProtoKind::Tensor:
+      break;
+    }
+    const auto child = ChildMessage(kind, step.field);
+    if (!child)
+      return nullptr;
+    kind = child->kind;
+  }
+  return kind == ProtoKind::Tensor ? tensor : nullptr;
+}
+
+void ApplySkippedPayloads(ol::ModelProto &model, const std::vector<SkippedTensorPayload> &skipped) {
+  for (const auto &payload : skipped) {
+    auto *tensor = FindTensor(model, payload);
+    if (!tensor)
+      throw std::runtime_error("Could not locate an omitted tensor payload.");
+    for (const auto field : payload.fields) {
+      switch (field) {
+      case 4:
+        tensor->clear_float_data();
+        break;
+      case 5:
+        tensor->clear_int32_data();
+        break;
+      case 6:
+        tensor->clear_string_data();
+        break;
+      case 7:
+        tensor->clear_int64_data();
+        break;
+      case 9:
+        tensor->clear_raw_data();
+        break;
+      case 10:
+        tensor->clear_double_data();
+        break;
+      case 11:
+        tensor->clear_uint64_data();
+        break;
+      }
+    }
+    tensor->set_data_location(ol::TensorProto::EXTERNAL);
+    const bool has_location = std::any_of(
+        tensor->external_data().begin(), tensor->external_data().end(),
+        [](const auto &entry) { return entry.key() == "location" && !entry.value().empty(); });
+    if (!has_location) {
+      auto *location = tensor->add_external_data();
+      location->set_key("location");
+      location->set_value(std::string(skippedPayloadLocation));
+    }
+  }
+}
+
+int OpenModelFile(const std::string &path) {
+#ifdef _WIN32
+  const auto unicode_path = std::filesystem::u8path(path);
+  return _wopen(unicode_path.c_str(), _O_RDONLY | _O_BINARY);
+#else
+  return open(path.c_str(), O_RDONLY);
+#endif
+}
+
+void CloseModelFile(int fd) {
+#ifdef _WIN32
+  _close(fd);
+#else
+  close(fd);
+#endif
+}
+
+class FileDescriptor {
+public:
+  explicit FileDescriptor(int fd) : fd_(fd) {}
+  ~FileDescriptor() {
+    if (fd_ >= 0)
+      CloseModelFile(fd_);
+  }
+  int get() const { return fd_; }
+
+private:
+  int fd_;
+};
 
 template <typename Action> auto RunAlgorithm(const char *name, Action action) {
   try {
@@ -367,10 +733,16 @@ Napi::Array ValueNames(Napi::Env env, const Values &values,
 
 Napi::Object StorageInformation(Napi::Env env, const ol::TensorProto &tensor) {
   auto result = Napi::Object::New(env);
-  result.Set("external", tensor.data_location() == ol::TensorProto::EXTERNAL ||
-                             !tensor.external_data().empty());
+  const bool payload_omitted = std::any_of(
+      tensor.external_data().begin(), tensor.external_data().end(), [](const auto &entry) {
+        return entry.key() == "location" && entry.value() == skippedPayloadLocation;
+      });
+  result.Set("external", !payload_omitted && (tensor.data_location() == ol::TensorProto::EXTERNAL ||
+                                              !tensor.external_data().empty()));
   result.Set("location", env.Null());
   for (const auto &entry : tensor.external_data()) {
+    if (payload_omitted)
+      break;
     if (entry.key() == "location") {
       result.Set("location", Text(env, entry.value()));
     }
@@ -834,10 +1206,14 @@ public:
 
   void Execute() override {
     try {
-      ol::utils::FileStream stream(path_);
+      FileDescriptor file(OpenModelFile(path_));
+      if (file.get() < 0)
+        throw std::system_error(errno, std::generic_category(), "Could not open model file");
+      ol::utils::FdReadStream source(file.get());
       ol::ParseOptions options;
-      options.skip_raw_data = true;
+      PayloadSkippingStream stream(source, static_cast<uint64_t>(options.raw_data_threshold));
       ReadModel(*model_->model, stream, options);
+      ApplySkippedPayloads(*model_->model, stream.skipped());
     } catch (const std::exception &error) {
       SetError(error.what());
     }

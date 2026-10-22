@@ -26,6 +26,7 @@ let connectionsByName = new Map();
 let releasedValues = new Set();
 let unusedLabels = [];
 let hasModel = false;
+let replacementPending = false;
 let nextAction = 0;
 const logSession = crypto.randomUUID();
 const logRows = new Map();
@@ -91,7 +92,12 @@ function displayLog(entry) {
   if (entry.status !== "RUNNING" && pendingActions.has(entry.id)) {
     const type = pendingActions.get(entry.id);
     pendingActions.delete(entry.id);
-    if (type === "open" || type === "open-backend-test") setLoading(false);
+    if (type === "open" || type === "open-backend-test") {
+      replacementPending = [...pendingActions.values()].some(
+        (pending) => pending === "open" || pending === "open-backend-test",
+      );
+      setLoading(replacementPending);
+    }
   }
 }
 
@@ -110,7 +116,10 @@ function newAction(action) {
 function requestAction(type, action, parameters = {}) {
   const entry = newAction(action);
   pendingActions.set(entry.id, type);
-  if (type === "open" || type === "open-backend-test") setLoading(true);
+  if (type === "open" || type === "open-backend-test") {
+    replacementPending = true;
+    setLoading(true);
+  }
   vscode.postMessage({ type, ...parameters, actionId: entry.id });
 }
 
@@ -843,7 +852,7 @@ function navigate(path) {
 
 function render(graph, metadata) {
   hasModel = true;
-  setLoading(false);
+  if (!replacementPending) setLoading(false);
   endGesture();
   refreshStatus(false);
   svg.setAttribute("aria-busy", "false");
@@ -1318,7 +1327,8 @@ window.addEventListener("message", (event) => {
       event.data.error ? `Could not open model: ${event.data.error}` : "",
     );
   } else if (event.data?.type === "load-error") {
-    setLoading(false, `Could not open model: ${event.data.error}`);
+    if (!replacementPending)
+      setLoading(false, `Could not open model: ${event.data.error}`);
   } else if (event.data?.type === "graph") {
     render(event.data.graph, event.data.metadata);
   } else if (event.data?.type === "navigation-error") {

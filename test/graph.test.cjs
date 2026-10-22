@@ -8,6 +8,7 @@ const {
   ftruncateSync,
   closeSync,
   rmSync,
+  writeFileSync,
 } = require("node:fs");
 const { tmpdir } = require("node:os");
 const path = require("node:path");
@@ -25,7 +26,72 @@ function modelBytes(name) {
   return readFileSync(path.join(__dirname, "models", name));
 }
 
-test("streams local models, retains small shape constants and never opens external weights", async () => {
+function varint(value) {
+  const bytes = [];
+  do {
+    bytes.push((value % 128) | (value >= 128 ? 128 : 0));
+    value = Math.floor(value / 128);
+  } while (value);
+  return Buffer.from(bytes);
+}
+
+function varintField(number, value) {
+  return Buffer.concat([varint(number * 8), varint(value)]);
+}
+
+function bytesField(number, value) {
+  const bytes = Buffer.isBuffer(value) ? value : Buffer.from(value);
+  return Buffer.concat([varint(number * 8 + 2), varint(bytes.length), bytes]);
+}
+
+function matmulWithRawWeight() {
+  const dimension = (size) =>
+    bytesField(
+      1,
+      typeof size === "string" ? bytesField(2, size) : varintField(1, size),
+    );
+  const valueInfo = (name) =>
+    Buffer.concat([
+      bytesField(1, name),
+      bytesField(
+        2,
+        bytesField(
+          1,
+          Buffer.concat([
+            varintField(1, 1),
+            bytesField(2, Buffer.concat([dimension("N"), dimension(4)])),
+          ]),
+        ),
+      ),
+    ]);
+  const weight = Buffer.concat([
+    varintField(1, 4),
+    varintField(1, 4),
+    varintField(2, 1),
+    bytesField(8, "weight"),
+    bytesField(9, Buffer.alloc(64)),
+  ]);
+  const node = Buffer.concat([
+    bytesField(1, "x"),
+    bytesField(1, "weight"),
+    bytesField(2, "y"),
+    bytesField(4, "MatMul"),
+  ]);
+  const graph = Buffer.concat([
+    bytesField(1, node),
+    bytesField(2, "analysis after loading"),
+    bytesField(5, weight),
+    bytesField(11, valueInfo("x")),
+    bytesField(12, valueInfo("y")),
+  ]);
+  return Buffer.concat([
+    varintField(1, 8),
+    bytesField(8, varintField(2, 13)),
+    bytesField(7, graph),
+  ]);
+}
+
+test("streams local models, retains small shape constants and never opens external weights", async (t) => {
   for (const name of [
     "inference.onnx",
     "initializers.onnx",
@@ -54,6 +120,14 @@ test("streams local models, retains small shape constants and never opens extern
   assert.throws(
     () => loadModelFile("invalid\0path", "invalid"),
     /Invalid model file path/,
+  );
+  const directory = mkdtempSync(path.join(tmpdir(), "onnx-light-viewer-模型-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const unicodePath = path.join(directory, "модель.onnx");
+  writeFileSync(unicodePath, modelBytes("relu.onnx"));
+  assert.equal(
+    (await loadModelFile(unicodePath, "unicode.onnx")).graph().nodes[0].opType,
+    "Relu",
   );
 });
 
@@ -111,6 +185,59 @@ test("skips a large embedded weight without allocating its payload or blocking t
     { name: "w", type: "UINT8", shape: [String(size)] },
   ]);
   assert.ok(process.memoryUsage().rss - rss < 64 * 1024 * 1024);
+});
+
+test("skips a large packed float initializer without allocating its payload", async (t) => {
+  const directory = mkdtempSync(path.join(tmpdir(), "onnx-light-viewer-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const file = path.join(directory, "large-packed.onnx");
+  const size = 256 * 1024 * 1024;
+  const tensorHeader = Buffer.concat([
+    Buffer.from([0x08]),
+    varint(size / 4),
+    Buffer.from([0x10, 0x01, 0x42, 0x01, 0x77, 0x22]),
+    varint(size),
+  ]);
+  const graphHeader = Buffer.concat([
+    Buffer.from([0x12, 0x05]),
+    Buffer.from("large"),
+    Buffer.from([0x2a]),
+    varint(tensorHeader.length + size),
+    tensorHeader,
+  ]);
+  const header = Buffer.concat([
+    Buffer.from([0x08, 0x08, 0x3a]),
+    varint(graphHeader.length + size),
+    graphHeader,
+  ]);
+  const fd = openSync(file, "w");
+  try {
+    writeSync(fd, header);
+    ftruncateSync(fd, header.length + size);
+  } finally {
+    closeSync(fd);
+  }
+  const rss = process.memoryUsage().rss;
+  const model = await loadModelFile(file, "large-packed.onnx");
+  assert.equal(model.graph().initializerCount, 1);
+  assert.deepEqual(model.graph().tensors, [
+    { name: "w", type: "FLOAT", shape: [String(size / 4)] },
+  ]);
+  assert.ok(process.memoryUsage().rss - rss < 64 * 1024 * 1024);
+});
+
+test("allows shape and metadata analysis after omitting a large raw initializer", async (t) => {
+  const directory = mkdtempSync(path.join(tmpdir(), "onnx-light-viewer-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const file = path.join(directory, "matmul.onnx");
+  writeFileSync(file, matmulWithRawWeight());
+
+  const model = await loadModelFile(file, "matmul.onnx");
+  assert.deepEqual(
+    model.graph(true).tensors.find(({ name }) => name === "y").shape,
+    ["N", "4"],
+  );
+  assert.equal(model.metadata().nodes.length, 1);
 });
 
 test("verifies invalid graph connectivity before inference and metadata without changing the model", () => {

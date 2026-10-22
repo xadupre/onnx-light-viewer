@@ -26,7 +26,7 @@ async function openExtension(
   let editor;
   let backendSelection;
   let client;
-  let fileLoadGate;
+  const fileLoadGates = [];
   const disposable = () => ({ dispose() {} });
   const root = path.resolve(__dirname, "..");
   const uri = (filePath) => ({
@@ -116,8 +116,7 @@ async function openExtension(
   }
   const loadFile = graph.loadModelFile;
   graph.loadModelFile = async (...args) => {
-    const gate = fileLoadGate;
-    fileLoadGate = undefined;
+    const gate = fileLoadGates.shift();
     const native = await loadFile(...args);
     if (gate) await gate;
     nativeModels.push(native);
@@ -162,9 +161,10 @@ async function openExtension(
     nativeModels,
     pauseNextFileLoad: () => {
       let resume;
-      fileLoadGate = new Promise((resolve) => {
+      const gate = new Promise((resolve) => {
         resume = resolve;
       });
+      fileLoadGates.push(gate);
       return resume;
     },
     showLogs: () => commands.get("onnxLightViewer.showLogs")(),
@@ -223,6 +223,40 @@ test("ignores stale recovery results and errors after replacing a local model", 
       assert.equal(extension.nativeModels.length, nativeCount + 1);
     }
   }
+});
+
+test("shares concurrent native recovery and keeps inferred state for navigation", async () => {
+  const extension = await openExtension("inference.onnx", undefined, true);
+  const initial = extension.nativeModels.at(-1);
+  const graph = initial.graph;
+  let failInference = true;
+  initial.graph = (infer, ...args) => {
+    if (infer && failInference) {
+      failInference = false;
+      throw new Error("temporary inference failure");
+    }
+    return graph(infer, ...args);
+  };
+  await extension.receive({ type: "refresh-shapes" });
+  assert.equal(extension.messages.at(-1).type, "shape-error");
+
+  const count = extension.nativeModels.length;
+  const resumeShape = extension.pauseNextFileLoad();
+  const shapes = extension.receive({ type: "refresh-shapes" });
+  const resumeMetadata = extension.pauseNextFileLoad();
+  const metadata = extension.receive({ type: "metadata" });
+  resumeShape();
+  await shapes;
+  resumeMetadata();
+  await metadata;
+  assert.equal(extension.nativeModels.length, count + 1);
+  await extension.receive({ type: "navigate", path: [] });
+  assert.deepEqual(
+    extension.messages
+      .at(-1)
+      .graph.tensors.find(({ name }) => name === "reshaped").shape,
+    ["N", "3", "1"],
+  );
 });
 
 test("keeps operation logs quiet and exposes real native exception recovery in Status", async (t) => {

@@ -138,12 +138,16 @@ Parsing and ownership
 ~~~~~~~~~~~~~~~~~~~~~
 
 ``ReadModel`` parses bytes with onnx-light and checks that a model graph and
-valid IR version exist. ``loadModelFile`` uses a buffered ``FileStream`` and
-``skip_raw_data=true``: large inline tensor payloads are skipped, while small
-constants (smaller than onnx-light's 64-byte threshold) remain available for shape
-inference. External weight files are not opened. The worker returns an owned
-model without retaining the file contents. Shape inference that needs skipped
-weight values may fail and is reported through the existing error handling.
+valid IR version exist. ``loadModelFile`` uses a buffered descriptor stream;
+Windows paths are converted from UTF-8 before opening. Large inline raw and typed
+tensor payloads are skipped, while small constants (smaller than onnx-light's
+64-byte threshold) remain available for shape inference. Omitted payloads are
+represented as external tensors in the retained model so structural validation
+can still verify graph connectivity without requiring the values. Their storage
+is shown as inline in the viewer, and external weight files are not opened. The
+worker returns an owned model without retaining the file contents. Shape
+inference that needs skipped weight values may fail and is reported through the
+existing error handling.
 
 Virtual-file reads still require a complete byte buffer because VS Code's
 filesystem API does not expose streaming reads. The byte-buffer loading path

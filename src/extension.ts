@@ -29,6 +29,7 @@ interface LoadedModel {
   graph: Graph;
   /** Absent after a failed shape/metadata refresh until the next native action. */
   native?: NativeModel;
+  nativeReload?: Promise<NativeModel>;
   reload: () => NativeModel | Promise<NativeModel>;
   /** Cached for the current graph; cleared on navigation, not shape refresh. */
   metadata?: GraphMetadata;
@@ -44,11 +45,24 @@ async function nativeModel(
   changed: () => void,
 ): Promise<NativeModel> {
   if (!model.native) {
-    model.native = await log.run(
-      `Reload native model: ${model.graph.name}`,
-      model.reload,
-    );
-    changed();
+    const reload =
+      model.nativeReload ??
+      (model.nativeReload = log.run(
+        `Reload native model: ${model.graph.name}`,
+        model.reload,
+      ));
+    try {
+      const native = await reload;
+      if (model.nativeReload === reload) {
+        model.native = native;
+        model.nativeReload = undefined;
+        changed();
+      }
+      return native;
+    } catch (error) {
+      if (model.nativeReload === reload) model.nativeReload = undefined;
+      throw error;
+    }
   }
   return model.native;
 }

@@ -146,6 +146,44 @@ test("shows loading progress until success, failure or cancellation, including i
   );
 });
 
+test("keeps replacement loading visible when an in-flight navigation renders", (t) => {
+  const { document, messages, load, window } = openViewer(t);
+  const model = loadModel(
+    readFileSync(require.resolve("./models/subgraphs.onnx")),
+    "subgraphs.onnx",
+  );
+  const root = model.graph();
+  const path = root.nodes[0].attributes.find(({ graphs }) => graphs?.length)
+    .graphs[0].path;
+  load(model.graph(false, path));
+  const state = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+
+  document.getElementById("open-model").click();
+  const replacement = messages.at(-1);
+  document.querySelector("#graph-navigation button").click();
+  assert.equal(messages.at(-1).type, "navigate");
+  load(root);
+  assert.equal(document.getElementById("load-progress").hidden, false);
+  assert.equal(
+    document.getElementById("model-view").getAttribute("aria-busy"),
+    "true",
+  );
+  assert.equal(document.getElementById("open-model").disabled, true);
+
+  state({
+    type: "log-entry",
+    entry: {
+      id: replacement.actionId,
+      action: "Open model",
+      timestamp: new Date().toISOString(),
+      status: "SUCCEEDED",
+    },
+  });
+  assert.equal(document.getElementById("load-progress").hidden, true);
+  assert.equal(document.getElementById("open-model").disabled, false);
+});
+
 test("switches all tabs without logging clicks or changing graph, selection or camera", async (t) => {
   const { document, load, window, events } = openViewer(t);
   load(demoGraph);
