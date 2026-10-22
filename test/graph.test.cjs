@@ -1,4 +1,6 @@
 const assert = require("node:assert/strict");
+const { readFileSync } = require("node:fs");
+const path = require("node:path");
 const { test } = require("node:test");
 const { onnx } = require("onnx-proto");
 const { decodeGraph, demoGraph } = require("../dist/graph");
@@ -9,21 +11,9 @@ function encode(graph) {
   ).finish();
 }
 
-test("the one-node demo has the same structure as a decoded ONNX graph", () => {
-  const bytes = encode({
-    name: demoGraph.name,
-    input: [{ name: "input" }],
-    output: [{ name: "output" }],
-    node: [
-      {
-        name: "activation",
-        opType: "Relu",
-        input: ["input"],
-        output: ["output"],
-      },
-    ],
-  });
-  assert.deepEqual(decodeGraph(bytes, "demo.onnx"), demoGraph);
+test("loads a real one-node ONNX fixture matching the demo", () => {
+  const bytes = readFileSync(path.join(__dirname, "fixtures", "relu.onnx"));
+  assert.deepEqual(decodeGraph(bytes, "relu.onnx"), demoGraph);
 });
 
 test("preserves unnamed and custom operators, omits optional ports and initializer inputs", () => {
