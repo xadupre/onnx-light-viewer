@@ -20,13 +20,23 @@ import { ActionLog, LogEntry } from "./log";
 
 const viewType = "onnxLightViewer.graph";
 
+/**
+ * Panel-local display state, independent of the recoverable native handle.
+ * Reload uses original bytes or a backend case ID, not the current disk contents.
+ */
 interface LoadedModel {
   graph: Graph;
+  /** Absent after a failed shape/metadata refresh until the next native action. */
   native?: NativeModel;
   reload: () => NativeModel;
+  /** Cached for the current graph; cleared on navigation, not shape refresh. */
   metadata?: GraphMetadata;
 }
 
+/**
+ * Returns the retained handle, logging a reload if a previous refresh invalidated
+ * it. The changed callback publishes status only after successful recreation.
+ */
 async function nativeModel(
   model: LoadedModel,
   log: ActionLog,
@@ -42,6 +52,7 @@ async function nativeModel(
   return model.native;
 }
 
+/** Discards potentially partial native state while retaining displayed snapshots. */
 function invalidateModel(model: LoadedModel, log: ActionLog): void {
   model.native = undefined;
   log.record(
@@ -50,6 +61,11 @@ function invalidateModel(model: LoadedModel, log: ActionLog): void {
   );
 }
 
+/**
+ * VS Code entry point registering viewer commands and the .onnx custom editor.
+ * Each panel owns its model/history; Show Logs targets the last activated panel.
+ * @param context Extension resources and subscription lifetime supplied by VS Code.
+ */
 export function activate(context: vscode.ExtensionContext): void {
   let current: { panel: vscode.WebviewPanel; showLogs: () => void } | undefined;
   const openViewer = async (
@@ -108,6 +124,11 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 }
 
+/**
+ * Reads a model through VS Code's filesystem and logs its initial projection.
+ * The reload closure retains these bytes for recovery without rereading the URI.
+ * @returns Root snapshot, retained handle and its recovery factory.
+ */
 async function readGraph(
   uri: vscode.Uri,
   log: ActionLog,
@@ -141,7 +162,19 @@ function isGraphPath(path: unknown): path is GraphPath {
 
 /**
  * Retains the model, current graph and optional metadata snapshot for this panel.
- * Navigation invalidates metadata; ready resends snapshots and action history.
+ * Installs the message router before loading so initial errors remain inspectable.
+ *
+ * ready replays snapshots/history; open and open-backend-test replace the model
+ * only on success. navigate replaces the graph and clears cached metadata.
+ * refresh-shapes returns tensor labels in shape-info; metadata returns a separate
+ * metadata-info snapshot. Both refresh failures discard the native handle, not
+ * the last display. actionId correlates requests with their UI log entries.
+ *
+ * @param context Supplies bundled media resources.
+ * @param panel Panel whose message and view-state subscriptions are disposed on close.
+ * @param uri Optional model to load initially; omitted leaves the viewer empty.
+ * @param initialTab Tab selected in the initial HTML shell.
+ * @param activatePanel Registers this panel's Show Logs callback, or clears it on disposal.
  */
 async function configurePanel(
   context: vscode.ExtensionContext,
