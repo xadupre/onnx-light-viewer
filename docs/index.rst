@@ -6,7 +6,7 @@ onnx-light; no model data is uploaded.
 
 .. figure:: _static/viewer-snapshot.png
    :alt: ONNX Light Viewer showing a graph with symbolic tensor shapes and the Reshape node's parameters.
-   :width: 100%
+   :width: 75%
 
    Explore tensor shapes and inspect the selected node's parameters.
 

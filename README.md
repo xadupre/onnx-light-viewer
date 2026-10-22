@@ -6,7 +6,7 @@
 
 An interactive ONNX graph viewer for VS Code, using native onnx-light decoding.
 
-![ONNX Light Viewer showing a graph with symbolic tensor shapes and the Reshape node's parameters](docs/_static/viewer-snapshot.png)
+<img src="docs/_static/viewer-snapshot.png" width="75%" alt="ONNX Light Viewer showing a graph with symbolic tensor shapes and the Reshape node's parameters">
 
 ## Quick start
 
