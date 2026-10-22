@@ -333,6 +333,7 @@ async function configurePanel(
           );
         }
       } else if (message?.type === "navigate") {
+        const requestedModel = model;
         let graph: Graph;
         try {
           graph = await log.run(
@@ -349,6 +350,7 @@ async function configurePanel(
             message.actionId,
           );
         } catch (error) {
+          if (model !== requestedModel) return;
           const detail = error instanceof Error ? error.message : String(error);
           await panel.webview.postMessage({
             type: "navigation-error",
@@ -359,10 +361,12 @@ async function configurePanel(
           );
           return;
         }
+        if (model !== requestedModel) return;
         requireModel().graph = graph;
         requireModel().metadata = undefined;
         await sendGraph();
       } else if (message?.type === "metadata") {
+        const requestedModel = model;
         let metadata: GraphMetadata;
         try {
           metadata = await log.run(
@@ -377,6 +381,7 @@ async function configurePanel(
             message.actionId,
           );
         } catch (error) {
+          if (model !== requestedModel) return;
           if (model) invalidateModel(model, log);
           const detail = error instanceof Error ? error.message : String(error);
           await panel.webview.postMessage({
@@ -388,9 +393,11 @@ async function configurePanel(
           );
           return;
         }
+        if (model !== requestedModel) return;
         requireModel().metadata = metadata;
         await panel.webview.postMessage({ type: "metadata-info", metadata });
       } else if (message?.type === "refresh-shapes") {
+        const requestedModel = model;
         let refreshed: Graph;
         try {
           refreshed = await log.run(
@@ -405,6 +412,7 @@ async function configurePanel(
             message.actionId,
           );
         } catch (error) {
+          if (model !== requestedModel) return;
           if (model) invalidateModel(model, log);
           const detail = error instanceof Error ? error.message : String(error);
           await panel.webview.postMessage({
@@ -416,6 +424,7 @@ async function configurePanel(
           );
           return;
         }
+        if (model !== requestedModel) return;
         requireModel().graph = refreshed;
         await panel.webview.postMessage({
           type: "shape-info",

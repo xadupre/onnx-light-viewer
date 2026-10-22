@@ -26,6 +26,7 @@ async function openExtension(
   let editor;
   let backendSelection;
   let client;
+  let fileLoadGate;
   const disposable = () => ({ dispose() {} });
   const root = path.resolve(__dirname, "..");
   const uri = (filePath) => ({
@@ -115,7 +116,10 @@ async function openExtension(
   }
   const loadFile = graph.loadModelFile;
   graph.loadModelFile = async (...args) => {
+    const gate = fileLoadGate;
+    fileLoadGate = undefined;
     const native = await loadFile(...args);
+    if (gate) await gate;
     nativeModels.push(native);
     return native;
   };
@@ -156,6 +160,13 @@ async function openExtension(
       client = callback;
     },
     nativeModels,
+    pauseNextFileLoad: () => {
+      let resume;
+      fileLoadGate = new Promise((resolve) => {
+        resume = resolve;
+      });
+      return resume;
+    },
     showLogs: () => commands.get("onnxLightViewer.showLogs")(),
     receive: (message) => receive(message),
     open: async (name) => {
@@ -188,6 +199,30 @@ test("streams local custom-editor files and replacements without reading whole f
   await extension.open("initializers.onnx");
   assert.equal(extension.messages.at(-1).type, "graph");
   assert.deepEqual(extension.reads, []);
+});
+
+test("ignores stale recovery results and errors after replacing a local model", async () => {
+  for (const type of ["navigate", "metadata", "refresh-shapes"]) {
+    const extension = await openExtension("inference.onnx", undefined, true);
+    for (const path of [[], [{ node: 9999, attribute: 0, graph: 0 }]]) {
+      await extension.open("invalid-graph.onnx");
+      await extension.receive({ type: "metadata" });
+      const resume = extension.pauseNextFileLoad();
+      const recovery = extension.receive({ type, path });
+      await extension.open("relu.onnx");
+      const count = extension.messages.length;
+      const errors = extension.errors.length;
+      const nativeCount = extension.nativeModels.length;
+      resume();
+      await recovery;
+      assert.equal(extension.messages.length, count);
+      assert.equal(extension.errors.length, errors);
+      await extension.receive({ type: "ready" });
+      assert.equal(extension.messages.at(-1).graph.nodes[0].opType, "Relu");
+      await extension.receive({ type: "refresh-shapes" });
+      assert.equal(extension.nativeModels.length, nativeCount + 1);
+    }
+  }
 });
 
 test("keeps operation logs quiet and exposes real native exception recovery in Status", async (t) => {

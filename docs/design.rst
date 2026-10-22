@@ -140,15 +140,16 @@ Parsing and ownership
 ``ReadModel`` parses bytes with onnx-light and checks that a model graph and
 valid IR version exist. ``loadModelFile`` uses a buffered ``FileStream`` and
 ``skip_raw_data=true``: large inline tensor payloads are skipped, while small
-constants (up to onnx-light's 64-byte threshold) remain available for shape
+constants (smaller than onnx-light's 64-byte threshold) remain available for shape
 inference. External weight files are not opened. The worker returns an owned
 model without retaining the file contents. Shape inference that needs skipped
 weight values may fail and is reported through the existing error handling.
 
-The byte-buffer loading path uses borrowed fields rather
-than copying tensor payloads. ``StoredModel`` therefore holds a persistent
-reference to the source ``Uint8Array`` alongside the parsed model. Callers must
-not modify those bytes while the handle is in use.
+Virtual-file reads still require a complete byte buffer because VS Code's
+filesystem API does not expose streaming reads. The byte-buffer loading path
+uses borrowed fields rather than copying tensor payloads. ``StoredModel``
+therefore holds a persistent reference to the source ``Uint8Array`` alongside the
+parsed model. Callers must not modify those bytes while the handle is in use.
 
 Backend models instead retain their owning native ``TestCase``. Expected-output
 generation is disabled; opening a case is not running a backend test.
