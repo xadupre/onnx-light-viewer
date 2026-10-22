@@ -75,13 +75,17 @@ operations with the webview's action IDs.
 
 :download:`Source: huggingface.ts <../src/huggingface.ts>`.
 
-``parseHuggingFaceUrl`` accepts public HTTPS Hugging Face ONNX file links and
-normalizes blob links to resolve links. ``cachedHuggingFaceModel`` keys an
+``parseHuggingFaceInput`` accepts public repository IDs, repository URLs and ONNX
+file URLs. ``listHuggingFaceModels`` queries the Hub model API for ONNX files;
+the host offers a variant picker when several files are present.
+``parseHuggingFaceUrl`` normalizes blob file links to resolve links.
+``cachedHuggingFaceModel`` keys an
 extension-owned cache by the normalized URL's SHA-256 hash. Downloads follow
 Hub/CDN redirects and stream to a uniquely named temporary file; the host's
 native loading callback must succeed before an atomic rename publishes it.
 Failed or cancelled transfers remove their temporary file. Cache hits are
-loaded directly without a network request.
+loaded directly without a network request. Repository inputs still require a
+network request to list files; direct cached file URLs work offline.
 
 Cache storage is under ``context.globalStorageUri/huggingface`` in the extension
 host. The original remote basename is passed to the native loader, not the

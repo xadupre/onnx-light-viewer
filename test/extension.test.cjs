@@ -31,6 +31,9 @@ async function openExtension(
   let huggingFaceInput;
   let cancelDownload = false;
   let modelSource = "local";
+  let repositoryFiles;
+  let repositoryFileSelection;
+  const listedRepositories = [];
   const disposable = () => ({ dispose() {} });
   const root = path.resolve(__dirname, "..");
   const webview = {
@@ -106,6 +109,8 @@ async function openExtension(
         picks.push({ items, options });
         if (options.title === "Open an ONNX model")
           return items.find(({ id }) => id === modelSource);
+        if (options.title === "Choose an ONNX file")
+          return items.find(({ label }) => label === repositoryFileSelection);
         return backendSelection === undefined
           ? undefined
           : {
@@ -120,6 +125,15 @@ async function openExtension(
   const filename = path.join(root, "dist", "extension.js");
   const requireExtension = createRequire(filename);
   const graph = { ...requireExtension("./graph") };
+  const huggingface = {
+    ...requireExtension("./huggingface"),
+    listHuggingFaceModels: async (repository) => {
+      listedRepositories.push(repository);
+      if (!repositoryFiles)
+        throw new Error("Repository files were not provided.");
+      return repositoryFiles;
+    },
+  };
   for (const name of ["loadModel", "loadBackendTest"]) {
     const load = graph[name];
     graph[name] = (...args) => {
@@ -139,7 +153,9 @@ async function openExtension(
         ? vscode
         : name === "./graph"
           ? graph
-          : requireExtension(name),
+          : name === "./huggingface"
+            ? huggingface
+            : requireExtension(name),
     module,
     module.exports,
   );
@@ -169,6 +185,7 @@ async function openExtension(
       client = callback;
     },
     nativeModels,
+    listedRepositories,
     showLogs: () => commands.get("onnxLightViewer.showLogs")(),
     receive: (message) => receive(message),
     open: async (name) => {
@@ -180,10 +197,12 @@ async function openExtension(
       backendSelection = name;
       await receive({ type: "open-backend-test" });
     },
-    openHuggingFace: async (input, cancel = false) => {
+    openHuggingFace: async (input, cancel = false, repository) => {
       modelSource = "huggingface";
       huggingFaceInput = input;
       cancelDownload = cancel;
+      repositoryFiles = repository?.files;
+      repositoryFileSelection = repository?.selectedFile;
       await receive({ type: "open" });
     },
     cancelOpen: async () => {
@@ -216,6 +235,29 @@ test("opens a cached Hugging Face model and preserves the display on invalid inp
     ["Local file", "Hugging Face"],
   );
   const graph = extension.messages.at(-1).graph;
+  const repository = {
+    files: [
+      { url, fileName: "inference.onnx", path: "inference.onnx" },
+      {
+        url: url.replace("inference.onnx", "other.onnx"),
+        fileName: "other.onnx",
+        path: "other.onnx",
+      },
+    ],
+    selectedFile: "inference.onnx",
+  };
+  await extension.openHuggingFace("viewer-tests/fixtures", false, repository);
+  assert.equal(extension.messages.at(-1).graph.name, graph.name);
+  assert.equal(extension.picks.at(-1).options.title, "Choose an ONNX file");
+  await extension.openHuggingFace(
+    "https://huggingface.co/viewer-tests/fixtures",
+    false,
+    { files: [repository.files[0]] },
+  );
+  assert.deepEqual(extension.listedRepositories, [
+    { url: "https://huggingface.co/viewer-tests/fixtures" },
+    { url: "https://huggingface.co/viewer-tests/fixtures" },
+  ]);
   assert.ok(graph.nodes.some(({ opType }) => opType === "Reshape"));
   assert.ok(
     extension.logs.some((line) =>
@@ -234,6 +276,9 @@ test("opens a cached Hugging Face model and preserves the display on invalid inp
   const errors = extension.errors.length;
   await extension.openHuggingFace(undefined);
   await extension.openHuggingFace(url, true);
+  await extension.openHuggingFace("viewer-tests/fixtures", false, {
+    files: repository.files,
+  });
   await extension.cancelOpen();
   await extension.receive({ type: "ready" });
   assert.equal(extension.messages.at(-1).graph.name, graph.name);
@@ -242,7 +287,7 @@ test("opens a cached Hugging Face model and preserves the display on invalid inp
     extension.logs.filter((line) =>
       line.includes("[CANCELLED] Open ONNX model"),
     ).length,
-    3,
+    4,
   );
 });
 test("keeps operation logs quiet and exposes real native exception recovery in Status", async (t) => {

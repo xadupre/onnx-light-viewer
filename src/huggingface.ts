@@ -10,6 +10,88 @@ export interface HuggingFaceSource {
   fileName: string;
 }
 
+export interface HuggingFaceRepository {
+  url: string;
+}
+
+export interface HuggingFaceModelFile extends HuggingFaceSource {
+  path: string;
+}
+
+export function parseHuggingFaceInput(
+  input: string,
+): HuggingFaceSource | HuggingFaceRepository {
+  const value = input.trim();
+  const url = new URL(
+    /^[\w.-]+\/[\w.-]+$/.test(value)
+      ? `https://huggingface.co/${value}`
+      : value,
+  );
+  const parts = url.pathname.replace(/\/$/, "").slice(1).split("/");
+  if (
+    url.origin === "https://huggingface.co" &&
+    !url.username &&
+    !url.password &&
+    !url.search &&
+    !url.hash &&
+    parts.length === 2 &&
+    parts.every((part) => /^[\w.-]+$/.test(part) && !/^\.+$/.test(part))
+  )
+    return { url: `${url.origin}/${parts.join("/")}` };
+  return parseHuggingFaceUrl(value);
+}
+
+export async function listHuggingFaceModels(
+  repository: HuggingFaceRepository,
+  signal?: AbortSignal,
+): Promise<HuggingFaceModelFile[]> {
+  const url = new URL(repository.url);
+  url.pathname = `/api/models${url.pathname}`;
+  const response = await fetch(url, { signal });
+  if (!response.ok) {
+    await response.body?.cancel();
+    throw new Error(
+      `Cannot list Hugging Face repository ${repository.url}: HTTP ${response.status} ${response.statusText}. Only public, ungated repositories are supported.`,
+    );
+  }
+  const metadata: unknown = await response.json();
+  if (
+    typeof metadata !== "object" ||
+    metadata === null ||
+    !("siblings" in metadata) ||
+    !Array.isArray(metadata.siblings)
+  )
+    throw new Error(`Invalid Hugging Face file listing: ${repository.url}`);
+  const files: HuggingFaceModelFile[] = [];
+  const entries: unknown[] = metadata.siblings;
+  for (const entry of entries) {
+    if (
+      typeof entry !== "object" ||
+      entry === null ||
+      !("rfilename" in entry) ||
+      typeof entry.rfilename !== "string"
+    )
+      throw new Error(`Invalid Hugging Face file listing: ${repository.url}`);
+    const path = entry.rfilename;
+    if (!/\.onnx$/i.test(path)) continue;
+    const parts = path.split("/");
+    if (
+      parts.some(
+        (part) => !part || part === "." || part === ".." || /[\\\0]/.test(part),
+      )
+    )
+      throw new Error(`Invalid Hugging Face model path: ${path}`);
+    files.push({
+      path,
+      fileName: parts[parts.length - 1],
+      url: `${repository.url}/resolve/main/${parts.map(encodeURIComponent).join("/")}`,
+    });
+  }
+  if (!files.length)
+    throw new Error(`No ONNX files found in ${repository.url}.`);
+  return files.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+}
+
 /** Normalizes a public Hub file link without retaining query strings or fragments. */
 export function parseHuggingFaceUrl(input: string): HuggingFaceSource {
   const url = new URL(input.trim());

@@ -17,7 +17,11 @@ import {
 } from "./graph";
 import { webviewHtml } from "./webview";
 import { ActionLog, LogEntry } from "./log";
-import { cachedHuggingFaceModel, parseHuggingFaceUrl } from "./huggingface";
+import {
+  cachedHuggingFaceModel,
+  listHuggingFaceModels,
+  parseHuggingFaceInput,
+} from "./huggingface";
 
 const viewType = "onnxLightViewer.graph";
 
@@ -308,13 +312,12 @@ async function configurePanel(
               const input = await vscode.window.showInputBox({
                 title: "Open a Hugging Face ONNX model",
                 prompt:
-                  "Paste a public ONNX file URL. External weight files are not downloaded.",
-                placeHolder:
-                  "https://huggingface.co/owner/repository/blob/main/onnx/model.onnx",
+                  "Enter a public repository ID, repository URL or ONNX file URL. External weight files are not downloaded.",
+                placeHolder: "onnx-community/Kokoro-82M-v1.0-ONNX",
                 ignoreFocusOut: true,
                 validateInput: (value) => {
                   try {
-                    parseHuggingFaceUrl(value);
+                    parseHuggingFaceInput(value);
                     return undefined;
                   } catch (error) {
                     return error instanceof Error
@@ -327,11 +330,11 @@ async function configurePanel(
                 log.record("CANCELLED", "Open ONNX model", id);
                 return;
               }
-              const source = parseHuggingFaceUrl(input);
+              const target = parseHuggingFaceInput(input);
               return vscode.window.withProgress(
                 {
                   location: vscode.ProgressLocation.Notification,
-                  title: `Hugging Face: ${source.fileName}`,
+                  title: `Hugging Face: ${"fileName" in target ? target.fileName : target.url}`,
                   cancellable: true,
                 },
                 async (_progress, token) => {
@@ -341,6 +344,35 @@ async function configurePanel(
                   );
                   if (token.isCancellationRequested) controller.abort();
                   try {
+                    let source;
+                    if ("fileName" in target) source = target;
+                    else {
+                      const files = await listHuggingFaceModels(
+                        target,
+                        controller.signal,
+                      );
+                      const selection =
+                        files.length === 1
+                          ? { source: files[0] }
+                          : await vscode.window.showQuickPick(
+                              files.map((file) => ({
+                                label: file.path,
+                                source: file,
+                              })),
+                              {
+                                title: "Choose an ONNX file",
+                                placeHolder:
+                                  "Select a model variant to download",
+                              },
+                              token,
+                            );
+                      if (!selection) {
+                        log.record("CANCELLED", "Open ONNX model", id);
+                        return;
+                      }
+                      source = selection.source;
+                    }
+                    controller.signal.throwIfAborted();
                     const result = await cachedHuggingFaceModel(
                       source,
                       join(context.globalStorageUri.fsPath, "huggingface"),

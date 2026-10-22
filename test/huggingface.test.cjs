@@ -9,6 +9,8 @@ const { loadModel } = require("../dist/graph");
 const {
   cachedHuggingFaceModel,
   parseHuggingFaceUrl,
+  parseHuggingFaceInput,
+  listHuggingFaceModels,
 } = require("../dist/huggingface");
 
 async function fixture(t, respond) {
@@ -64,6 +66,69 @@ test("normalizes Hugging Face file links and rejects non-model or credential-bea
     "https://huggingface.co/owner/repo/blob/main/model.onnx?token=not-a-real-token",
   ])
     assert.throws(() => parseHuggingFaceUrl(input));
+});
+
+test("accepts repository IDs and URLs without changing direct file links", () => {
+  const repository = "onnx-community/Kokoro-82M-v1.0-ONNX";
+  for (const input of [
+    repository,
+    `https://huggingface.co/${repository}`,
+    ` https://huggingface.co/${repository}/ `,
+  ])
+    assert.deepEqual(parseHuggingFaceInput(input), {
+      url: `https://huggingface.co/${repository}`,
+    });
+  const file = `https://huggingface.co/${repository}/blob/main/onnx/model.onnx`;
+  assert.deepEqual(parseHuggingFaceInput(file), parseHuggingFaceUrl(file));
+  for (const input of [
+    "https://example.com/owner/repo",
+    "http://huggingface.co/owner/repo",
+    "owner",
+    "owner/repo/extra",
+    "https://huggingface.co/owner/repo?token=invalid",
+  ])
+    assert.throws(() => parseHuggingFaceInput(input));
+});
+
+test("lists nested ONNX variants through HTTP and reports empty, malformed or inaccessible repositories", async (t) => {
+  let payload = {
+    siblings: [
+      { rfilename: "README.md" },
+      { rfilename: "onnx/model_q8.onnx" },
+      { rfilename: "onnx/model.onnx" },
+      { rfilename: "onnx/model.onnx_data" },
+    ],
+  };
+  let status = 200;
+  const server = await fixture(t, (_request, response) => {
+    response.writeHead(status, { "Content-Type": "application/json" });
+    response.end(JSON.stringify(payload));
+  });
+  const repository = { url: server.source("/owner/repo").url };
+  const files = await listHuggingFaceModels(repository);
+  assert.deepEqual(
+    files.map(({ path }) => path),
+    ["onnx/model.onnx", "onnx/model_q8.onnx"],
+  );
+  assert.equal(
+    files[1].url,
+    `${repository.url}/resolve/main/onnx/model_q8.onnx`,
+  );
+  assert.deepEqual(server.requests, ["/api/models/owner/repo"]);
+  payload = { siblings: [{ rfilename: "README.md" }] };
+  await assert.rejects(listHuggingFaceModels(repository), /No ONNX files/);
+  payload = { siblings: [{ rfilename: "../model.onnx" }] };
+  await assert.rejects(listHuggingFaceModels(repository), /Invalid.*path/);
+  payload = {};
+  await assert.rejects(listHuggingFaceModels(repository), /Invalid.*listing/);
+  status = 403;
+  await assert.rejects(listHuggingFaceModels(repository), /HTTP 403/);
+  const controller = new AbortController();
+  controller.abort();
+  await assert.rejects(
+    listHuggingFaceModels(repository, controller.signal),
+    /abort/i,
+  );
 });
 
 test("follows download redirects, separates source URLs and reuses validated models offline", async (t) => {

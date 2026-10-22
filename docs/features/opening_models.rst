@@ -17,8 +17,13 @@ Opening models
 Hugging Face models
 -------------------
 
-Choose **Open ONNX model**, then **Hugging Face**, and paste the URL of a public
-``.onnx`` file. Both the file page (``/blob/``) and direct download
+Choose **Open ONNX model**, then **Hugging Face**, and enter a public repository
+ID such as ``onnx-community/Kokoro-82M-v1.0-ONNX``, its URL
+(``https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX``), or the URL of an
+``.onnx`` file. For a repository, the extension lists its ONNX files and lets you
+choose a variant; a single ONNX file is selected automatically.
+
+For direct file URLs, both the file page (``/blob/``) and direct download
 (``/resolve/``) links are accepted, including nested paths and pinned revisions.
 For example:
 
@@ -29,7 +34,9 @@ For example:
 The extension downloads the file with a cancellable progress notification, loads
 it through the native viewer and retains it in its persistent Hugging Face
 cache. Later openings of the same normalized URL use the cached file without
-network access, including after restarting VS Code. Logs distinguish downloads
+network access when opened by file URL, including after restarting VS Code.
+Opening a repository still needs network access to list its files.
+Logs distinguish downloads
 from cache hits and include the cached file's location. Native inspection,
 subgraph navigation and refresh controls work as for a local model.
 
