@@ -19,11 +19,18 @@ function openViewer(t) {
   dom.window.acquireVsCodeApi = () => ({
     postMessage: (message) => messages.push(message),
   });
+  let viewport = { width: 1060, height: 350 };
+  dom.window.document.getElementById("canvas").getBoundingClientRect = () =>
+    new dom.window.DOMRect(0, 0, viewport.width, viewport.height);
+  const resize = (width, height) => {
+    viewport = { width, height };
+    dom.window.dispatchEvent(new dom.window.Event("resize"));
+  };
   dom.window.eval(readFileSync(require.resolve("../media/viewer.js"), "utf8"));
-  const load = (graph, isDemo = false) => {
+  const load = (graph) => {
     dom.window.dispatchEvent(
       new dom.window.MessageEvent("message", {
-        data: { type: "graph", graph, isDemo },
+        data: { type: "graph", graph },
       }),
     );
   };
@@ -32,13 +39,18 @@ function openViewer(t) {
     window: dom.window,
     messages,
     load,
+    resize,
   };
 }
 
 test("renders the demo, inspects its operator and requests a real file", (t) => {
   const { document, messages, load } = openViewer(t);
   assert.equal(messages[0].type, "ready");
-  load(demoGraph, true);
+  load(demoGraph);
+  assert.doesNotMatch(
+    document.body.textContent,
+    /A LITTLE CLARITY|Your model, connected|Explore the graph|A first ONNX graph|ONNX MODEL/,
+  );
   assert.equal(document.querySelectorAll(".graph-node").length, 1);
   assert.equal(document.querySelectorAll(".port").length, 2);
   assert.equal(document.querySelectorAll(".edge").length, 2);
@@ -49,8 +61,7 @@ test("renders the demo, inspects its operator and requests a real file", (t) => 
     "true",
   );
   document.getElementById("open-model").click();
-  document.getElementById("open-another").click();
-  assert.equal(messages.filter((message) => message.type === "open").length, 2);
+  assert.equal(messages.filter((message) => message.type === "open").length, 1);
   const graph = document.getElementById("graph");
   const initialViewBox = graph.getAttribute("viewBox");
   document.getElementById("zoom-in").click();
@@ -77,13 +88,7 @@ test("loads a connected graph, selects with the keyboard and treats model text a
       },
     ],
   });
-  assert.equal(document.getElementById("graph-name").textContent, unsafeName);
-  assert.equal(document.getElementById("graph-name").children.length, 0);
   assert.equal(document.querySelectorAll(".edge").length, 3);
-  assert.equal(
-    document.getElementById("model-badge").textContent,
-    "ONNX MODEL",
-  );
   const secondNode = document.querySelectorAll(".graph-node")[1];
   secondNode.dispatchEvent(
     new window.KeyboardEvent("keydown", { key: "Enter" }),
@@ -97,7 +102,7 @@ test("loads a connected graph, selects with the keyboard and treats model text a
 
 test("replaces the demo with a no-operator graph without stale nodes or inspector values", (t) => {
   const { document, load } = openViewer(t);
-  load(demoGraph, true);
+  load(demoGraph);
   load({
     name: "passthrough",
     nodes: [],
@@ -197,5 +202,34 @@ test("zooms in and out with buttons and the wheel without rearranging the graph"
   assert.equal(graph.getAttribute("viewBox"), zoomedOut);
   document.getElementById("zoom-fit").click();
   assert.equal(graph.getAttribute("viewBox"), initialViewBox);
+  assert.deepEqual(nodePositions(document), positions);
+});
+
+test("fits resized viewports without resetting zoom or rearranging nodes", (t) => {
+  const { document, load, resize } = openViewer(t);
+  load(chainGraph());
+  const positions = nodePositions(document);
+  const graph = document.getElementById("graph");
+  const viewBox = () => graph.getAttribute("viewBox").split(" ").map(Number);
+  document.getElementById("zoom-in").click();
+  for (const [width, height] of [
+    [1920, 1080],
+    [360, 640],
+    [1200, 300],
+  ]) {
+    resize(width, height);
+    const zoomed = viewBox();
+    assert.ok(Math.abs(zoomed[2] / zoomed[3] - width / height) < 1e-10);
+    document.getElementById("zoom-fit").click();
+    assert.ok(Math.abs(viewBox()[2] - zoomed[2] * 1.25) < 1e-10);
+    document.getElementById("zoom-in").click();
+    assert.deepEqual(nodePositions(document), positions);
+  }
+  const beforeHide = graph.getAttribute("viewBox");
+  resize(0, 0);
+  assert.equal(graph.getAttribute("viewBox"), beforeHide);
+  resize(800, 600);
+  assert.ok(viewBox().every(Number.isFinite));
+  assert.ok(Math.abs(viewBox()[2] / viewBox()[3] - 800 / 600) < 1e-10);
   assert.deepEqual(nodePositions(document), positions);
 });

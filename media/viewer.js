@@ -54,8 +54,13 @@ function inspect(node) {
 }
 
 function fit() {
-  const width = bounds.width / zoom;
-  const height = bounds.height / zoom;
+  const viewport = byId("canvas").getBoundingClientRect();
+  if (viewport.width === 0 || viewport.height === 0) return;
+  const scale =
+    Math.max(bounds.width / viewport.width, bounds.height / viewport.height) /
+    zoom;
+  const width = viewport.width * scale;
+  const height = viewport.height * scale;
   svg.setAttribute(
     "viewBox",
     `${(bounds.width - width) / 2} ${(bounds.height - height) / 2} ${width} ${height}`,
@@ -67,9 +72,7 @@ function changeZoom(factor) {
   fit();
 }
 
-function render(graph, isDemo) {
-  byId("graph-name").textContent = graph.name;
-  byId("model-badge").textContent = isDemo ? "DEMO MODEL" : "ONNX MODEL";
+function render(graph) {
   const tensors = new Set([
     ...graph.inputs,
     ...graph.outputs,
@@ -79,12 +82,6 @@ function render(graph, isDemo) {
     `${graph.nodes.length} node${graph.nodes.length === 1 ? "" : "s"} / ${tensors.size} tensors`;
   byId("initializer-count").textContent =
     `${graph.initializerCount} initializer${graph.initializerCount === 1 ? "" : "s"}`;
-  byId("welcome-title").textContent = isDemo
-    ? "One node. A good place to start."
-    : "Your model. A little clearer.";
-  byId("welcome-description").textContent = isDemo
-    ? "This demo connects an input to a Relu operator and an output. Open an .onnx file to explore your own model."
-    : "Select an operator to inspect its inputs and outputs, or open another ONNX model.";
 
   const edges = byId("edges");
   const nodes = byId("nodes");
@@ -234,9 +231,6 @@ function render(graph, isDemo) {
 byId("open-model").addEventListener("click", () =>
   vscode.postMessage({ type: "open" }),
 );
-byId("open-another").addEventListener("click", () =>
-  vscode.postMessage({ type: "open" }),
-);
 byId("zoom-in").addEventListener("click", () => {
   changeZoom(1.25);
 });
@@ -256,9 +250,10 @@ svg.addEventListener(
   },
   { passive: false },
 );
+window.addEventListener("resize", fit);
 window.addEventListener("message", (event) => {
   if (event.data?.type === "graph") {
-    render(event.data.graph, event.data.isDemo);
+    render(event.data.graph);
   }
 });
 vscode.postMessage({ type: "ready" });
