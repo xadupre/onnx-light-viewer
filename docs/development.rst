@@ -74,6 +74,9 @@ With Python 3.11 or later, run from the repository root:
 Open ``build/docs/html/index.html`` in a browser. Generated HTML is ignored by
 Git. Documentation dependencies are separate from the extension's dependencies.
 
+The documentation uses PyData Sphinx Theme, like onnx-light, with a light/dark
+theme switcher in the navigation bar. By default, it follows the system theme.
+
 Source layout
 -------------
 
