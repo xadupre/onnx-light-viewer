@@ -106,13 +106,15 @@ a:focus-visible {
   stroke-linecap: round;
   stroke-linejoin: round;
 }
-#shape-status {
+#shape-status,
+#metadata-status {
   max-width: 38ch;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
 }
-#shape-status:empty {
+#shape-status:empty,
+#metadata-status:empty {
   display: none;
 }
 .graph-stats {
@@ -328,6 +330,72 @@ button:disabled {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   font: inherit;
+}
+#metadata-panel dl {
+  margin: 8px 0 12px;
+}
+#metadata-panel dt {
+  margin-top: 6px;
+  font-size: 10px;
+  letter-spacing: 0;
+}
+#metadata-panel dd {
+  font-size: 11px;
+  white-space: pre-wrap;
+}
+#metadata-panel #metadata-analysis {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 4px 10px;
+  margin: 12px 0;
+}
+#metadata-analysis dt,
+#metadata-analysis dd {
+  margin: 0;
+}
+#metadata-panel details {
+  margin-top: 10px;
+}
+#metadata-panel summary {
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+}
+#metadata-values {
+  margin-top: 8px;
+}
+.metadata-value-name {
+  display: block;
+  font-weight: 500;
+}
+.metadata-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 4px 0;
+}
+.metadata-badges span {
+  padding: 0 5px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 10px;
+  color: var(--mint);
+}
+.metadata-value-type {
+  font-size: 10px;
+  color: var(--muted);
+}
+.edge.released {
+  stroke: #e2b77a;
+  stroke-dasharray: 5 4;
+}
+.tensor-label.released {
+  fill: #e2b77a;
+  text-decoration: line-through;
+}
+.graph-node .unused-label {
+  fill: #e2b77a;
+  font-size: 9px;
 }
 #operator-doc {
   width: min(900px, 95vw);

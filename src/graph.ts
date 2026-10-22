@@ -57,6 +57,36 @@ export interface Graph {
 
 export interface NativeModel {
   graph(inferShapes?: boolean): Graph;
+  metadata(): GraphMetadata;
+}
+
+export interface MetadataEntry {
+  key: string;
+  value: string;
+}
+
+export interface ValueMetadata {
+  name: string;
+  entries: MetadataEntry[];
+  constant: boolean;
+  tag: string | null;
+}
+
+export interface NodeMetadata {
+  id: string;
+  entries: MetadataEntry[];
+  constant: boolean;
+  tag: string | null;
+  releaseAfter: string[];
+  lastUse: string[];
+  unusedOutputs: string[];
+}
+
+export interface GraphMetadata {
+  model: MetadataEntry[];
+  graph: MetadataEntry[];
+  nodes: NodeMetadata[];
+  values: ValueMetadata[];
 }
 
 export interface BackendTest {

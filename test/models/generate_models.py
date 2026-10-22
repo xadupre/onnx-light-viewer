@@ -214,3 +214,55 @@ initializer_model = helper.make_model(
 )
 # External files are intentionally absent: viewing metadata must not open them.
 save_model(initializer_model, Path(__file__).with_name("initializers.onnx"))
+
+shared_name = "shared;activation"
+metadata_model = helper.make_model(
+    helper.make_graph(
+        [
+            helper.make_node(
+                "Constant",
+                [],
+                ["constant"],
+                name="constant_source",
+                value=helper.make_tensor("value", TensorProto.FLOAT, [1], [2.0]),
+            ),
+            helper.make_node(
+                "Add", ["constant", "bias"], ["constant_sum"], name="constant_add"
+            ),
+            helper.make_node(
+                "Identity", ["input"], [shared_name], name="shared_source"
+            ),
+            helper.make_node("Shape", [shared_name], ["dimensions"], name="shape"),
+            helper.make_node(
+                "Identity", [shared_name], ["unused"], name="unused_result"
+            ),
+            helper.make_node(
+                "Add", [shared_name, "constant_sum"], ["output"], name="last_consumer"
+            ),
+        ],
+        "Metadata and result lifetimes",
+        [value_info("input")],
+        [value_info("output")],
+        initializer=[
+            external_tensor(
+                "bias", TensorProto.FLOAT, [1], "missing/metadata-weights.bin"
+            )
+        ],
+        value_info=[value_info(shared_name)],
+    ),
+    ir_version=9,
+    opset_imports=[helper.make_opsetid("", 13)],
+)
+for proto, key, value in [
+    (metadata_model, "purpose", "metadata <inspection>"),
+    (metadata_model.graph, "graph_note", "Keep all entries"),
+    (metadata_model.graph.node[5], "node_note", "<script>not executable</script>"),
+    (metadata_model.graph.value_info[0], "tensor_note", "A result used by three nodes"),
+    (metadata_model.graph.initializer[0], "weight_note", "External payload is absent"),
+]:
+    entry = proto.metadata_props.add()
+    entry.key = key
+    entry.value = value
+save_model(metadata_model, Path(__file__).with_name("analysis.onnx"))
+metadata_model.graph.output.append(value_info(shared_name))
+save_model(metadata_model, Path(__file__).with_name("analysis-kept-output.onnx"))

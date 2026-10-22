@@ -82,6 +82,29 @@ Attribute defaults provided by ``LightOpSchema`` are marked ``[default]`` and
 never replace explicit model values. Attribute arrays still show their first
 eight elements and total count when shortened, with bounded preview text.
 
+**Metadata** switches the side inspector to native constant, tag and lifetime
+analysis, alongside stored model, graph, node and connected-tensor metadata.
+The compact summary shows the selected value's tag and constant status.
+Empty lifetime sections are hidden, and connected tensors and stored metadata
+are expandable. The global **Refresh metadata** button, beside **Refresh
+shapes**, reruns onnx-light's constant, tag and lifetime algorithms for the
+entire model, even with the metadata panel closed. It preserves the current
+view and keeps the last snapshot visible while refreshing. Progress and
+errors appear in the main toolbar.
+Select an operator to see its tag, whether it is constant, and the results
+releasable after its last reads. Their connections become dashed and their
+tensor names are crossed out. This is a static lifetime view after the selected
+node, not an execution of the model.
+
+Inputs and weights reaching their last read are listed separately: they remain
+caller-owned and are not marked as released. Graph outputs are kept.
+An **Unused** badge identifies results with no consumer that are not graph
+outputs; their names appear in the sidebar and badge tooltip.
+Click **Metadata** again to restore normal parameter inspection. Metadata
+analysis does not modify the model or source file, infer shapes, evaluate
+operators, or open external weights. Unknown shapes and custom operators do
+not prevent this inspection.
+
 Click **Refresh shapes** to :doc:`refresh shape and type
 information <shape_information>` with onnx-light. Tensor descriptions appear
 on the graph and in the side inspector. The viewer logo opens the GitHub

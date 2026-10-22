@@ -100,6 +100,78 @@ test("loads a real one-node ONNX model file matching the demo", () => {
   assert.deepEqual(decodeGraph(bytes, "relu.onnx"), demoGraph);
 });
 
+test("analyzes constants, tags and last-use releases without reading weights or changing stored metadata", () => {
+  const bytes = modelBytes("analysis.onnx");
+  const model = loadModel(bytes, "analysis.onnx");
+  const graph = model.graph();
+  const metadata = model.metadata();
+  assert.deepEqual(metadata.model, [
+    { key: "purpose", value: "metadata <inspection>" },
+  ]);
+  assert.deepEqual(metadata.graph, [
+    { key: "graph_note", value: "Keep all entries" },
+  ]);
+  assert.deepEqual(
+    metadata.nodes.map((node) => node.constant),
+    [true, true, false, false, false, false],
+  );
+  assert.equal(metadata.nodes[3].tag, "shape");
+  assert.deepEqual(metadata.nodes[1].releaseAfter, ["constant"]);
+  assert.deepEqual(metadata.nodes[1].lastUse, ["bias"]);
+  assert.deepEqual(metadata.nodes[2].lastUse, ["input"]);
+  assert.deepEqual(metadata.nodes[3].releaseAfter, []);
+  assert.deepEqual(metadata.nodes[4].releaseAfter, []);
+  assert.deepEqual(metadata.nodes[5].releaseAfter, [
+    "shared;activation",
+    "constant_sum",
+  ]);
+  assert.deepEqual(metadata.nodes[3].unusedOutputs, ["dimensions"]);
+  assert.deepEqual(metadata.nodes[4].unusedOutputs, ["unused"]);
+  assert.deepEqual(metadata.nodes[5].unusedOutputs, []);
+  assert.deepEqual(metadata.nodes[5].entries, [
+    { key: "node_note", value: "<script>not executable</script>" },
+  ]);
+  assert.deepEqual(
+    metadata.values.find((value) => value.name === "bias"),
+    {
+      name: "bias",
+      constant: true,
+      tag: "weight",
+      entries: [{ key: "weight_note", value: "External payload is absent" }],
+    },
+  );
+  assert.equal(
+    metadata.values.find((value) => value.name === "constant_sum").constant,
+    true,
+  );
+  assert.equal(
+    metadata.values.find((value) => value.name === "dimensions").tag,
+    "shape",
+  );
+  assert.deepEqual(model.graph(), graph);
+  assert.deepEqual(modelBytes("analysis.onnx"), bytes);
+  assert.throws(() => model.metadata(true), TypeError);
+
+  const kept = loadModel(
+    modelBytes("analysis-kept-output.onnx"),
+    "kept.onnx",
+  ).metadata();
+  assert.deepEqual(kept.nodes[5].releaseAfter, ["constant_sum"]);
+  assert.ok(
+    kept.nodes.every(
+      (node) => !node.unusedOutputs.includes("shared;activation"),
+    ),
+  );
+  assert.deepEqual(
+    loadModel(modelBytes("passthrough.onnx"), "pass.onnx").metadata().nodes,
+    [],
+  );
+  assert.equal(
+    loadModel(modelBytes("custom.onnx"), "custom.onnx").metadata().nodes[1].tag,
+    "weight",
+  );
+});
+
 test("preserves unnamed and custom operators, omits optional ports and initializer inputs", () => {
   const graph = decodeGraph(modelBytes("custom.onnx"), "model.onnx");
   assert.equal(graph.name, "Custom operators");
