@@ -1,0 +1,8 @@
+.vscode/**
+src/**
+test/**
+tsconfig.json
+.prettierignore
+.gitignore
+**/*.map
+start.sh
