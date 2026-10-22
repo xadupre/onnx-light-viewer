@@ -93,7 +93,8 @@ network request to list files; direct cached file URLs work offline.
 
 Cache storage is under ``context.globalStorageUri/huggingface`` in the extension
 host. The original remote basename is passed to the native loader, not the
-temporary cache name. Retained model bytes still provide native failure recovery
+temporary cache name. After publication, the recovery factory uses the final
+cache path, not the renamed temporary file. Recovery streams that local file
 without another download. Authentication, external weight downloads and model
 execution are outside this action's scope.
 
@@ -311,9 +312,10 @@ its Logs tab.
 
 A failed shape or metadata refresh invalidates the native handle, not the
 last displayed snapshots. Before the next native action, ``nativeModel``
-logs and recreates that handle from the original bytes or backend case.
-It does not reread or save the source file. This discards potentially partial
-native inference state; previously inferred information may need refreshing
+logs and recreates that handle by streaming the local file again, using retained
+virtual-file bytes, or rebuilding the backend case. Local files, including cache
+entries, must still exist; source files are never modified. This discards
+potentially partial native inference state; previously inferred information may need refreshing
 after recovery. Reload failures are logged and surfaced like other failures.
 
 ``application-status`` is sent on action updates, model replacement, native
@@ -345,6 +347,16 @@ rebuilding the graph on every pointer move. Selection rendering also tracks
 changed nodes. A gesture caches its viewport mapping; changes that resize the
 canvas invalidate that mapping. Zoom and pan change the SVG ``viewBox``, not
 model coordinates.
+
+Above 1,000 nodes, view records retain lightweight SVG factories instead of
+creating the full SVG tree. The initial camera uses readable size; camera
+updates attach only intersecting detail groups and detach offscreen groups.
+Tensor labels and metadata markers are initialized from current snapshots when
+a group is first created. **Fit** draws the whole graph as two batched paths;
+long edges whose labels are offscreen also use batched paths in detail view.
+Node search uses the complete view index, so it can select and center nodes
+which have never had a DOM element. These operations preserve model coordinates
+and the current inspection state.
 
 Build and verification boundaries
 ---------------------------------
