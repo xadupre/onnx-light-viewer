@@ -330,19 +330,60 @@ button:disabled {
   font: inherit;
 }
 #metadata-panel dl {
-  margin: 6px 0 14px;
+  margin: 8px 0 12px;
+}
+#metadata-panel dt {
+  margin-top: 6px;
+  font-size: 10px;
+  letter-spacing: 0;
 }
 #metadata-panel dd {
+  font-size: 11px;
   white-space: pre-wrap;
 }
+#metadata-panel #metadata-analysis {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 4px 10px;
+  margin: 12px 0;
+}
+#metadata-analysis dt,
+#metadata-analysis dd {
+  margin: 0;
+}
+#metadata-status:empty {
+  display: none;
+}
 #metadata-panel details {
-  margin-top: 14px;
+  margin-top: 10px;
 }
 #metadata-panel summary {
   cursor: pointer;
   font-size: 11px;
+  font-weight: 600;
 }
-.metadata-hint {
+#metadata-values {
+  margin-top: 8px;
+}
+.metadata-value-name {
+  display: block;
+  font-weight: 500;
+}
+.metadata-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 4px 0;
+}
+.metadata-badges span {
+  padding: 0 5px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 10px;
+  color: var(--mint);
+}
+.metadata-value-type {
+  font-size: 10px;
   color: var(--muted);
 }
 .edge.released {

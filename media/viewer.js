@@ -217,10 +217,8 @@ function inspect(view) {
 
 function metadataEntries(parent, entries) {
   parent.replaceChildren();
-  if (!entries.length) {
-    parent.append(document.createTextNode("None"));
-    return;
-  }
+  if (parent.parentElement.tagName === "DETAILS")
+    parent.parentElement.hidden = entries.length === 0;
   for (const { key, value } of entries) {
     const term = document.createElement("dt");
     const description = document.createElement("dd");
@@ -231,8 +229,9 @@ function metadataEntries(parent, entries) {
 }
 
 function metadataNames(id, names) {
+  byId(`${id}-section`).hidden = names.length === 0;
   byId(id).replaceChildren(
-    ...(names.length ? names : ["None"]).map((name) => {
+    ...names.map((name) => {
       const item = document.createElement("li");
       item.textContent = name;
       return item;
@@ -284,17 +283,36 @@ function inspectMetadata() {
   const names = new Set(
     node ? [...node.inputs, ...node.outputs] : port ? [port.name] : [],
   );
+  byId("metadata-value-count").textContent = names.size;
+  byId("metadata-values").parentElement.hidden = names.size === 0;
   byId("metadata-values").replaceChildren(
     ...[...names].map((name) => {
       const value = valueMetadata.get(name);
       const item = document.createElement("li");
       const heading = document.createElement("strong");
+      heading.className = "metadata-value-name";
       heading.textContent = name;
+      const badges = document.createElement("div");
+      badges.className = "metadata-badges";
+      for (const text of [value?.tag, value?.constant ? "constant" : null]) {
+        if (!text) continue;
+        const badge = document.createElement("span");
+        badge.textContent = text;
+        badges.append(badge);
+      }
       const description = document.createElement("div");
-      description.textContent = `${tensorDescription(name)} · Tag: ${value?.tag ?? "Unknown"} · Constant: ${value ? (value.constant ? "Yes" : "No") : "Unknown"}`;
-      const entries = document.createElement("dl");
-      metadataEntries(entries, value?.entries ?? []);
-      item.append(heading, description, entries);
+      description.className = "metadata-value-type";
+      description.textContent = tensorDescription(name);
+      item.append(heading, badges, description);
+      if (value?.entries.length) {
+        const details = document.createElement("details");
+        const summary = document.createElement("summary");
+        summary.textContent = "Stored metadata";
+        const entries = document.createElement("dl");
+        details.append(summary, entries);
+        metadataEntries(entries, value.entries);
+        item.append(details);
+      }
       return item;
     }),
   );
@@ -306,6 +324,7 @@ function acceptMetadata(metadata) {
   valueMetadata = new Map(metadata.values.map((value) => [value.name, value]));
   metadataPending = false;
   byId("show-metadata").setAttribute("aria-busy", "false");
+  byId("refresh-metadata").disabled = false;
   byId("metadata-status").textContent = "";
   byId("metadata-content").hidden = false;
   metadataEntries(byId("metadata-model"), metadata.model);
@@ -335,7 +354,8 @@ function requestMetadata() {
   if (metadataPending) return;
   metadataPending = true;
   byId("show-metadata").setAttribute("aria-busy", "true");
-  byId("metadata-content").hidden = true;
+  byId("refresh-metadata").disabled = true;
+  byId("metadata-content").hidden = !graphMetadata;
   byId("metadata-status").textContent = "Analyzing metadata…";
   vscode.postMessage({ type: "metadata" });
 }
@@ -596,6 +616,7 @@ function render(graph, metadata) {
   byId("metadata-content").hidden = true;
   byId("metadata-status").textContent = "";
   byId("show-metadata").setAttribute("aria-busy", "false");
+  byId("refresh-metadata").disabled = false;
   const tensors = new Set([
     ...graph.inputs,
     ...graph.outputs,
@@ -883,6 +904,7 @@ byId("show-metadata").addEventListener("click", () => {
   inspectMetadata();
   if (metadataVisible && !graphMetadata) requestMetadata();
 });
+byId("refresh-metadata").addEventListener("click", requestMetadata);
 byId("refresh-shapes").addEventListener("click", () => {
   refreshStatus(true, "Inferring shapes/types…");
   vscode.postMessage({ type: "refresh-shapes" });
@@ -948,6 +970,7 @@ window.addEventListener("message", (event) => {
   } else if (event.data?.type === "metadata-error") {
     metadataPending = false;
     byId("show-metadata").setAttribute("aria-busy", "false");
+    byId("refresh-metadata").disabled = false;
     byId("metadata-status").textContent =
       `Metadata analysis failed: ${event.data.error}`;
   } else if (event.data?.type === "shape-info") {

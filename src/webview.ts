@@ -34,16 +34,15 @@ export function webviewHtml(
             <h3>Initializers <span id="parameter-count">0</span></h3><ul id="node-initializers"></ul>
           </section></div>
           <section id="metadata-panel" hidden>
+            <button id="refresh-metadata" class="icon-button" title="Recompute constants, tags and lifetimes with onnx-light">Refresh metadata</button>
             <p id="metadata-status" role="status"></p>
             <div id="metadata-content" hidden>
-              <h3>Selected node / tensor</h3><dl id="metadata-analysis"></dl>
-              <h3>Releasable after this node</h3><ul id="metadata-releases"></ul>
-              <p class="metadata-hint">Dashed, crossed-out connections are no longer needed after the selected node. Static analysis only; the model is not executed.</p>
-              <h3>Last use: inputs / weights</h3><ul id="metadata-last-use"></ul>
-              <p class="metadata-hint">Caller-owned values are not released.</p>
-              <h3>Unused outputs</h3><ul id="metadata-unused"></ul>
-              <details open><summary>Selected node metadata</summary><dl id="metadata-node"></dl></details>
-              <details open><summary>Connected tensor metadata</summary><ul id="metadata-values"></ul></details>
+              <dl id="metadata-analysis"></dl>
+              <section id="metadata-releases-section" hidden><h3>Releasable after this node</h3><ul id="metadata-releases"></ul></section>
+              <section id="metadata-last-use-section" hidden><h3 title="Last reads of caller-owned values; these are not released">Last use: inputs / weights</h3><ul id="metadata-last-use"></ul></section>
+              <section id="metadata-unused-section" hidden><h3>Unused outputs</h3><ul id="metadata-unused"></ul></section>
+              <details><summary>Stored node metadata</summary><dl id="metadata-node"></dl></details>
+              <details><summary>Connected tensors (<span id="metadata-value-count">0</span>)</summary><ul id="metadata-values"></ul></details>
               <details><summary>Model metadata</summary><dl id="metadata-model"></dl></details>
               <details><summary>Graph metadata</summary><dl id="metadata-graph"></dl></details>
             </div>

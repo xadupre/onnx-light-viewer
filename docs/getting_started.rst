@@ -84,6 +84,11 @@ eight elements and total count when shortened, with bounded preview text.
 
 **Metadata** switches the side inspector to native constant, tag and lifetime
 analysis, alongside stored model, graph, node and connected-tensor metadata.
+The compact summary shows the selected value's tag and constant status.
+Empty lifetime sections are hidden, and connected tensors and stored metadata
+are expandable. **Refresh metadata** recomputes the native analysis without
+closing the panel or discarding the current view; the last snapshot remains
+visible while the refresh runs.
 Select an operator to see its tag, whether it is constant, and the results
 releasable after its last reads. Their connections become dashed and their
 tensor names are crossed out. This is a static lifetime view after the selected

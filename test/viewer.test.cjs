@@ -109,6 +109,23 @@ test("shows native metadata in the sidebar and marks released and never-used res
   );
   assert.equal(toggle.getAttribute("aria-busy"), "false");
   assert.equal(document.getElementById("metadata-content").hidden, false);
+  assert.equal(document.getElementById("metadata-unused-section").hidden, true);
+  assert.equal(
+    document.getElementById("metadata-releases-section").hidden,
+    true,
+  );
+  assert.equal(
+    document.getElementById("metadata-node").parentElement.hidden,
+    true,
+  );
+  assert.equal(
+    document.getElementById("metadata-values").parentElement.open,
+    false,
+  );
+  assert.doesNotMatch(
+    document.querySelector("main").textContent,
+    /Dashed, crossed-out connections are no longer needed/,
+  );
   assert.match(
     document.getElementById("metadata-analysis").textContent,
     /ConstantYes/,
@@ -130,12 +147,34 @@ test("shows native metadata in the sidebar and marks released and never-used res
     pointer(graph, "pointerup", point.x, point.y);
   };
   select(3);
+  assert.equal(
+    document.getElementById("metadata-unused-section").hidden,
+    false,
+  );
+  assert.equal(
+    document.getElementById("metadata-unused").textContent,
+    "dimensions",
+  );
   assert.match(
     document.getElementById("metadata-analysis").textContent,
     /Tagshape/,
   );
   assert.equal(document.querySelectorAll(".edge.released").length, 0);
   select(5);
+  assert.equal(document.getElementById("metadata-unused-section").hidden, true);
+  assert.equal(
+    document.getElementById("metadata-releases-section").hidden,
+    false,
+  );
+  assert.equal(
+    document.getElementById("metadata-value-count").textContent,
+    "3",
+  );
+  assert.equal(
+    document.getElementById("metadata-node").parentElement.open,
+    false,
+  );
+  assert.ok(document.querySelector("#metadata-values .metadata-badges"));
   assert.equal(document.querySelectorAll(".edge.released").length, 4);
   assert.equal(document.querySelectorAll(".tensor-label.released").length, 4);
   assert.deepEqual(
@@ -208,6 +247,41 @@ test("reports metadata errors, allows retry and clears stale metadata and releas
     }),
   );
   assert.equal(document.querySelectorAll(".unused-label").length, 2);
+  const refresh = document.getElementById("refresh-metadata");
+  const content =
+    document.getElementById("metadata-analysis").firstElementChild;
+  const count = messages.length;
+  refresh.click();
+  assert.equal(messages.length, count + 1);
+  assert.equal(messages.at(-1).type, "metadata");
+  assert.equal(refresh.disabled, true);
+  assert.equal(document.getElementById("metadata-content").hidden, false);
+  refresh.click();
+  assert.equal(messages.length, count + 1);
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: { type: "metadata-error", error: "refresh failed" },
+    }),
+  );
+  assert.equal(refresh.disabled, false);
+  assert.equal(document.getElementById("metadata-content").hidden, false);
+  assert.match(
+    document.getElementById("metadata-status").textContent,
+    /refresh failed/,
+  );
+  refresh.click();
+  assert.equal(messages.length, count + 2);
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: { type: "metadata-info", metadata: model.metadata() },
+    }),
+  );
+  assert.equal(refresh.disabled, false);
+  assert.equal(document.getElementById("metadata-status").textContent, "");
+  assert.notEqual(
+    document.getElementById("metadata-analysis").firstElementChild,
+    content,
+  );
   load(demoGraph);
   assert.equal(messages.at(-1).type, "metadata");
   assert.equal(document.getElementById("metadata-content").hidden, true);

@@ -194,6 +194,11 @@ test("analyzes retained native metadata on demand, preserves it on ready and res
     "constant_sum",
   ]);
   assert.equal(extension.reads.length, reads);
+  await extension.receive({ type: "metadata" });
+  assert.equal(extension.messages.at(-1).type, "metadata-info");
+  assert.notEqual(extension.messages.at(-1).metadata, info.metadata);
+  assert.deepEqual(extension.messages.at(-1).metadata, info.metadata);
+  assert.equal(extension.reads.length, reads);
   await extension.receive({ type: "ready" });
   assert.deepEqual(extension.messages.at(-1).metadata, info.metadata);
   await extension.open("relu.onnx");
