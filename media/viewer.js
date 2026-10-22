@@ -12,6 +12,9 @@ let selected = new Set();
 let connections = [];
 let gesture;
 let inspectedNode;
+let inspectedView;
+let tensorInformation = new Map();
+let tensorLabels = [];
 
 function element(tag, attributes, text) {
   const node = document.createElementNS(svgNS, tag);
@@ -36,6 +39,39 @@ function shortName(value, length = 22) {
   return value.length > length ? `${value.slice(0, length - 1)}…` : value;
 }
 
+function tensorDescription(name) {
+  const info = tensorInformation.get(name);
+  const type = info?.type ?? "?";
+  if (info && info.shape === undefined) return type;
+  return `${type} [${info?.shape === null || !info ? "?" : info.shape.join(", ")}]`;
+}
+
+function tensorLabel(parent, x, y, name, length, anchor = "middle") {
+  const text = label(parent, x, y, "", "tensor-info", anchor);
+  const title = element("title", {});
+  const value = element("tspan", {});
+  text.append(title, value);
+  tensorLabels.push({ name, text, title, value, length });
+  return text;
+}
+
+function updateTensorInformation(tensors) {
+  tensorInformation = new Map(tensors.map((tensor) => [tensor.name, tensor]));
+  for (const { name, text, title, value, length } of tensorLabels) {
+    const description = tensorDescription(name);
+    title.textContent = `${name}: ${description}`;
+    text.setAttribute("aria-label", description);
+    value.textContent = shortName(description, length);
+  }
+}
+
+function refreshStatus(pending, message = "") {
+  byId("refresh-shapes").disabled = pending;
+  byId("refresh-shapes").setAttribute("aria-busy", String(pending));
+  byId("shape-status").textContent = message;
+  byId("shape-status").title = message;
+}
+
 function resetDocumentation() {
   if (byId("operator-doc").open) byId("operator-doc").close();
   byId("doc-title").textContent = "";
@@ -44,6 +80,7 @@ function resetDocumentation() {
 }
 
 function inspect(view) {
+  inspectedView = view;
   const node = view?.node;
   const port = view?.port;
   const hasOperators = [...nodeViews.values()].some((view) => view.node);
@@ -93,7 +130,13 @@ function inspect(view) {
     byId(`node-${direction}`).replaceChildren(
       ...names.map((name) => {
         const item = document.createElement("li");
-        item.textContent = name;
+        const tensorName = document.createElement("span");
+        tensorName.className = "tensor-name";
+        tensorName.textContent = name;
+        const information = document.createElement("span");
+        information.className = "tensor-info";
+        information.textContent = tensorDescription(name);
+        item.append(tensorName, information);
         return item;
       }),
     );
@@ -155,7 +198,8 @@ function selectNode(id, additive) {
 }
 
 function updateConnection(connection) {
-  const { from, to, fromOperator, toOperator, path, text } = connection;
+  const { from, to, fromOperator, toOperator, path, text, information } =
+    connection;
   const y1 = from.y + (fromOperator ? 47 : 26);
   const y2 = to.y - (toOperator ? 47 : 26);
   const middle = (y1 + y2) / 2;
@@ -165,6 +209,8 @@ function updateConnection(connection) {
   );
   text.setAttribute("x", (from.x + to.x) / 2 + 10);
   text.setAttribute("y", middle);
+  information.setAttribute("x", (from.x + to.x) / 2 + 10);
+  information.setAttribute("y", middle + 14);
 }
 
 function moveNodes(origins, dx, dy) {
@@ -294,6 +340,8 @@ function render(graph) {
   endGesture();
   resetDocumentation();
   inspectedNode = undefined;
+  inspectedView = undefined;
+  tensorLabels = [];
   nodeViews = new Map();
   selected = new Set();
   connections = [];
@@ -355,11 +403,12 @@ function render(graph) {
     label(
       group,
       position.x,
-      position.y - 6,
+      position.y - 12,
       output ? "OUTPUT" : "INPUT",
       "port-type",
     );
-    label(group, position.x, position.y + 12, shortName(name, 16), "port-name");
+    label(group, position.x, position.y + 3, shortName(name, 16), "port-name");
+    tensorLabel(group, position.x, position.y + 18, name, 18);
     registerNode(`${output ? "output" : "input"}-${index}`, {
       port: { name, output },
       group,
@@ -385,7 +434,16 @@ function render(graph) {
       "tensor-label",
       "start",
     );
-    const connection = { from, to, fromOperator, toOperator, path, text };
+    const information = tensorLabel(edges, 0, 0, name, 34, "start");
+    const connection = {
+      from,
+      to,
+      fromOperator,
+      toOperator,
+      path,
+      text,
+      information,
+    };
     connections.push(connection);
     updateConnection(connection);
   };
@@ -453,7 +511,9 @@ function render(graph) {
   pan = { x: 0, y: 0 };
   fit();
   if (graph.nodes.length) selected.add(graph.nodes[0].id);
+  updateTensorInformation(graph.tensors ?? []);
   updateSelection();
+  refreshStatus(false);
 }
 
 svg.addEventListener("pointerdown", (event) => {
@@ -540,6 +600,10 @@ byId("close-doc").addEventListener("click", () => byId("operator-doc").close());
 byId("open-model").addEventListener("click", () =>
   vscode.postMessage({ type: "open" }),
 );
+byId("refresh-shapes").addEventListener("click", () => {
+  refreshStatus(true, "Inferring shapes/types…");
+  vscode.postMessage({ type: "refresh-shapes" });
+});
 byId("zoom-in").addEventListener("click", () => {
   changeZoom(1.25);
 });
@@ -595,6 +659,12 @@ window.addEventListener("resize", () => {
 window.addEventListener("message", (event) => {
   if (event.data?.type === "graph") {
     render(event.data.graph);
+  } else if (event.data?.type === "shape-info") {
+    updateTensorInformation(event.data.tensors);
+    inspect(inspectedView);
+    refreshStatus(false, "Shapes/types refreshed");
+  } else if (event.data?.type === "shape-error") {
+    refreshStatus(false, `Shape/type inference failed: ${event.data.error}`);
   }
 });
 vscode.postMessage({ type: "ready" });

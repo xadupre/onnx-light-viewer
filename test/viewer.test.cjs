@@ -98,7 +98,10 @@ test("renders the demo, inspects its operator and requests a real file", (t) => 
   assert.equal(document.querySelectorAll(".port").length, 2);
   assert.equal(document.querySelectorAll(".edge").length, 2);
   assert.equal(document.getElementById("node-title").textContent, "Relu");
-  assert.equal(document.getElementById("node-inputs").textContent, "input");
+  assert.equal(
+    document.querySelector("#node-inputs .tensor-name").textContent,
+    "input",
+  );
   assert.equal(
     document.querySelector(".graph-node").getAttribute("aria-pressed"),
     "true",
@@ -229,6 +232,179 @@ test("renders attribute names, values and schema documentation as text, not HTML
   }
 });
 
+test("links the viewer logo to its repository and requests a shape refresh only while idle", (t) => {
+  const { document, load, messages, window } = openViewer(t);
+  const link = document.getElementById("repository-link");
+  assert.equal(link.tagName, "A");
+  assert.equal(link.href, "https://github.com/xadupre/onnx-light-viewer");
+  assert.ok(link.querySelector('img[src$="/logo.svg"]'));
+  assert.match(link.getAttribute("aria-label"), /GitHub repository/);
+  const refresh = document.getElementById("refresh-shapes");
+  assert.ok(refresh.querySelector("svg"));
+  assert.equal(refresh.disabled, true);
+  load(demoGraph);
+  assert.equal(refresh.disabled, false);
+  refresh.click();
+  refresh.click();
+  assert.equal(refresh.disabled, true);
+  assert.equal(refresh.getAttribute("aria-busy"), "true");
+  assert.equal(
+    messages.filter((message) => message.type === "refresh-shapes").length,
+    1,
+  );
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: { type: "shape-error", error: "Unsupported operator" },
+    }),
+  );
+  assert.equal(refresh.disabled, false);
+  assert.equal(refresh.getAttribute("aria-busy"), "false");
+  assert.match(
+    document.getElementById("shape-status").textContent,
+    /Unsupported operator/,
+  );
+  assert.equal(
+    document.querySelector("#node-inputs .tensor-info").textContent,
+    "FLOAT [1, 3]",
+  );
+  load(demoGraph);
+  assert.equal(document.getElementById("shape-status").textContent, "");
+});
+
+test("refreshes real onnx-light metadata on edges, ports and the current inspector without resetting the view", (t) => {
+  const { document, load, window, pointer } = openViewer(t);
+  const bytes = readFileSync(require.resolve("./models/inference.onnx"));
+  load(decodeGraph(bytes, "inference.onnx"));
+  const nodes = document.querySelectorAll(".graph-node");
+  nodes[1].dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter" }));
+  const position = nodePositions(document)[1];
+  pointer(nodes[1], "pointerdown", position.x, position.y);
+  pointer(
+    document.getElementById("graph"),
+    "pointermove",
+    position.x + 45,
+    position.y + 20,
+  );
+  pointer(
+    document.getElementById("graph"),
+    "pointerup",
+    position.x + 45,
+    position.y + 20,
+  );
+  nodes[2].dispatchEvent(
+    new window.KeyboardEvent("keydown", { key: "Enter", ctrlKey: true }),
+  );
+  document.getElementById("zoom-in").click();
+  const graph = document.getElementById("graph");
+  graph.dispatchEvent(
+    new window.WheelEvent("wheel", {
+      deltaY: 40,
+      shiftKey: true,
+      cancelable: true,
+    }),
+  );
+  const viewBox = graph.getAttribute("viewBox");
+  const positions = nodePositions(document);
+  const selected = [...document.querySelectorAll('[aria-pressed="true"]')].map(
+    (node) => node.dataset.id,
+  );
+  const paths = [...document.querySelectorAll(".edge")].map((edge) =>
+    edge.getAttribute("d"),
+  );
+  assert.equal(
+    document.querySelector("#node-outputs .tensor-info").textContent,
+    "? [?]",
+  );
+  document.getElementById("refresh-shapes").click();
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: {
+        type: "shape-info",
+        tensors: decodeGraph(bytes, "inference.onnx", true).tensors,
+      },
+    }),
+  );
+  assert.equal(document.getElementById("refresh-shapes").disabled, false);
+  assert.equal(document.getElementById("node-title").textContent, "Transpose");
+  assert.equal(
+    document.querySelector("#node-outputs .tensor-info").textContent,
+    "FLOAT [N, 1, 3]",
+  );
+  assert.ok(
+    [...document.querySelectorAll("#edges .tensor-info")].some(
+      (label) => label.getAttribute("aria-label") === "FLOAT [N, 3, 1]",
+    ),
+  );
+  assert.equal(
+    document
+      .querySelector(".port.output .tensor-info")
+      .getAttribute("aria-label"),
+    "INT64 [N, 1, 3]",
+  );
+  assert.equal(graph.getAttribute("viewBox"), viewBox);
+  assert.deepEqual(nodePositions(document), positions);
+  assert.deepEqual(
+    [...document.querySelectorAll('[aria-pressed="true"]')].map(
+      (node) => node.dataset.id,
+    ),
+    selected,
+  );
+  assert.deepEqual(
+    [...document.querySelectorAll(".edge")].map((edge) =>
+      edge.getAttribute("d"),
+    ),
+    paths,
+  );
+  document
+    .querySelector(".port.output")
+    .dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter" }));
+  assert.equal(
+    document.querySelector("#node-inputs .tensor-info").textContent,
+    "INT64 [N, 1, 3]",
+  );
+});
+
+test("distinguishes scalar and unknown-rank tensors and renders symbolic dimensions literally", (t) => {
+  const { document, load, window } = openViewer(t);
+  load(
+    decodeGraph(
+      readFileSync(require.resolve("./models/metadata.onnx")),
+      "metadata.onnx",
+    ),
+  );
+  const ports = document.querySelectorAll(".port");
+  const labels = [...ports].map((port) =>
+    port.querySelector(".tensor-info").getAttribute("aria-label"),
+  );
+  assert.ok(labels.includes("FLOAT []"));
+  assert.ok(labels.includes("FLOAT [?]"));
+  assert.ok(labels.includes("INT64 [0, N, ?]"));
+  const text = '<img src=x onerror="alert(1)">';
+  load({
+    ...demoGraph,
+    tensors: [{ name: "input", type: "FLOAT", shape: [text] }],
+  });
+  assert.match(
+    document.querySelector("#node-inputs .tensor-info").textContent,
+    /<img src=x/,
+  );
+  assert.equal(document.querySelector("#node-inputs img"), null);
+  assert.equal(
+    document.querySelector("#nodes .tensor-info title").textContent,
+    `input: FLOAT [${text}]`,
+  );
+  assert.equal(document.querySelector("#nodes .tensor-info img"), null);
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: { type: "shape-info", tensors: [] },
+    }),
+  );
+  assert.equal(
+    document.querySelector("#node-inputs .tensor-info").textContent,
+    "? [?]",
+  );
+});
+
 test("loads a connected graph, selects with the keyboard and treats model text as text", (t) => {
   const { document, window, load } = openViewer(t);
   const unsafeName = '<img src=x onerror="alert(1)">';
@@ -256,7 +432,10 @@ test("loads a connected graph, selects with the keyboard and treats model text a
   assert.equal(document.getElementById("node-name").textContent, unsafeName);
   assert.equal(document.getElementById("node-name").children.length, 0);
   assert.equal(secondNode.getAttribute("aria-pressed"), "true");
-  assert.equal(document.getElementById("node-inputs").textContent, "hidden");
+  assert.equal(
+    document.querySelector("#node-inputs .tensor-name").textContent,
+    "hidden",
+  );
 });
 
 test("replaces the demo with a no-operator graph without stale nodes or inspector values", (t) => {

@@ -41,8 +41,11 @@ Test models
 
 ``test/models/relu.onnx`` contains one Relu operator with float32 input/output
 tensors of shape ``[1, 3]`` (IR 9, opset 13). It can also be opened in the viewer.
+The same model is bundled as ``media/relu.onnx`` for the command's demo.
 Other small models cover custom operators, dense/sparse initializers, optional
 ports, an empty operator list and intentionally invalid metadata.
+Shape tests also cover symbolic dimensions, scalar and unknown ranks, and
+inference through Add, Reshape, Transpose and Cast with a raw-data constant.
 
 To regenerate them with the Python ``onnx-light`` package available:
 

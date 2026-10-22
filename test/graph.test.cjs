@@ -137,3 +137,70 @@ test("uses the model domain and opset to select LightOpSchema documentation and 
   assert.equal(custom.domain, "example");
   assert.equal(custom.schema, null);
 });
+
+test("exposes declared tensor types, scalar/unknown ranks, symbolic/zero dimensions and initializer shapes", () => {
+  const tensors = Object.fromEntries(
+    decodeGraph(modelBytes("metadata.onnx"), "metadata.onnx").tensors.map(
+      (tensor) => [tensor.name, tensor],
+    ),
+  );
+  assert.deepEqual(tensors.scalar, {
+    name: "scalar",
+    type: "FLOAT",
+    shape: [],
+  });
+  assert.deepEqual(tensors.unknown_rank, {
+    name: "unknown_rank",
+    type: "FLOAT",
+    shape: null,
+  });
+  assert.deepEqual(tensors.zero.shape, ["0", "N", "?"]);
+  assert.match(tensors.sequence.type, /sequence_type/);
+  assert.equal(tensors.sequence.shape, undefined);
+  const graph = decodeGraph(modelBytes("custom.onnx"), "custom.onnx");
+  assert.deepEqual(
+    graph.tensors.find((tensor) => tensor.name === "sparse"),
+    {
+      name: "sparse",
+      type: "SPARSE FLOAT",
+      shape: ["1"],
+    },
+  );
+});
+
+test("refreshes intermediate shapes and types with onnx-light, including symbolic Reshape with raw constants", () => {
+  const bytes = modelBytes("inference.onnx");
+  const original = Buffer.from(bytes);
+  const before = decodeGraph(bytes, "inference.onnx");
+  assert.deepEqual(
+    before.tensors.find((tensor) => tensor.name === "hidden"),
+    {
+      name: "hidden",
+      type: null,
+      shape: null,
+    },
+  );
+  const inferred = decodeGraph(bytes, "inference.onnx", true);
+  const tensors = Object.fromEntries(
+    inferred.tensors.map((tensor) => [tensor.name, tensor]),
+  );
+  assert.deepEqual(tensors.hidden, {
+    name: "hidden",
+    type: "FLOAT",
+    shape: ["N", "3"],
+  });
+  assert.deepEqual(tensors.reshaped.shape, ["N", "3", "1"]);
+  assert.deepEqual(tensors.transposed.shape, ["N", "1", "3"]);
+  assert.equal(tensors.transposed.type, "FLOAT");
+  assert.equal(tensors.y.type, "INT64");
+  assert.deepEqual(bytes, original);
+  bytes.fill(0);
+  assert.deepEqual(tensors.y.shape, ["N", "1", "3"]);
+});
+
+test("surfaces unsupported shape inference as a JavaScript error", () => {
+  assert.throws(
+    () => decodeGraph(modelBytes("custom.onnx"), "custom.onnx", true),
+    /unsupported domain.*example/,
+  );
+});

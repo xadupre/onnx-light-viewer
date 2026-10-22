@@ -27,16 +27,23 @@ export interface GraphNode {
   schema: OperatorSchema | null;
 }
 
+export interface TensorInformation {
+  name: string;
+  type: string | null;
+  shape?: string[] | null;
+}
+
 export interface Graph {
   name: string;
   nodes: GraphNode[];
   inputs: string[];
   outputs: string[];
   initializerCount: number;
+  tensors: TensorInformation[];
 }
 
 const native: {
-  decodeGraph(bytes: Uint8Array, fileName: string): Graph;
+  decodeGraph(bytes: Uint8Array, fileName: string, inferShapes: boolean): Graph;
   getSchema(
     opType: string,
     domain: string,
@@ -63,8 +70,16 @@ export const demoGraph: Graph = {
   inputs: ["input"],
   outputs: ["output"],
   initializerCount: 0,
+  tensors: [
+    { name: "input", type: "FLOAT", shape: ["1", "3"] },
+    { name: "output", type: "FLOAT", shape: ["1", "3"] },
+  ],
 };
 
-export function decodeGraph(bytes: Uint8Array, fileName: string): Graph {
-  return native.decodeGraph(bytes, fileName);
+export function decodeGraph(
+  bytes: Uint8Array,
+  fileName: string,
+  inferShapes = false,
+): Graph {
+  return native.decodeGraph(bytes, fileName, inferShapes);
 }

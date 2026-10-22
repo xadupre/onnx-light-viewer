@@ -1,4 +1,6 @@
 #include <napi.h>
+#include <onnx_core/shapes/shape_inference.h>
+#include <onnx_extensions/shapes/dispatch_table.h>
 #include <onnx_op/operator_sets.h>
 #include <onnx_proto/onnx.h>
 
@@ -29,6 +31,63 @@ template <typename Proto> std::string Preview(const Proto &value) {
   value.PrintToStringStream(stream, options);
   ol::utils::enforce_short_repr_length(stream, options);
   return stream.str();
+}
+
+Napi::Array Dimensions(Napi::Env env, const ol::TensorShapeProto &shape) {
+  auto result = Napi::Array::New(env);
+  uint32_t index = 0;
+  for (const auto &dimension : shape.dim()) {
+    result.Set(index++, dimension.has_dim_value()
+                            ? Text(env, std::to_string(dimension.dim_value()))
+                            : Text(env, dimension.dim_param().empty()
+                                            ? std::string_view("?")
+                                            : std::string_view(dimension.dim_param())));
+  }
+  return result;
+}
+
+Napi::Object TensorInformation(Napi::Env env, std::string_view name,
+                               const ol::TypeProto *type = nullptr) {
+  auto result = Napi::Object::New(env);
+  result.Set("name", Text(env, name));
+  if (type && (type->has_tensor_type() || type->has_sparse_tensor_type())) {
+    const bool sparse = type->has_sparse_tensor_type();
+    const auto data_type =
+        sparse ? type->sparse_tensor_type().elem_type() : type->tensor_type().elem_type();
+    result.Set("type", data_type == ol::TensorProto::UNDEFINED
+                           ? Napi::Value(env.Null())
+                           : Napi::Value(Text(env, std::string(sparse ? "SPARSE " : "") +
+                                                       ol::TensorProto::DataType_Name(data_type))));
+    const bool has_shape =
+        sparse ? type->sparse_tensor_type().has_shape() : type->tensor_type().has_shape();
+    result.Set("shape",
+               has_shape ? Napi::Value(Dimensions(env, sparse ? type->sparse_tensor_type().shape()
+                                                              : type->tensor_type().shape()))
+                         : Napi::Value(env.Null()));
+  } else if (type && type->has_type()) {
+    result.Set("type", Preview(*type));
+  } else {
+    result.Set("type", env.Null());
+    result.Set("shape", env.Null());
+  }
+  return result;
+}
+
+template <typename Dims>
+Napi::Object InitializerInformation(Napi::Env env, std::string_view name,
+                                    ol::TensorProto::DataType data_type, const Dims &dims,
+                                    bool sparse = false) {
+  auto result = Napi::Object::New(env);
+  result.Set("name", Text(env, name));
+  result.Set("type",
+             std::string(sparse ? "SPARSE " : "") + ol::TensorProto::DataType_Name(data_type));
+  auto shape = Napi::Array::New(env);
+  uint32_t index = 0;
+  for (const auto dimension : dims) {
+    shape.Set(index++, Text(env, std::to_string(dimension)));
+  }
+  result.Set("shape", shape);
+  return result;
 }
 
 Napi::Value Schema(Napi::Env env, const std::string &op_type, const std::string &domain,
@@ -134,9 +193,10 @@ Napi::Array ValueNames(Napi::Env env, const Values &values,
 
 Napi::Value DecodeGraph(const Napi::CallbackInfo &info) {
   const auto env = info.Env();
-  if (info.Length() != 2 || !info[0].IsTypedArray() ||
-      info[0].As<Napi::TypedArray>().TypedArrayType() != napi_uint8_array || !info[1].IsString()) {
-    Napi::TypeError::New(env, "Expected a Uint8Array and a file name.")
+  if ((info.Length() != 2 && info.Length() != 3) || !info[0].IsTypedArray() ||
+      info[0].As<Napi::TypedArray>().TypedArrayType() != napi_uint8_array || !info[1].IsString() ||
+      (info.Length() == 3 && !info[2].IsBoolean())) {
+    Napi::TypeError::New(env, "Expected a Uint8Array, a file name and an optional inference flag.")
         .ThrowAsJavaScriptException();
     return env.Undefined();
   }
@@ -145,8 +205,10 @@ Napi::Value DecodeGraph(const Napi::CallbackInfo &info) {
   try {
     const auto bytes = info[0].As<Napi::Uint8Array>();
     ol::utils::StringStream stream(bytes.Data(), bytes.ByteLength());
+    const bool infer_shapes = info.Length() == 3 && info[2].As<Napi::Boolean>().Value();
     ol::ParseOptions options;
-    options.skip_raw_data = true;
+    options.skip_raw_data = !infer_shapes;
+    options.no_copy = infer_shapes;
     ol::ModelProto model;
     if (!model.ParseFromStream(stream, options)) {
       throw std::runtime_error("Could not decode the ONNX model.");
@@ -154,8 +216,22 @@ Napi::Value DecodeGraph(const Napi::CallbackInfo &info) {
     if (!model.has_graph() || !model.has_ir_version() || model.ir_version() <= 0) {
       throw std::runtime_error("This file does not contain an ONNX model graph.");
     }
+    if (infer_shapes) {
+      ol::onnx_shapes::RegisterShapeFunctions();
+      ol::core::shapes::InferShapesModel(model);
+    }
 
     const auto &graph = model.graph();
+    std::map<std::string, Napi::Object> tensor_information;
+    for (const auto *values : {&graph.input(), &graph.output(), &graph.value_info()}) {
+      for (const auto &value : *values) {
+        if (!value.name().empty()) {
+          tensor_information.insert_or_assign(
+              std::string(value.name()),
+              TensorInformation(env, value.name(), value.has_type() ? &value.type() : nullptr));
+        }
+      }
+    }
     std::map<std::string, int64_t> opsets;
     for (const auto &opset : model.opset_import()) {
       opsets[Domain(opset.domain())] = opset.version();
@@ -167,6 +243,8 @@ Napi::Value DecodeGraph(const Napi::CallbackInfo &info) {
       if (!tensor.name().empty()) {
         const std::string name(tensor.name());
         initializers.emplace(name);
+        tensor_information.insert_or_assign(
+            name, InitializerInformation(env, name, tensor.data_type(), tensor.dims()));
         auto parameter = Napi::Object::New(env);
         parameter.Set("name", name);
         parameter.Set("type", ol::TensorProto::DataType_Name(tensor.data_type()));
@@ -178,6 +256,9 @@ Napi::Value DecodeGraph(const Napi::CallbackInfo &info) {
       if (tensor.has_values() && !tensor.values().name().empty()) {
         initializers.emplace(std::string_view(tensor.values().name()));
         const std::string name(tensor.values().name());
+        tensor_information.insert_or_assign(
+            name,
+            InitializerInformation(env, name, tensor.values().data_type(), tensor.dims(), true));
         auto parameter = Napi::Object::New(env);
         parameter.Set("name", name);
         parameter.Set("type", std::string("SPARSE ") +
@@ -233,6 +314,13 @@ Napi::Value DecodeGraph(const Napi::CallbackInfo &info) {
         }
       }
       result.Set("parameters", weights);
+      for (const auto *ports : {&node.input(), &node.output()}) {
+        for (const auto &port : *ports) {
+          if (!port.empty() && !tensor_information.contains(std::string(port))) {
+            tensor_information.emplace(std::string(port), TensorInformation(env, port));
+          }
+        }
+      }
       result.Set("inputs", Ports(env, node.input()));
       result.Set("outputs", Ports(env, node.output()));
       nodes.Set(index++, result);
@@ -243,6 +331,12 @@ Napi::Value DecodeGraph(const Napi::CallbackInfo &info) {
     result.Set("inputs", ValueNames(env, graph.input(), initializers));
     result.Set("outputs", ValueNames(env, graph.output()));
     result.Set("initializerCount", Napi::Number::New(env, initializers.size()));
+    auto tensors = Napi::Array::New(env);
+    uint32_t tensor_index = 0;
+    for (const auto &[name, tensor] : tensor_information) {
+      tensors.Set(tensor_index++, tensor);
+    }
+    result.Set("tensors", tensors);
     return result;
   } catch (const std::exception &error) {
     Napi::Error::New(env, error.what()).ThrowAsJavaScriptException();

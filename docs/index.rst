@@ -8,5 +8,6 @@ onnx-light; no model data is uploaded.
    :maxdepth: 2
 
    getting_started
+   shape_information
    native_loading
    development

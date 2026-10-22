@@ -62,8 +62,12 @@ The inspector also shows the imported opset, typed operator attributes and
 connected dense or sparse initializers (type, dimensions and stored typed
 values). Attribute defaults provided by ``LightOpSchema`` are marked
 ``[default]`` and never replace explicit model values. Long previews are
-truncated to 4,096 characters; inline ``raw_data`` payloads and external weight
-files are not loaded.
+truncated to 4,096 characters; raw weight payloads are not displayed.
+
+Click the circular-arrow toolbar icon to :doc:`refresh shape and type
+information <shape_information>` with onnx-light. Tensor descriptions appear
+on the graph and in the side inspector. The viewer logo opens the GitHub
+repository.
 
 Use **Doc** to open the selected operator's available ``LightOpSchema``
 documentation, including formal inputs, outputs, attributes and type
@@ -104,8 +108,8 @@ Opening an ``.onnx`` file directly in VS Code also uses the viewer. Choose
 Current limitations
 -------------------
 
-This prototype reads the entire model file into memory and draws every
-top-level operator. The native parser skips inline ``raw_data`` payloads.
-Inferred shapes, nested subgraph visualization, editing and external weight
-files are not supported. Models with external weights can still display their
-graph. The dark palette is currently fixed.
+This prototype retains the model file in memory and draws every top-level
+operator. Native shape inference is explicit, not automatic on opening.
+Nested subgraph visualization, editing and external weight files are not
+supported. Models with external weights can still display their graph.
+The dark palette is currently fixed.
