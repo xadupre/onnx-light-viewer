@@ -1,10 +1,15 @@
 /**
  * Builds the static shell; model-derived text arrives later through messages.
- * @param resource Resolves bundled media files to VS Code webview URIs.
- * @param cspSource Source allowed to load local images and styles.
- * @param nonce Per-panel nonce authorizing the bundled viewer script.
+ * The DOM IDs are the binding points used by media/viewer.js.
+ * Inputs are trusted host-generated values interpolated without HTML escaping;
+ * never supply model text here. The CSP blocks other content by default.
+ * @param resource Resolves bundled filenames (viewer.css, viewer.js, logo.svg)
+ * to webview URI strings within the panel's allowed media resource root.
+ * @param cspSource The panel webview's cspSource, allowing local images/styles.
+ * @param nonce Fresh per-panel nonce authorizing only the bundled viewer script.
  * @param onnxLightVersion C++ release embedded in the compiled native addon.
  * @param initialTab Initially selected viewer tab.
+ * @returns Complete HTML document; graph and log data require the ready handshake.
  */
 export function webviewHtml(
   resource: (name: string) => string,

@@ -250,6 +250,15 @@ positions and the camera. ``metadata-info`` updates the separate analysis
 view. The metadata toggle requests analysis only if none is available;
 **Refresh metadata** always requests a fresh snapshot, even with the panel closed.
 
+Both refresh actions show per-refresh update counts in the main toolbar, including
+zero when nothing changed. Shape/type updates count each added, removed or changed
+tensor once. Metadata updates count each added, removed or changed model metadata
+entry, graph metadata entry, node analysis or value analysis once. The first
+metadata analysis counts all newly available records; subsequent refreshes compare
+with the previous successful snapshot. Loading or navigating to a graph resets
+these comparisons. Labels, graph markers and the current inspector are updated
+in place without resetting positions or selection.
+
 Action history and recovery
 ---------------------------
 

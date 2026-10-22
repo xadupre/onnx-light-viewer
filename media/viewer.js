@@ -286,7 +286,24 @@ function tensorLabel(parent, x, y, name, length, anchor = "middle") {
   return text;
 }
 
+function countUpdates(previous, current, key) {
+  const before = new Map(
+    previous.map((item) => [item[key], JSON.stringify(item)]),
+  );
+  const after = new Map(
+    current.map((item) => [item[key], JSON.stringify(item)]),
+  );
+  return [...new Set([...before.keys(), ...after.keys()])].filter(
+    (id) => before.get(id) !== after.get(id),
+  ).length;
+}
+
 function updateTensorInformation(tensors) {
+  const updates = countUpdates(
+    [...tensorInformation.values()],
+    tensors,
+    "name",
+  );
   tensorInformation = new Map(tensors.map((tensor) => [tensor.name, tensor]));
   for (const { names, text, title, value, length } of tensorLabels) {
     const description = names.map(tensorDescription).join(" | ");
@@ -296,6 +313,7 @@ function updateTensorInformation(tensors) {
     text.setAttribute("aria-label", description);
     value.textContent = shortName(description, length);
   }
+  return updates;
 }
 
 function refreshPositions() {
@@ -321,6 +339,7 @@ function refreshStatus(pending, message = "") {
   byId("shape-status").title = message;
   // Status changes can wrap the toolbar and resize the canvas.
   if (gesture) gesture.viewport = undefined;
+  if (svg.hasAttribute("viewBox")) fit();
 }
 
 function resetDocumentation() {
@@ -522,10 +541,18 @@ function metadataStatus(pending, message = "") {
 }
 
 function acceptMetadata(metadata) {
+  const updates =
+    countUpdates(graphMetadata?.model ?? [], metadata.model, "key") +
+    countUpdates(graphMetadata?.graph ?? [], metadata.graph, "key") +
+    countUpdates(graphMetadata?.nodes ?? [], metadata.nodes, "id") +
+    countUpdates(graphMetadata?.values ?? [], metadata.values, "name");
   graphMetadata = metadata;
   nodeMetadata = new Map(metadata.nodes.map((node) => [node.id, node]));
   valueMetadata = new Map(metadata.values.map((value) => [value.name, value]));
-  metadataStatus(false, "Metadata refreshed");
+  metadataStatus(
+    false,
+    `Metadata refreshed: ${updates} update${updates === 1 ? "" : "s"}`,
+  );
   byId("metadata-content").hidden = false;
   metadataEntries(byId("metadata-model"), metadata.model);
   metadataEntries(byId("metadata-graph"), metadata.graph);
@@ -1281,6 +1308,8 @@ window.addEventListener("message", (event) => {
     displayLog(event.data.entry);
   } else if (event.data?.type === "log-history") {
     for (const entry of event.data.entries) displayLog(entry);
+    const panel = byId("logs-view");
+    if (!panel.hidden) panel.scrollTop = panel.scrollHeight;
   } else if (event.data?.type === "show-logs") {
     showTab("logs", true);
   } else if (event.data?.type === "load-state") {
@@ -1302,9 +1331,12 @@ window.addEventListener("message", (event) => {
   } else if (event.data?.type === "metadata-error") {
     metadataStatus(false, `Metadata analysis failed: ${event.data.error}`);
   } else if (event.data?.type === "shape-info") {
-    updateTensorInformation(event.data.tensors);
+    const updates = updateTensorInformation(event.data.tensors);
     inspect(inspectedView);
-    refreshStatus(false, "Shapes/types refreshed");
+    refreshStatus(
+      false,
+      `Shapes/types refreshed: ${updates} tensor${updates === 1 ? "" : "s"} updated`,
+    );
   } else if (event.data?.type === "shape-error") {
     refreshStatus(false, `Shape/type inference failed: ${event.data.error}`);
   }
