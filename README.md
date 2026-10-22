@@ -4,7 +4,11 @@
 
 # ONNX Light Viewer
 
-An interactive ONNX graph viewer for VS Code, using native onnx-light decoding.
+ONNX Light Viewer is a lightweight, interactive ONNX graph viewer for VS Code.
+Explore model graphs and nested subgraphs, inspect operators, tensor shapes and
+parameters, and refresh shape inference and metadata analysis. Models are decoded
+locally with the native onnx-light C++ library; no model data is uploaded, and
+source files are not modified.
 
 <img src="docs/_static/viewer-snapshot.png" width="75%" alt="ONNX Light Viewer showing a graph with symbolic tensor shapes and the Reshape node's parameters">
 
