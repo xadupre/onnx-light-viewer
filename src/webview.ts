@@ -15,7 +15,7 @@ export function webviewHtml(
 <body>
   <main class="workspace" aria-label="ONNX graph explorer">
       <header class="graph-toolbar">
-        <div><a id="repository-link" href="https://github.com/xadupre/onnx-light-viewer" title="ONNX Light Viewer on GitHub" aria-label="Open the ONNX Light Viewer GitHub repository"><img src="${resource("logo.svg")}" alt="" width="24" height="24"></a><button id="open-model" class="primary">Open ONNX model</button><button id="refresh-shapes" class="icon-button" disabled title="Refresh shape and type information with onnx-light" aria-label="Refresh shape and type information"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2 6M20 4v7h-7"/></svg></button></div>
+        <div><a id="repository-link" href="https://github.com/xadupre/onnx-light-viewer" title="ONNX Light Viewer on GitHub" aria-label="Open the ONNX Light Viewer GitHub repository"><img src="${resource("logo.svg")}" alt="" width="24" height="24"></a><button id="open-model" class="primary">Open ONNX model</button><button id="refresh-shapes" class="icon-button" disabled title="Refresh shape and type information with onnx-light" aria-label="Refresh shape and type information"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2 6M20 4v7h-7"/></svg>Refresh shapes</button><button id="refresh-positions" class="icon-button" disabled title="Reset the portrait layout with new random horizontal positions" aria-label="Refresh node positions"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2 6M20 4v7h-7"/></svg>Refresh positions</button></div>
         <div class="graph-stats" aria-live="polite"><span id="graph-summary">1 node / 2 tensors</span><span id="initializer-count">0 initializers</span><span id="shape-status" role="status"></span></div>
       </header>
       <div class="graph-body">
@@ -31,7 +31,7 @@ export function webviewHtml(
           <section id="node-parameters" hidden>
             <h3>Attributes <span id="attribute-count">0</span></h3><ul id="node-attributes"></ul>
             <h3>Initializers <span id="parameter-count">0</span></h3><ul id="node-initializers"></ul>
-            <p>Raw tensor data is not displayed; external weights are not loaded. Long previews are truncated.</p>
+            <p>Up to 8 elements are shown per parameter array. Raw tensor data is not displayed; external weights are not loaded.</p>
           </section>
         </aside>
       </div>

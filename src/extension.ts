@@ -1,15 +1,14 @@
 import * as vscode from "vscode";
 import { randomBytes } from "node:crypto";
 import { posix } from "node:path";
-import { decodeGraph, Graph } from "./graph";
+import { loadModel, Graph, NativeModel } from "./graph";
 import { webviewHtml } from "./webview";
 
 const viewType = "onnxLightViewer.graph";
 
 interface LoadedModel {
   graph: Graph;
-  bytes: Uint8Array;
-  fileName: string;
+  native: NativeModel;
 }
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -39,7 +38,8 @@ export function activate(context: vscode.ExtensionContext): void {
 async function readGraph(uri: vscode.Uri): Promise<LoadedModel> {
   const bytes = await vscode.workspace.fs.readFile(uri);
   const fileName = posix.basename(uri.path);
-  return { graph: decodeGraph(bytes, fileName), bytes, fileName };
+  const native = loadModel(bytes, fileName);
+  return { graph: native.graph(), native };
 }
 
 function configurePanel(
@@ -83,7 +83,7 @@ function configurePanel(
       } else if (message?.type === "refresh-shapes") {
         let refreshed: Graph;
         try {
-          refreshed = decodeGraph(model.bytes, model.fileName, true);
+          refreshed = model.native.graph(true);
         } catch (error) {
           const detail = error instanceof Error ? error.message : String(error);
           await panel.webview.postMessage({
@@ -95,7 +95,7 @@ function configurePanel(
           );
           return;
         }
-        model.graph = { ...model.graph, tensors: refreshed.tensors };
+        model.graph = refreshed;
         await panel.webview.postMessage({
           type: "shape-info",
           tensors: refreshed.tensors,

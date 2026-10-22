@@ -241,6 +241,7 @@ test("links the viewer logo to its repository and requests a shape refresh only 
   assert.match(link.getAttribute("aria-label"), /GitHub repository/);
   const refresh = document.getElementById("refresh-shapes");
   assert.ok(refresh.querySelector("svg"));
+  assert.equal(refresh.textContent.trim(), "Refresh shapes");
   assert.equal(refresh.disabled, true);
   load(demoGraph);
   assert.equal(refresh.disabled, false);
@@ -330,6 +331,12 @@ test("refreshes real onnx-light metadata on edges, ports and the current inspect
     document.querySelector("#node-outputs .tensor-info").textContent,
     "FLOAT [N, 1, 3]",
   );
+  assert.deepEqual(
+    [...document.querySelectorAll(".graph-node .node-tensor-info")].map(
+      (label) => label.getAttribute("aria-label"),
+    ),
+    ["FLOAT [N, 3]", "FLOAT [N, 3, 1]", "FLOAT [N, 1, 3]", "INT64 [N, 1, 3]"],
+  );
   assert.ok(
     [...document.querySelectorAll("#edges .tensor-info")].some(
       (label) => label.getAttribute("aria-label") === "FLOAT [N, 3, 1]",
@@ -361,6 +368,32 @@ test("refreshes real onnx-light metadata on edges, ports and the current inspect
   assert.equal(
     document.querySelector("#node-inputs .tensor-info").textContent,
     "INT64 [N, 1, 3]",
+  );
+});
+
+test("shows every operator output's type and shape even when no connection consumes it", (t) => {
+  const { document, load } = openViewer(t);
+  load({
+    ...demoGraph,
+    nodes: [{ ...demoGraph.nodes[0], outputs: ["hidden", "unused"] }],
+    outputs: [],
+    tensors: [
+      { name: "hidden", type: "FLOAT", shape: ["N", "3"] },
+      { name: "unused", type: "BOOL", shape: [] },
+    ],
+  });
+  const information = document.querySelector(".graph-node .node-tensor-info");
+  assert.equal(
+    information.getAttribute("aria-label"),
+    "FLOAT [N, 3] | BOOL []",
+  );
+  assert.equal(
+    information.querySelector("tspan").textContent,
+    "FLOAT [N, 3] | BOOL []",
+  );
+  assert.equal(
+    information.querySelector("title").textContent,
+    "hidden: FLOAT [N, 3]\nunused: BOOL []",
   );
 });
 
@@ -598,6 +631,76 @@ test("assigns random horizontal positions and node-index rows on each model load
     nodePositions(document).map((position) => position.y),
     positions.map((position) => position.y),
   );
+});
+
+test("refreshes operator and port positions independently while retaining shapes, selection and inspector", (t) => {
+  const { document, window, load, pointer, messages } = openViewer(t);
+  const refresh = document.getElementById("refresh-positions");
+  assert.equal(refresh.disabled, true);
+  load(
+    decodeGraph(
+      readFileSync(require.resolve("./models/inference.onnx")),
+      "inference.onnx",
+      true,
+    ),
+  );
+  assert.equal(refresh.disabled, false);
+  const graph = document.getElementById("graph");
+  const initialViewBox = graph.getAttribute("viewBox");
+  const ports = nodePositions(document, ".port rect");
+  const nodes = document.querySelectorAll(".graph-node");
+  nodes[1].dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter" }));
+  for (const port of document.querySelectorAll(".port")) {
+    port.dispatchEvent(
+      new window.KeyboardEvent("keydown", { key: "Enter", ctrlKey: true }),
+    );
+  }
+  const position = nodePositions(document)[1];
+  pointer(nodes[1], "pointerdown", position.x, position.y);
+  pointer(graph, "pointermove", position.x + 600, position.y + 400);
+  pointer(graph, "pointerup", position.x + 600, position.y + 400);
+  document.getElementById("zoom-in").click();
+  graph.dispatchEvent(
+    new window.WheelEvent("wheel", { deltaY: 100, shiftKey: true }),
+  );
+  const moved = nodePositions(document);
+  assert.notDeepEqual(nodePositions(document, ".port rect"), ports);
+  const selected = [...document.querySelectorAll('[aria-pressed="true"]')].map(
+    (node) => node.dataset.id,
+  );
+  const inspector = document.querySelector("aside").textContent;
+  const labels = [...document.querySelectorAll(".tensor-info")].map(
+    (label) => label.textContent,
+  );
+  const messageCount = messages.length;
+  refresh.click();
+  assert.deepEqual(nodePositions(document, ".port rect"), ports);
+  assert.deepEqual(
+    nodePositions(document).map(({ y }) => y),
+    [180, 325, 470, 615],
+  );
+  assert.notDeepEqual(nodePositions(document), moved);
+  assert.equal(graph.getAttribute("viewBox"), initialViewBox);
+  assert.deepEqual(
+    [...document.querySelectorAll('[aria-pressed="true"]')].map(
+      (node) => node.dataset.id,
+    ),
+    selected,
+  );
+  assert.equal(document.querySelector("aside").textContent, inspector);
+  assert.deepEqual(
+    [...document.querySelectorAll(".tensor-info")].map(
+      (label) => label.textContent,
+    ),
+    labels,
+  );
+  assert.equal(messages.length, messageCount);
+  const firstEdge = document
+    .querySelector(".edge")
+    .getAttribute("d")
+    .match(/-?\d+(?:\.\d+)?(?:e[+-]?\d+)?/gi)
+    .map(Number);
+  assert.deepEqual(firstEdge.slice(0, 2), [ports[0].x, ports[0].y + 26]);
 });
 
 test("zooms in and out with buttons and Ctrl+wheel without rearranging the graph", (t) => {

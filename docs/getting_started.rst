@@ -61,10 +61,11 @@ supported. **Fit** recenters the graph and resets zoom and scrolling.
 The inspector also shows the imported opset, typed operator attributes and
 connected dense or sparse initializers (type, dimensions and stored typed
 values). Attribute defaults provided by ``LightOpSchema`` are marked
-``[default]`` and never replace explicit model values. Long previews are
-truncated to 4,096 characters; raw weight payloads are not displayed.
+``[default]`` and never replace explicit model values. Parameter arrays show
+their first eight elements and the total count when shortened. Tensor and
+attribute preview text is also bounded; raw weight payloads are not displayed.
 
-Click the circular-arrow toolbar icon to :doc:`refresh shape and type
+Click **Refresh shapes** to :doc:`refresh shape and type
 information <shape_information>` with onnx-light. Tensor descriptions appear
 on the graph and in the side inspector. The viewer logo opens the GitHub
 repository.
@@ -79,7 +80,8 @@ and operators without available schema documentation.
 The graph flows from top to bottom: inputs above the operators, outputs below
 them, and connections attached to the top and bottom of each node. Operators
 have random horizontal positions on each model load; their vertical rows follow
-the node indices.
+the node indices. **Refresh positions** restores this layout, including graph
+inputs/outputs, and fits the camera without discarding inferred shapes.
 
 The workspace fills the editor and adapts when it is resized. Resizing and
 zooming preserve node positions.

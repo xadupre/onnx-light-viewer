@@ -70,6 +70,11 @@ missing_operator = helper.make_model(
 )
 save_model(missing_operator, Path(__file__).with_name("missing-operator.onnx"))
 
+parameter_sparse = helper.make_sparse_tensor(
+    helper.make_tensor("preview", TensorProto.FLOAT, [12], list(range(12))),
+    helper.make_tensor("indices", TensorProto.INT64, [12], list(range(12))),
+    [12],
+)
 parameter_graph = helper.make_graph(
     [
         helper.make_node(
@@ -87,6 +92,9 @@ parameter_graph = helper.make_graph(
             labels=["left", "right"],
             value=helper.make_tensor("constant", TensorProto.INT64, [2], [3, 7]),
             long_list=list(range(2000)),
+            long_floats=[float(index) for index in range(12)],
+            long_strings=[f"label{index}" for index in range(12)],
+            sparse_value=parameter_sparse,
         ),
     ],
     "Operator parameters",

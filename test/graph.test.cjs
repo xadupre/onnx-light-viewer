@@ -1,8 +1,9 @@
 const assert = require("node:assert/strict");
+const { execFileSync } = require("node:child_process");
 const { readFileSync } = require("node:fs");
 const path = require("node:path");
 const { test } = require("node:test");
-const { decodeGraph, demoGraph } = require("../dist/graph");
+const { decodeGraph, demoGraph, loadModel } = require("../dist/graph");
 
 function modelBytes(name) {
   return readFileSync(path.join(__dirname, "models", name));
@@ -104,8 +105,21 @@ test("loads typed attributes and dense/sparse initializer parameters without los
   assert.match(attributes.labels.value, /"left", "right"/);
   assert.match(attributes.text.value, /<b>model text<\/b>/);
   assert.match(attributes.value.value, /int64_data: \[3, 7\]/);
-  assert.ok(attributes.long_list.value.length <= 4096);
-  assert.match(attributes.long_list.value, /\.\.\.$/);
+  assert.equal(
+    attributes.long_list.value,
+    "{ long_list: [0, 1, 2, 3, 4, 5, 6, 7] } ... (2000 elements)",
+  );
+  assert.match(conv.parameters[0].value, /\.\.\. \(9 elements\)$/);
+  for (const name of ["long_floats", "long_strings", "sparse_value"]) {
+    assert.match(attributes[name].value, /\.\.\. \(12 elements\)/);
+    assert.ok(attributes[name].value.length < 512);
+  }
+  assert.match(attributes.long_floats.value, /\[0, 1, 2, 3, 4, 5, 6, 7\]/);
+  assert.doesNotMatch(attributes.long_strings.value, /label8/);
+  assert.match(
+    attributes.sparse_value.value,
+    /int64_data: \[0, 1, 2, 3, 4, 5, 6, 7\]/,
+  );
 });
 
 test("uses the model domain and opset to select LightOpSchema documentation and defaults", () => {
@@ -203,4 +217,57 @@ test("surfaces unsupported shape inference as a JavaScript error", () => {
     () => decodeGraph(modelBytes("custom.onnx"), "custom.onnx", true),
     /unsupported domain.*example/,
   );
+});
+
+test("persists inferred intermediate value_info in the native model without modifying its source", () => {
+  const bytes = modelBytes("inference.onnx");
+  const original = Buffer.from(bytes);
+  const model = loadModel(bytes, "inference.onnx");
+  assert.deepEqual(model.graph(undefined), model.graph());
+  assert.throws(() => model.graph("yes"), TypeError);
+  assert.equal(
+    model.graph().tensors.find(({ name }) => name === "hidden").type,
+    null,
+  );
+  const inferred = model.graph(true);
+  assert.deepEqual(
+    inferred.tensors.find(({ name }) => name === "hidden"),
+    { name: "hidden", type: "FLOAT", shape: ["N", "3"] },
+  );
+  assert.deepEqual(model.graph(), inferred);
+  assert.deepEqual(model.graph(true), inferred);
+  inferred.tensors.find(({ name }) => name === "hidden").shape[0] =
+    "changed in JS";
+  assert.deepEqual(
+    model.graph().tensors.find(({ name }) => name === "hidden").shape,
+    ["N", "3"],
+  );
+  assert.deepEqual(bytes, original);
+  const unsupported = loadModel(modelBytes("custom.onnx"), "custom.onnx");
+  const before = unsupported.graph();
+  assert.throws(() => unsupported.graph(true), /unsupported domain.*example/);
+  assert.deepEqual(unsupported.graph(), before);
+});
+
+test("keeps borrowed raw tensor data alive when only the native graph method is retained", () => {
+  execFileSync(process.execPath, [
+    "--expose-gc",
+    "-e",
+    `
+    const assert = require("node:assert/strict");
+    const { readFileSync } = require("node:fs");
+    const { loadModel } = require(${JSON.stringify(require.resolve("../dist/graph"))});
+    const graph = (() => {
+      const bytes = readFileSync(${JSON.stringify(require.resolve("./models/inference.onnx"))});
+      const padded = new Uint8Array(bytes.length + 16);
+      padded.set(bytes, 8);
+      return loadModel(padded.subarray(8, 8 + bytes.length), "inference.onnx").graph;
+    })();
+    global.gc();
+    assert.deepEqual(
+      graph(true).tensors.find(({ name }) => name === "reshaped").shape,
+      ["N", "3", "1"],
+    );
+  `,
+  ]);
 });

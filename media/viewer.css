@@ -75,6 +75,7 @@ p {
   display: flex;
   align-items: center;
   gap: 10px;
+  flex-wrap: wrap;
 }
 #repository-link {
   display: flex;
@@ -89,6 +90,7 @@ a:focus-visible {
   align-items: center;
   justify-content: center;
   padding: 5px;
+  gap: 6px;
   background: transparent;
   color: var(--text);
   border: 1px solid var(--border);
@@ -178,6 +180,9 @@ li > .tensor-info {
   margin-top: 2px;
 }
 .port .tensor-info {
+  font-size: 9px;
+}
+.graph-node .tensor-info {
   font-size: 9px;
 }
 .graph-node,

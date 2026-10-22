@@ -9,7 +9,9 @@ intermediate type/shape information, together with dense and sparse initializer
 types and dimensions. Information absent from the model is not guessed.
 
 The main graph shows this information below tensor names on connections and
-input/output nodes. Hover a shortened label for its complete description.
+input/output nodes, and inside each operator for its results, including
+intermediate values without consumers. Multiple results share a compact line.
+Hover a shortened label for its complete description and result names.
 Select an operator or a graph input/output to see the same information in the
 side inspector's input/output lists.
 
@@ -27,7 +29,7 @@ representation instead of assuming a tensor shape.
 Refreshing shapes and types
 ---------------------------
 
-Click the circular-arrow icon beside **Open ONNX model** to run onnx-light's
+Click **Refresh shapes** beside **Open ONNX model** to run onnx-light's
 native shape/type inference on the currently loaded model. The button is
 temporarily disabled while the calculation is running. The toolbar reports
 completion or an error.
@@ -36,9 +38,20 @@ The new information updates both the graph labels and the side inspector
 without resetting node positions, selection, zoom or scrolling. The bundled
 Relu demo supports the same action.
 
-The extension retains the opened model bytes in memory. Refreshing uses that
-snapshot, not a file that might subsequently have changed on disk. It does not
-save or modify the original ONNX file.
+The extension retains a native ``ModelProto`` in memory. Inference updates that
+model's ``graph.value_info`` for intermediate results and its output
+information, so subsequent reads use the updated model rather than a separate
+display-only cache. Refreshing does not reread, save or modify the original
+ONNX file.
+
+Refreshing positions
+--------------------
+
+**Refresh positions** restores the portrait layout: operators return to their
+node-index rows with new random horizontal positions, and graph inputs/outputs
+return to their original positions. Connections follow the nodes, and the
+camera is fitted to the graph. Selection, the inspector and inferred
+type/shape information are preserved. This action does not run shape inference.
 
 Native implementation and limitations
 -------------------------------------

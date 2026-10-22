@@ -42,6 +42,10 @@ export interface Graph {
   tensors: TensorInformation[];
 }
 
+export interface NativeModel {
+  graph(inferShapes?: boolean): Graph;
+}
+
 const native: {
   decodeGraph(bytes: Uint8Array, fileName: string, inferShapes: boolean): Graph;
   getSchema(
@@ -49,6 +53,7 @@ const native: {
     domain: string,
     opset: number,
   ): OperatorSchema | null;
+  loadModel(bytes: Uint8Array, fileName: string): NativeModel;
 } = require("./native/onnx_light_viewer.node");
 
 export const demoGraph: Graph = {
@@ -82,4 +87,8 @@ export function decodeGraph(
   inferShapes = false,
 ): Graph {
   return native.decodeGraph(bytes, fileName, inferShapes);
+}
+
+export function loadModel(bytes: Uint8Array, fileName: string): NativeModel {
+  return native.loadModel(bytes, fileName);
 }

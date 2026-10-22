@@ -92,7 +92,7 @@ async function openExtension(customModel) {
   };
 }
 
-test("refreshes the bundled demo and the currently opened model using its retained native source", async () => {
+test("refreshes the bundled demo and the currently opened model using its retained native model", async () => {
   const extension = await openExtension();
   await extension.receive({ type: "ready" });
   assert.equal(extension.messages.at(-1).graph.nodes[0].opType, "Relu");
@@ -118,6 +118,8 @@ test("refreshes the bundled demo and the currently opened model using its retain
     },
   );
   assert.equal(extension.reads.length, readCount);
+  await extension.receive({ type: "refresh-shapes" });
+  assert.deepEqual(extension.messages.at(-1).tensors, result.tensors);
   assert.deepEqual(extension.errors, []);
   await extension.receive({ type: "ready" });
   assert.equal(

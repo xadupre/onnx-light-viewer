@@ -51,18 +51,44 @@ function tensorLabel(parent, x, y, name, length, anchor = "middle") {
   const title = element("title", {});
   const value = element("tspan", {});
   text.append(title, value);
-  tensorLabels.push({ name, text, title, value, length });
+  tensorLabels.push({
+    names: Array.isArray(name) ? name : [name],
+    text,
+    title,
+    value,
+    length,
+  });
   return text;
 }
 
 function updateTensorInformation(tensors) {
   tensorInformation = new Map(tensors.map((tensor) => [tensor.name, tensor]));
-  for (const { name, text, title, value, length } of tensorLabels) {
-    const description = tensorDescription(name);
-    title.textContent = `${name}: ${description}`;
+  for (const { names, text, title, value, length } of tensorLabels) {
+    const description = names.map(tensorDescription).join(" | ");
+    title.textContent = names
+      .map((name) => `${name}: ${tensorDescription(name)}`)
+      .join("\n");
     text.setAttribute("aria-label", description);
     value.textContent = shortName(description, length);
   }
+}
+
+function refreshPositions() {
+  endGesture();
+  const positions = new Map();
+  for (const [id, view] of nodeViews) {
+    positions.set(id, {
+      x: view.node
+        ? 100 + Math.random() * (layoutBounds.width - 200)
+        : view.initial.x,
+      y: view.initial.y,
+    });
+  }
+  moveNodes(positions, 0, 0);
+  bounds = { ...layoutBounds };
+  zoom = 1;
+  pan = { x: 0, y: 0 };
+  fit();
 }
 
 function refreshStatus(pending, message = "") {
@@ -474,10 +500,20 @@ function render(graph) {
     label(
       group,
       position.x,
-      position.y + 25,
+      position.y + 21,
       shortName(node.name),
       "operator-name",
     );
+    if (node.outputs.length) {
+      const information = tensorLabel(
+        group,
+        position.x,
+        position.y + 39,
+        node.outputs,
+        26,
+      );
+      information.classList.add("node-tensor-info");
+    }
     registerNode(node.id, {
       node,
       group,
@@ -514,6 +550,7 @@ function render(graph) {
   updateTensorInformation(graph.tensors ?? []);
   updateSelection();
   refreshStatus(false);
+  byId("refresh-positions").disabled = false;
 }
 
 svg.addEventListener("pointerdown", (event) => {
@@ -604,6 +641,7 @@ byId("refresh-shapes").addEventListener("click", () => {
   refreshStatus(true, "Inferring shapes/types…");
   vscode.postMessage({ type: "refresh-shapes" });
 });
+byId("refresh-positions").addEventListener("click", refreshPositions);
 byId("zoom-in").addEventListener("click", () => {
   changeZoom(1.25);
 });
