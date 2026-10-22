@@ -27,7 +27,8 @@ close the development window and run `./start.sh` again.
 ## Documentation
 
 Sphinx documentation: [getting started](docs/getting_started.rst),
-[implemented features and viewer controls](docs/features.rst), and
+[implemented features and viewer controls](docs/features.rst),
+[application design and source guide](docs/design.rst), and
 [development, tests and documentation build](docs/development.rst).
 
 Licensed under [Apache-2.0](LICENSE).

@@ -1,3 +1,9 @@
+/**
+ * @file
+ * Node-API bridge to onnx-light. Retained models keep their backing buffers
+ * alive; JavaScript receives graph and analysis snapshots.
+ * See docs/design.rst for ownership, graph paths and the message flow.
+ */
 #include <napi.h>
 #include <onnx_core/backend_test/test_case.h>
 #include <onnx_core/compute/constant_info.h>
@@ -82,6 +88,7 @@ const ol::GraphProto &ChildGraph(const ol::GraphProto &parent, const GraphStep &
   throw std::runtime_error("Unknown subgraph path.");
 }
 
+/** Returns borrowed graph pointers, ordered from the root to the selected scope. */
 std::vector<const ol::GraphProto *> GraphScopes(const ol::ModelProto &model,
                                                 const GraphPath &path) {
   std::vector<const ol::GraphProto *> scopes{&model.graph()};
@@ -374,6 +381,7 @@ template <typename Proto> Napi::Array MetadataEntries(Napi::Env env, const Proto
   return result;
 }
 
+/** Seeds captured constants from enclosing scopes without modifying the model. */
 Napi::Object ModelMetadata(Napi::Env env, const ol::ModelProto &model, const GraphPath &path) {
   const auto scopes = GraphScopes(model, path);
   const auto &graph = *scopes.back();
@@ -449,6 +457,10 @@ Napi::Object ModelMetadata(Napi::Env env, const ol::ModelProto &model, const Gra
   return result;
 }
 
+/**
+ * Projects only the selected graph, inheriting outer tensor/initializer metadata
+ * unless shadowed locally. Child graphs become links, not recursive snapshots.
+ */
 Napi::Object ModelGraph(Napi::Env env, const ol::ModelProto &model, const std::string &file_name,
                         const GraphPath &path = {}) {
   const auto scopes = GraphScopes(model, path);
@@ -651,6 +663,7 @@ Napi::Object ModelGraph(Napi::Env env, const ol::ModelProto &model, const std::s
   return result;
 }
 
+/** With raw data retained, the caller must keep bytes alive for borrowed fields. */
 void ReadModel(ol::ModelProto &model, const Napi::Uint8Array &bytes, bool skip_raw_data) {
   ol::utils::StringStream stream(bytes.Data(), bytes.ByteLength());
   ol::ParseOptions options;
@@ -664,6 +677,10 @@ void ReadModel(ol::ModelProto &model, const Napi::Uint8Array &bytes, bool skip_r
   }
 }
 
+/**
+ * Root shape application does not persist nested value_info. Apply the retained
+ * GRAPH contexts before inference state is discarded.
+ */
 void ApplySubgraphShapes(ol::GraphProto &graph, const ol::core::shapes::ShapesContext &context) {
   for (int index = 0; index < graph.node_size(); ++index) {
     for (auto &attribute : graph.ref_node()[index].ref_attribute()) {
@@ -708,14 +725,18 @@ Napi::Value DecodeGraph(const Napi::CallbackInfo &info) {
   }
 }
 
+/**
+ * Owns the parsed model and its backing storage. Declaration order keeps the
+ * source buffer or backend case alive until after the model is destroyed.
+ */
 struct StoredModel {
-  // Borrowed tensor buffers must outlive the native model.
   Napi::Reference<Napi::Uint8Array> source;
   std::shared_ptr<ol::core::backend_test::TestCase> backend_case;
   std::shared_ptr<ol::ModelProto> model;
   std::string file_name;
 };
 
+/** Method closures share ownership, even if JavaScript retains only one method. */
 Napi::Object ModelHandle(Napi::Env env, std::shared_ptr<StoredModel> model) {
   auto result = Napi::Object::New(env);
   result.Set("metadata",
