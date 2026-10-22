@@ -12,10 +12,27 @@ zoom controls, or choose **Open ONNX model** to load a real `.onnx` file.
 
 ## Run the extension
 
-Requires Node.js 22 or later, npm, and VS Code 1.96 or later.
+Requires Node.js 22 or later, npm, and VS Code 1.96 or later, with the `code`
+command available in your terminal.
+
+From a Bash terminal, run:
 
 ```sh
-npm install
+./start.sh
+```
+
+The script installs dependencies on the first run, recompiles the extension,
+and opens a new VS Code development window with a real, single-node demo ONNX
+file already open in the viewer. Other extensions are disabled in that test
+window to avoid conflicts with other ONNX viewers. No F5 or Command Palette
+step is needed.
+After making changes, close that development window and run the script again.
+The script also works when called from another directory.
+
+### Manual launch with F5
+
+```sh
+npm ci
 npm run compile
 ```
 
