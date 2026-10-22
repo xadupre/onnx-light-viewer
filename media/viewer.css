@@ -262,6 +262,49 @@ li {
   margin-bottom: 5px;
   overflow-wrap: anywhere;
 }
+.inspector-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.inspector-heading button {
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 3px 10px;
+}
+button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+#node-parameters pre {
+  margin: 5px 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+}
+#operator-doc {
+  width: min(900px, 95vw);
+  max-height: 90vh;
+  overflow: auto;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+#operator-doc::backdrop {
+  background: #0009;
+}
+#operator-doc h2 {
+  font-size: 20px;
+}
+#doc-body {
+  margin-top: 16px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 @media (max-width: 760px) {
   .graph-body {
     grid-template-columns: minmax(0, 1fr);

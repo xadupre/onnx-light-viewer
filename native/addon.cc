@@ -1,6 +1,9 @@
 #include <napi.h>
+#include <onnx_op/operator_sets.h>
 #include <onnx_proto/onnx.h>
 
+#include <map>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -12,6 +15,96 @@ namespace {
 
 Napi::String Text(Napi::Env env, std::string_view value) {
   return Napi::String::New(env, value.empty() ? "" : value.data(), value.size());
+}
+
+std::string Domain(std::string_view domain) {
+  return domain.empty() ? "ai.onnx" : std::string(domain);
+}
+
+template <typename Proto> std::string Preview(const Proto &value) {
+  ol::utils::PrintOptions options;
+  options.skip_raw_data = true;
+  options.max_short_repr_length = 4096;
+  std::stringstream stream;
+  value.PrintToStringStream(stream, options);
+  ol::utils::enforce_short_repr_length(stream, options);
+  return stream.str();
+}
+
+Napi::Value Schema(Napi::Env env, const std::string &op_type, const std::string &domain,
+                   int64_t opset) {
+  const auto schemas = ol::onnx_op::GetAllOnnxOpSchemasWithHistory(op_type, true);
+  const ol::core::schema::LightOpSchema *selected = nullptr;
+  for (const auto &schema : schemas) {
+    if (Domain(schema.domain()) == domain && schema.since_version() <= opset &&
+        (!selected || schema.since_version() > selected->since_version())) {
+      selected = &schema;
+    }
+  }
+  if (!selected) {
+    return env.Null();
+  }
+  auto result = Napi::Object::New(env);
+  result.Set("sinceVersion", selected->since_version());
+  std::stringstream documentation;
+  documentation << selected->doc();
+  for (const auto &[heading, parameters] :
+       {std::pair{"Inputs", &selected->inputs()}, std::pair{"Outputs", &selected->outputs()}}) {
+    documentation << "\n\n" << heading << "\n";
+    for (const auto &parameter : *parameters) {
+      documentation << "\n"
+                    << parameter.name << " (" << parameter.type << ")\n"
+                    << parameter.description << "\n";
+    }
+  }
+  auto defaults = Napi::Array::New(env);
+  uint32_t index = 0;
+  documentation << "\n\nAttributes\n";
+  for (const auto &attribute : selected->attributes()) {
+    const auto type = ol::core::schema::AttributeType_Name(attribute.type);
+    documentation << "\n"
+                  << attribute.name << " (" << type << ")"
+                  << (attribute.required ? " [required]" : "") << "\n"
+                  << attribute.description << "\n";
+    if (!std::holds_alternative<std::monostate>(attribute.default_value)) {
+      const auto value = ol::core::schema::AttributeDefaultRepr(attribute.default_value);
+      documentation << "Default: " << value << "\n";
+      auto item = Napi::Object::New(env);
+      item.Set("name", attribute.name);
+      item.Set("type", type);
+      item.Set("value", value);
+      item.Set("default", true);
+      defaults.Set(index++, item);
+    }
+  }
+  documentation << "\n\nType constraints\n";
+  for (const auto &constraint : selected->type_constraints()) {
+    documentation << "\n" << constraint.type_param_str << ": ";
+    for (const auto type : constraint.allowed_type_strs) {
+      documentation << ol::core::schema::ToTypeString(type) << " ";
+    }
+    documentation << "\n" << constraint.description << "\n";
+  }
+  result.Set("doc", selected->doc().empty() ? "" : documentation.str());
+  result.Set("defaults", defaults);
+  return result;
+}
+
+Napi::Value GetSchema(const Napi::CallbackInfo &info) {
+  const auto env = info.Env();
+  if (info.Length() != 3 || !info[0].IsString() || !info[1].IsString() || !info[2].IsNumber()) {
+    Napi::TypeError::New(env, "Expected an operator name, domain and opset version.")
+        .ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  try {
+    return Schema(env, info[0].As<Napi::String>().Utf8Value(),
+                  Domain(info[1].As<Napi::String>().Utf8Value()),
+                  info[2].As<Napi::Number>().Int64Value());
+  } catch (const std::exception &error) {
+    Napi::Error::New(env, error.what()).ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
 }
 
 template <typename Values> Napi::Array Ports(Napi::Env env, const Values &values) {
@@ -63,15 +156,34 @@ Napi::Value DecodeGraph(const Napi::CallbackInfo &info) {
     }
 
     const auto &graph = model.graph();
+    std::map<std::string, int64_t> opsets;
+    for (const auto &opset : model.opset_import()) {
+      opsets[Domain(opset.domain())] = opset.version();
+    }
+    std::map<std::pair<std::string, std::string>, Napi::Value> schemas;
     std::unordered_set<std::string> initializers;
+    std::map<std::string, Napi::Object> parameters;
     for (const auto &tensor : graph.initializer()) {
       if (!tensor.name().empty()) {
-        initializers.emplace(std::string_view(tensor.name()));
+        const std::string name(tensor.name());
+        initializers.emplace(name);
+        auto parameter = Napi::Object::New(env);
+        parameter.Set("name", name);
+        parameter.Set("type", ol::TensorProto::DataType_Name(tensor.data_type()));
+        parameter.Set("value", Preview(tensor));
+        parameters.emplace(name, parameter);
       }
     }
     for (const auto &tensor : graph.sparse_initializer()) {
       if (tensor.has_values() && !tensor.values().name().empty()) {
         initializers.emplace(std::string_view(tensor.values().name()));
+        const std::string name(tensor.values().name());
+        auto parameter = Napi::Object::New(env);
+        parameter.Set("name", name);
+        parameter.Set("type", std::string("SPARSE ") +
+                                  ol::TensorProto::DataType_Name(tensor.values().data_type()));
+        parameter.Set("value", Preview(tensor));
+        parameters.emplace(name, parameter);
       }
     }
 
@@ -88,8 +200,39 @@ Napi::Value DecodeGraph(const Napi::CallbackInfo &info) {
                                                              std::to_string(index + 1))
                                              : Text(env, node.name()));
       result.Set("opType", Text(env, node.op_type()));
-      result.Set("domain", Text(env, node.domain().empty() ? std::string_view("ai.onnx")
-                                                           : std::string_view(node.domain())));
+      const auto domain = Domain(node.domain());
+      result.Set("domain", domain);
+      const auto opset = opsets.find(domain);
+      result.Set("opset", opset == opsets.end()
+                              ? Napi::Value(env.Null())
+                              : Napi::Value(Text(env, std::to_string(opset->second))));
+      const auto key = std::pair{domain, std::string(node.op_type())};
+      if (!schemas.contains(key)) {
+        schemas.emplace(key, opset == opsets.end()
+                                 ? env.Null()
+                                 : Schema(env, key.second, domain, opset->second));
+      }
+      result.Set("schema", schemas.at(key));
+      auto attributes = Napi::Array::New(env);
+      uint32_t attribute_index = 0;
+      for (const auto &attribute : node.attribute()) {
+        auto item = Napi::Object::New(env);
+        item.Set("name", Text(env, attribute.name()));
+        item.Set("type", ol::AttributeProto::AttributeType_Name(attribute.type()));
+        item.Set("value", Preview(attribute));
+        item.Set("default", false);
+        attributes.Set(attribute_index++, item);
+      }
+      result.Set("attributes", attributes);
+      auto weights = Napi::Array::New(env);
+      uint32_t weight_index = 0;
+      for (const auto &input : node.input()) {
+        const auto parameter = parameters.find(std::string(input));
+        if (parameter != parameters.end()) {
+          weights.Set(weight_index++, parameter->second);
+        }
+      }
+      result.Set("parameters", weights);
       result.Set("inputs", Ports(env, node.input()));
       result.Set("outputs", Ports(env, node.output()));
       nodes.Set(index++, result);
@@ -109,6 +252,7 @@ Napi::Value DecodeGraph(const Napi::CallbackInfo &info) {
 
 Napi::Object Initialize(Napi::Env env, Napi::Object exports) {
   exports.Set("decodeGraph", Napi::Function::New(env, DecodeGraph));
+  exports.Set("getSchema", Napi::Function::New(env, GetSchema));
   return exports;
 }
 

@@ -2,8 +2,9 @@ Native model loading
 ====================
 
 The extension host loads a Node-API 8 C++ binding linked to onnx-light's
-``onnx_proto`` library. It does not use the npm ``onnx-proto`` package,
-protobufjs, upstream ``onnx``, a Python process, or a custom ONNX decoder.
+``onnx_proto``, ``onnx_core`` and ``onnx_op`` libraries. It does not use the npm
+``onnx-proto`` package, protobufjs, upstream ``onnx``, a Python process, or a
+custom ONNX decoder.
 
 Published library
 -----------------
@@ -17,6 +18,12 @@ There is no fallback to compiling onnx-light from source.
 
 The archive is cached under ``build/native/`` and reused on subsequent builds.
 The platform asset names and checksums are pinned in ``CMakeLists.txt``.
+
+Operator documentation and attribute defaults come from the released
+``LightOpSchema`` records. Lookup matches the operator domain and selects the
+newest schema whose ``since_version`` does not exceed the model's imported
+opset. Missing schemas or documentation simply disable the **Doc** button.
+No external documentation service is used.
 
 Extension host compatibility
 ----------------------------

@@ -2,7 +2,7 @@ const assert = require("node:assert/strict");
 const { readFileSync } = require("node:fs");
 const { test } = require("node:test");
 const { JSDOM } = require("jsdom");
-const { demoGraph } = require("../dist/graph");
+const { decodeGraph, demoGraph } = require("../dist/graph");
 const { webviewHtml } = require("../dist/webview");
 
 function openViewer(t) {
@@ -31,6 +31,13 @@ function openViewer(t) {
     const event = new dom.window.Event("lostpointercapture");
     Object.defineProperty(event, "pointerId", { value: id });
     graph.dispatchEvent(event);
+  };
+  const dialog = dom.window.document.getElementById("operator-doc");
+  dialog.showModal = () => {
+    dialog.open = true;
+  };
+  dialog.close = () => {
+    dialog.open = false;
   };
   const pointer = (target, type, x, y, modifiers = {}) => {
     const [left, top, width, height] = graph
@@ -104,6 +111,122 @@ test("renders the demo, inspects its operator and requests a real file", (t) => 
   assert.notEqual(graph.getAttribute("viewBox"), initialViewBox);
   document.getElementById("zoom-fit").click();
   assert.equal(graph.getAttribute("viewBox"), initialViewBox);
+});
+
+test("shows actual attributes, connected initializer parameters and versioned defaults", (t) => {
+  const { document, load, window } = openViewer(t);
+  const graph = decodeGraph(
+    readFileSync(require.resolve("./models/parameters.onnx")),
+    "parameters.onnx",
+  );
+  load(graph);
+  assert.match(
+    document.getElementById("node-attributes").textContent,
+    /strides \(INTS\)[\s\S]*\[2, 2\]/,
+  );
+  assert.match(
+    document.getElementById("node-initializers").textContent,
+    /kernel \(FLOAT\)[\s\S]*\[1, 1, 3, 3\]/,
+  );
+  document
+    .querySelector('[data-id="node-1"]')
+    .dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter" }));
+  const attributes = document.getElementById("node-attributes");
+  assert.equal(attributes.children.length, 1);
+  assert.match(attributes.textContent, /alpha \(FLOAT\)[\s\S]*0\.125/);
+  assert.doesNotMatch(attributes.textContent, /\[default\]/);
+  for (const [version, axis] of [
+    [11, "1"],
+    [13, "-1"],
+  ]) {
+    load(
+      decodeGraph(
+        readFileSync(require.resolve(`./models/softmax-${version}.onnx`)),
+        "softmax.onnx",
+      ),
+    );
+    assert.equal(
+      document.getElementById("node-opset").textContent,
+      String(version),
+    );
+    assert.match(attributes.textContent, /axis \(INT\) \[default\]/);
+    assert.equal(attributes.querySelector("pre").textContent, axis);
+  }
+});
+
+test("opens native LightOpSchema docs and clears stale docs and parameters on selection or model changes", (t) => {
+  const { document, load, window } = openViewer(t);
+  const docButton = document.getElementById("show-doc");
+  const dialog = document.getElementById("operator-doc");
+  assert.equal(docButton.disabled, true);
+  load(demoGraph);
+  assert.equal(docButton.disabled, false);
+  docButton.click();
+  assert.equal(dialog.open, true);
+  assert.equal(
+    document.getElementById("doc-body").textContent,
+    demoGraph.nodes[0].schema.doc,
+  );
+  assert.match(
+    document.getElementById("doc-version").textContent,
+    /model opset 13/,
+  );
+  document.getElementById("close-doc").click();
+  assert.equal(dialog.open, false);
+  docButton.click();
+  load(demoGraph);
+  assert.equal(dialog.open, false);
+  assert.equal(document.getElementById("doc-body").textContent, "");
+  docButton.click();
+  document
+    .querySelector(".port")
+    .dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter" }));
+  assert.equal(dialog.open, false);
+  assert.equal(docButton.disabled, true);
+  assert.equal(document.getElementById("node-parameters").hidden, true);
+  assert.equal(document.getElementById("node-attributes").children.length, 0);
+  load(
+    decodeGraph(
+      readFileSync(require.resolve("./models/parameters.onnx")),
+      "parameters.onnx",
+    ),
+  );
+  docButton.click();
+  document
+    .querySelector('[data-id="node-2"]')
+    .dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter" }));
+  assert.equal(dialog.open, false);
+  assert.equal(docButton.disabled, true);
+  assert.equal(document.getElementById("doc-body").textContent, "");
+  assert.match(
+    document.getElementById("node-initializers").textContent,
+    /SPARSE FLOAT/,
+  );
+  load({ ...demoGraph, nodes: [] });
+  assert.equal(document.getElementById("node-parameters").hidden, true);
+  assert.equal(document.getElementById("node-initializers").children.length, 0);
+});
+
+test("renders attribute names, values and schema documentation as text, not HTML", (t) => {
+  const { document, load } = openViewer(t);
+  const text = '<img src=x onerror="alert(1)">';
+  load({
+    ...demoGraph,
+    nodes: [
+      {
+        ...demoGraph.nodes[0],
+        attributes: [
+          { name: text, type: "STRING", value: text, default: false },
+        ],
+        schema: { ...demoGraph.nodes[0].schema, doc: text },
+      },
+    ],
+  });
+  document.getElementById("show-doc").click();
+  for (const id of ["node-attributes", "doc-body"]) {
+    assert.ok(document.getElementById(id).textContent.includes(text));
+    assert.equal(document.getElementById(id).querySelector("img"), null);
+  }
 });
 
 test("loads a connected graph, selects with the keyboard and treats model text as text", (t) => {

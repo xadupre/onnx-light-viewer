@@ -11,6 +11,7 @@ let nodeViews = new Map();
 let selected = new Set();
 let connections = [];
 let gesture;
+let inspectedNode;
 
 function element(tag, attributes, text) {
   const node = document.createElementNS(svgNS, tag);
@@ -35,6 +36,13 @@ function shortName(value, length = 22) {
   return value.length > length ? `${value.slice(0, length - 1)}…` : value;
 }
 
+function resetDocumentation() {
+  if (byId("operator-doc").open) byId("operator-doc").close();
+  byId("doc-title").textContent = "";
+  byId("doc-version").textContent = "";
+  byId("doc-body").textContent = "";
+}
+
 function inspect(view) {
   const node = view?.node;
   const port = view?.port;
@@ -49,9 +57,7 @@ function inspect(view) {
         ? "No selection"
         : "No operator");
   byId("node-description").textContent = node
-    ? node.opType === "Relu" && node.domain === "ai.onnx"
-      ? "Rectified linear activation: max(0, x)."
-      : `${node.opType} operator`
+    ? `${node.opType} operator`
     : port
       ? `Graph ${port.output ? "output" : "input"} tensor.`
       : hasOperators
@@ -59,6 +65,23 @@ function inspect(view) {
         : "This graph contains no operator nodes.";
   byId("node-name").textContent = node?.name ?? port?.name ?? "—";
   byId("node-domain").textContent = node?.domain ?? "—";
+  byId("node-opset").textContent = node?.opset ?? "—";
+  if (inspectedNode !== node) {
+    resetDocumentation();
+    inspectedNode = node;
+  }
+  byId("show-doc").disabled = !node?.schema?.doc;
+  byId("show-doc").title = node?.schema?.doc
+    ? "Documentation from onnx-light LightOpSchema"
+    : "No LightOpSchema documentation available for this selection.";
+  const attributes = node?.attributes ?? [];
+  const names = new Set(attributes.map((attribute) => attribute.name));
+  const defaults = (node?.schema?.defaults ?? []).filter(
+    (attribute) => !names.has(attribute.name),
+  );
+  parameterList("attributes", [...attributes, ...defaults], "attribute-count");
+  parameterList("initializers", node?.parameters ?? [], "parameter-count");
+  byId("node-parameters").hidden = !node;
   for (const direction of ["inputs", "outputs"]) {
     const names =
       node?.[direction] ??
@@ -75,6 +98,21 @@ function inspect(view) {
       }),
     );
   }
+}
+
+function parameterList(id, parameters, countId) {
+  byId(countId).textContent = parameters.length;
+  byId(`node-${id}`).replaceChildren(
+    ...parameters.map((parameter) => {
+      const item = document.createElement("li");
+      const heading = document.createElement("strong");
+      heading.textContent = `${parameter.name} (${parameter.type})${parameter.default ? " [default]" : ""}`;
+      const value = document.createElement("pre");
+      value.textContent = parameter.value;
+      item.append(heading, value);
+      return item;
+    }),
+  );
 }
 
 function updateSelection(activeId) {
@@ -254,6 +292,8 @@ function changeZoom(factor) {
 
 function render(graph) {
   endGesture();
+  resetDocumentation();
+  inspectedNode = undefined;
   nodeViews = new Map();
   selected = new Set();
   connections = [];
@@ -487,6 +527,16 @@ svg.addEventListener("keydown", (event) => {
   }
 });
 window.addEventListener("blur", () => endGesture(true));
+byId("show-doc").addEventListener("click", () => {
+  if (!inspectedNode?.schema?.doc) return;
+  const { schema, opType, domain, opset } = inspectedNode;
+  byId("doc-title").textContent = `${opType} documentation`;
+  byId("doc-version").textContent =
+    `${domain} · model opset ${opset} · LightOpSchema since version ${schema.sinceVersion}`;
+  byId("doc-body").textContent = schema.doc;
+  byId("operator-doc").showModal();
+});
+byId("close-doc").addEventListener("click", () => byId("operator-doc").close());
 byId("open-model").addEventListener("click", () =>
   vscode.postMessage({ type: "open" }),
 );

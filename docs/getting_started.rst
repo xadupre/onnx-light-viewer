@@ -58,6 +58,20 @@ to zoom in and out. Scrolling without Ctrl moves the view vertically;
 Shift+wheel moves it horizontally. Horizontal trackpad scrolling is also
 supported. **Fit** recenters the graph and resets zoom and scrolling.
 
+The inspector also shows the imported opset, typed operator attributes and
+connected dense or sparse initializers (type, dimensions and stored typed
+values). Attribute defaults provided by ``LightOpSchema`` are marked
+``[default]`` and never replace explicit model values. Long previews are
+truncated to 4,096 characters; inline ``raw_data`` payloads and external weight
+files are not loaded.
+
+Use **Doc** to open the selected operator's available ``LightOpSchema``
+documentation, including formal inputs, outputs, attributes and type
+constraints. The dialog identifies the model opset and selected schema version;
+**Close** or Escape dismisses it. Documentation is displayed as plain text,
+preserving Markdown source safely. **Doc** is disabled for graph inputs/outputs
+and operators without available schema documentation.
+
 The graph flows from top to bottom: inputs above the operators, outputs below
 them, and connections attached to the top and bottom of each node. Operators
 have random horizontal positions on each model load; their vertical rows follow
@@ -92,6 +106,6 @@ Current limitations
 
 This prototype reads the entire model file into memory and draws every
 top-level operator. The native parser skips inline ``raw_data`` payloads.
-Tensor data, attributes, inferred shapes, nested subgraphs, editing and external
-weight files are not displayed or loaded. Models with external weights can
-still display their graph. The dark palette is currently fixed.
+Inferred shapes, nested subgraph visualization, editing and external weight
+files are not supported. Models with external weights can still display their
+graph. The dark palette is currently fixed.
