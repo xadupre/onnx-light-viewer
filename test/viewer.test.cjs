@@ -458,14 +458,15 @@ test("refreshes whole-model metadata from the global toolbar with the inspector 
   );
   document.getElementById("canvas").getBoundingClientRect = () =>
     new window.DOMRect(0, 0, 1060, 300);
+  const metadata = model.metadata();
   window.dispatchEvent(
     new window.MessageEvent("message", {
-      data: { type: "metadata-info", metadata: model.metadata() },
+      data: { type: "metadata-info", metadata },
     }),
   );
   assert.equal(
     document.getElementById("metadata-status").textContent,
-    "Metadata refreshed",
+    `Metadata refreshed: ${metadata.model.length + metadata.graph.length + metadata.nodes.length + metadata.values.length} updates`,
   );
   assert.equal(document.getElementById("metadata-panel").hidden, true);
   assert.equal(refresh.disabled, false);
@@ -488,6 +489,78 @@ test("refreshes whole-model metadata from the global toolbar with the inspector 
     "shared;activationconstant_sum",
   );
   assert.equal(document.querySelectorAll(".edge.released").length, 4);
+});
+
+test("counts metadata changes and replaces cached analysis and graph markers on every refresh", (t) => {
+  const { document, window, load } = openViewer(t);
+  const errors = [];
+  window.addEventListener("error", (event) => errors.push(event.error));
+  const model = loadModel(
+    readFileSync(require.resolve("./models/analysis.onnx")),
+    "analysis.onnx",
+  );
+  load(model.graph());
+  const send = (metadata) => {
+    document.getElementById("refresh-metadata").click();
+    window.dispatchEvent(
+      new window.MessageEvent("message", {
+        data: { type: "metadata-info", metadata },
+      }),
+    );
+  };
+  const metadata = model.metadata();
+  send(metadata);
+  const status = document.getElementById("metadata-status");
+  send(structuredClone(metadata));
+  assert.equal(status.textContent, "Metadata refreshed: 0 updates");
+  assert.equal(status.title, status.textContent);
+  const changed = structuredClone(metadata);
+  changed.model.push({ key: "new", value: "updated model" });
+  changed.graph.push({ key: "new", value: "updated graph" });
+  changed.nodes[0].constant = !changed.nodes[0].constant;
+  changed.nodes[0].tag = "updated tag";
+  changed.values.find(
+    (value) => value.name === model.graph().nodes[0].outputs[0],
+  ).tag = "updated value";
+  const unused = changed.nodes.find((node) => node.unusedOutputs.length);
+  unused.unusedOutputs = [];
+  send(changed);
+  assert.equal(status.textContent, "Metadata refreshed: 5 updates");
+  assert.equal(document.querySelectorAll(".unused-label").length, 1);
+  document.getElementById("show-metadata").click();
+  assert.match(
+    document.getElementById("metadata-model").textContent,
+    /updated model/,
+  );
+  assert.match(
+    document.getElementById("metadata-graph").textContent,
+    /updated graph/,
+  );
+  assert.match(
+    document.getElementById("metadata-analysis").textContent,
+    /updated tag/,
+  );
+  assert.match(
+    document.getElementById("metadata-values").textContent,
+    /updated value/,
+  );
+  send(metadata);
+  assert.equal(status.textContent, "Metadata refreshed: 5 updates");
+  assert.equal(document.querySelectorAll(".unused-label").length, 2);
+  const oneChange = structuredClone(metadata);
+  oneChange.nodes[0].tag = "one update";
+  send(oneChange);
+  assert.equal(status.textContent, "Metadata refreshed: 1 update");
+  send(oneChange);
+  assert.equal(status.textContent, "Metadata refreshed: 0 updates");
+  load(model.graph());
+  assert.equal(status.textContent, "Analyzing metadata…");
+  send(metadata);
+  assert.equal(
+    status.textContent,
+    `Metadata refreshed: ${metadata.model.length + metadata.graph.length + metadata.nodes.length + metadata.values.length} updates`,
+  );
+  assert.deepEqual(errors, []);
 });
 
 test("shows native metadata in the sidebar and marks released and never-used results without changing the layout", (t) => {
@@ -683,7 +756,7 @@ test("reports metadata errors, allows retry and clears stale metadata and releas
   assert.equal(refresh.disabled, false);
   assert.equal(
     document.getElementById("metadata-status").textContent,
-    "Metadata refreshed",
+    "Metadata refreshed: 0 updates",
   );
   assert.notEqual(
     document.getElementById("metadata-analysis").firstElementChild,
@@ -1037,6 +1110,69 @@ test("refreshes real onnx-light metadata on edges, ports and the current inspect
     document.querySelector("#node-inputs .tensor-info").textContent,
     "INT64 [N, 1, 3]",
   );
+  assert.match(
+    document.getElementById("shape-status").textContent,
+    /Shapes\/types refreshed: [1-9]\d* tensors? updated/,
+  );
+  document.getElementById("refresh-shapes").click();
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: {
+        type: "shape-info",
+        tensors: decodeGraph(bytes, "inference.onnx", true).tensors,
+      },
+    }),
+  );
+  assert.equal(
+    document.getElementById("shape-status").textContent,
+    "Shapes/types refreshed: 0 tensors updated",
+  );
+});
+
+test("counts each changed tensor once and resets the baseline when another graph is loaded", (t) => {
+  const { document, window, load } = openViewer(t);
+  const tensors = [
+    { name: "input", type: null, shape: null },
+    { name: "output", type: null, shape: null },
+  ];
+  load({ ...demoGraph, tensors });
+  const send = (tensors, count) => {
+    document.getElementById("refresh-shapes").click();
+    window.dispatchEvent(
+      new window.MessageEvent("message", {
+        data: { type: "shape-info", tensors },
+      }),
+    );
+    const status = document.getElementById("shape-status");
+    assert.equal(
+      status.textContent,
+      `Shapes/types refreshed: ${count} tensor${count === 1 ? "" : "s"} updated`,
+    );
+    assert.equal(status.title, status.textContent);
+  };
+  send(structuredClone(tensors).reverse(), 0);
+  const changed = [
+    { name: "input", type: "FLOAT", shape: [] },
+    { name: "output", type: "FLOAT", shape: ["N", "3"] },
+  ];
+  send(changed, 2);
+  assert.equal(
+    document.querySelector("#node-inputs .tensor-info").textContent,
+    "FLOAT []",
+  );
+  assert.equal(
+    document.querySelector("#node-outputs .tensor-info").textContent,
+    "FLOAT [N, 3]",
+  );
+  send([{ ...changed[0], type: "INT64" }, changed[1]], 1);
+  send([{ ...changed[0], shape: null }, changed[1]], 1);
+  send([{ name: "input", type: "sequence" }, changed[1]], 1);
+  send([changed[1]], 1);
+  send(changed, 1);
+  send(changed, 0);
+  load({ ...demoGraph, tensors });
+  assert.equal(document.getElementById("shape-status").textContent, "");
+  send(changed, 2);
 });
 
 test("shows every operator output's type and shape even when no connection consumes it", (t) => {
@@ -1368,8 +1504,9 @@ test("changes only affected selections and edges, and preserves an unchanged ins
       data: { type: "shape-info", tensors: demoGraph.tensors },
     }),
   );
-  pointer(graph, "pointermove", before[1].x + 1100, before[1].y + 1100);
   assert.equal(viewportReads, 3);
+  pointer(graph, "pointermove", before[1].x + 1100, before[1].y + 1100);
+  assert.equal(viewportReads, 4);
   pointer(graph, "pointercancel", before[1].x, before[1].y);
   assertMoved(before, nodePositions(document), [0], 1000, 1000);
 });
