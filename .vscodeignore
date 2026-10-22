@@ -6,3 +6,9 @@ tsconfig.json
 .gitignore
 **/*.map
 start.sh
+build/**
+native/**
+scripts/**
+CMakeLists.txt
+.clang-format
+.gitattributes
