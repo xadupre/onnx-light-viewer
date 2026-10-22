@@ -2,7 +2,8 @@ Native model loading
 ====================
 
 The extension host loads a Node-API 8 C++ binding linked to onnx-light's
-``onnx_proto``, ``onnx_core``, ``onnx_op`` and ``onnx_shape`` libraries. It does
+``onnx_proto``, ``onnx_core``, ``onnx_op``, ``onnx_shape`` and
+``onnx_backend_test`` libraries (the latter also links native kernels). It does
 not use the npm ``onnx-proto`` package, protobufjs, upstream ``onnx``, a Python
 process, or a custom ONNX decoder.
 
@@ -28,6 +29,12 @@ No external documentation service is used.
 The refresh action registers the released ``onnx_shapes`` algorithms and calls
 ``core::shapes::InferShapesModel``. See :doc:`shape_information` for the
 displayed metadata, refresh behavior and inference limitations.
+
+The backend-test selector calls ``core::backend_test::CollectTestCases()``.
+Listing reads case metadata without materializing models or datasets. Only the
+chosen case is materialized, with reference-output generation disabled, and its
+native owner is retained alongside the model so borrowed buffers remain valid.
+Cases come from the released C++ library, not Python backend tests or downloads.
 
 Extension host compatibility
 ----------------------------

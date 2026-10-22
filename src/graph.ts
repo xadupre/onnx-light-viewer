@@ -59,6 +59,14 @@ export interface NativeModel {
   graph(inferShapes?: boolean): Graph;
 }
 
+export interface BackendTest {
+  id: number;
+  name: string;
+  modelName: string;
+  kind: string;
+  tag: string;
+}
+
 const native: {
   decodeGraph(bytes: Uint8Array, fileName: string, inferShapes: boolean): Graph;
   getSchema(
@@ -67,6 +75,8 @@ const native: {
     opset: number,
   ): OperatorSchema | null;
   loadModel(bytes: Uint8Array, fileName: string): NativeModel;
+  listBackendTests(): BackendTest[];
+  loadBackendTest(id: number): NativeModel;
 } = require("./native/onnx_light_viewer.node");
 
 export const demoGraph: Graph = {
@@ -104,4 +114,14 @@ export function decodeGraph(
 
 export function loadModel(bytes: Uint8Array, fileName: string): NativeModel {
   return native.loadModel(bytes, fileName);
+}
+
+export function listBackendTests(): BackendTest[] {
+  return native
+    .listBackendTests()
+    .sort((left, right) => left.name.localeCompare(right.name));
+}
+
+export function loadBackendTest(id: number): NativeModel {
+  return native.loadBackendTest(id);
 }

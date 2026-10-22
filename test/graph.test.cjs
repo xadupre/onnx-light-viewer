@@ -3,11 +3,73 @@ const { execFileSync } = require("node:child_process");
 const { readFileSync } = require("node:fs");
 const path = require("node:path");
 const { test } = require("node:test");
-const { decodeGraph, demoGraph, loadModel } = require("../dist/graph");
+const {
+  decodeGraph,
+  demoGraph,
+  loadModel,
+  listBackendTests,
+  loadBackendTest,
+} = require("../dist/graph");
 
 function modelBytes(name) {
   return readFileSync(path.join(__dirname, "models", name));
 }
+
+test("lists the released native backend tests and opens node and model cases on demand", () => {
+  const tests = listBackendTests();
+  assert.equal(new Set(tests.map(({ id }) => id)).size, tests.length);
+  const reluCase = tests.find(({ name }) => name === "test_cc_relu");
+  assert.deepEqual(
+    tests.find(({ name }) => name === "test_cc_relu"),
+    {
+      id: reluCase.id,
+      name: "test_cc_relu",
+      modelName: "test_cc_relu",
+      kind: "node",
+      tag: "",
+    },
+  );
+  assert.equal(
+    tests.find(({ name }) => name === "test_cc_constant_add_chain").kind,
+    "model",
+  );
+  const relu = loadBackendTest(reluCase.id);
+  assert.equal(relu.graph().nodes[0].opType, "Relu");
+  assert.deepEqual(
+    relu.graph(true).tensors.find(({ name }) => name === "Y"),
+    {
+      name: "Y",
+      type: "FLOAT",
+      shape: ["2", "3"],
+    },
+  );
+  const model = loadBackendTest(
+    tests.find(({ name }) => name === "test_cc_constant_add_chain").id,
+  );
+  assert.deepEqual(
+    model.graph().nodes.map(({ opType }) => opType),
+    ["Add", "Add"],
+  );
+  assert.equal(model.graph(true).initializerCount, 1);
+  assert.throws(
+    () => loadBackendTest(tests.length),
+    /Unknown onnx-light backend test ID/,
+  );
+  assert.throws(() => loadBackendTest(null), TypeError);
+  for (const invalid of [-1, NaN, Infinity, 0.5]) {
+    assert.throws(() => loadBackendTest(invalid), RangeError);
+  }
+  const duplicated = tests.filter(
+    ({ name }) => name === "test_cc_greater_or_equal_float16",
+  );
+  assert.ok(duplicated.length > 1);
+  for (const test of duplicated) {
+    assert.equal(
+      loadBackendTest(test.id).graph().nodes[0].opType,
+      "GreaterOrEqual",
+    );
+  }
+});
 
 test("loads a real one-node ONNX model file matching the demo", () => {
   const bytes = modelBytes("relu.onnx");
@@ -339,6 +401,27 @@ test("keeps borrowed raw tensor data alive when only the native graph method is 
       graph(true).tensors.find(({ name }) => name === "reshaped").shape,
       ["N", "3", "1"],
     );
+  `,
+  ]);
+});
+
+test("keeps native backend case resources alive through garbage collection and later catalog loads", () => {
+  execFileSync(process.execPath, [
+    "--expose-gc",
+    "-e",
+    `
+    const assert = require("node:assert/strict");
+    const { loadBackendTest, listBackendTests } = require(${JSON.stringify(require.resolve("../dist/graph"))});
+    const cases = listBackendTests();
+    const graph = loadBackendTest(cases.find(test => test.name === "test_cc_constant_node_source").id).graph;
+    const before = graph();
+    for (let index = 0; index < 3; index++) {
+      listBackendTests();
+      loadBackendTest(cases.find(test => test.name === "test_cc_relu").id).graph();
+      global.gc();
+    }
+    assert.deepEqual(graph(), before);
+    assert.doesNotThrow(() => graph(true));
   `,
   ]);
 });

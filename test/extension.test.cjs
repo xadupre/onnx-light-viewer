@@ -10,10 +10,12 @@ async function openExtension(customModel, command = "onnxLightViewer.open") {
   const messages = [];
   const errors = [];
   const reads = [];
+  const picks = [];
   const commands = new Map();
   let receive;
   let selection;
   let editor;
+  let backendSelection;
   const disposable = () => ({ dispose() {} });
   const root = path.resolve(__dirname, "..");
   const webview = {
@@ -56,6 +58,16 @@ async function openExtension(customModel, command = "onnxLightViewer.open") {
         return disposable();
       },
       showOpenDialog: async () => selection,
+      showQuickPick: async (items, options) => {
+        picks.push({ items, options });
+        return backendSelection === undefined
+          ? undefined
+          : {
+              label: backendSelection,
+              id:
+                items.find((item) => item.label === backendSelection)?.id ?? -1,
+            };
+      },
       showErrorMessage: async (message) => errors.push(message),
     },
   };
@@ -84,10 +96,15 @@ async function openExtension(customModel, command = "onnxLightViewer.open") {
     messages,
     errors,
     reads,
+    picks,
     receive: (message) => receive(message),
     open: async (name) => {
       selection = [{ path: path.join(__dirname, "models", name) }];
       await receive({ type: "open" });
+    },
+    chooseBackend: async (name) => {
+      backendSelection = name;
+      await receive({ type: "open-backend-test" });
     },
   };
 }
@@ -130,6 +147,52 @@ test("refreshes the bundled demo and the currently opened model using its retain
   );
 });
 
+test("opens a searchable native backend selector, preserves the model on cancellation and supports shape refresh", async () => {
+  const extension = await openExtension();
+  await extension.receive({ type: "ready" });
+  const original = extension.messages.at(-1);
+  await extension.chooseBackend();
+  assert.equal(extension.messages.at(-1), original);
+  const { items, options } = extension.picks[0];
+  assert.match(options.placeHolder, /Search/);
+  assert.equal(options.matchOnDescription, true);
+  assert.equal(options.matchOnDetail, true);
+  assert.ok(items.some((item) => item.label === "test_cc_relu"));
+  assert.ok(
+    items.some(
+      (item) =>
+        item.label === "test_cc_constant_add_chain" &&
+        item.description.includes("model"),
+    ),
+  );
+  const reads = extension.reads.length;
+  await extension.chooseBackend("test_cc_constant_add_chain");
+  assert.equal(
+    extension.messages.at(-1).graph.name,
+    "test_cc_constant_add_chain",
+  );
+  assert.deepEqual(
+    extension.messages.at(-1).graph.nodes.map(({ opType }) => opType),
+    ["Add", "Add"],
+  );
+  await extension.receive({ type: "refresh-shapes" });
+  assert.equal(extension.messages.at(-1).type, "shape-info");
+  assert.equal(extension.reads.length, reads);
+  assert.deepEqual(extension.errors, []);
+});
+
+test("reports a backend model loading failure without replacing the open graph", async () => {
+  const extension = await openExtension();
+  await extension.receive({ type: "ready" });
+  const before = extension.messages.at(-1).graph;
+  await extension.chooseBackend("not-a-backend-test");
+  assert.match(
+    extension.errors[0],
+    /Could not open onnx-light backend test:.*Invalid onnx-light backend test ID/,
+  );
+  await extension.receive({ type: "ready" });
+  assert.deepEqual(extension.messages.at(-1).graph, before);
+});
 test("opens the bundled symbolic transformer through its command and refreshes its intermediate shapes", async () => {
   const extension = await openExtension(
     undefined,

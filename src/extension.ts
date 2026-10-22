@@ -1,7 +1,13 @@
 import * as vscode from "vscode";
 import { randomBytes } from "node:crypto";
 import { posix } from "node:path";
-import { loadModel, Graph, NativeModel } from "./graph";
+import {
+  listBackendTests,
+  loadBackendTest,
+  loadModel,
+  Graph,
+  NativeModel,
+} from "./graph";
 import { webviewHtml } from "./webview";
 
 const viewType = "onnxLightViewer.graph";
@@ -66,6 +72,37 @@ function configurePanel(
   const messages = panel.webview.onDidReceiveMessage(
     async (message: { type?: string } | null) => {
       if (message?.type === "ready") {
+        await sendGraph();
+      } else if (message?.type === "open-backend-test") {
+        let loadedModel: LoadedModel;
+        let name: string;
+        try {
+          const selection = await vscode.window.showQuickPick(
+            listBackendTests().map((test) => ({
+              id: test.id,
+              label: test.name,
+              description: [test.kind, test.tag].filter(Boolean).join(" · "),
+              detail: test.modelName !== test.name ? test.modelName : undefined,
+            })),
+            {
+              title: "onnx-light backend tests",
+              placeHolder: "Search by test name, model or category",
+              matchOnDescription: true,
+              matchOnDetail: true,
+            },
+          );
+          if (!selection) return;
+          name = selection.label;
+          const native = loadBackendTest(selection.id);
+          loadedModel = { graph: native.graph(), native };
+        } catch (error) {
+          await vscode.window.showErrorMessage(
+            `Could not open onnx-light backend test: ${error instanceof Error ? error.message : String(error)}`,
+          );
+          return;
+        }
+        model = loadedModel;
+        panel.title = `ONNX: ${name}`;
         await sendGraph();
       } else if (message?.type === "open") {
         const selection = await vscode.window.showOpenDialog({
