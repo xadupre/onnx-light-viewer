@@ -56,7 +56,9 @@ or focus it and press Enter or Space, to inspect its name, domain, inputs and
 outputs. Use the zoom buttons or hold Ctrl while scrolling the mouse wheel
 to zoom in and out. Scrolling without Ctrl moves the view vertically;
 Shift+wheel moves it horizontally. Horizontal trackpad scrolling is also
-supported. **Fit** recenters the graph and resets zoom and scrolling.
+supported. Zooming in has no fixed maximum relative to **Fit**, so even large
+graphs can be enlarged to a readable scale. **Fit** recenters the graph and
+resets zoom and scrolling.
 
 **Backend test** opens a VS Code selector with a search bar for onnx-light's
 native C++ backend tests. Type part of a test name, model name or category,
@@ -64,8 +66,9 @@ then choose a result with the mouse or Enter. Both single-node and multi-node
 model cases are available. Escape cancels without changing the current graph.
 The selected case opens in the same viewer and supports normal inspection,
 position changes and **Refresh shapes**. No Python or network access is needed.
-The catalog is from the pinned onnx-light release; large ``_big_`` cases and
-benchmark mode are excluded by the library's default collection settings.
+The catalog is from the pinned onnx-light release and includes large ``_big_``
+cases, including the four-layer Qwen3 models (search for ``qwen``). Benchmark
+mode is not used. External weights are not downloaded or opened.
 
 The inspector also shows the imported opset, typed operator attributes and
 all connected dense or sparse initializers, without a limit on their number.
@@ -102,6 +105,8 @@ inputs/outputs, and fits the camera without discarding inferred shapes.
 
 The workspace fills the editor and adapts when it is resized. Resizing and
 zooming preserve node positions.
+Operator types and node names are shown in full: boxes widen up to 280 graph
+units, then reduce the corresponding font size for longer labels.
 
 Moving and selecting nodes
 ~~~~~~~~~~~~~~~~~~~~~~~~~~

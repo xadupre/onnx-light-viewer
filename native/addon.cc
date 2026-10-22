@@ -499,7 +499,7 @@ Napi::Value LoadModel(const Napi::CallbackInfo &info) {
 Napi::Value ListBackendTests(const Napi::CallbackInfo &info) {
   const auto env = info.Env();
   try {
-    const auto cases = ol::core::backend_test::CollectTestCases();
+    const auto cases = ol::core::backend_test::CollectTestCases("", true);
     auto result = Napi::Array::New(env);
     uint32_t index = 0;
     for (const auto &test : cases) {
@@ -530,7 +530,7 @@ Napi::Value LoadBackendTest(const Napi::CallbackInfo &info) {
     return env.Undefined();
   }
   try {
-    auto cases = ol::core::backend_test::CollectTestCases();
+    auto cases = ol::core::backend_test::CollectTestCases("", true);
     if (id >= cases.size()) {
       throw std::runtime_error("Unknown onnx-light backend test ID: " + std::to_string(id));
     }

@@ -71,6 +71,30 @@ test("lists the released native backend tests and opens node and model cases on 
   }
 });
 
+test("opens all released Qwen variants, including their symbolic input and output metadata", () => {
+  const cases = listBackendTests();
+  for (const suffix of ["", "_fused", "_persistent", "_persistent_paged"]) {
+    const name = `test_cc_shape_inference_big_qwen3_4_layers_like${suffix}`;
+    const entry = cases.find((test) => test.name === name);
+    assert.ok(entry, `Missing Qwen backend case: ${name}`);
+    const graph = loadBackendTest(entry.id).graph();
+    assert.equal(graph.name, name);
+    assert.ok(graph.nodes.some((node) => node.opType === "MatMul"));
+    assert.deepEqual(
+      graph.tensors.find((tensor) => tensor.name === "input_ids").shape,
+      ["batch_size", "sequence_length"],
+    );
+    assert.deepEqual(
+      graph.tensors.find((tensor) => tensor.name === "output_0"),
+      {
+        name: "output_0",
+        type: "FLOAT16",
+        shape: ["batch_size", "sequence_length", "32000"],
+      },
+    );
+  }
+});
+
 test("loads a real one-node ONNX model file matching the demo", () => {
   const bytes = modelBytes("relu.onnx");
   assert.deepEqual(decodeGraph(bytes, "relu.onnx"), demoGraph);

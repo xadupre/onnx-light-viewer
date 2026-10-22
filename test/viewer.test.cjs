@@ -16,6 +16,14 @@ function openViewer(t) {
     { runScripts: "outside-only" },
   );
   t.after(() => dom.window.close());
+  dom.window.HTMLCanvasElement.prototype.getContext = () => ({
+    font: "",
+    measureText(text) {
+      return {
+        width: text.length * Number(this.font.match(/([\d.]+)px/)[1]) * 0.6,
+      };
+    },
+  });
   dom.window.acquireVsCodeApi = () => ({
     postMessage: (message) => messages.push(message),
   });
@@ -526,15 +534,15 @@ test("replaces the demo with a no-operator graph without stale nodes or inspecto
   assert.equal(document.getElementById("node-name").textContent, "—");
 });
 
-function chainGraph() {
+function chainGraph(length = 6) {
   return {
     ...demoGraph,
-    nodes: Array.from({ length: 6 }, (_, index) => ({
+    nodes: Array.from({ length }, (_, index) => ({
       ...demoGraph.nodes[0],
       id: `node-${index}`,
       name: `activation_${index}`,
       inputs: [index === 0 ? "input" : `tensor_${index - 1}`],
-      outputs: [index === 5 ? "output" : `tensor_${index}`],
+      outputs: [index === length - 1 ? "output" : `tensor_${index}`],
     })),
   };
 }
@@ -598,6 +606,147 @@ test("renders a portrait graph with inputs above operators and outputs below", (
     assert.equal(points[4], points[6]);
     assert.equal(points[3], points[5]);
   }
+});
+
+test("fits complete operator types and names without redundant node or port badges", (t) => {
+  const { document, load, pointer } = openViewer(t);
+  const nodes = [
+    {
+      ...demoGraph.nodes[0],
+      id: "normalization",
+      opType: "LayerNormalization",
+    },
+    {
+      ...demoGraph.nodes[0],
+      id: "long-type",
+      opType: "VeryLongCustomNormalizationOperatorNameThatCannotFitAtFullSize",
+    },
+    { ...demoGraph.nodes[0], id: "long-name", name: "model_layer_".repeat(10) },
+  ];
+  load({ ...demoGraph, nodes });
+  assert.equal(document.querySelector(".operator-tag, .port-type"), null);
+  const groups = document.querySelectorAll(".graph-node");
+  for (const [index, group] of Array.from(groups).entries()) {
+    assert.equal(
+      group.querySelector(".operator-label").textContent,
+      nodes[index].opType,
+    );
+    assert.equal(
+      group.querySelector(".operator-name").textContent,
+      nodes[index].name,
+    );
+    const width = Number(group.querySelector("rect").getAttribute("width"));
+    assert.ok(width > 160 && width <= 280);
+  }
+  assert.equal(
+    groups[0].querySelector(".operator-label").style.fontSize,
+    "19px",
+  );
+  assert.ok(
+    parseFloat(groups[1].querySelector(".operator-label").style.fontSize) < 19,
+  );
+  assert.ok(
+    parseFloat(groups[2].querySelector(".operator-name").style.fontSize) < 10,
+  );
+  assert.match(
+    document.querySelector(".port").getAttribute("aria-label"),
+    /^Input:/,
+  );
+  assert.match(
+    document.querySelector(".port.output").getAttribute("aria-label"),
+    /^Output:/,
+  );
+
+  const graph = document.getElementById("graph");
+  const rect = groups[1].querySelector("rect");
+  const right =
+    Number(rect.getAttribute("x")) + Number(rect.getAttribute("width"));
+  const { y } = nodePositions(document)[1];
+  pointer(graph, "pointerdown", right + 10, y - 10);
+  pointer(graph, "pointermove", right - 2, y + 10);
+  pointer(graph, "pointerup", right - 2, y + 10);
+  assert.equal(groups[1].getAttribute("aria-pressed"), "true");
+});
+
+test("changes only affected selections and edges, and preserves an unchanged inspector during dragging", (t) => {
+  const { document, window, load, pointer } = openViewer(t);
+  load(chainGraph(256));
+  const graph = document.getElementById("graph");
+  const nodes = document.querySelectorAll(".graph-node");
+  const edges = document.querySelectorAll(".edge");
+  const before = nodePositions(document);
+  const inspectorInput =
+    document.getElementById("node-inputs").firstElementChild;
+  const canvas = document.getElementById("canvas");
+  const viewport = canvas.getBoundingClientRect;
+  let viewportReads = 0;
+  canvas.getBoundingClientRect = () => {
+    viewportReads++;
+    return viewport();
+  };
+  const observer = new window.MutationObserver(() => {});
+  observer.observe(document.querySelector("main"), {
+    attributes: true,
+    childList: true,
+    subtree: true,
+  });
+  t.after(() => observer.disconnect());
+  pointer(nodes[0], "pointerdown", before[0].x, before[0].y);
+  assert.equal(
+    document.getElementById("node-inputs").firstElementChild,
+    inspectorInput,
+  );
+  assert.equal(
+    observer
+      .takeRecords()
+      .filter(({ target }) => target.closest(".graph-node, .port")).length,
+    0,
+  );
+  pointer(graph, "pointermove", before[0].x + 1000, before[0].y + 1000);
+  assert.deepEqual(
+    observer
+      .takeRecords()
+      .filter(({ target }) => target.matches(".edge"))
+      .map(({ target }) => target),
+    [edges[0], edges[1]],
+  );
+  pointer(graph, "pointerup", before[0].x + 1000, before[0].y + 1000);
+  assert.equal(viewportReads, 1);
+  assert.equal(
+    observer.takeRecords().filter(({ target }) => target.matches(".edge"))
+      .length,
+    0,
+  );
+
+  pointer(nodes[1], "pointerdown", before[1].x, before[1].y, { ctrlKey: true });
+  const changed = observer
+    .takeRecords()
+    .filter(({ target }) => target.matches(".graph-node, .port"));
+  assert.deepEqual(
+    new Set(changed.map(({ target }) => target)),
+    new Set([nodes[1]]),
+  );
+  assert.notEqual(
+    document.getElementById("node-inputs").firstElementChild,
+    inspectorInput,
+  );
+  pointer(graph, "pointermove", before[1].x + 1000, before[1].y + 1000);
+  const moved = observer
+    .takeRecords()
+    .filter(({ target }) => target.matches(".edge"))
+    .map(({ target }) => target);
+  assert.equal(moved.length, 3);
+  assert.deepEqual(new Set(moved), new Set([edges[0], edges[1], edges[2]]));
+  assert.equal(viewportReads, 2);
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: { type: "shape-info", tensors: demoGraph.tensors },
+    }),
+  );
+  pointer(graph, "pointermove", before[1].x + 1100, before[1].y + 1100);
+  assert.equal(viewportReads, 3);
+  pointer(graph, "pointercancel", before[1].x, before[1].y);
+  assertMoved(before, nodePositions(document), [0], 1000, 1000);
 });
 
 test("spreads multiple graph ports across top and bottom rows without overlap", (t) => {
@@ -771,6 +920,35 @@ test("zooms in and out with buttons and Ctrl+wheel without rearranging the graph
   document.getElementById("zoom-fit").click();
   assert.equal(graph.getAttribute("viewBox"), initialViewBox);
   assert.deepEqual(nodePositions(document), positions);
+});
+
+test("zooms large graphs to a readable scale beyond four times Fit with buttons and Ctrl+wheel", (t) => {
+  const { document, window, load } = openViewer(t);
+  load(chainGraph(400));
+  const graph = document.getElementById("graph");
+  const initial = graph.getAttribute("viewBox");
+  const positions = nodePositions(document);
+  for (const zoomIn of [
+    () => document.getElementById("zoom-in").click(),
+    () =>
+      graph.dispatchEvent(
+        new window.WheelEvent("wheel", { deltaY: -100, ctrlKey: true }),
+      ),
+  ]) {
+    for (let step = 0; step < 30; step++) zoomIn();
+    const viewBox = graph.getAttribute("viewBox").split(" ").map(Number);
+    assert.ok(viewBox.every(Number.isFinite));
+    assert.ok((19 * 350) / viewBox[3] >= 19);
+    document.getElementById("zoom-out").click();
+    assert.ok(
+      Math.abs(
+        Number(graph.getAttribute("viewBox").split(" ")[3]) / viewBox[3] - 1.25,
+      ) < 1e-9,
+    );
+    document.getElementById("zoom-fit").click();
+    assert.equal(graph.getAttribute("viewBox"), initial);
+    assert.deepEqual(nodePositions(document), positions);
+  }
 });
 
 test("wheel scrolling pans vertically and Shift+wheel pans horizontally without zooming", (t) => {

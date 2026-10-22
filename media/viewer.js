@@ -9,7 +9,9 @@ let zoom = 1;
 let pan = { x: 0, y: 0 };
 let nodeViews = new Map();
 let selected = new Set();
-let connections = [];
+let renderedSelection = new Set();
+let connectionsByPosition = new Map();
+let hasOperators = false;
 let gesture;
 let inspectedNode;
 let inspectedView;
@@ -37,6 +39,42 @@ function label(parent, x, y, text, className, anchor = "middle") {
 
 function shortName(value, length = 22) {
   return value.length > length ? `${value.slice(0, length - 1)}…` : value;
+}
+
+function operatorSizes(nodes) {
+  const context = document.createElement("canvas").getContext("2d");
+  const family = getComputedStyle(svg).fontFamily;
+  const widths = new Map();
+  context.font = `600 19px ${family}`;
+  for (const { opType } of nodes) {
+    if (!widths.has(opType)) {
+      widths.set(opType, context.measureText(opType).width);
+    }
+  }
+  context.font = `10px ${family}`;
+  return new Map(
+    nodes.map((node) => {
+      const typeWidth = widths.get(node.opType);
+      const nameWidth = context.measureText(node.name).width;
+      const width = Math.min(
+        280,
+        Math.max(160, Math.ceil(Math.max(typeWidth, nameWidth) + 32)),
+      );
+      return [
+        node.id,
+        {
+          width,
+          typeFontSize: Math.min(19, (19 * (width - 32)) / (typeWidth || 1)),
+          nameFontSize: Math.min(10, (10 * (width - 32)) / (nameWidth || 1)),
+        },
+      ];
+    }),
+  );
+}
+
+function randomNodeX(halfWidth) {
+  const margin = halfWidth + 20;
+  return margin + Math.random() * (layoutBounds.width - 2 * margin);
 }
 
 function tensorDescription(name) {
@@ -78,9 +116,7 @@ function refreshPositions() {
   const positions = new Map();
   for (const [id, view] of nodeViews) {
     positions.set(id, {
-      x: view.node
-        ? 100 + Math.random() * (layoutBounds.width - 200)
-        : view.initial.x,
+      x: view.node ? randomNodeX(view.halfWidth) : view.initial.x,
       y: view.initial.y,
     });
   }
@@ -96,6 +132,8 @@ function refreshStatus(pending, message = "") {
   byId("refresh-shapes").setAttribute("aria-busy", String(pending));
   byId("shape-status").textContent = message;
   byId("shape-status").title = message;
+  // Status changes can wrap the toolbar and resize the canvas.
+  if (gesture) gesture.viewport = undefined;
 }
 
 function resetDocumentation() {
@@ -109,7 +147,6 @@ function inspect(view) {
   inspectedView = view;
   const node = view?.node;
   const port = view?.port;
-  const hasOperators = [...nodeViews.values()].some((view) => view.node);
   byId("node-title").textContent =
     node?.opType ??
     (port
@@ -210,12 +247,17 @@ function parameterList(id, parameters, countId) {
   );
 }
 
-function updateSelection(activeId) {
-  for (const [id, { group }] of nodeViews) {
-    group.classList.toggle("selected", selected.has(id));
-    group.setAttribute("aria-pressed", String(selected.has(id)));
+function updateSelection(activeId, forceInspect = false) {
+  for (const id of new Set([...renderedSelection, ...selected])) {
+    const isSelected = selected.has(id);
+    if (isSelected === renderedSelection.has(id)) continue;
+    const { group } = nodeViews.get(id);
+    group.classList.toggle("selected", isSelected);
+    group.setAttribute("aria-pressed", String(isSelected));
   }
-  inspect(nodeViews.get(activeId ?? [...selected].at(-1)));
+  renderedSelection = new Set(selected);
+  const view = nodeViews.get(activeId ?? [...selected].at(-1));
+  if (forceInspect || view !== inspectedView) inspect(view);
 }
 
 function registerNode(id, view) {
@@ -224,6 +266,7 @@ function registerNode(id, view) {
   const { group } = view;
   group.setAttribute("tabindex", "0");
   group.setAttribute("role", "button");
+  group.setAttribute("aria-pressed", "false");
   group.setAttribute("data-id", id);
   group.addEventListener("click", (event) => {
     if (event.detail === 0) {
@@ -266,16 +309,26 @@ function updateConnection(connection) {
 }
 
 function moveNodes(origins, dx, dy) {
+  const affected = new Set();
   for (const [id, origin] of origins) {
     const view = nodeViews.get(id);
+    if (
+      view.position.x === origin.x + dx &&
+      view.position.y === origin.y + dy
+    ) {
+      continue;
+    }
     view.position.x = origin.x + dx;
     view.position.y = origin.y + dy;
     view.group.setAttribute(
       "transform",
       `translate(${view.position.x - view.initial.x} ${view.position.y - view.initial.y})`,
     );
+    for (const connection of connectionsByPosition.get(view.position) ?? []) {
+      affected.add(connection);
+    }
   }
-  connections.forEach(updateConnection);
+  affected.forEach(updateConnection);
 }
 
 function endGesture(cancel = false) {
@@ -297,8 +350,7 @@ function endGesture(cancel = false) {
   }
 }
 
-function graphPoint(event) {
-  const viewport = byId("canvas").getBoundingClientRect();
+function graphPoint(event, viewport) {
   if (!viewport.width || !viewport.height) return;
   const [x, y, width, height] = svg
     .getAttribute("viewBox")
@@ -312,7 +364,8 @@ function graphPoint(event) {
 
 function moveGesture(event) {
   if (!gesture || gesture.pointerId !== event.pointerId) return;
-  const point = graphPoint(event);
+  gesture.viewport ??= byId("canvas").getBoundingClientRect();
+  const point = graphPoint(event, gesture.viewport);
   if (!point) {
     endGesture(true);
     return;
@@ -384,7 +437,7 @@ function fit() {
 
 function changeZoom(factor) {
   endGesture();
-  zoom = Math.min(4, Math.max(0.25, zoom * factor));
+  zoom = Math.max(0.25, zoom * factor);
   fit();
 }
 
@@ -396,7 +449,9 @@ function render(graph) {
   tensorLabels = [];
   nodeViews = new Map();
   selected = new Set();
-  connections = [];
+  renderedSelection = new Set();
+  connectionsByPosition = new Map();
+  hasOperators = graph.nodes.length > 0;
   const tensors = new Set([
     ...graph.inputs,
     ...graph.outputs,
@@ -411,6 +466,7 @@ function render(graph) {
   const nodes = byId("nodes");
   edges.replaceChildren();
   nodes.replaceChildren();
+  const sizes = operatorSizes(graph.nodes);
   const producers = new Map();
   const positions = new Map();
   for (const node of graph.nodes) {
@@ -428,7 +484,7 @@ function render(graph) {
   layoutBounds = bounds;
   graph.nodes.forEach((node, index) => {
     positions.set(node.id, {
-      x: 100 + Math.random() * (bounds.width - 200),
+      x: randomNodeX(sizes.get(node.id).width / 2),
       y: 180 + index * 145,
     });
   });
@@ -452,15 +508,8 @@ function render(graph) {
         rx: 9,
       }),
     );
-    label(
-      group,
-      position.x,
-      position.y - 12,
-      output ? "OUTPUT" : "INPUT",
-      "port-type",
-    );
-    label(group, position.x, position.y + 3, shortName(name, 16), "port-name");
-    tensorLabel(group, position.x, position.y + 18, name, 18);
+    label(group, position.x, position.y - 3, shortName(name, 16), "port-name");
+    tensorLabel(group, position.x, position.y + 15, name, 18);
     registerNode(`${output ? "output" : "input"}-${index}`, {
       port: { name, output },
       group,
@@ -496,11 +545,17 @@ function render(graph) {
       text,
       information,
     };
-    connections.push(connection);
+    for (const position of new Set([from, to])) {
+      if (!connectionsByPosition.has(position)) {
+        connectionsByPosition.set(position, new Set());
+      }
+      connectionsByPosition.get(position).add(connection);
+    }
     updateConnection(connection);
   };
   for (const node of graph.nodes) {
     const position = positions.get(node.id);
+    const size = sizes.get(node.id);
     const group = element("g", {
       class: "graph-node",
       "aria-label": `${node.opType}: ${node.name}`,
@@ -508,33 +563,34 @@ function render(graph) {
     group.append(
       element("title", {}, `${node.name} (${node.opType})`),
       element("rect", {
-        x: position.x - 80,
+        x: position.x - size.width / 2,
         y: position.y - 47,
-        width: 160,
+        width: size.width,
         height: 94,
         rx: 12,
       }),
     );
-    label(group, position.x, position.y - 23, "OPERATOR", "operator-tag");
-    label(
+    const typeLabel = label(
       group,
       position.x,
-      position.y + 3,
-      shortName(node.opType, 15),
+      position.y - 6,
+      node.opType,
       "operator-label",
     );
-    label(
+    typeLabel.style.fontSize = `${size.typeFontSize}px`;
+    const nameLabel = label(
       group,
       position.x,
-      position.y + 21,
-      shortName(node.name),
+      position.y + 14,
+      node.name,
       "operator-name",
     );
+    nameLabel.style.fontSize = `${size.nameFontSize}px`;
     if (node.outputs.length) {
       const information = tensorLabel(
         group,
         position.x,
-        position.y + 39,
+        position.y + 34,
         node.outputs,
         26,
       );
@@ -544,7 +600,7 @@ function render(graph) {
       node,
       group,
       position,
-      halfWidth: 80,
+      halfWidth: size.width / 2,
       halfHeight: 47,
     });
     nodes.append(group);
@@ -574,14 +630,15 @@ function render(graph) {
   fit();
   if (graph.nodes.length) selected.add(graph.nodes[0].id);
   updateTensorInformation(graph.tensors ?? []);
-  updateSelection();
+  updateSelection(undefined, true);
   refreshStatus(false);
   byId("refresh-positions").disabled = false;
 }
 
 svg.addEventListener("pointerdown", (event) => {
   if (event.button !== 0 || gesture || !svg.hasAttribute("viewBox")) return;
-  const start = graphPoint(event);
+  const viewport = byId("canvas").getBoundingClientRect();
+  const start = graphPoint(event, viewport);
   if (!start) return;
   const group = event.target.closest(".graph-node, .port");
   const additive = event.ctrlKey || event.metaKey || event.shiftKey;
@@ -612,6 +669,7 @@ svg.addEventListener("pointerdown", (event) => {
   }
   Object.assign(gesture, {
     start,
+    viewport,
     clientX: event.clientX,
     clientY: event.clientY,
     pointerId: event.pointerId,
