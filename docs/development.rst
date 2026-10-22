@@ -20,6 +20,12 @@ Command Palette to open the one-node demo.
 ``npm run watch`` watches TypeScript only; compile the native binding first,
 and rebuild it with ``npm run build:native`` after editing C++.
 
+The first native build downloads the published onnx-light C++ archive pinned
+in ``CMakeLists.txt`` and verifies its SHA-256 checksum. Only the Node-API binding
+is compiled; onnx-light is not rebuilt. The archive is reused from
+``build/native/``. The binding must match the extension host's OS and architecture,
+including Linux for Remote WSL.
+
 Tests and formatting
 --------------------
 
@@ -53,8 +59,8 @@ To regenerate them with the Python ``onnx-light`` package available:
 
    python3 test/models/generate_models.py
 
-The :doc:`symbolic transformer example <symbolic_example>` is generated
-separately with ``python3 examples/generate_tiny_llm.py``. Its bundled ONNX
+The bundled transformer example is generated separately with
+``python3 examples/generate_tiny_llm.py``. Its ONNX
 file is exercised directly by the native and extension tests. Initializer
 metadata tests also use external-file references whose payload files are
 intentionally absent, and more than eight connected initializers.

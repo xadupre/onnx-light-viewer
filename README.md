@@ -11,7 +11,7 @@ An interactive ONNX graph viewer for VS Code, using native onnx-light decoding.
 ## Quick start
 
 Requires Node.js 22+, npm, VS Code 1.96+ with `code` on `PATH`, CMake 3.24+,
-a C++20 compiler, and OpenMP/OpenSSL development packages.
+a C++20 compiler, and OpenSSL development packages.
 
 From a Bash terminal in this checkout:
 
@@ -26,10 +26,8 @@ close the development window and run `./start.sh` again.
 
 ## Documentation
 
-Sphinx documentation: [setup and usage](docs/getting_started.rst),
-[shape/type information and refresh](docs/shape_information.rst),
-[symbolic transformer example](docs/symbolic_example.rst),
-[native loading](docs/native_loading.rst), and
+Sphinx documentation: [getting started](docs/getting_started.rst),
+[implemented features and viewer controls](docs/features.rst), and
 [development, tests and documentation build](docs/development.rst).
 
 Licensed under [Apache-2.0](LICENSE).

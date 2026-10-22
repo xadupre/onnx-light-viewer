@@ -11,10 +11,8 @@ onnx-light; no model data is uploaded.
    Explore tensor shapes and inspect the selected node's parameters.
 
 .. toctree::
-   :maxdepth: 2
+   :maxdepth: 1
 
    getting_started
-   shape_information
-   symbolic_example
-   native_loading
+   features
    development
