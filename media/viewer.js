@@ -62,6 +62,11 @@ function fit() {
   );
 }
 
+function changeZoom(factor) {
+  zoom = Math.min(4, Math.max(0.25, zoom * factor));
+  fit();
+}
+
 function render(graph, isDemo) {
   byId("graph-name").textContent = graph.name;
   byId("model-badge").textContent = isDemo ? "DEMO MODEL" : "ONNX MODEL";
@@ -87,31 +92,22 @@ function render(graph, isDemo) {
   nodes.replaceChildren();
   const producers = new Map();
   const positions = new Map();
-  const levels = new Map();
-  const rows = new Map();
   for (const node of graph.nodes) {
     for (const output of node.outputs) producers.set(output, node.id);
   }
-  // ONNX stores graph nodes in topological order.
-  for (const node of graph.nodes) {
-    let level = 1;
-    for (const input of node.inputs) {
-      level = Math.max(level, (levels.get(producers.get(input)) ?? 0) + 1);
-    }
-    levels.set(node.id, level);
-    const row = rows.get(level) ?? 0;
-    rows.set(level, row + 1);
-    positions.set(node.id, { x: 70 + level * 230, y: 110 + row * 145 });
-  }
-  const lastLevel = Math.max(0, ...levels.values()) + 1;
+  graph.nodes.forEach((node, index) => {
+    positions.set(node.id, {
+      x: 300 + Math.random() * 460,
+      y: 110 + index * 145,
+    });
+  });
   bounds = {
-    width: 200 + lastLevel * 230,
+    width: 1060,
     height: Math.max(
       350,
       150 +
         Math.max(
-          1,
-          ...rows.values(),
+          graph.nodes.length,
           graph.inputs.length,
           graph.outputs.length,
         ) *
@@ -120,7 +116,7 @@ function render(graph, isDemo) {
   };
   const addPort = (name, index, output) => {
     const position = {
-      x: 70 + (output ? lastLevel : 0) * 230,
+      x: output ? bounds.width - 70 : 70,
       y: 110 + index * 145,
     };
     const group = element("g", { class: `port${output ? " output" : ""}` });
@@ -242,17 +238,24 @@ byId("open-another").addEventListener("click", () =>
   vscode.postMessage({ type: "open" }),
 );
 byId("zoom-in").addEventListener("click", () => {
-  zoom = Math.min(4, zoom * 1.25);
-  fit();
+  changeZoom(1.25);
 });
 byId("zoom-out").addEventListener("click", () => {
-  zoom = Math.max(0.25, zoom / 1.25);
-  fit();
+  changeZoom(1 / 1.25);
 });
 byId("zoom-fit").addEventListener("click", () => {
   zoom = 1;
   fit();
 });
+svg.addEventListener(
+  "wheel",
+  (event) => {
+    if (event.deltaY === 0) return;
+    event.preventDefault();
+    changeZoom(event.deltaY < 0 ? 1.25 : 1 / 1.25);
+  },
+  { passive: false },
+);
 window.addEventListener("message", (event) => {
   if (event.data?.type === "graph") {
     render(event.data.graph, event.data.isDemo);

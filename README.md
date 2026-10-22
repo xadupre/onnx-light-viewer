@@ -57,8 +57,10 @@ no ONNX runtime or Python installation is required.
 - Original SVG logo, dark graph canvas, and keyboard-accessible node inspector.
 - ONNX protobuf loading, operator connections, graph inputs/outputs, and
   initializer count.
-- Simple left-to-right layout for topologically ordered ONNX graphs.
-- Zoom in/out and fit-to-graph controls.
+- A random horizontal position for each operator on every model load; vertical
+  rows follow the node indices, with spacing to keep the nodes readable.
+- Zoom in/out using the buttons or mouse wheel over the graph, and a
+  fit-to-graph control. Zooming preserves the assigned node positions.
 
 This is a starting point, not yet a large-model renderer: the entire file is
 decoded in memory and every top-level operator is drawn. Tensor data, attributes,
@@ -73,6 +75,10 @@ npm test
 npm run format:check
 npm run watch
 ```
+
+The **Tests** GitHub Actions workflow runs the tests and formatting check on
+every pull request and every push to `main`. Results appear in the PR's
+**Checks** tab and the repository's **Actions** tab.
 
 The tests load [`test/models/relu.onnx`](test/models/relu.onnx), a small,
 valid ONNX model containing one Relu operator with float32 input/output tensors
