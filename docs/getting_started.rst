@@ -55,9 +55,13 @@ Choose **Open ONNX model** to select a model. Select an operator with the mouse,
 or focus it and press Enter or Space, to inspect its name, domain, inputs and
 outputs. Use the zoom buttons, the mouse wheel, or **Fit** to adjust the view.
 
+The graph flows from top to bottom: inputs above the operators, outputs below
+them, and connections attached to the top and bottom of each node. Operators
+have random horizontal positions on each model load; their vertical rows follow
+the node indices.
+
 The workspace fills the editor and adapts when it is resized. Resizing and
-zooming preserve node positions. Operators have random horizontal positions
-on each model load; their vertical rows follow the node indices.
+zooming preserve node positions.
 
 Opening an ``.onnx`` file directly in VS Code also uses the viewer. Choose
 **Reopen Editor With...** if another installed ONNX editor handles the file.

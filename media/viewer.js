@@ -15,9 +15,9 @@ function element(tag, attributes, text) {
   return node;
 }
 
-function label(parent, x, y, text, className) {
+function label(parent, x, y, text, className, anchor = "middle") {
   parent.append(
-    element("text", { x, y, class: className, "text-anchor": "middle" }, text),
+    element("text", { x, y, class: className, "text-anchor": anchor }, text),
   );
 }
 
@@ -92,29 +92,24 @@ function render(graph) {
   for (const node of graph.nodes) {
     for (const output of node.outputs) producers.set(output, node.id);
   }
+  bounds = {
+    width: Math.max(
+      500,
+      40 + Math.max(graph.inputs.length, graph.outputs.length) * 140,
+    ),
+    height: Math.max(650, 250 + graph.nodes.length * 145),
+  };
   graph.nodes.forEach((node, index) => {
     positions.set(node.id, {
-      x: 300 + Math.random() * 460,
-      y: 110 + index * 145,
+      x: 100 + Math.random() * (bounds.width - 200),
+      y: 180 + index * 145,
     });
   });
-  bounds = {
-    width: 1060,
-    height: Math.max(
-      350,
-      150 +
-        Math.max(
-          graph.nodes.length,
-          graph.inputs.length,
-          graph.outputs.length,
-        ) *
-          145,
-    ),
-  };
   const addPort = (name, index, output) => {
+    const count = output ? graph.outputs.length : graph.inputs.length;
     const position = {
-      x: output ? bounds.width - 70 : 70,
-      y: 110 + index * 145,
+      x: ((index + 1) * bounds.width) / (count + 1),
+      y: output ? bounds.height - 60 : 60,
     };
     const group = element("g", { class: `port${output ? " output" : ""}` });
     group.append(
@@ -143,21 +138,22 @@ function render(graph) {
   );
   const connect = (from, to, name, fromOperator, toOperator) => {
     if (!from || !to) return;
-    const x1 = from.x + (fromOperator ? 80 : 60);
-    const x2 = to.x - (toOperator ? 80 : 60);
-    const middle = (x1 + x2) / 2;
+    const y1 = from.y + (fromOperator ? 47 : 26);
+    const y2 = to.y - (toOperator ? 47 : 26);
+    const middle = (y1 + y2) / 2;
     edges.append(
       element("path", {
         class: "edge",
-        d: `M${x1},${from.y} C${middle},${from.y} ${middle},${to.y} ${x2},${to.y}`,
+        d: `M${from.x},${y1} C${from.x},${middle} ${to.x},${middle} ${to.x},${y2}`,
       }),
     );
     label(
       edges,
+      (from.x + to.x) / 2 + 10,
       middle,
-      (from.y + to.y) / 2 - 10,
       shortName(name, 15),
       "tensor-label",
+      "start",
     );
   };
   for (const node of graph.nodes) {

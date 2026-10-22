@@ -140,14 +140,90 @@ function nodePositions(document) {
   }));
 }
 
+test("renders a portrait graph with inputs above operators and outputs below", (t) => {
+  const { document, load } = openViewer(t);
+  load(demoGraph);
+  const box = (selector) => {
+    const rect = document.querySelector(selector);
+    return Object.fromEntries(
+      ["x", "y", "width", "height"].map((key) => [
+        key,
+        Number(rect.getAttribute(key)),
+      ]),
+    );
+  };
+  const input = box(".port:not(.output) rect");
+  const operator = box(".graph-node rect");
+  const output = box(".port.output rect");
+  assert.ok(input.y + input.height < operator.y);
+  assert.ok(operator.y + operator.height < output.y);
+  const boxes = [input, operator, output];
+  const contentWidth =
+    Math.max(...boxes.map((rect) => rect.x + rect.width)) -
+    Math.min(...boxes.map((rect) => rect.x));
+  assert.ok(output.y + output.height - input.y > contentWidth);
+  const edges = document.querySelectorAll(".edge");
+  for (const [index, from, to] of [
+    [0, input, operator],
+    [1, operator, output],
+  ]) {
+    const points = edges[index]
+      .getAttribute("d")
+      .match(/-?\d+(?:\.\d+)?(?:e[+-]?\d+)?/gi)
+      .map(Number);
+    assert.deepEqual(points.slice(0, 2), [
+      from.x + from.width / 2,
+      from.y + from.height,
+    ]);
+    assert.deepEqual(points.slice(6), [to.x + to.width / 2, to.y]);
+    assert.equal(points[2], points[0]);
+    assert.equal(points[4], points[6]);
+    assert.equal(points[3], points[5]);
+  }
+});
+
+test("spreads multiple graph ports across top and bottom rows without overlap", (t) => {
+  const { document, load, resize } = openViewer(t);
+  const inputs = Array.from({ length: 8 }, (_, index) => `input_${index}`);
+  load({
+    name: "Multiple graph ports",
+    nodes: [],
+    inputs,
+    outputs: inputs.slice(0, 5),
+    initializerCount: 0,
+  });
+  resize(360, 640);
+  const [x, y, width, height] = document
+    .getElementById("graph")
+    .getAttribute("viewBox")
+    .split(" ")
+    .map(Number);
+  for (const selector of [".port:not(.output) rect", ".port.output rect"]) {
+    const ports = Array.from(document.querySelectorAll(selector));
+    let previousRight = -Infinity;
+    for (const port of ports) {
+      const left = Number(port.getAttribute("x"));
+      const top = Number(port.getAttribute("y"));
+      const right = left + Number(port.getAttribute("width"));
+      const bottom = top + Number(port.getAttribute("height"));
+      assert.equal(top, Number(ports[0].getAttribute("y")));
+      assert.ok(left > previousRight);
+      assert.ok(left >= x && right <= x + width);
+      assert.ok(top >= y && bottom <= y + height);
+      previousRight = right;
+    }
+  }
+  assert.equal(document.querySelectorAll(".edge").length, 5);
+});
+
 test("assigns random horizontal positions and node-index rows on each model load", (t) => {
   const { document, load } = openViewer(t);
   const model = chainGraph();
   load(model);
   const positions = nodePositions(document);
   positions.forEach((position, index) => {
-    assert.equal(position.y, 110 + index * 145);
-    assert.ok(position.x >= 300 && position.x < 760);
+    assert.equal(position.y, 180 + index * 145);
+    assert.ok(position.x >= 100 && position.x < 400);
   });
   assert.ok(new Set(positions.map((position) => position.x)).size > 1);
   assert.equal(document.querySelectorAll(".edge").length, 7);
