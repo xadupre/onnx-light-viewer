@@ -30,6 +30,7 @@ async function openExtension(
   let client;
   let huggingFaceInput;
   let cancelDownload = false;
+  let modelSource = "local";
   const disposable = () => ({ dispose() {} });
   const root = path.resolve(__dirname, "..");
   const webview = {
@@ -103,6 +104,8 @@ async function openExtension(
         ),
       showQuickPick: async (items, options) => {
         picks.push({ items, options });
+        if (options.title === "Open an ONNX model")
+          return items.find(({ id }) => id === modelSource);
         return backendSelection === undefined
           ? undefined
           : {
@@ -169,6 +172,7 @@ async function openExtension(
     showLogs: () => commands.get("onnxLightViewer.showLogs")(),
     receive: (message) => receive(message),
     open: async (name) => {
+      modelSource = "local";
       selection = [{ path: path.join(__dirname, "models", name) }];
       await receive({ type: "open" });
     },
@@ -177,9 +181,14 @@ async function openExtension(
       await receive({ type: "open-backend-test" });
     },
     openHuggingFace: async (input, cancel = false) => {
+      modelSource = "huggingface";
       huggingFaceInput = input;
       cancelDownload = cancel;
-      await receive({ type: "open-huggingface" });
+      await receive({ type: "open" });
+    },
+    cancelOpen: async () => {
+      modelSource = undefined;
+      await receive({ type: "open" });
     },
   };
 }
@@ -202,6 +211,10 @@ test("opens a cached Hugging Face model and preserves the display on invalid inp
     storage,
   );
   await extension.openHuggingFace(url.replace("/resolve/", "/blob/"));
+  assert.deepEqual(
+    extension.picks.at(-1).items.map(({ label }) => label),
+    ["Local file", "Hugging Face"],
+  );
   const graph = extension.messages.at(-1).graph;
   assert.ok(graph.nodes.some(({ opType }) => opType === "Reshape"));
   assert.ok(
@@ -221,12 +234,15 @@ test("opens a cached Hugging Face model and preserves the display on invalid inp
   const errors = extension.errors.length;
   await extension.openHuggingFace(undefined);
   await extension.openHuggingFace(url, true);
+  await extension.cancelOpen();
+  await extension.receive({ type: "ready" });
+  assert.equal(extension.messages.at(-1).graph.name, graph.name);
   assert.equal(extension.errors.length, errors);
   assert.equal(
     extension.logs.filter((line) =>
-      line.includes("[CANCELLED] Open Hugging Face model"),
+      line.includes("[CANCELLED] Open ONNX model"),
     ).length,
-    2,
+    3,
   );
 });
 test("keeps operation logs quiet and exposes real native exception recovery in Status", async (t) => {

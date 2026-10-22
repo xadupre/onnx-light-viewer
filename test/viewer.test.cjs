@@ -156,16 +156,17 @@ test("shows the compiled onnx-light release before loading a graph and after mod
   assert.equal(release.textContent, `onnx-light ${version}`);
 });
 
-test("requests Hugging Face loading, keeps tabs usable and clears busy state after cancellation or failure", (t) => {
+test("requests model opening without a separate Hugging Face button and clears busy state after cancellation or failure", (t) => {
   const { document, window, messages, load } = openViewer(t);
   load(demoGraph);
-  const button = document.getElementById("open-huggingface");
+  assert.equal(document.getElementById("open-huggingface"), null);
+  const button = document.getElementById("open-model");
   button.click();
   const request = messages.at(-1);
-  assert.equal(request.type, "open-huggingface");
+  assert.equal(request.type, "open");
   assert.equal(button.disabled, true);
-  assert.equal(document.getElementById("open-model").disabled, true);
   document.getElementById("logs-tab").click();
+  assert.equal(document.getElementById("logs-tab").textContent, "Logs");
   assert.equal(document.getElementById("logs-view").hidden, false);
   window.dispatchEvent(
     new window.MessageEvent("message", {
@@ -174,13 +175,14 @@ test("requests Hugging Face loading, keeps tabs usable and clears busy state aft
         entry: {
           id: request.actionId,
           timestamp: new Date().toISOString(),
-          action: "Open Hugging Face model",
+          action: "Open ONNX model",
           status: "CANCELLED",
         },
       },
     }),
   );
   assert.equal(button.disabled, false);
+  assert.equal(document.getElementById("logs-tab").textContent, "Logs");
   document.getElementById("model-tab").click();
   button.click();
   window.dispatchEvent(

@@ -271,11 +271,40 @@ async function configurePanel(
           await panel.webview.postMessage({ type: "show-logs" });
           showLogsRequested = false;
         }
-      } else if (message?.type === "open-huggingface") {
+      } else if (message?.type === "open") {
         try {
           const loaded = await log.run(
-            "Open Hugging Face model",
+            "Open ONNX model",
             async (id) => {
+              const location = await vscode.window.showQuickPick(
+                [
+                  { id: "local", label: "Local file" },
+                  { id: "huggingface", label: "Hugging Face" },
+                ],
+                {
+                  title: "Open an ONNX model",
+                  placeHolder: "Choose where to open the model from",
+                },
+              );
+              if (!location) {
+                log.record("CANCELLED", "Open ONNX model", id);
+                return;
+              }
+              if (location.id === "local") {
+                const selection = await vscode.window.showOpenDialog({
+                  canSelectMany: false,
+                  filters: { "ONNX models": ["onnx"] },
+                  openLabel: "Open ONNX graph",
+                });
+                if (!selection?.[0]) {
+                  log.record("CANCELLED", "Open ONNX model", id);
+                  return;
+                }
+                return {
+                  model: await readGraph(selection[0], log),
+                  name: posix.basename(selection[0].path),
+                };
+              }
               const input = await vscode.window.showInputBox({
                 title: "Open a Hugging Face ONNX model",
                 prompt:
@@ -295,7 +324,7 @@ async function configurePanel(
                 },
               });
               if (input === undefined) {
-                log.record("CANCELLED", "Open Hugging Face model", id);
+                log.record("CANCELLED", "Open ONNX model", id);
                 return;
               }
               const source = parseHuggingFaceUrl(input);
@@ -332,7 +361,7 @@ async function configurePanel(
                       error instanceof Error &&
                       error.name === "AbortError"
                     ) {
-                      log.record("CANCELLED", "Open Hugging Face model", id);
+                      log.record("CANCELLED", "Open ONNX model", id);
                       return;
                     }
                     throw error;
@@ -355,7 +384,7 @@ async function configurePanel(
             error: detail,
           });
           await vscode.window.showErrorMessage(
-            `Could not open Hugging Face model: ${detail}`,
+            `Could not open ONNX model: ${detail}`,
           );
         }
       } else if (message?.type === "open-backend-test") {
@@ -416,38 +445,6 @@ async function configurePanel(
         model = loaded.model;
         panel.title = `ONNX: ${loaded.name}`;
         await sendGraph();
-      } else if (message?.type === "open") {
-        try {
-          const loaded = await log.run(
-            "Open ONNX model",
-            async (id) => {
-              const selection = await vscode.window.showOpenDialog({
-                canSelectMany: false,
-                filters: { "ONNX models": ["onnx"] },
-                openLabel: "Open ONNX graph",
-              });
-              if (!selection?.[0]) {
-                log.record("CANCELLED", "Open ONNX model", id);
-                return;
-              }
-              const loadedModel = await readGraph(selection[0], log);
-              return { loadedModel, uri: selection[0] };
-            },
-            message.actionId,
-          );
-          if (!loaded) return;
-          model = loaded.loadedModel;
-          panel.title = `ONNX: ${posix.basename(loaded.uri.path)}`;
-          await sendGraph();
-        } catch (error) {
-          await panel.webview.postMessage({
-            type: "load-error",
-            error: error instanceof Error ? error.message : String(error),
-          });
-          await vscode.window.showErrorMessage(
-            `Could not open ONNX model: ${error instanceof Error ? error.message : String(error)}`,
-          );
-        }
       } else if (message?.type === "navigate") {
         let graph: Graph;
         try {

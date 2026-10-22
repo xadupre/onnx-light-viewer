@@ -5,7 +5,8 @@ Opening models
    :alt: Open ONNX model button in the viewer toolbar.
    :width: 200px
 
-* **Open ONNX model** loads a local file. Opening an ``.onnx`` file in VS Code
+* **Open ONNX model** offers **Local file** or **Hugging Face**.
+  Opening an ``.onnx`` file in VS Code
   also uses the viewer; use **Reopen Editor With...** if another editor handles it.
 * **ONNX Light Viewer: Open Graph** opens the bundled Relu demo.
   **ONNX Light Viewer: Open Symbolic Transformer Example** opens a bundled,
@@ -16,7 +17,7 @@ Opening models
 Hugging Face models
 -------------------
 
-Choose **Hugging Face** in the viewer toolbar and paste the URL of a public
+Choose **Open ONNX model**, then **Hugging Face**, and paste the URL of a public
 ``.onnx`` file. Both the file page (``/blob/``) and direct download
 (``/resolve/``) links are accepted, including nested paths and pinned revisions.
 For example:

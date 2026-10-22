@@ -19,8 +19,8 @@ From a Bash terminal in the repository:
    ./start.sh
 
 This builds the extension and opens a VS Code development window with a small
-Relu model. Choose **Open ONNX model** to open your own ``.onnx`` file.
-Choose **Hugging Face** to download and cache a public ONNX file by URL.
+Relu model. Choose **Open ONNX model**, then **Local file** to open your own
+``.onnx`` file or **Hugging Face** to download and cache a public ONNX file by URL.
 After changing the application, close that window and run ``./start.sh`` again.
 
 In WSL, use the desktop VS Code ``bin`` directory on ``PATH``, not the remote

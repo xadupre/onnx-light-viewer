@@ -231,14 +231,12 @@ replies with ``panel.webview.postMessage``.
      - Retain a timestamped explicit operation or viewer error.
      - ``log-entry``.
    * - ``open``
-     - Choose and load a local model.
-     - ``graph`` on success; cancellation leaves the view unchanged.
+     - Choose a local file or a public Hugging Face URL; load the file or
+       download/reuse the persistent cache.
+     - ``graph`` or ``load-error``; cancellation leaves the view unchanged.
    * - ``open-backend-test``
      - Search the released native catalog and load a case.
      - ``graph`` on success; cancellation leaves the view unchanged.
-   * - ``open-huggingface``
-     - Prompt for a public file URL, download or reuse the cache, then load it.
-     - ``graph`` or ``load-error``; cancellation leaves the view unchanged.
    * - ``navigate`` with ``path``
      - Project the selected graph and discard cached metadata.
      - ``graph`` or ``navigation-error``.
