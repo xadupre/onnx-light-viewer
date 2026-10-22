@@ -6,6 +6,7 @@ const svg = byId("graph");
 let bounds = { x: 0, y: 0, width: 800, height: 350 };
 let layoutBounds = bounds;
 let zoom = 1;
+let pan = { x: 0, y: 0 };
 let nodeViews = new Map();
 let selected = new Set();
 let connections = [];
@@ -241,7 +242,7 @@ function fit() {
   const height = viewport.height * scale;
   svg.setAttribute(
     "viewBox",
-    `${bounds.x + (bounds.width - width) / 2} ${bounds.y + (bounds.height - height) / 2} ${width} ${height}`,
+    `${bounds.x + (bounds.width - width) / 2 + pan.x} ${bounds.y + (bounds.height - height) / 2 + pan.y} ${width} ${height}`,
   );
 }
 
@@ -409,6 +410,7 @@ function render(graph) {
     );
   });
   zoom = 1;
+  pan = { x: 0, y: 0 };
   fit();
   if (graph.nodes.length) selected.add(graph.nodes[0].id);
   updateSelection();
@@ -498,14 +500,41 @@ byId("zoom-fit").addEventListener("click", () => {
   endGesture();
   reframe();
   zoom = 1;
+  pan = { x: 0, y: 0 };
   fit();
 });
 svg.addEventListener(
   "wheel",
   (event) => {
-    if (event.deltaY === 0) return;
+    if (event.ctrlKey) {
+      if (event.deltaY === 0) return;
+      event.preventDefault();
+      changeZoom(event.deltaY < 0 ? 1.25 : 1 / 1.25);
+      return;
+    }
+    if ((!event.deltaX && !event.deltaY) || !svg.hasAttribute("viewBox"))
+      return;
+    const viewport = byId("canvas").getBoundingClientRect();
+    if (!viewport.width || !viewport.height) return;
     event.preventDefault();
-    changeZoom(event.deltaY < 0 ? 1.25 : 1 / 1.25);
+    endGesture();
+    const [, , width, height] = svg
+      .getAttribute("viewBox")
+      .split(" ")
+      .map(Number);
+    const unitX =
+      event.deltaMode === 2 ? viewport.width : event.deltaMode === 1 ? 16 : 1;
+    const unitY =
+      event.deltaMode === 2 ? viewport.height : event.deltaMode === 1 ? 16 : 1;
+    pan.x +=
+      ((event.shiftKey ? event.deltaX || event.deltaY : event.deltaX) *
+        unitX *
+        width) /
+      viewport.width;
+    if (!event.shiftKey) {
+      pan.y += (event.deltaY * unitY * height) / viewport.height;
+    }
+    fit();
   },
   { passive: false },
 );

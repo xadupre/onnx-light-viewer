@@ -298,7 +298,7 @@ test("assigns random horizontal positions and node-index rows on each model load
   );
 });
 
-test("zooms in and out with buttons and the wheel without rearranging the graph", (t) => {
+test("zooms in and out with buttons and Ctrl+wheel without rearranging the graph", (t) => {
   const { document, window, load } = openViewer(t);
   load(chainGraph());
   const positions = nodePositions(document);
@@ -311,7 +311,11 @@ test("zooms in and out with buttons and the wheel without rearranging the graph"
   document.getElementById("zoom-out").click();
   assert.equal(graph.getAttribute("viewBox"), initialViewBox);
   const wheel = (deltaY) => {
-    const event = new window.WheelEvent("wheel", { deltaY, cancelable: true });
+    const event = new window.WheelEvent("wheel", {
+      deltaY,
+      ctrlKey: true,
+      cancelable: true,
+    });
     graph.dispatchEvent(event);
     return event;
   };
@@ -327,6 +331,96 @@ test("zooms in and out with buttons and the wheel without rearranging the graph"
   document.getElementById("zoom-fit").click();
   assert.equal(graph.getAttribute("viewBox"), initialViewBox);
   assert.deepEqual(nodePositions(document), positions);
+});
+
+test("wheel scrolling pans vertically and Shift+wheel pans horizontally without zooming", (t) => {
+  const { document, window, load, resize } = openViewer(t);
+  load(chainGraph());
+  resize(900, 600);
+  const graph = document.getElementById("graph");
+  const positions = nodePositions(document);
+  const viewBox = () => graph.getAttribute("viewBox").split(" ").map(Number);
+  for (const [options, dx, dy] of [
+    [{ deltaY: 80 }, 0, 80],
+    [{ deltaY: -80, shiftKey: true }, -80, 0],
+    [{ deltaX: -40 }, -40, 0],
+    [{ deltaX: 25, deltaY: 100, shiftKey: true }, 25, 0],
+    [{ deltaY: 2, deltaMode: 1 }, 0, 32],
+    [{ deltaY: 1, deltaMode: 2 }, 0, 600],
+    [{ deltaY: 1, deltaMode: 2, shiftKey: true }, 900, 0],
+  ]) {
+    document.getElementById("zoom-fit").click();
+    document.getElementById("zoom-in").click();
+    const before = viewBox();
+    const event = new window.WheelEvent("wheel", {
+      ...options,
+      cancelable: true,
+    });
+    graph.dispatchEvent(event);
+    const after = viewBox();
+    assert.equal(event.defaultPrevented, true);
+    assert.deepEqual(after.slice(2), before.slice(2));
+    assert.ok(Math.abs(after[0] - before[0] - (dx * before[2]) / 900) < 1e-9);
+    assert.ok(Math.abs(after[1] - before[1] - (dy * before[3]) / 600) < 1e-9);
+  }
+  const before = graph.getAttribute("viewBox");
+  const empty = new window.WheelEvent("wheel", { cancelable: true });
+  graph.dispatchEvent(empty);
+  assert.equal(empty.defaultPrevented, false);
+  assert.equal(graph.getAttribute("viewBox"), before);
+  assert.deepEqual(nodePositions(document), positions);
+});
+
+test("panning survives zoom and resize, supports dragging, and resets on Fit or model load", (t) => {
+  const { document, window, load, resize, pointer } = openViewer(t);
+  load(chainGraph());
+  resize(900, 600);
+  const graph = document.getElementById("graph");
+  const viewBox = () => graph.getAttribute("viewBox").split(" ").map(Number);
+  const center = () => {
+    const [x, y, width, height] = viewBox();
+    return [x + width / 2, y + height / 2];
+  };
+  const initialCenter = center();
+  document.getElementById("zoom-in").click();
+  graph.dispatchEvent(
+    new window.WheelEvent("wheel", { deltaY: 80, shiftKey: true }),
+  );
+  graph.dispatchEvent(new window.WheelEvent("wheel", { deltaY: 40 }));
+  const pannedCenter = center();
+  assert.notDeepEqual(pannedCenter, initialCenter);
+  document.getElementById("zoom-in").click();
+  resize(600, 900);
+  center().forEach((value, index) =>
+    assert.ok(Math.abs(value - pannedCenter[index]) < 1e-9),
+  );
+  const before = nodePositions(document);
+  pointer(
+    document.querySelector(".graph-node"),
+    "pointerdown",
+    before[0].x,
+    before[0].y,
+  );
+  pointer(graph, "pointerup", 250, before[0].y + 20);
+  assertMoved(before, nodePositions(document), [0], 250 - before[0].x, 20);
+  document.getElementById("zoom-fit").click();
+  center().forEach((value, index) =>
+    assert.ok(Math.abs(value - initialCenter[index]) < 1e-9),
+  );
+  const fitted = graph.getAttribute("viewBox");
+  graph.dispatchEvent(
+    new window.WheelEvent("wheel", {
+      deltaY: -100,
+      ctrlKey: true,
+      shiftKey: true,
+    }),
+  );
+  assert.ok(viewBox()[2] < Number(fitted.split(" ")[2]));
+  graph.dispatchEvent(
+    new window.WheelEvent("wheel", { deltaY: 100, shiftKey: true }),
+  );
+  load(chainGraph());
+  assert.equal(graph.getAttribute("viewBox"), fitted);
 });
 
 test("fits resized viewports without resetting zoom or rearranging nodes", (t) => {

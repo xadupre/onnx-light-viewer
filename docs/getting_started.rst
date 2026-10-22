@@ -53,7 +53,10 @@ Using the viewer
 
 Choose **Open ONNX model** to select a model. Select an operator with the mouse,
 or focus it and press Enter or Space, to inspect its name, domain, inputs and
-outputs. Use the zoom buttons, the mouse wheel, or **Fit** to adjust the view.
+outputs. Use the zoom buttons or hold Ctrl while scrolling the mouse wheel
+to zoom in and out. Scrolling without Ctrl moves the view vertically;
+Shift+wheel moves it horizontally. Horizontal trackpad scrolling is also
+supported. **Fit** recenters the graph and resets zoom and scrolling.
 
 The graph flows from top to bottom: inputs above the operators, outputs below
 them, and connections attached to the top and bottom of each node. Operators
