@@ -2,9 +2,9 @@ Native model loading
 ====================
 
 The extension host loads a Node-API 8 C++ binding linked to onnx-light's
-``onnx_proto``, ``onnx_core`` and ``onnx_op`` libraries. It does not use the npm
-``onnx-proto`` package, protobufjs, upstream ``onnx``, a Python process, or a
-custom ONNX decoder.
+``onnx_proto``, ``onnx_core``, ``onnx_op`` and ``onnx_shape`` libraries. It does
+not use the npm ``onnx-proto`` package, protobufjs, upstream ``onnx``, a Python
+process, or a custom ONNX decoder.
 
 Published library
 -----------------
@@ -24,6 +24,10 @@ Operator documentation and attribute defaults come from the released
 newest schema whose ``since_version`` does not exceed the model's imported
 opset. Missing schemas or documentation simply disable the **Doc** button.
 No external documentation service is used.
+
+The refresh action registers the released ``onnx_shapes`` algorithms and calls
+``core::shapes::InferShapesModel``. See :doc:`shape_information` for the
+displayed metadata, refresh behavior and inference limitations.
 
 Extension host compatibility
 ----------------------------

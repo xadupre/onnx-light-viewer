@@ -1,43 +1,51 @@
 import * as vscode from "vscode";
 import { randomBytes } from "node:crypto";
 import { posix } from "node:path";
-import { decodeGraph, demoGraph, Graph } from "./graph";
+import { loadModel, Graph, NativeModel } from "./graph";
 import { webviewHtml } from "./webview";
 
 const viewType = "onnxLightViewer.graph";
 
+interface LoadedModel {
+  graph: Graph;
+  native: NativeModel;
+}
+
 export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
-    vscode.commands.registerCommand("onnxLightViewer.open", () => {
+    vscode.commands.registerCommand("onnxLightViewer.open", async () => {
+      const model = await readGraph(
+        vscode.Uri.joinPath(context.extensionUri, "media", "relu.onnx"),
+      );
       const panel = vscode.window.createWebviewPanel(
         viewType,
         "ONNX Light Viewer",
         vscode.ViewColumn.One,
         { enableScripts: true },
       );
-      configurePanel(context, panel, demoGraph);
+      configurePanel(context, panel, model);
     }),
     vscode.window.registerCustomEditorProvider(viewType, {
       openCustomDocument: (uri) => ({ uri, dispose() {} }),
       resolveCustomEditor: async (document, panel) => {
-        const graph = await readGraph(document.uri);
-        configurePanel(context, panel, graph);
+        const model = await readGraph(document.uri);
+        configurePanel(context, panel, model);
       },
     }),
   );
 }
 
-async function readGraph(uri: vscode.Uri): Promise<Graph> {
-  return decodeGraph(
-    await vscode.workspace.fs.readFile(uri),
-    posix.basename(uri.path),
-  );
+async function readGraph(uri: vscode.Uri): Promise<LoadedModel> {
+  const bytes = await vscode.workspace.fs.readFile(uri);
+  const fileName = posix.basename(uri.path);
+  const native = loadModel(bytes, fileName);
+  return { graph: native.graph(), native };
 }
 
 function configurePanel(
   context: vscode.ExtensionContext,
   panel: vscode.WebviewPanel,
-  initialGraph: Graph,
+  initialModel: LoadedModel,
 ): void {
   const mediaRoot = vscode.Uri.joinPath(context.extensionUri, "media");
   panel.webview.options = {
@@ -45,8 +53,9 @@ function configurePanel(
     localResourceRoots: [mediaRoot],
   };
   panel.iconPath = vscode.Uri.joinPath(mediaRoot, "logo.svg");
-  let graph = initialGraph;
-  const sendGraph = () => panel.webview.postMessage({ type: "graph", graph });
+  let model = initialModel;
+  const sendGraph = () =>
+    panel.webview.postMessage({ type: "graph", graph: model.graph });
   const messages = panel.webview.onDidReceiveMessage(
     async (message: { type?: string } | null) => {
       if (message?.type === "ready") {
@@ -58,19 +67,39 @@ function configurePanel(
           openLabel: "Open ONNX graph",
         });
         if (selection?.[0]) {
-          let loadedGraph: Graph;
+          let loadedModel: LoadedModel;
           try {
-            loadedGraph = await readGraph(selection[0]);
+            loadedModel = await readGraph(selection[0]);
           } catch (error) {
             await vscode.window.showErrorMessage(
               `Could not open ONNX model: ${error instanceof Error ? error.message : String(error)}`,
             );
             return;
           }
-          graph = loadedGraph;
+          model = loadedModel;
           panel.title = `ONNX: ${posix.basename(selection[0].path)}`;
           await sendGraph();
         }
+      } else if (message?.type === "refresh-shapes") {
+        let refreshed: Graph;
+        try {
+          refreshed = model.native.graph(true);
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error);
+          await panel.webview.postMessage({
+            type: "shape-error",
+            error: detail,
+          });
+          await vscode.window.showErrorMessage(
+            `Could not infer ONNX shapes/types: ${detail}`,
+          );
+          return;
+        }
+        model.graph = refreshed;
+        await panel.webview.postMessage({
+          type: "shape-info",
+          tensors: refreshed.tensors,
+        });
       }
     },
   );

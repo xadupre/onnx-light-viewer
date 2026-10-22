@@ -1,4 +1,5 @@
 from pathlib import Path
+from struct import pack
 
 from onnx_light.onnx import ModelProto, TensorProto, checker, helper, save_model
 
@@ -21,6 +22,7 @@ model = helper.make_model(
 )
 checker.check_model(model)
 save_model(model, Path(__file__).with_name("relu.onnx"))
+save_model(model, Path(__file__).parents[2] / "media" / "relu.onnx")
 
 weight = helper.make_tensor("weight", TensorProto.FLOAT, [1], [1.0])
 sparse = helper.make_sparse_tensor(
@@ -68,6 +70,11 @@ missing_operator = helper.make_model(
 )
 save_model(missing_operator, Path(__file__).with_name("missing-operator.onnx"))
 
+parameter_sparse = helper.make_sparse_tensor(
+    helper.make_tensor("preview", TensorProto.FLOAT, [12], list(range(12))),
+    helper.make_tensor("indices", TensorProto.INT64, [12], list(range(12))),
+    [12],
+)
 parameter_graph = helper.make_graph(
     [
         helper.make_node(
@@ -85,6 +92,9 @@ parameter_graph = helper.make_graph(
             labels=["left", "right"],
             value=helper.make_tensor("constant", TensorProto.INT64, [2], [3, 7]),
             long_list=list(range(2000)),
+            long_floats=[float(index) for index in range(12)],
+            long_strings=[f"label{index}" for index in range(12)],
+            sparse_value=parameter_sparse,
         ),
     ],
     "Operator parameters",
@@ -116,3 +126,44 @@ for version in (11, 13):
     )
     checker.check_model(softmax)
     save_model(softmax, Path(__file__).with_name(f"softmax-{version}.onnx"))
+
+inference = helper.make_model(
+    helper.make_graph(
+        [
+            helper.make_node("Add", ["x", "bias"], ["hidden"]),
+            helper.make_node("Reshape", ["hidden", "target"], ["reshaped"]),
+            helper.make_node("Transpose", ["reshaped"], ["transposed"], perm=[0, 2, 1]),
+            helper.make_node("Cast", ["transposed"], ["y"], to=TensorProto.INT64),
+        ],
+        "Shape inference",
+        [helper.make_tensor_value_info("x", TensorProto.FLOAT, ["N", 3])],
+        [helper.make_tensor_value_info("y", TensorProto.INT64, ["N", 1, 3])],
+        initializer=[
+            helper.make_tensor("bias", TensorProto.FLOAT, [3], [0.0, 0.0, 0.0]),
+            helper.make_tensor(
+                "target", TensorProto.INT64, [3], pack("<qqq", 0, 3, 1), raw=True
+            ),
+        ],
+    ),
+    ir_version=9,
+    opset_imports=[helper.make_opsetid("", 13)],
+)
+checker.check_model(inference)
+save_model(inference, Path(__file__).with_name("inference.onnx"))
+
+metadata = helper.make_model(
+    helper.make_graph(
+        [],
+        "Tensor metadata",
+        [
+            helper.make_tensor_value_info("scalar", TensorProto.FLOAT, []),
+            helper.make_tensor_value_info("zero", TensorProto.INT64, [0, "N", None]),
+            helper.make_tensor_value_info("unknown_rank", TensorProto.FLOAT, None),
+            helper.make_tensor_sequence_value_info("sequence", TensorProto.FLOAT, [2]),
+        ],
+        [],
+    ),
+    ir_version=9,
+    opset_imports=[helper.make_opsetid("", 13)],
+)
+save_model(metadata, Path(__file__).with_name("metadata.onnx"))

@@ -25,6 +25,7 @@ close the development window and run `./start.sh` again.
 ## Documentation
 
 Sphinx documentation: [setup and usage](docs/getting_started.rst),
+[shape/type information and refresh](docs/shape_information.rst),
 [native loading](docs/native_loading.rst), and
 [development, tests and documentation build](docs/development.rst).
 

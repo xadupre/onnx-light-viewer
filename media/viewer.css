@@ -75,6 +75,45 @@ p {
   display: flex;
   align-items: center;
   gap: 10px;
+  flex-wrap: wrap;
+}
+#repository-link {
+  display: flex;
+  border-radius: 4px;
+}
+a:focus-visible {
+  outline: 2px solid var(--mint);
+  outline-offset: 4px;
+}
+.icon-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 5px;
+  gap: 6px;
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+}
+.icon-button:hover:not(:disabled) {
+  background: #293c4e;
+}
+.icon-button svg {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+#shape-status {
+  max-width: 38ch;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+#shape-status:empty {
+  display: none;
 }
 .graph-stats {
   color: var(--muted);
@@ -130,6 +169,21 @@ p {
 .tensor-label {
   fill: var(--muted);
   font-size: 10px;
+}
+.tensor-info {
+  fill: var(--muted);
+  color: var(--muted);
+  font-size: 10px;
+}
+li > .tensor-info {
+  display: block;
+  margin-top: 2px;
+}
+.port .tensor-info {
+  font-size: 9px;
+}
+.graph-node .tensor-info {
+  font-size: 9px;
 }
 .graph-node,
 .port {
@@ -338,6 +392,10 @@ button:disabled {
   .port text,
   .tensor-label {
     fill: CanvasText;
+  }
+  .tensor-info {
+    fill: CanvasText;
+    color: CanvasText;
   }
   .edge {
     stroke: CanvasText;
