@@ -4,12 +4,14 @@
  * @param cspSource Source allowed to load local images and styles.
  * @param nonce Per-panel nonce authorizing the bundled viewer script.
  * @param onnxLightVersion C++ release embedded in the compiled native addon.
+ * @param initialTab Initially selected viewer tab.
  */
 export function webviewHtml(
   resource: (name: string) => string,
   cspSource: string,
   nonce: string,
   onnxLightVersion: string,
+  initialTab: "model" | "logs" = "model",
 ): string {
   return `<!doctype html>
 <html lang="en">
@@ -22,10 +24,16 @@ export function webviewHtml(
 </head>
 <body>
   <main class="workspace" aria-label="ONNX graph explorer">
+    <nav class="viewer-tabs" role="tablist" aria-label="Viewer">
+      <button id="model-tab" role="tab" aria-controls="model-view" aria-selected="${initialTab === "model"}" tabindex="${initialTab === "model" ? 0 : -1}">Model</button>
+      <button id="logs-tab" role="tab" aria-controls="logs-view" aria-selected="${initialTab === "logs"}" tabindex="${initialTab === "logs" ? 0 : -1}">Logs <span id="log-count">0</span></button>
+      <button id="status-tab" role="tab" aria-controls="status-view" aria-selected="false" tabindex="-1">Status</button>
+    </nav>
+    <section id="model-view" role="tabpanel" aria-labelledby="model-tab"${initialTab === "logs" ? " hidden" : ""}>
       <header class="graph-toolbar">
         <div><a id="repository-link" href="https://github.com/xadupre/onnx-light-viewer" title="ONNX Light Viewer on GitHub" aria-label="Open the ONNX Light Viewer GitHub repository"><img src="${resource("logo.svg")}" alt="" width="24" height="24"></a><button id="open-model" class="primary">Open ONNX model</button><button id="refresh-shapes" class="icon-button" disabled title="Refresh shape and type information with onnx-light" aria-label="Refresh shape and type information"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2 6M20 4v7h-7"/></svg>Refresh shapes</button><button id="refresh-metadata" class="icon-button" disabled title="Recompute constants, tags and lifetimes for the displayed graph with onnx-light" aria-label="Refresh metadata for the displayed graph"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2 6M20 4v7h-7"/></svg>Refresh metadata</button><button id="refresh-positions" class="icon-button" disabled title="Reset the portrait layout with new random horizontal positions" aria-label="Refresh node positions"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2 6M20 4v7h-7"/></svg>Refresh positions</button></div>
         <div><button id="show-metadata" class="icon-button" aria-expanded="false" aria-controls="metadata-panel" title="Show native constants, tags, lifetimes and stored metadata">Metadata</button><button id="open-backend-test" class="icon-button" title="Search and open an onnx-light backend test">Backend test</button></div>
-        <div class="graph-stats" aria-live="polite"><span id="graph-summary">1 node / 2 tensors</span><span id="initializer-count">0 initializers</span><span id="onnx-light-version" title="onnx-light C++ release used by this viewer">onnx-light ${onnxLightVersion}</span><span id="shape-status" role="status"></span><span id="metadata-status" role="status"></span><span id="navigation-status" role="status"></span></div>
+        <div class="graph-stats" aria-live="polite"><span id="graph-summary">No model loaded</span><span id="initializer-count">0 initializers</span><span id="onnx-light-version" title="onnx-light C++ release used by this viewer">onnx-light ${onnxLightVersion}</span><span id="shape-status" role="status"></span><span id="metadata-status" role="status"></span><span id="navigation-status" role="status"></span><span id="load-status" role="status"></span></div>
         <nav id="graph-navigation" aria-label="Graph breadcrumbs" hidden></nav>
       </header>
       <div class="graph-body">
@@ -34,10 +42,10 @@ export function webviewHtml(
           <div class="zoom-controls" aria-label="Graph zoom"><button id="zoom-out" aria-label="Zoom out">−</button><button id="zoom-fit" title="Fit graph">Fit</button><button id="zoom-in" aria-label="Zoom in">+</button></div>
         </div>
         <aside aria-label="Node inspector">
-          <div class="eyebrow">INSPECTOR</div><div class="inspector-heading"><h2 id="node-title">Relu</h2><button id="show-doc" disabled aria-haspopup="dialog">Doc</button></div><p id="node-description">Select a node to explore its connections.</p>
-          <div id="node-details"><dl><dt>NODE NAME</dt><dd id="node-name">activation</dd><dt>DOMAIN</dt><dd id="node-domain">ai.onnx</dd><dt>OPSET</dt><dd id="node-opset">—</dd></dl>
-          <h3>Inputs <span id="input-count">1</span></h3><ul id="node-inputs"></ul>
-          <h3>Outputs <span id="output-count">1</span></h3><ul id="node-outputs"></ul>
+          <div class="eyebrow">INSPECTOR</div><div class="inspector-heading"><h2 id="node-title">No model loaded</h2><button id="show-doc" disabled aria-haspopup="dialog">Doc</button></div><p id="node-description">Open an ONNX model to explore its connections.</p>
+          <div id="node-details"><dl><dt>NODE NAME</dt><dd id="node-name">—</dd><dt>DOMAIN</dt><dd id="node-domain">—</dd><dt>OPSET</dt><dd id="node-opset">—</dd></dl>
+          <h3>Inputs <span id="input-count">0</span></h3><ul id="node-inputs"></ul>
+          <h3>Outputs <span id="output-count">0</span></h3><ul id="node-outputs"></ul>
           <section id="node-captures" hidden><h3>Captured inputs</h3><ul id="captured-inputs"></ul></section>
           <section id="node-parameters" hidden>
             <h3>Attributes <span id="attribute-count">0</span></h3><ul id="node-attributes"></ul>
@@ -57,6 +65,31 @@ export function webviewHtml(
           </section>
         </aside>
       </div>
+    </section>
+    <section id="logs-view" role="tabpanel" aria-labelledby="logs-tab" tabindex="0"${initialTab === "model" ? " hidden" : ""}>
+      <h2>Action history</h2>
+      <p>Model operations and errors only. Operations show Running, OK, Failed or Cancelled.</p>
+      <p id="logs-empty">No actions yet.</p>
+      <ol id="log-entries" aria-label="Action history"></ol>
+    </section>
+    <section id="status-view" role="tabpanel" aria-labelledby="status-tab" tabindex="0" hidden>
+      <h2>Application status</h2>
+      <dl class="status-details" aria-live="polite">
+        <dt>Native library</dt><dd id="status-library">Waiting for extension host</dd>
+        <dt>Current graph</dt><dd id="status-model">Waiting for extension host</dd>
+        <dt>Native model handle</dt><dd id="status-handle">Waiting for extension host</dd>
+        <dt>Current operations</dt><dd id="status-running">Waiting for extension host</dd>
+        <dt>Recovery</dt><dd id="status-recovery">Waiting for extension host</dd>
+      </dl>
+      <h3>What happens after an exception?</h3>
+      <p>A caught C++ exception becomes a JavaScript error and is recorded in Logs. It does not unload onnx-light. A failed shape or metadata refresh discards only the native model handle; the next native action recreates it. The displayed graph is kept.</p>
+      <section id="status-failure" hidden>
+        <h3>Last failed action</h3>
+        <strong id="status-failure-action"></strong>
+        <p id="status-failure-time"></p>
+        <pre id="status-failure-details"></pre>
+      </section>
+    </section>
   </main>
   <dialog id="operator-doc" aria-labelledby="doc-title">
     <header class="inspector-heading"><h2 id="doc-title"></h2><button id="close-doc" autofocus>Close</button></header>

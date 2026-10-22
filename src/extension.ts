@@ -1,6 +1,6 @@
 /**
  * Owns panel-local native models and routes webview requests.
- * Only display snapshots cross into the webview; model bytes stay in the host.
+ * Display snapshots and action logs cross into the webview; model bytes stay in the host.
  */
 import * as vscode from "vscode";
 import { randomBytes } from "node:crypto";
@@ -16,32 +16,76 @@ import {
   GraphPath,
 } from "./graph";
 import { webviewHtml } from "./webview";
+import { ActionLog, LogEntry } from "./log";
 
 const viewType = "onnxLightViewer.graph";
 
 interface LoadedModel {
   graph: Graph;
-  native: NativeModel;
+  native?: NativeModel;
+  reload: () => NativeModel;
   metadata?: GraphMetadata;
 }
 
+async function nativeModel(
+  model: LoadedModel,
+  log: ActionLog,
+  changed: () => void,
+): Promise<NativeModel> {
+  if (!model.native) {
+    model.native = await log.run(
+      `Reload native model: ${model.graph.name}`,
+      model.reload,
+    );
+    changed();
+  }
+  return model.native;
+}
+
+function invalidateModel(model: LoadedModel, log: ActionLog): void {
+  model.native = undefined;
+  log.record(
+    "INVALIDATED",
+    `${model.graph.name}: the next native action will reload the original model; inferred information may need refreshing.`,
+  );
+}
+
 export function activate(context: vscode.ExtensionContext): void {
+  let current: { panel: vscode.WebviewPanel; showLogs: () => void } | undefined;
+  const openViewer = async (
+    uri?: vscode.Uri,
+    initialTab: "model" | "logs" = "model",
+  ) => {
+    const panel = vscode.window.createWebviewPanel(
+      viewType,
+      "ONNX Light Viewer",
+      vscode.ViewColumn.One,
+      { enableScripts: true },
+    );
+    return configurePanel(context, panel, uri, initialTab, (showLogs) => {
+      if (showLogs) current = { panel, showLogs };
+      else if (current?.panel === panel) current = undefined;
+    });
+  };
+  context.subscriptions.push(
+    vscode.commands.registerCommand("onnxLightViewer.showLogs", () => {
+      if (current) {
+        current.panel.reveal();
+        current.showLogs();
+      } else {
+        return openViewer(undefined, "logs");
+      }
+    }),
+  );
   for (const [command, fileName] of [
     ["onnxLightViewer.open", "relu.onnx"],
     ["onnxLightViewer.openSymbolicExample", "tiny-llm.onnx"],
   ]) {
     context.subscriptions.push(
       vscode.commands.registerCommand(command, async () => {
-        const model = await readGraph(
+        await openViewer(
           vscode.Uri.joinPath(context.extensionUri, "media", fileName),
         );
-        const panel = vscode.window.createWebviewPanel(
-          viewType,
-          "ONNX Light Viewer",
-          vscode.ViewColumn.One,
-          { enableScripts: true },
-        );
-        configurePanel(context, panel, model);
       }),
     );
   }
@@ -49,18 +93,32 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.window.registerCustomEditorProvider(viewType, {
       openCustomDocument: (uri) => ({ uri, dispose() {} }),
       resolveCustomEditor: async (document, panel) => {
-        const model = await readGraph(document.uri);
-        configurePanel(context, panel, model);
+        await configurePanel(
+          context,
+          panel,
+          document.uri,
+          "model",
+          (showLogs) => {
+            if (showLogs) current = { panel, showLogs };
+            else if (current?.panel === panel) current = undefined;
+          },
+        );
       },
     }),
   );
 }
 
-async function readGraph(uri: vscode.Uri): Promise<LoadedModel> {
-  const bytes = await vscode.workspace.fs.readFile(uri);
-  const fileName = posix.basename(uri.path);
-  const native = loadModel(bytes, fileName);
-  return { graph: native.graph(), native };
+async function readGraph(
+  uri: vscode.Uri,
+  log: ActionLog,
+): Promise<LoadedModel> {
+  return log.run(`Load model: ${uri.path}`, async () => {
+    const bytes = await vscode.workspace.fs.readFile(uri);
+    const fileName = posix.basename(uri.path);
+    const reload = () => loadModel(bytes, fileName);
+    const native = reload();
+    return { graph: native.graph(), native, reload };
+  });
 }
 
 /** Checks message structure; the native layer also checks graph index bounds. */
@@ -83,87 +141,207 @@ function isGraphPath(path: unknown): path is GraphPath {
 
 /**
  * Retains the model, current graph and optional metadata snapshot for this panel.
- * Navigation invalidates metadata; a ready event resends the current snapshots.
+ * Navigation invalidates metadata; ready resends snapshots and action history.
  */
-function configurePanel(
+async function configurePanel(
   context: vscode.ExtensionContext,
   panel: vscode.WebviewPanel,
-  initialModel: LoadedModel,
-): void {
+  uri: vscode.Uri | undefined,
+  initialTab: "model" | "logs",
+  activatePanel: (showLogs: (() => void) | undefined) => void,
+): Promise<void> {
   const mediaRoot = vscode.Uri.joinPath(context.extensionUri, "media");
   panel.webview.options = {
     enableScripts: true,
     localResourceRoots: [mediaRoot],
   };
   panel.iconPath = vscode.Uri.joinPath(mediaRoot, "logo.svg");
-  let model = initialModel;
-  const sendGraph = () =>
+  let model: LoadedModel | undefined;
+  let ready = false;
+  let showLogsRequested = false;
+  let initialLoading = !!uri;
+  let initialError: string | undefined;
+  let lastFailure: LogEntry | undefined;
+  const sendStatus = () =>
     panel.webview.postMessage({
-      type: "graph",
-      graph: model.graph,
-      ...(model.metadata ? { metadata: model.metadata } : {}),
+      type: "application-status",
+      library: { loaded: true, version: onnxLightVersion },
+      model: {
+        name: model?.graph.name,
+        state: !model ? "none" : model.native ? "ready" : "invalidated",
+      },
+      running: log
+        .snapshot()
+        .filter((entry) => entry.status === "RUNNING")
+        .map((entry) => entry.action),
+      lastFailure,
     });
+  const log = new ActionLog((entry) => {
+    if (entry.status === "FAILED") lastFailure = entry;
+    void panel.webview.postMessage({ type: "log-entry", entry });
+    void sendStatus();
+  });
+  const showLogs = () => {
+    showLogsRequested = true;
+    if (ready) {
+      void panel.webview.postMessage({ type: "show-logs" });
+      showLogsRequested = false;
+    }
+  };
+  activatePanel(showLogs);
+  const viewState = panel.onDidChangeViewState(() => {
+    if (panel.active) activatePanel(showLogs);
+  });
+  const requireModel = () => {
+    if (!model) throw new Error("No ONNX model is loaded.");
+    return model;
+  };
+  const sendGraph = () => {
+    const current = requireModel();
+    void sendStatus();
+    return panel.webview.postMessage({
+      type: "graph",
+      graph: current.graph,
+      ...(current.metadata ? { metadata: current.metadata } : {}),
+    });
+  };
   const messages = panel.webview.onDidReceiveMessage(
-    async (message: { type?: string; path?: unknown } | null) => {
-      if (message?.type === "ready") {
-        await sendGraph();
+    async (
+      message: {
+        type?: string;
+        path?: unknown;
+        actionId?: string;
+        entry?: unknown;
+      } | null,
+    ) => {
+      if (message?.type === "show-logs") {
+        showLogs();
+      } else if (message?.type === "interaction") {
+        log.interaction(message.entry);
+      } else if (message?.type === "ready") {
+        ready = true;
+        await panel.webview.postMessage({
+          type: "log-history",
+          entries: log.snapshot(),
+        });
+        await sendStatus();
+        if (model) await sendGraph();
+        else
+          await panel.webview.postMessage({
+            type: "load-state",
+            pending: initialLoading,
+            error: initialError,
+          });
+        if (showLogsRequested) {
+          await panel.webview.postMessage({ type: "show-logs" });
+          showLogsRequested = false;
+        }
       } else if (message?.type === "open-backend-test") {
-        let loadedModel: LoadedModel;
-        let name: string;
+        let loaded: { model: LoadedModel; name: string } | undefined;
         try {
-          const selection = await vscode.window.showQuickPick(
-            listBackendTests().map((test) => ({
-              id: test.id,
-              label: test.name,
-              description: [test.kind, test.tag].filter(Boolean).join(" · "),
-              detail: test.modelName !== test.name ? test.modelName : undefined,
-            })),
-            {
-              title: "onnx-light backend tests",
-              placeHolder: "Search by test name, model or category",
-              matchOnDescription: true,
-              matchOnDetail: true,
+          loaded = await log.run(
+            "Open backend test",
+            async (id) => {
+              const tests = await log.run(
+                "List backend tests",
+                listBackendTests,
+              );
+              const selection = await vscode.window.showQuickPick(
+                tests.map((test) => ({
+                  id: test.id,
+                  label: test.name,
+                  description: [test.kind, test.tag]
+                    .filter(Boolean)
+                    .join(" · "),
+                  detail:
+                    test.modelName !== test.name ? test.modelName : undefined,
+                })),
+                {
+                  title: "onnx-light backend tests",
+                  placeHolder: "Search by test name, model or category",
+                  matchOnDescription: true,
+                  matchOnDetail: true,
+                },
+              );
+              if (!selection) {
+                log.record("CANCELLED", "Open backend test", id);
+                return;
+              }
+              const name = selection.label;
+              const loadedModel = await log.run(
+                `Load backend test: ${name}`,
+                () => {
+                  const reload = () => loadBackendTest(selection.id);
+                  const native = reload();
+                  return { graph: native.graph(), native, reload };
+                },
+              );
+              return { model: loadedModel, name };
             },
+            message.actionId,
           );
-          if (!selection) return;
-          name = selection.label;
-          const native = loadBackendTest(selection.id);
-          loadedModel = { graph: native.graph(), native };
         } catch (error) {
+          await panel.webview.postMessage({
+            type: "load-error",
+            error: error instanceof Error ? error.message : String(error),
+          });
           await vscode.window.showErrorMessage(
             `Could not open onnx-light backend test: ${error instanceof Error ? error.message : String(error)}`,
           );
           return;
         }
-        model = loadedModel;
-        panel.title = `ONNX: ${name}`;
+        if (!loaded) return;
+        model = loaded.model;
+        panel.title = `ONNX: ${loaded.name}`;
         await sendGraph();
       } else if (message?.type === "open") {
-        const selection = await vscode.window.showOpenDialog({
-          canSelectMany: false,
-          filters: { "ONNX models": ["onnx"] },
-          openLabel: "Open ONNX graph",
-        });
-        if (selection?.[0]) {
-          let loadedModel: LoadedModel;
-          try {
-            loadedModel = await readGraph(selection[0]);
-          } catch (error) {
-            await vscode.window.showErrorMessage(
-              `Could not open ONNX model: ${error instanceof Error ? error.message : String(error)}`,
-            );
-            return;
-          }
-          model = loadedModel;
-          panel.title = `ONNX: ${posix.basename(selection[0].path)}`;
+        try {
+          const loaded = await log.run(
+            "Open ONNX model",
+            async (id) => {
+              const selection = await vscode.window.showOpenDialog({
+                canSelectMany: false,
+                filters: { "ONNX models": ["onnx"] },
+                openLabel: "Open ONNX graph",
+              });
+              if (!selection?.[0]) {
+                log.record("CANCELLED", "Open ONNX model", id);
+                return;
+              }
+              const loadedModel = await readGraph(selection[0], log);
+              return { loadedModel, uri: selection[0] };
+            },
+            message.actionId,
+          );
+          if (!loaded) return;
+          model = loaded.loadedModel;
+          panel.title = `ONNX: ${posix.basename(loaded.uri.path)}`;
           await sendGraph();
+        } catch (error) {
+          await panel.webview.postMessage({
+            type: "load-error",
+            error: error instanceof Error ? error.message : String(error),
+          });
+          await vscode.window.showErrorMessage(
+            `Could not open ONNX model: ${error instanceof Error ? error.message : String(error)}`,
+          );
         }
       } else if (message?.type === "navigate") {
         let graph: Graph;
         try {
-          if (!isGraphPath(message.path))
-            throw new Error("Invalid subgraph path.");
-          graph = model.native.graph(false, message.path);
+          graph = await log.run(
+            `Navigate graph: ${model?.graph.name ?? "no model loaded"}`,
+            async () => {
+              if (!isGraphPath(message.path))
+                throw new Error("Invalid subgraph path.");
+              const current = requireModel();
+              const native = await nativeModel(current, log, () => {
+                void sendStatus();
+              });
+              return native.graph(false, message.path);
+            },
+            message.actionId,
+          );
         } catch (error) {
           const detail = error instanceof Error ? error.message : String(error);
           await panel.webview.postMessage({
@@ -175,16 +353,25 @@ function configurePanel(
           );
           return;
         }
-        model.graph = graph;
-        model.metadata = undefined;
+        requireModel().graph = graph;
+        requireModel().metadata = undefined;
         await sendGraph();
       } else if (message?.type === "metadata") {
         let metadata: GraphMetadata;
         try {
-          metadata = model.native.metadata(
-            model.graph.breadcrumbs.at(-1)?.path,
+          metadata = await log.run(
+            `Refresh metadata: ${model?.graph.name ?? "no model loaded"}`,
+            async () => {
+              const current = requireModel();
+              const native = await nativeModel(current, log, () => {
+                void sendStatus();
+              });
+              return native.metadata(current.graph.breadcrumbs.at(-1)?.path);
+            },
+            message.actionId,
           );
         } catch (error) {
+          if (model) invalidateModel(model, log);
           const detail = error instanceof Error ? error.message : String(error);
           await panel.webview.postMessage({
             type: "metadata-error",
@@ -195,16 +382,24 @@ function configurePanel(
           );
           return;
         }
-        model.metadata = metadata;
+        requireModel().metadata = metadata;
         await panel.webview.postMessage({ type: "metadata-info", metadata });
       } else if (message?.type === "refresh-shapes") {
         let refreshed: Graph;
         try {
-          refreshed = model.native.graph(
-            true,
-            model.graph.breadcrumbs.at(-1)?.path,
+          refreshed = await log.run(
+            `Refresh shapes: ${model?.graph.name ?? "no model loaded"}`,
+            async () => {
+              const current = requireModel();
+              const native = await nativeModel(current, log, () => {
+                void sendStatus();
+              });
+              return native.graph(true, current.graph.breadcrumbs.at(-1)?.path);
+            },
+            message.actionId,
           );
         } catch (error) {
+          if (model) invalidateModel(model, log);
           const detail = error instanceof Error ? error.message : String(error);
           await panel.webview.postMessage({
             type: "shape-error",
@@ -215,7 +410,7 @@ function configurePanel(
           );
           return;
         }
-        model.graph = refreshed;
+        requireModel().graph = refreshed;
         await panel.webview.postMessage({
           type: "shape-info",
           tensors: refreshed.tensors,
@@ -223,7 +418,11 @@ function configurePanel(
       }
     },
   );
-  panel.onDidDispose(() => messages.dispose());
+  panel.onDidDispose(() => {
+    messages.dispose();
+    viewState.dispose();
+    activatePanel(undefined);
+  });
   const resource = (name: string) =>
     panel.webview.asWebviewUri(vscode.Uri.joinPath(mediaRoot, name)).toString();
   const nonce = randomBytes(16).toString("hex");
@@ -232,5 +431,24 @@ function configurePanel(
     panel.webview.cspSource,
     nonce,
     onnxLightVersion,
+    initialTab,
   );
+  if (uri) {
+    try {
+      model = await readGraph(uri, log);
+      initialLoading = false;
+      if (ready) await sendGraph();
+      else void sendStatus();
+    } catch (error) {
+      initialLoading = false;
+      initialError = error instanceof Error ? error.message : String(error);
+      await panel.webview.postMessage({
+        type: "load-error",
+        error: error instanceof Error ? error.message : String(error),
+      });
+      await vscode.window.showErrorMessage(
+        `Could not open ONNX model: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
 }

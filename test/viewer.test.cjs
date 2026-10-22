@@ -12,6 +12,7 @@ const { webviewHtml } = require("../dist/webview");
 
 function openViewer(t) {
   const messages = [];
+  const events = [];
   const dom = new JSDOM(
     webviewHtml(
       (name) => `https://viewer.invalid/${name}`,
@@ -31,7 +32,10 @@ function openViewer(t) {
     },
   });
   dom.window.acquireVsCodeApi = () => ({
-    postMessage: (message) => messages.push(message),
+    postMessage: (message) => {
+      events.push(message);
+      if (message.type !== "interaction") messages.push(message);
+    },
   });
   let viewport = { width: 1060, height: 350 };
   dom.window.document.getElementById("canvas").getBoundingClientRect = () =>
@@ -86,11 +90,52 @@ function openViewer(t) {
     document: dom.window.document,
     window: dom.window,
     messages,
+    events,
     load,
     resize,
     pointer,
   };
 }
+
+test("switches all tabs without logging clicks or changing graph, selection or camera", async (t) => {
+  const { document, load, window, events } = openViewer(t);
+  load(demoGraph);
+  document.getElementById("zoom-in").click();
+  const graph = document.getElementById("nodes").innerHTML;
+  const inspector = document.querySelector("aside").textContent;
+  const camera = document.getElementById("graph").getAttribute("viewBox");
+  document.getElementById("logs-tab").click();
+  await Promise.resolve();
+  assert.equal(document.getElementById("model-view").hidden, true);
+  assert.equal(document.getElementById("logs-view").hidden, false);
+  document.getElementById("logs-view").click();
+  document.getElementById("status-tab").click();
+  assert.equal(document.getElementById("status-view").hidden, false);
+  assert.equal(document.getElementById("logs-view").hidden, true);
+  document
+    .getElementById("status-tab")
+    .dispatchEvent(
+      new window.KeyboardEvent("keydown", { key: "End", bubbles: true }),
+    );
+  assert.equal(document.activeElement.id, "status-tab");
+  document.getElementById("logs-tab").click();
+  document
+    .getElementById("logs-tab")
+    .dispatchEvent(
+      new window.KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }),
+    );
+  await Promise.resolve();
+  assert.equal(document.activeElement.id, "model-tab");
+  assert.equal(document.getElementById("logs-view").hidden, true);
+  assert.equal(document.getElementById("log-entries").children.length, 0);
+  assert.equal(events.filter(({ type }) => type === "interaction").length, 0);
+  assert.equal(document.getElementById("nodes").innerHTML, graph);
+  assert.equal(document.querySelector("aside").textContent, inspector);
+  assert.equal(
+    document.getElementById("graph").getAttribute("viewBox"),
+    camera,
+  );
+});
 
 test("shows the compiled onnx-light release before loading a graph and after model replacement", (t) => {
   const { document, load } = openViewer(t);
@@ -108,6 +153,40 @@ test("shows the compiled onnx-light release before loading a graph and after mod
     ),
   );
   assert.equal(release.textContent, `onnx-light ${version}`);
+});
+
+test("updates one action row, safely renders errors and retains history across model replacement", async (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  load(demoGraph);
+  document.getElementById("refresh-shapes").click();
+  const actionId = messages.at(-1).actionId;
+  const row = document.querySelector(".log-entry");
+  assert.equal(row.dataset.status, "RUNNING");
+  const entry = {
+    id: actionId,
+    timestamp: new Date().toISOString(),
+    action: "Refresh shapes",
+    status: "FAILED",
+    details: 'VerifyModel: <img src=x onerror="throw 1">',
+  };
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: { type: "log-entry", entry },
+    }),
+  );
+  assert.equal(row.dataset.status, "FAILED");
+  assert.equal(row.querySelector("pre").textContent, entry.details);
+  assert.equal(row.querySelector("img"), null);
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: { type: "log-history", entries: [entry] },
+    }),
+  );
+  load(demoGraph);
+  assert.equal(document.querySelectorAll(".log-entry").length, 1);
+  assert.equal(document.querySelector(".log-entry"), row);
+  await Promise.resolve();
+  assert.equal(row.dataset.status, "FAILED");
 });
 
 test("opens graph attributes and nested breadcrumbs, including empty graphs and failed navigation", (t) => {
@@ -587,6 +666,19 @@ test("renders the demo, inspects its operator and requests a real file", (t) => 
   );
   document.getElementById("open-model").click();
   assert.equal(messages.filter((message) => message.type === "open").length, 1);
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: {
+        type: "log-entry",
+        entry: {
+          id: messages.at(-1).actionId,
+          timestamp: new Date().toISOString(),
+          action: "Open ONNX model",
+          status: "CANCELLED",
+        },
+      },
+    }),
+  );
   document.getElementById("open-backend-test").click();
   assert.equal(
     messages.filter((message) => message.type === "open-backend-test").length,

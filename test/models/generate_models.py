@@ -70,6 +70,18 @@ missing_operator = helper.make_model(
 )
 save_model(missing_operator, Path(__file__).with_name("missing-operator.onnx"))
 
+invalid_graph = helper.make_model(
+    helper.make_graph(
+        [helper.make_node("Relu", ["missing"], ["y"])],
+        "Invalid graph",
+        [value_info("x")],
+        [value_info("y")],
+    ),
+    ir_version=9,
+    opset_imports=[helper.make_opsetid("", 13)],
+)
+save_model(invalid_graph, Path(__file__).with_name("invalid-graph.onnx"))
+
 parameter_sparse = helper.make_sparse_tensor(
     helper.make_tensor("preview", TensorProto.FLOAT, [12], list(range(12))),
     helper.make_tensor("indices", TensorProto.INT64, [12], list(range(12))),

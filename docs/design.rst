@@ -48,7 +48,8 @@ API and creates a retained native model with its initial graph snapshot.
 ``configurePanel`` owns a panel-local ``LoadedModel``: its native handle,
 currently displayed ``Graph`` and optional cached ``GraphMetadata``. It
 configures media access, installs the message router and supplies the HTML.
-The message subscription is disposed with the panel.
+The message subscription is disposed with the panel. A reload factory retains
+the original model bytes or backend case ID independently of the native handle.
 
 Opening another model replaces that state only after successful loading.
 Navigation changes the current graph and clears its metadata snapshot.
@@ -59,6 +60,15 @@ metadata; it does not reload the source file or return to the root graph.
 also validates indices against the retained model. Native failures are
 reported through VS Code notifications; navigation, shape and metadata errors
 also have dedicated webview responses.
+
+``src/log.ts``
+~~~~~~~~~~~~~~
+
+:download:`Source: log.ts <../src/log.ts>`.
+
+Defines structured action entries, retains each panel's history and publishes
+status updates. It validates incoming operation events and correlates native
+operations with the webview's action IDs.
 
 ``src/graph.ts``
 ~~~~~~~~~~~~~~~~
@@ -100,7 +110,7 @@ raw tensor bytes by default, without retaining a model for future refreshes.
 
 :download:`Source: webview.ts <../src/webview.ts>`.
 
-``webviewHtml`` generates the static toolbar, SVG canvas, inspector,
+``webviewHtml`` generates the Model/Logs/Status tabs, toolbar, SVG canvas, inspector,
 breadcrumbs and operator-documentation dialog. Its resource callback converts
 bundled media filenames to webview URIs. The content security policy permits
 local images/styles and authorizes the viewer script with a per-panel nonce.
@@ -169,6 +179,11 @@ the model; ``ApplySubgraphShapes`` then applies retained child contexts to
 ``GRAPH`` attributes recursively. This persists inferred outputs and
 intermediate ``value_info`` inside the in-memory model, not just in labels.
 
+Both shape inference and metadata analysis first call the schema-free
+``VerifyModel`` validator. Snapshot projection remains available for inspecting
+invalid connectivity without running analysis. Native algorithm boundaries add
+the failing algorithm's name to exceptions, preserving its complete error text.
+
 ``ModelMetadata`` analyzes only the selected graph using ``InferConstants``,
 ``InferValueAndNodeTags`` and ``ComputeResultLifetimeInfo(graph, false)``.
 Constant analysis is seeded from enclosing scopes. Results distinguish
@@ -191,7 +206,11 @@ replies with ``panel.webview.postMessage``.
      - Response
    * - ``ready``
      - Resend current snapshots.
-     - ``graph`` with optional cached metadata.
+     - ``log-history``, ``application-status`` and ``graph`` with optional
+       cached metadata, or ``load-state`` before a model is available.
+   * - ``interaction`` with ``entry``
+     - Retain a timestamped explicit operation or viewer error.
+     - ``log-entry``.
    * - ``open``
      - Choose and load a local model.
      - ``graph`` on success; cancellation leaves the view unchanged.
@@ -208,15 +227,53 @@ replies with ``panel.webview.postMessage``.
      - Recompute analysis for the current graph and cache the snapshot.
      - ``metadata-info`` or ``metadata-error``.
 
-Opening failures are shown as VS Code notifications without replacing the
-displayed graph. Refresh/navigation errors clear their busy state and show a
-toolbar error without replacing the previous display.
+Opening failures produce ``load-error`` and VS Code notifications without
+replacing the displayed graph. Refresh/navigation errors clear their busy state
+and show a toolbar error without replacing the previous display.
 
 The ``graph`` response rebuilds the display and resets its layout/selection.
 ``shape-info`` updates tensor labels and the inspector in place, preserving
 positions and the camera. ``metadata-info`` updates the separate analysis
 view. The metadata toggle requests analysis only if none is available;
 **Refresh metadata** always requests a fresh snapshot, even with the panel closed.
+
+Action history and recovery
+---------------------------
+
+Each panel owns an ``ActionLog`` (``src/log.ts``). Entries have an ID, UTC
+timestamp, action, status and optional error details. ``ActionLog.run`` publishes
+``RUNNING`` then ``SUCCEEDED`` or ``FAILED``; cancelled pickers use
+``CANCELLED``. Failures retain their full error stack and are rethrown to the UI
+error handlers. The panel exists before initial loading so even loading
+failures are inspectable.
+
+Explicit model operations immediately display an entry and send
+``interaction``. Native requests carry the same ``actionId``:
+host ``log-entry`` updates replace that row rather than adding duplicate
+start/completion rows. Refresh positions finishes in the webview. Tabs, node
+selection, zoom and arbitrary clicks are not logged. ``ready`` replays
+the history after webview recreation. Model replacement does not clear it.
+
+The **Model**, **Logs** and **Status** tab panels hide/show existing DOM;
+switching tabs does not render the graph again or reset browser-side state.
+The **Show Logs** command reveals the viewer and sends ``show-logs`` to select
+its Logs tab.
+
+A failed shape or metadata refresh invalidates the native handle, not the
+last displayed snapshots. Before the next native action, ``nativeModel``
+logs and recreates that handle from the original bytes or backend case.
+It does not reread or save the source file. This discards potentially partial
+native inference state; previously inferred information may need refreshing
+after recovery. Reload failures are logged and surfaced like other failures.
+
+``application-status`` is sent on action updates, model replacement, native
+handle recreation and ``ready``. It reports the imported library/version,
+native handle state (``none``, ``ready`` or ``invalidated``), running operations
+and last failure. A caught C++ exception becomes a JavaScript error; it does
+not unload the native addon. Status distinguishes the still-loaded library
+from a discarded model handle and retains the last failure after recovery.
+An addon import failure prevents activation, and native process crashes are
+not covered by this exception-recovery mechanism.
 
 Browser-side state and layout
 -----------------------------

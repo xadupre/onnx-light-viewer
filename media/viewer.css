@@ -60,6 +60,90 @@ p {
   overflow: hidden;
   background: var(--panel);
 }
+[hidden] {
+  display: none !important;
+}
+.viewer-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+}
+.viewer-tabs button {
+  padding: 8px 20px;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+}
+.viewer-tabs [aria-selected="true"] {
+  color: var(--text);
+  border-bottom-color: var(--mint);
+}
+#model-view {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 0;
+}
+#logs-view,
+#status-view {
+  padding: 16px;
+  overflow: auto;
+  min-height: 0;
+}
+#logs-view h2,
+#status-view h2 {
+  margin-top: 0;
+}
+#log-entries {
+  list-style: none;
+  padding: 0;
+}
+.log-entry {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+  overflow-wrap: anywhere;
+}
+.log-heading {
+  display: flex;
+  gap: 8px 16px;
+  flex-wrap: wrap;
+  align-items: baseline;
+}
+.log-heading time {
+  color: var(--muted);
+  font-size: 11px;
+}
+.log-status {
+  font-weight: 600;
+}
+.log-entry[data-status="SUCCEEDED"] .log-status {
+  color: var(--mint);
+}
+.log-entry[data-status="FAILED"] .log-status {
+  color: #ff9e9e;
+}
+.log-entry[data-status="RUNNING"] .log-status,
+.log-entry[data-status="INVALIDATED"] .log-status {
+  color: #f3d080;
+}
+.log-entry pre,
+#status-failure-details {
+  white-space: pre-wrap;
+  font-size: 12px;
+  margin-bottom: 0;
+  max-height: 20em;
+  overflow: auto;
+}
+.status-details {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) minmax(0, 3fr);
+  gap: 12px 20px;
+  max-width: 900px;
+}
+.status-details dd {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 .graph-toolbar {
   min-height: 44px;
   padding: 6px 10px;

@@ -15,6 +15,21 @@ function modelBytes(name) {
   return readFileSync(path.join(__dirname, "models", name));
 }
 
+test("verifies invalid graph connectivity before inference and metadata without changing the model", () => {
+  const bytes = modelBytes("invalid-graph.onnx");
+  const model = loadModel(bytes, "invalid-graph.onnx");
+  const before = model.graph();
+  for (const action of [
+    () => model.graph(true),
+    () => model.metadata(),
+    () => decodeGraph(bytes, "invalid-graph.onnx", true),
+  ]) {
+    assert.throws(action, /VerifyModel:/);
+  }
+  assert.deepEqual(model.graph(), before);
+  assert.deepEqual(modelBytes("invalid-graph.onnx"), bytes);
+});
+
 test("lists the released native backend tests and opens node and model cases on demand", () => {
   const tests = listBackendTests();
   assert.equal(new Set(tests.map(({ id }) => id)).size, tests.length);
@@ -127,12 +142,6 @@ test("opens nested GRAPH and GRAPHS attributes with scoped captures, parameters 
   assert.ok(child.nodes[0].schema.doc);
   assert.equal(child.initializerCount, 1);
   assert.ok(!child.tensors.some(({ name }) => name === "z"));
-  assert.equal(
-    model.metadata(then.path).values.find(({ name }) => name === "bias")
-      .constant,
-    true,
-  );
-  assert.equal(model.metadata(then.path).nodes.length, 2);
   const inner = branch(child, 1, "then_branch");
   const leaf = model.graph(false, inner.path);
   assert.equal(leaf.breadcrumbs.length, 3);
@@ -146,6 +155,11 @@ test("opens nested GRAPH and GRAPHS attributes with scoped captures, parameters 
     "2",
   ]);
   assert.deepEqual(shadow.nodes[0].parameters[0].shape, ["2"]);
+  // Shadowed names remain inspectable, but violate ONNX SSA for analysis.
+  assert.throws(
+    () => model.metadata(then.path),
+    /VerifyModel:[\s\S]*SSA violation/,
+  );
   assert.deepEqual(model.graph(), root);
   assert.deepEqual(modelBytes("subgraphs.onnx"), bytes);
   for (const path of [
@@ -167,6 +181,12 @@ test("refreshes shapes inside a nested graph using the retained enclosing model"
     .graph()
     .nodes[0].attributes.find(({ name }) => name === "then_branch").graphs[0];
   const child = model.graph(false, then.path);
+  assert.equal(
+    model.metadata(then.path).values.find(({ name }) => name === "bias")
+      .constant,
+    true,
+  );
+  assert.equal(model.metadata(then.path).nodes.length, 2);
   const leafPath = child.nodes[1].attributes.find(
     ({ name }) => name === "then_branch",
   ).graphs[0].path;

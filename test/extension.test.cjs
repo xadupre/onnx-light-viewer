@@ -5,22 +5,41 @@ const { createRequire } = require("node:module");
 const path = require("node:path");
 const vm = require("node:vm");
 const { test } = require("node:test");
+const { JSDOM } = require("jsdom");
 
 async function openExtension(customModel, command = "onnxLightViewer.open") {
   const messages = [];
   const errors = [];
   const reads = [];
   const picks = [];
+  const logs = [];
+  const logViews = [];
+  const events = [];
+  const nativeModels = [];
   const commands = new Map();
   let receive;
   let selection;
   let editor;
   let backendSelection;
+  let client;
   const disposable = () => ({ dispose() {} });
   const root = path.resolve(__dirname, "..");
   const webview = {
     postMessage: async (message) => {
-      messages.push(message);
+      events.push(message);
+      client?.(message);
+      if (message.type === "log-entry") {
+        const { entry } = message;
+        logs.push(
+          `[${entry.timestamp}] [${entry.status}] ${entry.action}${entry.details ? `\n${entry.details}` : ""}`,
+        );
+      } else if (message.type === "show-logs") {
+        logViews.push(true);
+      } else if (
+        !["log-history", "application-status"].includes(message.type)
+      ) {
+        messages.push(message);
+      }
       return true;
     },
     onDidReceiveMessage: (callback) => {
@@ -29,7 +48,12 @@ async function openExtension(customModel, command = "onnxLightViewer.open") {
     },
     asWebviewUri: (uri) => ({ toString: () => `file://${uri.path}` }),
   };
-  const panel = { webview, onDidDispose: disposable };
+  const panel = {
+    webview,
+    onDidDispose: disposable,
+    onDidChangeViewState: disposable,
+    reveal() {},
+  };
   const vscode = {
     Uri: {
       joinPath: (base, ...parts) => ({
@@ -73,13 +97,27 @@ async function openExtension(customModel, command = "onnxLightViewer.open") {
   };
   const filename = path.join(root, "dist", "extension.js");
   const requireExtension = createRequire(filename);
+  const graph = { ...requireExtension("./graph") };
+  for (const name of ["loadModel", "loadBackendTest"]) {
+    const load = graph[name];
+    graph[name] = (...args) => {
+      const native = load(...args);
+      nativeModels.push(native);
+      return native;
+    };
+  }
   const module = { exports: {} };
   const execute = vm.runInThisContext(
     `(function(require, module, exports) { ${readFileSync(filename, "utf8")}\n})`,
     { filename },
   );
   execute(
-    (name) => (name === "vscode" ? vscode : requireExtension(name)),
+    (name) =>
+      name === "vscode"
+        ? vscode
+        : name === "./graph"
+          ? graph
+          : requireExtension(name),
     module,
     module.exports,
   );
@@ -97,6 +135,15 @@ async function openExtension(customModel, command = "onnxLightViewer.open") {
     errors,
     reads,
     picks,
+    logs,
+    logViews,
+    events,
+    webview,
+    connect: (callback) => {
+      client = callback;
+    },
+    nativeModels,
+    showLogs: () => commands.get("onnxLightViewer.showLogs")(),
     receive: (message) => receive(message),
     open: async (name) => {
       selection = [{ path: path.join(__dirname, "models", name) }];
@@ -108,6 +155,241 @@ async function openExtension(customModel, command = "onnxLightViewer.open") {
     },
   };
 }
+
+test("keeps operation logs quiet and exposes real native exception recovery in Status", async (t) => {
+  const extension = await openExtension();
+  const dom = new JSDOM(extension.webview.html, { runScripts: "outside-only" });
+  t.after(() => dom.window.close());
+  const { window } = dom;
+  const { document } = window;
+  const requests = [];
+  window.HTMLCanvasElement.prototype.getContext = () => ({
+    font: "",
+    measureText(text) {
+      return { width: text.length * 8 };
+    },
+  });
+  document.getElementById("canvas").getBoundingClientRect = () =>
+    new window.DOMRect(0, 0, 1060, 350);
+  window.acquireVsCodeApi = () => ({
+    postMessage: (message) => requests.push(extension.receive(message)),
+  });
+  extension.connect((data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data })),
+  );
+  window.eval(
+    readFileSync(path.resolve(__dirname, "../media/viewer.js"), "utf8"),
+  );
+  const flush = async () => {
+    while (requests.length) await Promise.all(requests.splice(0));
+  };
+  await flush();
+  const entries = () => [...document.querySelectorAll(".log-entry")];
+  assert.match(
+    document.getElementById("status-library").textContent,
+    /Loaded.*onnx-light/,
+  );
+  assert.equal(document.getElementById("status-handle").textContent, "Ready");
+  assert.equal(document.getElementById("status-running").textContent, "Idle");
+  assert.ok(
+    entries().some(
+      (row) =>
+        row.dataset.status === "SUCCEEDED" &&
+        /Load model:/.test(row.textContent),
+    ),
+  );
+  assert.equal(
+    document.getElementById("logs-view").parentElement,
+    document.querySelector(".workspace"),
+  );
+
+  for (const id of ["refresh-shapes", "refresh-metadata"]) {
+    document.getElementById(id).click();
+    const row = entries().at(-1);
+    assert.equal(row.dataset.status, "RUNNING");
+    document.getElementById("status-tab").click();
+    assert.match(
+      document.getElementById("status-running").textContent,
+      /Refresh/,
+    );
+    document.getElementById("logs-tab").click();
+    assert.equal(document.getElementById("model-view").hidden, true);
+    await flush();
+    assert.equal(row.dataset.status, "SUCCEEDED");
+    assert.equal(row.querySelector(".log-status").textContent, "OK");
+    assert.equal(document.getElementById("status-running").textContent, "Idle");
+    document.getElementById("model-tab").click();
+    await flush();
+  }
+
+  document.getElementById("refresh-positions").click();
+  const positions = entries().at(-1);
+  await flush();
+  assert.match(positions.textContent, /OKRefresh positions/);
+  const count = entries().length;
+  document
+    .querySelector(".graph-node")
+    .dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  document.getElementById("logs-tab").click();
+  document.getElementById("logs-view").click();
+  document.getElementById("log-entries").click();
+  for (const id of ["status-tab", "model-tab", "zoom-in"])
+    document.getElementById(id).click();
+  document
+    .getElementById("graph")
+    .dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  extension.showLogs();
+  await flush();
+  assert.equal(entries().length, count);
+
+  await extension.open("custom.onnx");
+  const reads = extension.reads.length;
+  const failedHandle = extension.nativeModels.at(-1);
+  document.getElementById("model-tab").click();
+  document.getElementById("refresh-shapes").click();
+  const failure = entries().at(-1);
+  await flush();
+  assert.equal(failure.dataset.status, "FAILED");
+  assert.match(
+    failure.querySelector("pre").textContent,
+    /Error: ComputeShapeModel:/,
+  );
+  document.getElementById("status-tab").click();
+  assert.match(
+    document.getElementById("status-library").textContent,
+    /Loaded.*onnx-light/,
+  );
+  assert.match(
+    document.getElementById("status-handle").textContent,
+    /Discarded/,
+  );
+  assert.match(
+    document.getElementById("status-recovery").textContent,
+    /next native action recreates/,
+  );
+  assert.match(
+    document.getElementById("status-failure-details").textContent,
+    /ComputeShapeModel:/,
+  );
+  assert.equal(document.getElementById("status-running").textContent, "Idle");
+  document.getElementById("model-tab").click();
+  document.getElementById("refresh-metadata").click();
+  document.getElementById("status-tab").click();
+  await flush();
+  assert.notEqual(extension.nativeModels.at(-1), failedHandle);
+  assert.equal(extension.reads.length, reads);
+  assert.equal(document.getElementById("status-handle").textContent, "Ready");
+  assert.equal(
+    document.getElementById("status-recovery").textContent,
+    "No model recovery pending.",
+  );
+  assert.match(
+    document.getElementById("status-failure-details").textContent,
+    /ComputeShapeModel:/,
+  );
+  await extension.receive({ type: "ready" });
+  const replay = extension.events
+    .filter(({ type }) => type === "log-history")
+    .at(-1).entries;
+  assert.equal(entries().length, replay.length);
+  assert.equal(new Set(replay.map(({ id }) => id)).size, replay.length);
+});
+
+test("keeps failed initial loading inspectable and can open Logs before any model", async () => {
+  const failed = await openExtension("missing-ir.onnx");
+  await failed.receive({ type: "ready" });
+  const history = failed.events.find(
+    ({ type }) => type === "log-history",
+  ).entries;
+  assert.equal(history.length, 1);
+  assert.equal(history[0].status, "FAILED");
+  assert.match(history[0].details, /ONNX model graph/);
+  assert.match(failed.messages.at(-1).error, /ONNX model graph/);
+  const failedStatus = failed.events
+    .filter(({ type }) => type === "application-status")
+    .at(-1);
+  assert.equal(failedStatus.library.loaded, true);
+  assert.equal(failedStatus.model.state, "none");
+  failed.showLogs();
+  assert.deepEqual(failed.logViews, [true]);
+  await failed.open("inference.onnx");
+  assert.equal(failed.messages.at(-1).type, "graph");
+
+  const empty = await openExtension(undefined, "onnxLightViewer.showLogs");
+  assert.match(empty.webview.html, /id="logs-tab"[^>]*aria-selected="true"/);
+  await empty.receive({ type: "ready" });
+  assert.equal(empty.messages.at(-1).type, "load-state");
+  assert.equal(empty.messages.at(-1).pending, false);
+  assert.equal(
+    empty.events.filter(({ type }) => type === "application-status").at(-1)
+      .model.state,
+    "none",
+  );
+  assert.deepEqual(empty.logs, []);
+  await empty.receive({ type: "open", actionId: "ui:cancelled-file-picker" });
+  assert.ok(
+    empty.events.some(
+      ({ type, entry }) =>
+        type === "log-entry" &&
+        entry.id === "ui:cancelled-file-picker" &&
+        entry.status === "CANCELLED",
+    ),
+  );
+});
+
+test("keeps timestamped action history, verifies invalid graphs and reloads before retrying", async () => {
+  const extension = await openExtension();
+  assert.match(
+    extension.logs[0],
+    /^\[\d{4}-\d{2}-\d{2}T[\d:.]+Z\] \[RUNNING\] Load model:/,
+  );
+  assert.match(extension.logs[1], /\[SUCCEEDED\] Load model:/);
+  await extension.open("invalid-graph.onnx");
+  const before = extension.messages.at(-1).graph;
+  const reads = extension.reads.length;
+  const failedNative = extension.nativeModels.at(-1);
+  const nativeCount = extension.nativeModels.length;
+  await extension.receive({ type: "refresh-shapes" });
+  assert.equal(extension.messages.at(-1).type, "shape-error");
+  assert.match(extension.messages.at(-1).error, /^VerifyModel:/);
+  assert.ok(
+    extension.logs.some((line) =>
+      /\[FAILED\] Refresh shapes[\s\S]*Error: VerifyModel:/.test(line),
+    ),
+  );
+  assert.ok(extension.logs.some((line) => line.includes("[INVALIDATED]")));
+  await extension.receive({ type: "ready" });
+  assert.deepEqual(extension.messages.at(-1).graph, before);
+  await extension.receive({ type: "metadata" });
+  assert.equal(extension.messages.at(-1).type, "metadata-error");
+  assert.match(extension.messages.at(-1).error, /^VerifyModel:/);
+  assert.equal(extension.nativeModels.length, nativeCount + 1);
+  assert.notEqual(extension.nativeModels.at(-1), failedNative);
+  assert.ok(
+    extension.logs.some((line) =>
+      line.includes("[SUCCEEDED] Reload native model: Invalid graph"),
+    ),
+  );
+  assert.equal(extension.reads.length, reads);
+  await extension.open("inference.onnx");
+  await extension.receive({ type: "refresh-shapes" });
+  assert.equal(extension.messages.at(-1).type, "shape-info");
+  assert.ok(
+    extension.logs.some((line) => line.includes("[SUCCEEDED] Refresh shapes")),
+  );
+  assert.ok(
+    extension.logs.some((line) => line.includes("[FAILED] Refresh metadata")),
+  );
+  await extension.open("missing-ir.onnx");
+  assert.ok(
+    extension.logs.some((line) =>
+      /\[FAILED\] Load model:[\s\S]*Error:.*ONNX model graph/.test(line),
+    ),
+  );
+  extension.showLogs();
+  await extension.receive({ type: "show-logs" });
+  assert.deepEqual(extension.logViews, [true, true]);
+});
 
 test("navigates retained subgraphs, scopes refreshes and reports invalid paths without replacing the view", async () => {
   const extension = await openExtension("nested-if.onnx");
@@ -287,10 +569,22 @@ test("reports native inference errors without publishing partial results or chan
   const before = extension.messages.at(-1).graph;
   await extension.receive({ type: "refresh-shapes" });
   assert.equal(extension.messages.at(-1).type, "shape-error");
-  assert.match(extension.messages.at(-1).error, /unsupported domain.*example/);
+  assert.match(
+    extension.messages.at(-1).error,
+    /ComputeShapeModel:[\s\S]*unsupported domain.*example/,
+  );
   assert.match(extension.errors[0], /Could not infer ONNX shapes\/types/);
   await extension.receive({ type: "ready" });
   assert.deepEqual(extension.messages.at(-1).graph, before);
+  const reads = extension.reads.length;
+  await extension.receive({ type: "metadata" });
+  assert.equal(extension.messages.at(-1).type, "metadata-info");
+  assert.equal(extension.reads.length, reads);
+  assert.ok(
+    extension.logs.some((line) =>
+      line.includes("[SUCCEEDED] Reload native model: Custom operators"),
+    ),
+  );
   await extension.open("inference.onnx");
   await extension.receive({ type: "refresh-shapes" });
   assert.equal(extension.messages.at(-1).type, "shape-info");

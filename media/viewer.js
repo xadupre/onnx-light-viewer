@@ -25,6 +25,163 @@ let valueMetadata = new Map();
 let connectionsByName = new Map();
 let releasedValues = new Set();
 let unusedLabels = [];
+let hasModel = false;
+let nextAction = 0;
+const logSession = crypto.randomUUID();
+const logRows = new Map();
+const pendingActions = new Map();
+const statusLabels = {
+  RUNNING: "Running",
+  SUCCEEDED: "OK",
+  FAILED: "Failed",
+  CANCELLED: "Cancelled",
+  INVALIDATED: "Reload required",
+};
+const tabs = ["model", "logs", "status"];
+
+function showTab(name, focus = false) {
+  endGesture();
+  for (const tab of tabs) {
+    const active = tab === name;
+    byId(`${tab}-view`).hidden = !active;
+    byId(`${tab}-tab`).setAttribute("aria-selected", String(active));
+    byId(`${tab}-tab`).tabIndex = active ? 0 : -1;
+  }
+  if (focus) byId(`${name}-tab`).focus();
+  if (name === "model") fit();
+  else if (name === "logs")
+    byId("logs-view").scrollTop = byId("logs-view").scrollHeight;
+}
+
+function displayLog(entry) {
+  const panel = byId("logs-view");
+  const follow =
+    !panel.hidden &&
+    panel.scrollHeight - panel.scrollTop - panel.clientHeight < 32;
+  let row = logRows.get(entry.id);
+  if (entry.status === "RUNNING" && row && row.entry.status !== "RUNNING")
+    return;
+  if (!row) {
+    const item = document.createElement("li");
+    item.className = "log-entry";
+    const heading = document.createElement("div");
+    heading.className = "log-heading";
+    const time = document.createElement("time");
+    const status = document.createElement("span");
+    status.className = "log-status";
+    const action = document.createElement("strong");
+    const details = document.createElement("pre");
+    heading.append(time, status, action);
+    item.append(heading, details);
+    byId("log-entries").append(item);
+    row = { item, time, status, action, details };
+    logRows.set(entry.id, row);
+  }
+  row.entry = entry;
+  row.item.dataset.status = entry.status;
+  row.time.dateTime = entry.timestamp;
+  row.time.textContent = entry.timestamp;
+  row.status.textContent = statusLabels[entry.status];
+  row.action.textContent = entry.action;
+  row.details.textContent = entry.details ?? "";
+  row.details.hidden = !entry.details;
+  byId("logs-empty").hidden = true;
+  byId("log-count").textContent = logRows.size;
+  if (follow) panel.scrollTop = panel.scrollHeight;
+  if (entry.status !== "RUNNING" && pendingActions.has(entry.id)) {
+    const type = pendingActions.get(entry.id);
+    pendingActions.delete(entry.id);
+    if (type === "open" || type === "open-backend-test") setLoading(false);
+  }
+}
+
+function newAction(action) {
+  const entry = {
+    id: `ui:${logSession}:${++nextAction}`,
+    timestamp: new Date().toISOString(),
+    action,
+    status: "RUNNING",
+  };
+  displayLog(entry);
+  vscode.postMessage({ type: "interaction", entry: { ...entry } });
+  return entry;
+}
+
+function requestAction(type, action, parameters = {}) {
+  const entry = newAction(action);
+  pendingActions.set(entry.id, type);
+  if (type === "open" || type === "open-backend-test") setLoading(true);
+  vscode.postMessage({ type, ...parameters, actionId: entry.id });
+}
+
+function setLoading(pending, message = "") {
+  for (const id of ["open-model", "open-backend-test"])
+    byId(id).disabled = pending;
+  for (const id of [
+    "refresh-shapes",
+    "refresh-metadata",
+    "refresh-positions",
+    "show-metadata",
+  ])
+    byId(id).disabled =
+      pending || !hasModel || byId(id).getAttribute("aria-busy") === "true";
+  byId("load-status").textContent =
+    message || (pending ? "Loading model…" : "");
+}
+
+window.addEventListener("error", (event) => {
+  const entry = newAction("Viewer error");
+  entry.status = "FAILED";
+  entry.details = event.error?.stack ?? event.message;
+  displayLog(entry);
+  vscode.postMessage({ type: "interaction", entry: { ...entry } });
+});
+for (const name of tabs) {
+  byId(`${name}-tab`).addEventListener("click", () => showTab(name));
+  byId(`${name}-tab`).addEventListener("keydown", (event) => {
+    let index = tabs.indexOf(name);
+    if (event.key === "Home") index = 0;
+    else if (event.key === "End") index = tabs.length - 1;
+    else if (event.key === "ArrowLeft")
+      index = (index + tabs.length - 1) % tabs.length;
+    else if (event.key === "ArrowRight") index = (index + 1) % tabs.length;
+    else return;
+    event.preventDefault();
+    const next = tabs[index];
+    byId(`${next}-tab`).click();
+    byId(`${next}-tab`).focus();
+  });
+}
+
+function displayStatus(status) {
+  byId("status-library").textContent = status.library.loaded
+    ? `Loaded — onnx-light ${status.library.version}`
+    : "Not loaded";
+  byId("status-model").textContent = status.model.name ?? "No model loaded";
+  const states = {
+    none: "No native model",
+    ready: "Ready",
+    invalidated: "Discarded after a failed analysis",
+  };
+  byId("status-handle").textContent = states[status.model.state];
+  byId("status-running").textContent = status.running.length
+    ? status.running.join("\n")
+    : "Idle";
+  const recovery = {
+    none: "Open a model to create a native handle.",
+    ready: "No model recovery pending.",
+    invalidated:
+      "The next native action recreates the model from its original in-memory bytes or backend case. The previous display is preserved; shapes and metadata may need refreshing.",
+  };
+  byId("status-recovery").textContent = recovery[status.model.state];
+  byId("status-failure").hidden = !status.lastFailure;
+  if (status.lastFailure) {
+    byId("status-failure-action").textContent = status.lastFailure.action;
+    byId("status-failure-time").textContent = status.lastFailure.timestamp;
+    byId("status-failure-details").textContent =
+      status.lastFailure.details ?? "";
+  }
+}
 
 function element(tag, attributes, text) {
   const node = document.createElementNS(svgNS, tag);
@@ -395,7 +552,7 @@ function requestMetadata() {
   if (metadataPending) return;
   metadataStatus(true, "Analyzing metadata…");
   byId("metadata-content").hidden = !graphMetadata;
-  vscode.postMessage({ type: "metadata" });
+  requestAction("metadata", "Refresh metadata");
 }
 
 function initializerList(parameters) {
@@ -652,10 +809,12 @@ function navigate(path) {
   byId("navigation-status").textContent = "Opening graph…";
   svg.setAttribute("aria-busy", "true");
   fit();
-  vscode.postMessage({ type: "navigate", path });
+  requestAction("navigate", "Navigate graph", { path });
 }
 
 function render(graph, metadata) {
+  hasModel = true;
+  setLoading(false);
   endGesture();
   refreshStatus(false);
   svg.setAttribute("aria-busy", "false");
@@ -1027,10 +1186,10 @@ byId("show-doc").addEventListener("click", () => {
 });
 byId("close-doc").addEventListener("click", () => byId("operator-doc").close());
 byId("open-model").addEventListener("click", () =>
-  vscode.postMessage({ type: "open" }),
+  requestAction("open", "Open ONNX model"),
 );
 byId("open-backend-test").addEventListener("click", () =>
-  vscode.postMessage({ type: "open-backend-test" }),
+  requestAction("open-backend-test", "Open backend test"),
 );
 byId("show-metadata").addEventListener("click", () => {
   metadataVisible = !metadataVisible;
@@ -1046,9 +1205,21 @@ byId("show-metadata").addEventListener("click", () => {
 byId("refresh-metadata").addEventListener("click", requestMetadata);
 byId("refresh-shapes").addEventListener("click", () => {
   refreshStatus(true, "Inferring shapes/types…");
-  vscode.postMessage({ type: "refresh-shapes" });
+  requestAction("refresh-shapes", "Refresh shapes");
 });
-byId("refresh-positions").addEventListener("click", refreshPositions);
+byId("refresh-positions").addEventListener("click", () => {
+  const entry = newAction("Refresh positions");
+  try {
+    refreshPositions();
+    entry.status = "SUCCEEDED";
+  } catch (error) {
+    entry.status = "FAILED";
+    entry.details =
+      error instanceof Error ? (error.stack ?? error.message) : String(error);
+  }
+  displayLog(entry);
+  vscode.postMessage({ type: "interaction", entry: { ...entry } });
+});
 byId("zoom-in").addEventListener("click", () => {
   changeZoom(1.25);
 });
@@ -1102,7 +1273,22 @@ window.addEventListener("resize", () => {
   fit();
 });
 window.addEventListener("message", (event) => {
-  if (event.data?.type === "graph") {
+  if (event.data?.type === "application-status") {
+    displayStatus(event.data);
+  } else if (event.data?.type === "log-entry") {
+    displayLog(event.data.entry);
+  } else if (event.data?.type === "log-history") {
+    for (const entry of event.data.entries) displayLog(entry);
+  } else if (event.data?.type === "show-logs") {
+    showTab("logs", true);
+  } else if (event.data?.type === "load-state") {
+    setLoading(
+      event.data.pending,
+      event.data.error ? `Could not open model: ${event.data.error}` : "",
+    );
+  } else if (event.data?.type === "load-error") {
+    setLoading(false, `Could not open model: ${event.data.error}`);
+  } else if (event.data?.type === "graph") {
     render(event.data.graph, event.data.metadata);
   } else if (event.data?.type === "navigation-error") {
     svg.setAttribute("aria-busy", "false");
@@ -1121,4 +1307,5 @@ window.addEventListener("message", (event) => {
     refreshStatus(false, `Shape/type inference failed: ${event.data.error}`);
   }
 });
+setLoading(true);
 vscode.postMessage({ type: "ready" });
