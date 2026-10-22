@@ -82,13 +82,27 @@ Attribute defaults provided by ``LightOpSchema`` are marked ``[default]`` and
 never replace explicit model values. Attribute arrays still show their first
 eight elements and total count when shortened, with bounded preview text.
 
+Nodes such as **If**, **Loop** and **Scan** can contain subgraphs. Select the
+node and click **Open** on a graph attribute in the inspector to explore it.
+Every graph in a graph-list attribute has its own button. The breadcrumbs
+above the canvas return to any enclosing graph, including the main graph.
+Nested graphs retain the model's operator domains and opsets. Captured values
+appear as input ports; captured initializers stay in the parameter list rather
+than becoming graph inputs. Their enclosing types, shapes and storage metadata
+remain available. The inspector lists implicit dependencies under **Captured inputs**.
+Locally declared inputs and weights take precedence over enclosing names.
+
+**Refresh shapes** still infers the retained model and updates the graph
+currently displayed. **Refresh metadata** analyzes the displayed graph.
+Navigation and refreshes do not save or modify the source ONNX file.
+
 **Metadata** switches the side inspector to native constant, tag and lifetime
 analysis, alongside stored model, graph, node and connected-tensor metadata.
 The compact summary shows the selected value's tag and constant status.
 Empty lifetime sections are hidden, and connected tensors and stored metadata
 are expandable. The global **Refresh metadata** button, beside **Refresh
 shapes**, reruns onnx-light's constant, tag and lifetime algorithms for the
-entire model, even with the metadata panel closed. It preserves the current
+displayed graph, even with the metadata panel closed. It preserves the current
 view and keeps the last snapshot visible while refreshing. Progress and
 errors appear in the main toolbar.
 Select an operator to see its tag, whether it is constant, and the results

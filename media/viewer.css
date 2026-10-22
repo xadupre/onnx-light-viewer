@@ -107,14 +107,16 @@ a:focus-visible {
   stroke-linejoin: round;
 }
 #shape-status,
-#metadata-status {
+#metadata-status,
+#navigation-status {
   max-width: 38ch;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
 }
 #shape-status:empty,
-#metadata-status:empty {
+#metadata-status:empty,
+#navigation-status:empty {
   display: none;
 }
 .graph-stats {
@@ -135,6 +137,18 @@ a:focus-visible {
   background-color: #0f1822;
   background-image: radial-gradient(#2a3948 1px, transparent 1px);
   background-size: 20px 20px;
+}
+#graph-navigation:not([hidden]) {
+  display: flex;
+  flex: 0 0 100%;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+#graph-navigation button {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  text-align: left;
+  background: var(--panel);
 }
 #graph {
   display: block;

@@ -212,6 +212,15 @@ function inspect(view) {
       }),
     );
   }
+  const captures = node?.captures ?? [];
+  byId("node-captures").hidden = captures.length === 0;
+  byId("captured-inputs").replaceChildren(
+    ...captures.map((name) => {
+      const item = document.createElement("li");
+      item.textContent = `${name}: ${tensorDescription(name)}`;
+      return item;
+    }),
+  );
   inspectMetadata();
 }
 
@@ -281,7 +290,11 @@ function inspectMetadata() {
   metadataNames("metadata-unused", node ? info.unusedOutputs : []);
   metadataEntries(byId("metadata-node"), node ? info.entries : []);
   const names = new Set(
-    node ? [...node.inputs, ...node.outputs] : port ? [port.name] : [],
+    node
+      ? [...node.inputs, ...(node.captures ?? []), ...node.outputs]
+      : port
+        ? [port.name]
+        : [],
   );
   byId("metadata-value-count").textContent = names.size;
   byId("metadata-values").parentElement.hidden = names.size === 0;
@@ -401,6 +414,13 @@ function parameterList(id, parameters, countId) {
       const value = document.createElement("pre");
       value.textContent = parameter.value;
       item.append(heading, value);
+      for (const [index, graph] of (parameter.graphs ?? []).entries()) {
+        const button = document.createElement("button");
+        button.className = "icon-button";
+        button.textContent = `Open ${parameter.name}${parameter.graphs.length > 1 ? ` [${index}]` : ""}: ${graph.name} (${graph.nodeCount} nodes)`;
+        button.addEventListener("click", () => navigate(graph.path));
+        item.append(button);
+      }
       return item;
     }),
   );
@@ -600,8 +620,35 @@ function changeZoom(factor) {
   fit();
 }
 
+function navigate(path) {
+  endGesture();
+  byId("navigation-status").textContent = "Opening graph…";
+  svg.setAttribute("aria-busy", "true");
+  fit();
+  vscode.postMessage({ type: "navigate", path });
+}
+
 function render(graph, metadata) {
   endGesture();
+  refreshStatus(false);
+  svg.setAttribute("aria-busy", "false");
+  byId("navigation-status").textContent = "";
+  const breadcrumbs = graph.breadcrumbs ?? [];
+  byId("graph-navigation").hidden = breadcrumbs.length < 2;
+  byId("graph-navigation").replaceChildren(
+    ...(breadcrumbs.length > 1 ? breadcrumbs : []).map((crumb, index) => {
+      const button = document.createElement("button");
+      button.className = "icon-button";
+      button.textContent = crumb.name;
+      if (index === breadcrumbs.length - 1) {
+        button.disabled = true;
+        button.setAttribute("aria-current", "page");
+      } else {
+        button.addEventListener("click", () => navigate(crumb.path));
+      }
+      return button;
+    }),
+  );
   resetDocumentation();
   inspectedNode = undefined;
   inspectedView = undefined;
@@ -773,7 +820,7 @@ function render(graph, metadata) {
       halfHeight: 47,
     });
     nodes.append(group);
-    for (const input of node.inputs) {
+    for (const input of [...node.inputs, ...(node.captures ?? [])]) {
       const producer = producers.get(input);
       connect(
         producer ? positions.get(producer) : inputPositions.get(input),
@@ -800,14 +847,19 @@ function render(graph, metadata) {
   if (graph.nodes.length) selected.add(graph.nodes[0].id);
   updateTensorInformation(graph.tensors ?? []);
   updateSelection(undefined, true);
-  refreshStatus(false);
   byId("refresh-positions").disabled = false;
   if (metadata) acceptMetadata(metadata);
   else if (metadataVisible) requestMetadata();
 }
 
 svg.addEventListener("pointerdown", (event) => {
-  if (event.button !== 0 || gesture || !svg.hasAttribute("viewBox")) return;
+  if (
+    event.button !== 0 ||
+    gesture ||
+    !svg.hasAttribute("viewBox") ||
+    svg.getAttribute("aria-busy") === "true"
+  )
+    return;
   const viewport = byId("canvas").getBoundingClientRect();
   const start = graphPoint(event, viewport);
   if (!start) return;
@@ -967,6 +1019,11 @@ window.addEventListener("resize", () => {
 window.addEventListener("message", (event) => {
   if (event.data?.type === "graph") {
     render(event.data.graph, event.data.metadata);
+  } else if (event.data?.type === "navigation-error") {
+    svg.setAttribute("aria-busy", "false");
+    byId("navigation-status").textContent =
+      `Could not open graph: ${event.data.error}`;
+    fit();
   } else if (event.data?.type === "metadata-info") {
     acceptMetadata(event.data.metadata);
   } else if (event.data?.type === "metadata-error") {

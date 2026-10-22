@@ -100,6 +100,105 @@ test("loads a real one-node ONNX model file matching the demo", () => {
   assert.deepEqual(decodeGraph(bytes, "relu.onnx"), demoGraph);
 });
 
+test("opens nested GRAPH and GRAPHS attributes with scoped captures, parameters and schemas", () => {
+  const bytes = modelBytes("subgraphs.onnx");
+  const model = loadModel(bytes, "subgraphs.onnx");
+  const root = model.graph();
+  const branch = (graph, node, attribute) =>
+    graph.nodes[node].attributes.find(({ name }) => name === attribute)
+      .graphs[0];
+  const then = branch(root, 0, "then_branch");
+  const otherwise = branch(root, 0, "else_branch");
+  assert.equal(then.name, otherwise.name);
+  assert.notDeepEqual(then.path, otherwise.path);
+  assert.deepEqual(new Set(root.nodes[0].captures), new Set(["x", "bias"]));
+  const child = model.graph(false, then.path);
+  assert.deepEqual(
+    child.nodes.map(({ opType }) => opType),
+    ["Add", "If"],
+  );
+  assert.deepEqual(new Set(child.inputs), new Set(["x", "condition"]));
+  assert.deepEqual(child.tensors.find(({ name }) => name === "x").shape, [
+    "N",
+    "3",
+  ]);
+  assert.deepEqual(child.nodes[0].parameters[0].shape, ["3"]);
+  assert.equal(child.nodes[0].opset, "13");
+  assert.ok(child.nodes[0].schema.doc);
+  assert.equal(child.initializerCount, 1);
+  assert.ok(!child.tensors.some(({ name }) => name === "z"));
+  assert.equal(
+    model.metadata(then.path).values.find(({ name }) => name === "bias")
+      .constant,
+    true,
+  );
+  assert.equal(model.metadata(then.path).nodes.length, 2);
+  const inner = branch(child, 1, "then_branch");
+  const leaf = model.graph(false, inner.path);
+  assert.equal(leaf.breadcrumbs.length, 3);
+  assert.deepEqual(leaf.inputs, ["sum"]);
+  assert.equal(model.graph(false, otherwise.path).nodes[0].opType, "Identity");
+  const graphs = root.nodes[1].attributes[0].graphs;
+  assert.equal(graphs.length, 2);
+  assert.equal(model.graph(false, graphs[0].path).nodes.length, 0);
+  const shadow = model.graph(false, graphs[1].path);
+  assert.deepEqual(shadow.tensors.find(({ name }) => name === "x").shape, [
+    "2",
+  ]);
+  assert.deepEqual(shadow.nodes[0].parameters[0].shape, ["2"]);
+  assert.deepEqual(model.graph(), root);
+  assert.deepEqual(modelBytes("subgraphs.onnx"), bytes);
+  for (const path of [
+    [null],
+    [{ node: -1, attribute: 0, graph: 0 }],
+    [{ node: 0.5, attribute: 0, graph: 0 }],
+    [{ node: 99, attribute: 0, graph: 0 }],
+    [{ node: 0, attribute: 99, graph: 0 }],
+    [{ node: 0, attribute: 0, graph: 99 }],
+  ]) {
+    assert.throws(() => model.graph(false, path), /subgraph path/);
+    assert.throws(() => model.metadata(path), /subgraph path/);
+  }
+});
+
+test("refreshes shapes inside a nested graph using the retained enclosing model", () => {
+  const model = loadModel(modelBytes("nested-if.onnx"), "nested-if.onnx");
+  const then = model
+    .graph()
+    .nodes[0].attributes.find(({ name }) => name === "then_branch").graphs[0];
+  const child = model.graph(false, then.path);
+  const leafPath = child.nodes[1].attributes.find(
+    ({ name }) => name === "then_branch",
+  ).graphs[0].path;
+  const leaf = model.graph(true, leafPath);
+  assert.deepEqual(leaf.tensors.find(({ name }) => name === "sum").shape, [
+    "N",
+    "3",
+  ]);
+  assert.deepEqual(model.graph(false, leafPath), leaf);
+});
+
+test("opens the released Loop and Scan bodies with their inferred output shapes", () => {
+  const cases = listBackendTests();
+  for (const [name, output, shape] of [
+    ["test_cc_loop_basic_trip_count", "scan_out", ["1"]],
+    ["test_cc_scan_basic_trip_count", "y_elt", ["2"]],
+  ]) {
+    const model = loadBackendTest(cases.find((test) => test.name === name).id);
+    const body = model
+      .graph()
+      .nodes.flatMap((node) =>
+        node.attributes.flatMap((attribute) => attribute.graphs ?? []),
+      )[0];
+    const graph = model.graph(true, body.path);
+    assert.equal(graph.breadcrumbs.length, 2);
+    assert.deepEqual(
+      graph.tensors.find(({ name }) => name === output).shape,
+      shape,
+    );
+  }
+});
+
 test("analyzes constants, tags and last-use releases without reading weights or changing stored metadata", () => {
   const bytes = modelBytes("analysis.onnx");
   const model = loadModel(bytes, "analysis.onnx");

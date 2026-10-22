@@ -86,6 +86,76 @@ function openViewer(t) {
   };
 }
 
+test("opens graph attributes and nested breadcrumbs, including empty graphs and failed navigation", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const model = loadModel(
+    readFileSync(require.resolve("./models/subgraphs.onnx")),
+    "subgraphs.onnx",
+  );
+  const root = model.graph();
+  load(root);
+  const buttons = document.querySelectorAll("#node-attributes button");
+  assert.equal(buttons.length, 2);
+  assert.match(
+    document.getElementById("captured-inputs").textContent,
+    /x: FLOAT \[N, 3\]/,
+  );
+  buttons[1].click();
+  const request = messages.at(-1);
+  assert.equal(request.type, "navigate");
+  assert.equal(
+    document.getElementById("graph").getAttribute("aria-busy"),
+    "true",
+  );
+  load(model.graph(false, request.path));
+  assert.equal(document.getElementById("graph-navigation").hidden, false);
+  assert.equal(document.querySelectorAll("#graph-navigation button").length, 2);
+  assert.equal(
+    document.querySelector("#graph-navigation [aria-current]").disabled,
+    true,
+  );
+  assert.equal(document.querySelectorAll(".graph-node").length, 2);
+  document
+    .querySelector('[data-id="node-1"]')
+    .dispatchEvent(
+      new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+    );
+  document.querySelector("#node-attributes button").click();
+  load(model.graph(false, messages.at(-1).path));
+  assert.equal(document.querySelectorAll("#graph-navigation button").length, 3);
+  assert.equal(document.querySelectorAll(".graph-node").length, 1);
+  document.querySelector("#graph-navigation button").click();
+  assert.deepEqual(Array.from(messages.at(-1).path), []);
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: { type: "navigation-error", error: "invalid path" },
+    }),
+  );
+  assert.match(
+    document.getElementById("navigation-status").textContent,
+    /invalid path/,
+  );
+  assert.equal(document.querySelectorAll(".graph-node").length, 1);
+  load(root);
+  document
+    .querySelector('[data-id="node-1"]')
+    .dispatchEvent(
+      new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+    );
+  assert.equal(document.querySelectorAll("#node-attributes button").length, 2);
+  document.querySelector("#node-attributes button").click();
+  load(model.graph(false, messages.at(-1).path));
+  assert.equal(document.querySelectorAll(".graph-node").length, 0);
+  assert.equal(
+    document.getElementById("node-title").textContent,
+    "No operator",
+  );
+  load(demoGraph);
+  assert.equal(document.getElementById("graph-navigation").hidden, true);
+  assert.equal(document.querySelectorAll("#node-attributes button").length, 0);
+  assert.equal(document.getElementById("navigation-status").textContent, "");
+});
+
 test("refreshes whole-model metadata from the global toolbar with the inspector closed", (t) => {
   const { document, window, messages, load } = openViewer(t);
   const refresh = document.getElementById("refresh-metadata");

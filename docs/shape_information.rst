@@ -44,6 +44,11 @@ information, so subsequent reads use the updated model rather than a separate
 display-only cache. Refreshing does not reread, save or modify the original
 ONNX file.
 
+When exploring a subgraph, refresh still infers the enclosing model so captured
+values retain their context. The retained child shape contexts are applied to
+the corresponding nested graphs' outputs and ``value_info``. The displayed
+subgraph and its inspector then receive the updated tensor descriptions.
+
 Refreshing positions
 --------------------
 
@@ -56,10 +61,12 @@ type/shape information are preserved. This action does not run shape inference.
 Native implementation and limitations
 -------------------------------------
 
-The binding uses ``onnx_shapes::RegisterShapeFunctions()`` followed by
-``core::shapes::InferShapesModel()`` from the already published onnx-light
-C++ release. No JavaScript shape rules, upstream ONNX package, Python process
-or external service is involved.
+The binding uses ``onnx_shapes::RegisterShapeFunctions()`` and
+``core::shapes::ShapesContext::ComputeShapeModel()`` from the already published
+onnx-light C++ release. It applies the root context with
+``ApplyInferredShapesToModel()`` and retained child contexts with
+``ApplyInferredShapesToGraph()``. No JavaScript shape rules, upstream ONNX
+package, Python process or external service is involved.
 
 Inline ``raw_data`` is borrowed from the retained bytes during inference
 without copying the weight payloads. This makes small constant tensors, such

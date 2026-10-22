@@ -26,8 +26,9 @@ newest schema whose ``since_version`` does not exceed the model's imported
 opset. Missing schemas or documentation simply disable the **Doc** button.
 No external documentation service is used.
 
-The refresh action registers the released ``onnx_shapes`` algorithms and calls
-``core::shapes::InferShapesModel``. See :doc:`shape_information` for the
+The refresh action registers the released ``onnx_shapes`` algorithms and uses
+``core::shapes::ShapesContext`` to infer the model and persist its root and
+retained subgraph descriptors. See :doc:`shape_information` for the
 displayed metadata, refresh behavior and inference limitations.
 
 The backend-test selector calls ``core::backend_test::CollectTestCases("", true)``
@@ -45,6 +46,12 @@ captures and preserves graph outputs and caller-owned inputs/initializers.
 Release lists are exposed as arrays of names, not parsed from semicolon-delimited
 metadata strings. Stored ``metadata_props`` remain separate from computed
 classifications, and arbitrary keys and values are displayed as plain text.
+
+Graph-valued attributes expose lightweight navigation links rather than
+eagerly decoding every nested graph for the webview. Paths use node, attribute
+and graph indices, so repeated graph names are unambiguous. The native model
+resolves a selected path on demand, retaining enclosing opsets, tensor types
+and initializer storage metadata without copying or loading weight payloads.
 
 Extension host compatibility
 ----------------------------
