@@ -22,6 +22,33 @@ function openViewer(t) {
   let viewport = { width: 1060, height: 350 };
   dom.window.document.getElementById("canvas").getBoundingClientRect = () =>
     new dom.window.DOMRect(0, 0, viewport.width, viewport.height);
+  const graph = dom.window.document.getElementById("graph");
+  const captures = new Set();
+  graph.setPointerCapture = (id) => captures.add(id);
+  graph.hasPointerCapture = (id) => captures.has(id);
+  graph.releasePointerCapture = (id) => {
+    captures.delete(id);
+    const event = new dom.window.Event("lostpointercapture");
+    Object.defineProperty(event, "pointerId", { value: id });
+    graph.dispatchEvent(event);
+  };
+  const pointer = (target, type, x, y, modifiers = {}) => {
+    const [left, top, width, height] = graph
+      .getAttribute("viewBox")
+      .split(" ")
+      .map(Number);
+    const event = new dom.window.MouseEvent(type, {
+      bubbles: true,
+      cancelable: true,
+      clientX: ((x - left) * viewport.width) / width,
+      clientY: ((y - top) * viewport.height) / height,
+      ...modifiers,
+    });
+    Object.defineProperty(event, "pointerId", {
+      value: modifiers.pointerId ?? 1,
+    });
+    target.dispatchEvent(event);
+  };
   const resize = (width, height) => {
     viewport = { width, height };
     dom.window.dispatchEvent(new dom.window.Event("resize"));
@@ -40,12 +67,21 @@ function openViewer(t) {
     messages,
     load,
     resize,
+    pointer,
   };
 }
 
 test("renders the demo, inspects its operator and requests a real file", (t) => {
-  const { document, messages, load } = openViewer(t);
+  const { document, messages, load, window } = openViewer(t);
   assert.equal(messages[0].type, "ready");
+  const errors = [];
+  window.addEventListener("error", (event) => errors.push(event.error));
+  document
+    .getElementById("graph")
+    .dispatchEvent(
+      new window.MouseEvent("pointerdown", { bubbles: true, button: 0 }),
+    );
+  assert.deepEqual(errors, []);
   load(demoGraph);
   assert.doesNotMatch(
     document.body.textContent,
@@ -134,10 +170,22 @@ function chainGraph() {
 }
 
 function nodePositions(document) {
-  return Array.from(document.querySelectorAll(".graph-node rect"), (rect) => ({
-    x: Number(rect.getAttribute("x")) + Number(rect.getAttribute("width")) / 2,
-    y: Number(rect.getAttribute("y")) + Number(rect.getAttribute("height")) / 2,
-  }));
+  return Array.from(document.querySelectorAll(".graph-node rect"), (rect) => {
+    const [dx, dy] = rect.parentElement
+      .getAttribute("transform")
+      ?.match(/-?\d+(?:\.\d+)?(?:e[+-]?\d+)?/gi)
+      .map(Number) ?? [0, 0];
+    return {
+      x:
+        Number(rect.getAttribute("x")) +
+        Number(rect.getAttribute("width")) / 2 +
+        dx,
+      y:
+        Number(rect.getAttribute("y")) +
+        Number(rect.getAttribute("height")) / 2 +
+        dy,
+    };
+  });
 }
 
 test("renders a portrait graph with inputs above operators and outputs below", (t) => {
@@ -308,4 +356,199 @@ test("fits resized viewports without resetting zoom or rearranging nodes", (t) =
   assert.ok(viewBox().every(Number.isFinite));
   assert.ok(Math.abs(viewBox()[2] / viewBox()[3] - 800 / 600) < 1e-10);
   assert.deepEqual(nodePositions(document), positions);
+});
+
+function assertMoved(before, after, indices, dx, dy) {
+  before.forEach((position, index) => {
+    assert.ok(
+      Math.abs(
+        after[index].x - position.x - (indices.includes(index) ? dx : 0),
+      ) < 1e-8,
+    );
+    assert.ok(
+      Math.abs(
+        after[index].y - position.y - (indices.includes(index) ? dy : 0),
+      ) < 1e-8,
+    );
+  });
+}
+
+test("drags a zoomed operator and updates its connections without moving other nodes", (t) => {
+  const { document, load, resize, pointer } = openViewer(t);
+  load(chainGraph());
+  resize(1024, 700);
+  document.getElementById("zoom-in").click();
+  const graph = document.getElementById("graph");
+  const before = nodePositions(document);
+  const nodes = document.querySelectorAll(".graph-node");
+  const edgePaths = () =>
+    Array.from(document.querySelectorAll(".edge"), (edge) =>
+      edge.getAttribute("d"),
+    );
+  const edgesBefore = edgePaths();
+  const labelsBefore = Array.from(
+    document.querySelectorAll(".tensor-label"),
+    (text) => text.getAttribute("y"),
+  );
+  const start = before[2];
+  pointer(nodes[2], "pointerdown", start.x, start.y);
+  assert.equal(graph.hasPointerCapture(1), true);
+  pointer(graph, "pointermove", start.x + 100, start.y, { pointerId: 2 });
+  assert.deepEqual(nodePositions(document), before);
+  pointer(graph, "pointermove", start.x + 40, start.y + 70);
+  assertMoved(before, nodePositions(document), [2], 40, 70);
+  pointer(graph, "pointerup", start.x + 40, start.y + 70);
+  assert.equal(graph.hasPointerCapture(1), false);
+  assert.equal(nodes[2].getAttribute("aria-pressed"), "true");
+  assert.equal(nodes[0].getAttribute("aria-pressed"), "false");
+  edgePaths().forEach((path, index) => {
+    if (index === 2 || index === 3) {
+      assert.notEqual(path, edgesBefore[index]);
+      assert.notEqual(
+        document.querySelectorAll(".tensor-label")[index].getAttribute("y"),
+        labelsBefore[index],
+      );
+    } else {
+      assert.equal(path, edgesBefore[index]);
+    }
+  });
+  pointer(graph, "pointermove", start.x + 200, start.y + 200);
+  assertMoved(before, nodePositions(document), [2], 40, 70);
+});
+
+test("modifier clicks toggle selection and dragging a selected operator moves the whole selection", (t) => {
+  const { document, load, pointer, window } = openViewer(t);
+  load(chainGraph());
+  const graph = document.getElementById("graph");
+  const nodes = document.querySelectorAll(".graph-node");
+  const before = nodePositions(document);
+  for (const [index, modifiers] of [
+    [1, { ctrlKey: true }],
+    [2, { shiftKey: true }],
+    [1, { metaKey: true }],
+  ]) {
+    const point = before[index];
+    pointer(nodes[index], "pointerdown", point.x, point.y, modifiers);
+    pointer(graph, "pointerup", point.x, point.y, modifiers);
+    nodes[index].dispatchEvent(
+      new window.MouseEvent("click", {
+        bubbles: true,
+        detail: 1,
+        ...modifiers,
+      }),
+    );
+  }
+  assert.deepEqual(
+    Array.from(nodes, (node) => node.getAttribute("aria-pressed")),
+    ["true", "false", "true", "false", "false", "false"],
+  );
+  pointer(nodes[0], "pointerdown", before[0].x, before[0].y);
+  pointer(graph, "pointermove", before[0].x - 35, before[0].y + 45);
+  pointer(graph, "pointerup", before[0].x - 35, before[0].y + 45);
+  assertMoved(before, nodePositions(document), [0, 2], -35, 45);
+});
+
+test("rectangle selection supports reverse and additive gestures and moves together", (t) => {
+  const { document, load, pointer, window } = openViewer(t);
+  load(chainGraph());
+  const graph = document.getElementById("graph");
+  pointer(graph, "pointerdown", 500, 400);
+  pointer(graph, "pointermove", -10, 110);
+  assert.equal(document.querySelectorAll(".graph-node.selected").length, 2);
+  assert.ok(document.querySelector(".selection-rectangle"));
+  pointer(graph, "pointerup", -10, 110);
+  assert.equal(document.querySelector(".selection-rectangle"), null);
+  pointer(graph, "pointerdown", -10, 700, { ctrlKey: true });
+  pointer(graph, "pointermove", 500, 820, { ctrlKey: true });
+  pointer(graph, "pointerup", 500, 820, { ctrlKey: true });
+  assert.deepEqual(
+    Array.from(
+      document.querySelectorAll(".graph-node.selected"),
+      (node) => node.dataset.id,
+    ),
+    ["node-0", "node-1", "node-4"],
+  );
+  const before = nodePositions(document);
+  pointer(
+    document.querySelector('[data-id="node-1"]'),
+    "pointerdown",
+    before[1].x,
+    before[1].y,
+  );
+  pointer(graph, "pointerup", before[1].x + 30, before[1].y - 25);
+  assertMoved(before, nodePositions(document), [0, 1, 4], 30, -25);
+  pointer(graph, "pointerdown", 0, 0);
+  pointer(graph, "pointerup", 0, 0);
+  assert.equal(document.querySelectorAll(".graph-node.selected").length, 0);
+  graph.dispatchEvent(
+    new window.KeyboardEvent("keydown", { key: "a", ctrlKey: true }),
+  );
+  assert.equal(document.querySelectorAll(".graph-node.selected").length, 6);
+  graph.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape" }));
+  assert.equal(document.querySelectorAll(".graph-node.selected").length, 0);
+});
+
+test("cancels interrupted drags and rectangles and drops state on model replacement", (t) => {
+  const { document, load, pointer, window } = openViewer(t);
+  load(chainGraph());
+  const graph = document.getElementById("graph");
+  const before = nodePositions(document);
+  for (const cancel of [
+    () => pointer(graph, "pointercancel", 0, 0),
+    () =>
+      graph.dispatchEvent(
+        new window.KeyboardEvent("keydown", { key: "Escape" }),
+      ),
+    () => window.dispatchEvent(new window.Event("blur")),
+  ]) {
+    pointer(
+      document.querySelector(".graph-node"),
+      "pointerdown",
+      before[0].x,
+      before[0].y,
+    );
+    pointer(graph, "pointermove", before[0].x + 100, before[0].y + 100);
+    cancel();
+    assertMoved(before, nodePositions(document), [], 0, 0);
+    assert.equal(graph.hasPointerCapture(1), false);
+    assert.equal(graph.classList.contains("dragging"), false);
+  }
+  pointer(graph, "pointerdown", 500, 100);
+  pointer(graph, "pointermove", -10, 900);
+  graph.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape" }));
+  assert.equal(document.querySelectorAll(".graph-node.selected").length, 1);
+  assert.equal(document.querySelector(".selection-rectangle"), null);
+  pointer(graph, "pointerdown", 500, 100);
+  pointer(graph, "pointermove", -10, 900);
+  load(demoGraph);
+  assert.equal(graph.hasPointerCapture(1), false);
+  assert.equal(document.querySelector(".selection-rectangle"), null);
+  assert.equal(document.querySelectorAll(".graph-node.selected").length, 1);
+  assert.equal(document.querySelectorAll(".graph-node").length, 1);
+});
+
+test("Fit includes operators dragged beyond the original bounds without snapping during drag", (t) => {
+  const { document, load, pointer } = openViewer(t);
+  load(demoGraph);
+  const graph = document.getElementById("graph");
+  const viewBoxBefore = graph.getAttribute("viewBox");
+  const start = nodePositions(document)[0];
+  pointer(
+    document.querySelector(".graph-node"),
+    "pointerdown",
+    start.x,
+    start.y,
+  );
+  pointer(graph, "pointermove", -800, -900);
+  pointer(graph, "pointerup", -800, -900);
+  assert.equal(graph.getAttribute("viewBox"), viewBoxBefore);
+  document.getElementById("zoom-fit").click();
+  const [x, y, width, height] = graph
+    .getAttribute("viewBox")
+    .split(" ")
+    .map(Number);
+  const moved = nodePositions(document)[0];
+  assert.ok(moved.x - 80 >= x && moved.x + 80 <= x + width);
+  assert.ok(moved.y - 47 >= y && moved.y + 47 <= y + height);
+  assert.notEqual(graph.getAttribute("viewBox"), viewBoxBefore);
 });
