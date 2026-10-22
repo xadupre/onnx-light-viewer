@@ -2,6 +2,7 @@
 src/**
 test/**
 docs/**
+examples/**
 tsconfig.json
 .prettierignore
 .gitignore

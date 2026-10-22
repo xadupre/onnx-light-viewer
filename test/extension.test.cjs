@@ -6,7 +6,7 @@ const path = require("node:path");
 const vm = require("node:vm");
 const { test } = require("node:test");
 
-async function openExtension(customModel) {
+async function openExtension(customModel, command = "onnxLightViewer.open") {
   const messages = [];
   const errors = [];
   const reads = [];
@@ -78,7 +78,7 @@ async function openExtension(customModel) {
       panel,
     );
   } else {
-    await commands.get("onnxLightViewer.open")();
+    await commands.get(command)();
   }
   return {
     messages,
@@ -128,6 +128,27 @@ test("refreshes the bundled demo and the currently opened model using its retain
       .graph.tensors.find((tensor) => tensor.name === "hidden").type,
     "FLOAT",
   );
+});
+
+test("opens the bundled symbolic transformer through its command and refreshes its intermediate shapes", async () => {
+  const extension = await openExtension(
+    undefined,
+    "onnxLightViewer.openSymbolicExample",
+  );
+  await extension.receive({ type: "ready" });
+  assert.equal(
+    extension.messages.at(-1).graph.name,
+    "Tiny symbolic transformer",
+  );
+  assert.ok(extension.reads[0].endsWith("media/tiny-llm.onnx"));
+  await extension.receive({ type: "refresh-shapes" });
+  assert.deepEqual(
+    extension.messages
+      .at(-1)
+      .tensors.find(({ name }) => name === "feed_forward_expanded").shape,
+    ["batch_size", "sequence_length", "32"],
+  );
+  assert.deepEqual(extension.errors, []);
 });
 
 test("reports native inference errors without publishing partial results or changing the current graph", async () => {

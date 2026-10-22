@@ -31,7 +31,7 @@ export function webviewHtml(
           <section id="node-parameters" hidden>
             <h3>Attributes <span id="attribute-count">0</span></h3><ul id="node-attributes"></ul>
             <h3>Initializers <span id="parameter-count">0</span></h3><ul id="node-initializers"></ul>
-            <p>Up to 8 elements are shown per parameter array. Raw tensor data is not displayed; external weights are not loaded.</p>
+            <p>All connected initializers are listed with their shape, type and storage location. Weight values are not displayed; external files are not loaded. Attribute arrays show up to 8 elements.</p>
           </section>
         </aside>
       </div>

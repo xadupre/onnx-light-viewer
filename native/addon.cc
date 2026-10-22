@@ -272,6 +272,19 @@ Napi::Array ValueNames(Napi::Env env, const Values &values,
   return result;
 }
 
+Napi::Object StorageInformation(Napi::Env env, const ol::TensorProto &tensor) {
+  auto result = Napi::Object::New(env);
+  result.Set("external", tensor.data_location() == ol::TensorProto::EXTERNAL ||
+                             !tensor.external_data().empty());
+  result.Set("location", env.Null());
+  for (const auto &entry : tensor.external_data()) {
+    if (entry.key() == "location") {
+      result.Set("location", Text(env, entry.value()));
+    }
+  }
+  return result;
+}
+
 Napi::Object ModelGraph(Napi::Env env, const ol::ModelProto &model, const std::string &file_name) {
   const auto &graph = model.graph();
   std::map<std::string, Napi::Object> tensor_information;
@@ -297,10 +310,8 @@ Napi::Object ModelGraph(Napi::Env env, const ol::ModelProto &model, const std::s
       initializers.emplace(name);
       tensor_information.insert_or_assign(
           name, InitializerInformation(env, name, tensor.data_type(), tensor.dims()));
-      auto parameter = Napi::Object::New(env);
-      parameter.Set("name", name);
-      parameter.Set("type", ol::TensorProto::DataType_Name(tensor.data_type()));
-      parameter.Set("value", TensorPreview(tensor));
+      auto parameter = InitializerInformation(env, name, tensor.data_type(), tensor.dims());
+      parameter.Set("storage", StorageInformation(env, tensor));
       parameters.emplace(name, parameter);
     }
   }
@@ -311,11 +322,10 @@ Napi::Object ModelGraph(Napi::Env env, const ol::ModelProto &model, const std::s
       tensor_information.insert_or_assign(
           name,
           InitializerInformation(env, name, tensor.values().data_type(), tensor.dims(), true));
-      auto parameter = Napi::Object::New(env);
-      parameter.Set("name", name);
-      parameter.Set("type", std::string("SPARSE ") +
-                                ol::TensorProto::DataType_Name(tensor.values().data_type()));
-      parameter.Set("value", SparsePreview(tensor));
+      auto parameter =
+          InitializerInformation(env, name, tensor.values().data_type(), tensor.dims(), true);
+      parameter.Set("storage", StorageInformation(env, tensor.values()));
+      parameter.Set("indicesStorage", StorageInformation(env, tensor.indices()));
       parameters.emplace(name, parameter);
     }
   }

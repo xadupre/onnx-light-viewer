@@ -59,16 +59,24 @@ Shift+wheel moves it horizontally. Horizontal trackpad scrolling is also
 supported. **Fit** recenters the graph and resets zoom and scrolling.
 
 The inspector also shows the imported opset, typed operator attributes and
-connected dense or sparse initializers (type, dimensions and stored typed
-values). Attribute defaults provided by ``LightOpSchema`` are marked
-``[default]`` and never replace explicit model values. Parameter arrays show
-their first eight elements and the total count when shortened. Tensor and
-attribute preview text is also bounded; raw weight payloads are not displayed.
+all connected dense or sparse initializers, without a limit on their number.
+Scroll the inspector to reach the entire list. Initializers show only their
+type, shape and whether their storage is embedded or external. External
+initializers identify their weight file, including separate values/indices
+files for sparse tensors. Weight values are not sent to the viewer or displayed,
+and external files are never opened.
+
+Attribute defaults provided by ``LightOpSchema`` are marked ``[default]`` and
+never replace explicit model values. Attribute arrays still show their first
+eight elements and total count when shortened, with bounded preview text.
 
 Click **Refresh shapes** to :doc:`refresh shape and type
 information <shape_information>` with onnx-light. Tensor descriptions appear
 on the graph and in the side inspector. The viewer logo opens the GitHub
 repository.
+
+For a bundled language-model example with symbolic batch/sequence dimensions,
+see :doc:`symbolic_example`.
 
 Use **Doc** to open the selected operator's available ``LightOpSchema``
 documentation, including formal inputs, outputs, attributes and type

@@ -9,5 +9,6 @@ onnx-light; no model data is uploaded.
 
    getting_started
    shape_information
+   symbolic_example
    native_loading
    development

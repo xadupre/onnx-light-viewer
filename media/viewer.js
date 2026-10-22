@@ -143,7 +143,7 @@ function inspect(view) {
     (attribute) => !names.has(attribute.name),
   );
   parameterList("attributes", [...attributes, ...defaults], "attribute-count");
-  parameterList("initializers", node?.parameters ?? [], "parameter-count");
+  initializerList(node?.parameters ?? []);
   byId("node-parameters").hidden = !node;
   for (const direction of ["inputs", "outputs"]) {
     const names =
@@ -167,6 +167,32 @@ function inspect(view) {
       }),
     );
   }
+}
+
+function initializerList(parameters) {
+  byId("parameter-count").textContent = parameters.length;
+  byId("node-initializers").replaceChildren(
+    ...parameters.map((parameter) => {
+      const item = document.createElement("li");
+      const heading = document.createElement("strong");
+      heading.textContent = `${parameter.name} (${parameter.type})`;
+      const shape = document.createElement("div");
+      shape.className = "tensor-info";
+      shape.textContent = `Shape: [${parameter.shape.join(", ")}]`;
+      item.append(heading, shape);
+      for (const [label, storage] of [
+        [parameter.indicesStorage ? "Values" : "Storage", parameter.storage],
+        ["Indices", parameter.indicesStorage],
+      ]) {
+        if (!storage) continue;
+        const description = document.createElement("div");
+        description.className = "initializer-storage";
+        description.textContent = `${label}: ${storage.external ? `external file: ${storage.location || "not specified"}` : "embedded"}`;
+        item.append(description);
+      }
+      return item;
+    }),
+  );
 }
 
 function parameterList(id, parameters, countId) {

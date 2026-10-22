@@ -8,6 +8,19 @@ export interface GraphAttribute extends GraphParameter {
   default: boolean;
 }
 
+export interface InitializerStorage {
+  external: boolean;
+  location: string | null;
+}
+
+export interface GraphInitializer {
+  name: string;
+  type: string;
+  shape: string[];
+  storage: InitializerStorage;
+  indicesStorage?: InitializerStorage;
+}
+
 export interface OperatorSchema {
   sinceVersion: number;
   doc: string;
@@ -23,7 +36,7 @@ export interface GraphNode {
   outputs: string[];
   opset: string | null;
   attributes: GraphAttribute[];
-  parameters: GraphParameter[];
+  parameters: GraphInitializer[];
   schema: OperatorSchema | null;
 }
 
