@@ -1,0 +1,75 @@
+Development
+===========
+
+Manual launch
+-------------
+
+The simplest development loop is :doc:`start.sh <getting_started>`.
+To launch manually instead:
+
+.. code-block:: bash
+
+   npm ci
+   npm run compile
+
+Open the repository in VS Code and press **F5** to launch the Extension
+Development Host. Run **ONNX Light Viewer: Open Graph** in that window's
+Command Palette to open the one-node demo.
+
+``npm run compile`` builds the native binding and TypeScript.
+``npm run watch`` watches TypeScript only; compile the native binding first,
+and rebuild it with ``npm run build:native`` after editing C++.
+
+Tests and formatting
+--------------------
+
+Run from the repository root:
+
+.. code-block:: bash
+
+   npm test
+   npm run format:check
+   clang-format --dry-run --Werror native/addon.cc
+
+The **Tests** GitHub Actions workflow builds the binding, runs the tests and
+checks JavaScript/C++ formatting on pull requests and pushes to ``main``.
+Its documentation job also builds Sphinx with warnings treated as errors.
+Results appear in the PR's **Checks** tab and the repository's **Actions** tab.
+
+Test models
+-----------
+
+``test/models/relu.onnx`` contains one Relu operator with float32 input/output
+tensors of shape ``[1, 3]`` (IR 9, opset 13). It can also be opened in the viewer.
+Other small models cover custom operators, dense/sparse initializers, optional
+ports, an empty operator list and intentionally invalid metadata.
+
+To regenerate them with the Python ``onnx-light`` package available:
+
+.. code-block:: bash
+
+   python3 test/models/generate_models.py
+
+Python is not required to run the extension tests.
+
+Building this documentation
+---------------------------
+
+With Python 3.11 or later, run from the repository root:
+
+.. code-block:: bash
+
+   python3 -m pip install -r docs/requirements.txt
+   python3 -m sphinx -n -W --keep-going -b html docs build/docs/html
+
+Open ``build/docs/html/index.html`` in a browser. Generated HTML is ignored by
+Git. Documentation dependencies are separate from the extension's dependencies.
+
+Source layout
+-------------
+
+* ``src/extension.ts``: VS Code integration and model opening.
+* ``src/graph.ts``: graph types and the typed native entry point.
+* ``native/addon.cc``: native model decoding.
+* ``media/viewer.js`` and ``media/viewer.css``: graph rendering and layout.
+* ``media/logo.svg``: extension logo.

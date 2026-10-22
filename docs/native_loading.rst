@@ -1,0 +1,31 @@
+Native model loading
+====================
+
+The extension host loads a Node-API 8 C++ binding linked to onnx-light's
+``onnx_proto`` library. It does not use the npm ``onnx-proto`` package,
+protobufjs, upstream ``onnx``, a Python process, or a custom ONNX decoder.
+
+Published library
+-----------------
+
+The first build downloads the already published
+`onnx-light 0.1.35 C++ release
+<https://github.com/xadupre/onnx-light/releases/tag/0.1.35>`_,
+selecting the archive for the current platform and verifying its SHA-256
+checksum. Only the small Node-API binding is compiled; onnx-light is not rebuilt.
+There is no fallback to compiling onnx-light from source.
+
+The archive is cached under ``build/native/`` and reused on subsequent builds.
+The platform asset names and checksums are pinned in ``CMakeLists.txt``.
+
+Extension host compatibility
+----------------------------
+
+The compiled binding is written to ``dist/native/onnx_light_viewer.node``.
+It must match the extension host's operating system and architecture, rather
+than necessarily those of the desktop running VS Code. For example, Remote WSL
+uses the Linux binding.
+
+Node-API allows the binding to be loaded by Node.js and VS Code without an
+Electron-specific rebuild. The native binding and dependency licenses are
+included when packaging the extension.
