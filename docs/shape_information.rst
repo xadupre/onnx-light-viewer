@@ -64,13 +64,17 @@ or external service is involved.
 Inline ``raw_data`` is borrowed from the retained bytes during inference
 without copying the weight payloads. This makes small constant tensors, such
 as the shape input of ``Reshape``, available to onnx-light. External weight
-files are not loaded, and raw weight payloads are not displayed.
+files are not loaded. Initializer inspection exports metadata only: shape,
+type and embedded/external storage, with the external file name when declared.
+No initializer values are displayed, even for tensors with typed inline data.
 
 Inference follows the algorithms and supported operators of that release.
 Unsupported operators or missing required information can produce a native
 inference error. In that case, the viewer reports the error and keeps the
 previous information rather than presenting partial results as a success.
 Symbolic dimensions may remain symbolic after a successful refresh.
+The :doc:`bundled transformer example <symbolic_example>` demonstrates symbolic
+batch and sequence dimensions through attention and feed-forward layers.
 
 Repository link
 ---------------

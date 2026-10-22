@@ -167,3 +167,50 @@ metadata = helper.make_model(
     opset_imports=[helper.make_opsetid("", 13)],
 )
 save_model(metadata, Path(__file__).with_name("metadata.onnx"))
+
+
+def external_tensor(name, dtype, dimensions, location):
+    tensor = TensorProto()
+    tensor.name = name
+    tensor.data_type = dtype
+    tensor.dims.extend(dimensions)
+    tensor.data_location = TensorProto.EXTERNAL
+    entry = tensor.external_data.add()
+    entry.key = "location"
+    entry.value = location
+    return tensor
+
+
+initializer_metadata = [
+    helper.make_tensor(f"weight_{index}", TensorProto.FLOAT, [1], [index + 0.25])
+    for index in range(10)
+]
+initializer_metadata.append(
+    external_tensor("external_weight", TensorProto.FLOAT, [1], "weights/decoder.bin")
+)
+external_sparse = helper.make_sparse_tensor(
+    external_tensor("external_sparse", TensorProto.FLOAT, [1], "weights/values.bin"),
+    external_tensor("indices", TensorProto.INT64, [1], "weights/indices.bin"),
+    [1],
+)
+initializer_model = helper.make_model(
+    helper.make_graph(
+        [
+            helper.make_node(
+                "Inspect",
+                ["x", *[tensor.name for tensor in initializer_metadata], "external_sparse"],
+                ["y"],
+                domain="example",
+            )
+        ],
+        "Initializer metadata",
+        [value_info("x")],
+        [value_info("y")],
+        initializer=initializer_metadata,
+        sparse_initializer=[external_sparse],
+    ),
+    ir_version=9,
+    opset_imports=[helper.make_opsetid("", 13), helper.make_opsetid("example", 1)],
+)
+# External files are intentionally absent: viewing metadata must not open them.
+save_model(initializer_model, Path(__file__).with_name("initializers.onnx"))

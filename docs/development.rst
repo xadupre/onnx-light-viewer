@@ -53,6 +53,12 @@ To regenerate them with the Python ``onnx-light`` package available:
 
    python3 test/models/generate_models.py
 
+The :doc:`symbolic transformer example <symbolic_example>` is generated
+separately with ``python3 examples/generate_tiny_llm.py``. Its bundled ONNX
+file is exercised directly by the native and extension tests. Initializer
+metadata tests also use external-file references whose payload files are
+intentionally absent, and more than eight connected initializers.
+
 Python is not required to run the extension tests.
 
 Building this documentation

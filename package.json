@@ -27,6 +27,11 @@
         "command": "onnxLightViewer.open",
         "title": "ONNX Light Viewer: Open Graph",
         "icon": "media/logo.svg"
+      },
+      {
+        "command": "onnxLightViewer.openSymbolicExample",
+        "title": "ONNX Light Viewer: Open Symbolic Transformer Example",
+        "icon": "media/logo.svg"
       }
     ],
     "customEditors": [

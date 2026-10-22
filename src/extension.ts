@@ -12,19 +12,26 @@ interface LoadedModel {
 }
 
 export function activate(context: vscode.ExtensionContext): void {
+  for (const [command, fileName] of [
+    ["onnxLightViewer.open", "relu.onnx"],
+    ["onnxLightViewer.openSymbolicExample", "tiny-llm.onnx"],
+  ]) {
+    context.subscriptions.push(
+      vscode.commands.registerCommand(command, async () => {
+        const model = await readGraph(
+          vscode.Uri.joinPath(context.extensionUri, "media", fileName),
+        );
+        const panel = vscode.window.createWebviewPanel(
+          viewType,
+          "ONNX Light Viewer",
+          vscode.ViewColumn.One,
+          { enableScripts: true },
+        );
+        configurePanel(context, panel, model);
+      }),
+    );
+  }
   context.subscriptions.push(
-    vscode.commands.registerCommand("onnxLightViewer.open", async () => {
-      const model = await readGraph(
-        vscode.Uri.joinPath(context.extensionUri, "media", "relu.onnx"),
-      );
-      const panel = vscode.window.createWebviewPanel(
-        viewType,
-        "ONNX Light Viewer",
-        vscode.ViewColumn.One,
-        { enableScripts: true },
-      );
-      configurePanel(context, panel, model);
-    }),
     vscode.window.registerCustomEditorProvider(viewType, {
       openCustomDocument: (uri) => ({ uri, dispose() {} }),
       resolveCustomEditor: async (document, panel) => {

@@ -129,8 +129,9 @@ test("shows actual attributes, connected initializer parameters and versioned de
   );
   assert.match(
     document.getElementById("node-initializers").textContent,
-    /kernel \(FLOAT\)[\s\S]*\[1, 1, 3, 3\]/,
+    /kernel \(FLOAT\)[\s\S]*Shape: \[1, 1, 3, 3\][\s\S]*Storage: embedded/,
   );
+  assert.equal(document.querySelector("#node-initializers pre"), null);
   document
     .querySelector('[data-id="node-1"]')
     .dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter" }));
@@ -155,6 +156,35 @@ test("shows actual attributes, connected initializer parameters and versioned de
     assert.match(attributes.textContent, /axis \(INT\) \[default\]/);
     assert.equal(attributes.querySelector("pre").textContent, axis);
   }
+});
+
+test("lists more than eight initializer metadata entries, including external dense/sparse filenames, as literal text", (t) => {
+  const { document, load } = openViewer(t);
+  const graph = decodeGraph(
+    readFileSync(require.resolve("./models/initializers.onnx")),
+    "initializers.onnx",
+  );
+  const unsafe = '<img src=x onerror="alert(1)">';
+  graph.nodes[0].parameters[10].storage.location = unsafe;
+  load(graph);
+  const list = document.getElementById("node-initializers");
+  assert.equal(list.children.length, 12);
+  assert.equal(document.getElementById("parameter-count").textContent, "12");
+  assert.match(
+    list.children[9].textContent,
+    /weight_9 \(FLOAT\).*Shape: \[1\].*Storage: embedded/,
+  );
+  assert.ok(list.children[10].textContent.includes(`external file: ${unsafe}`));
+  assert.match(
+    list.children[11].textContent,
+    /Values: external file: weights\/values.bin/,
+  );
+  assert.match(
+    list.children[11].textContent,
+    /Indices: external file: weights\/indices.bin/,
+  );
+  assert.equal(list.querySelector("img"), null);
+  assert.equal(list.querySelector("pre"), null);
 });
 
 test("opens native LightOpSchema docs and clears stale docs and parameters on selection or model changes", (t) => {

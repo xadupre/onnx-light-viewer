@@ -93,8 +93,12 @@ test("loads typed attributes and dense/sparse initializer parameters without los
   assert.match(activation.attributes[0].value, /0\.125/);
   assert.equal(conv.parameters[0].name, "kernel");
   assert.equal(conv.parameters[0].type, "FLOAT");
-  assert.match(conv.parameters[0].value, /dims: \[1, 1, 3, 3\]/);
-  assert.match(conv.parameters[0].value, /0\.5/);
+  assert.deepEqual(conv.parameters[0].shape, ["1", "1", "3", "3"]);
+  assert.deepEqual(conv.parameters[0].storage, {
+    external: false,
+    location: null,
+  });
+  assert.equal("value" in conv.parameters[0], false);
   assert.equal(custom.parameters[0].name, "sparse");
   assert.equal(custom.parameters[0].type, "SPARSE FLOAT");
   const attributes = Object.fromEntries(
@@ -109,7 +113,6 @@ test("loads typed attributes and dense/sparse initializer parameters without los
     attributes.long_list.value,
     "{ long_list: [0, 1, 2, 3, 4, 5, 6, 7] } ... (2000 elements)",
   );
-  assert.match(conv.parameters[0].value, /\.\.\. \(9 elements\)$/);
   for (const name of ["long_floats", "long_strings", "sparse_value"]) {
     assert.match(attributes[name].value, /\.\.\. \(12 elements\)/);
     assert.ok(attributes[name].value.length < 512);
@@ -120,6 +123,74 @@ test("loads typed attributes and dense/sparse initializer parameters without los
     attributes.sparse_value.value,
     /int64_data: \[0, 1, 2, 3, 4, 5, 6, 7\]/,
   );
+});
+
+test("exposes all connected initializer shapes/types and external file locations, without values or external reads", () => {
+  const graph = decodeGraph(
+    modelBytes("initializers.onnx"),
+    "initializers.onnx",
+  );
+  const parameters = graph.nodes[0].parameters;
+  assert.equal(graph.initializerCount, 12);
+  assert.equal(parameters.length, 12);
+  assert.deepEqual(parameters[9], {
+    name: "weight_9",
+    type: "FLOAT",
+    shape: ["1"],
+    storage: { external: false, location: null },
+  });
+  assert.deepEqual(parameters[10].storage, {
+    external: true,
+    location: "weights/decoder.bin",
+  });
+  assert.deepEqual(parameters[11], {
+    name: "external_sparse",
+    type: "SPARSE FLOAT",
+    shape: ["1"],
+    storage: { external: true, location: "weights/values.bin" },
+    indicesStorage: { external: true, location: "weights/indices.bin" },
+  });
+  assert.ok(parameters.every((parameter) => !("value" in parameter)));
+  assert.deepEqual(
+    loadModel(modelBytes("initializers.onnx"), "initializers.onnx").graph(),
+    graph,
+  );
+});
+
+test("the bundled tiny language model preserves symbolic batch/sequence dimensions through attention inference", () => {
+  const bytes = readFileSync(require.resolve("../media/tiny-llm.onnx"));
+  const model = loadModel(bytes, "tiny-llm.onnx");
+  const before = model.graph();
+  assert.deepEqual(before.inputs, [
+    "input_ids",
+    "position_ids",
+    "attention_mask",
+  ]);
+  assert.deepEqual(
+    before.tensors.find(({ name }) => name === "token_vectors").shape,
+    ["batch_size", "sequence_length", "16"],
+  );
+  assert.equal(
+    before.tensors.find(({ name }) => name === "feed_forward_expanded").type,
+    null,
+  );
+  const graph = model.graph(true);
+  for (const [name, shape] of [
+    ["query.heads", ["batch_size", "2", "sequence_length", "8"]],
+    [
+      "attention_scores",
+      ["batch_size", "2", "sequence_length", "sequence_length"],
+    ],
+    ["attention_context", ["batch_size", "2", "sequence_length", "8"]],
+    ["context_merged", ["batch_size", "sequence_length", "16"]],
+    ["feed_forward_expanded", ["batch_size", "sequence_length", "32"]],
+    ["logits", ["batch_size", "sequence_length", "32"]],
+  ]) {
+    const tensor = graph.tensors.find((tensor) => tensor.name === name);
+    assert.equal(tensor.type, "FLOAT");
+    assert.deepEqual(tensor.shape, shape);
+  }
+  assert.deepEqual(model.graph(), graph);
 });
 
 test("uses the model domain and opset to select LightOpSchema documentation and defaults", () => {
