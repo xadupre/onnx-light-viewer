@@ -249,6 +249,11 @@ drives CMake through ``cmake-js``; TypeScript compilation and the native output
 are placed in ``dist/``. The native binary must match the extension host's OS
 and architecture, including Remote WSL.
 
+The same pinned ``ONNX_LIGHT_VERSION`` is embedded in the addon and exposed as
+``onnxLightVersion`` through ``src/graph.ts``. The host passes this build
+information to the HTML shell, which displays it in the toolbar independently
+of the loaded model. There is no separate hard-coded UI version.
+
 Tests follow the same boundaries: ``test/graph.test.cjs`` exercises the real
 addon and retained models; ``test/extension.test.cjs`` exercises host message
 routing; ``test/viewer.test.cjs`` exercises DOM/SVG interactions in jsdom.
