@@ -601,6 +601,45 @@ test("counts metadata changes and replaces cached analysis and graph markers on 
   assert.deepEqual(errors, []);
 });
 
+test("keeps the metadata button highlighted until its panel is closed", (t) => {
+  const { document, window, load } = openViewer(t);
+  const style = document.createElement("style");
+  style.textContent = readFileSync(
+    require.resolve("../media/viewer.css"),
+    "utf8",
+  );
+  document.head.append(style);
+  const model = loadModel(
+    readFileSync(require.resolve("./models/analysis.onnx")),
+    "analysis.onnx",
+  );
+  load(model.graph());
+  const toggle = document.getElementById("show-metadata");
+  const color = () => window.getComputedStyle(toggle).color;
+  const inactive = color();
+  assert.equal(toggle.getAttribute("aria-expanded"), "false");
+  toggle.click();
+  const active = color();
+  assert.equal(active, "rgb(16, 42, 40)");
+  assert.notEqual(active, inactive);
+  assert.equal(toggle.getAttribute("aria-expanded"), "true");
+  assert.equal(document.getElementById("metadata-panel").hidden, false);
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: { type: "metadata-info", metadata: model.metadata() },
+    }),
+  );
+  assert.equal(color(), active);
+  load(model.graph());
+  assert.equal(color(), active);
+  toggle.click();
+  assert.equal(toggle.getAttribute("aria-expanded"), "false");
+  assert.equal(document.getElementById("metadata-panel").hidden, true);
+  assert.equal(color(), inactive);
+  toggle.click();
+  assert.equal(color(), active);
+});
+
 test("shows native metadata in the sidebar and marks released and never-used results without changing the layout", (t) => {
   const { document, window, messages, load, pointer } = openViewer(t);
   const model = loadModel(
