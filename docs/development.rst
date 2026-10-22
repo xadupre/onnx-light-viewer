@@ -86,6 +86,9 @@ theme switcher in the navigation bar. By default, it follows the system theme.
 Source layout
 -------------
 
+See :doc:`design` for the component responsibilities, native ownership rules,
+graph contracts and webview message protocol.
+
 * ``src/extension.ts``: VS Code integration and model opening.
 * ``src/graph.ts``: graph types and the typed native entry point.
 * ``native/addon.cc``: native model decoding.

@@ -1,3 +1,7 @@
+/**
+ * Owns panel-local native models and routes webview requests.
+ * Only display snapshots cross into the webview; model bytes stay in the host.
+ */
 import * as vscode from "vscode";
 import { randomBytes } from "node:crypto";
 import { posix } from "node:path";
@@ -58,6 +62,7 @@ async function readGraph(uri: vscode.Uri): Promise<LoadedModel> {
   return { graph: native.graph(), native };
 }
 
+/** Checks message structure; the native layer also checks graph index bounds. */
 function isGraphPath(path: unknown): path is GraphPath {
   return (
     Array.isArray(path) &&
@@ -75,6 +80,10 @@ function isGraphPath(path: unknown): path is GraphPath {
   );
 }
 
+/**
+ * Retains the model, current graph and optional metadata snapshot for this panel.
+ * Navigation invalidates metadata; a ready event resends the current snapshots.
+ */
 function configurePanel(
   context: vscode.ExtensionContext,
   panel: vscode.WebviewPanel,

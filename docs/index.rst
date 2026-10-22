@@ -15,4 +15,5 @@ onnx-light; no model data is uploaded.
 
    getting_started
    features
+   design
    development

@@ -1,3 +1,7 @@
+/**
+ * Snapshot contracts shared by the native addon, extension host and webview.
+ * These describe the view, not the model's tensor payloads.
+ */
 export interface GraphParameter {
   name: string;
   type: string;
@@ -9,12 +13,14 @@ export interface GraphAttribute extends GraphParameter {
   graphs?: SubgraphLink[];
 }
 
+/** Native node/attribute indices plus the graph index within that attribute. */
 export interface GraphStep {
   node: number;
   attribute: number;
   graph: number;
 }
 
+/** Absolute path from the model's root graph; an empty path selects the root. */
 export type GraphPath = GraphStep[];
 
 export interface GraphBreadcrumb {
@@ -62,6 +68,7 @@ export interface GraphNode {
 export interface TensorInformation {
   name: string;
   type: string | null;
+  /** Empty for a scalar, null for unknown rank, omitted for non-tensor types. */
   shape?: string[] | null;
 }
 
@@ -76,7 +83,12 @@ export interface Graph {
 }
 
 export interface NativeModel {
+  /**
+   * Projects one graph. When requested, inference first updates the entire
+   * retained model in memory, including nested graph value_info.
+   */
   graph(inferShapes?: boolean, path?: GraphPath): Graph;
+  /** Recomputes analysis for one graph without inferring shapes or editing it. */
   metadata(path?: GraphPath): GraphMetadata;
 }
 
@@ -110,6 +122,7 @@ export interface GraphMetadata {
 }
 
 export interface BackendTest {
+  /** Original native collection index, independent of name sorting. */
   id: number;
   name: string;
   modelName: string;
@@ -156,6 +169,10 @@ export const demoGraph: Graph = {
   ],
 };
 
+/**
+ * One-shot projection, skipping raw tensor bytes unless inference is requested.
+ * Use loadModel instead when inferred value_info must survive subsequent calls.
+ */
 export function decodeGraph(
   bytes: Uint8Array,
   fileName: string,
@@ -164,6 +181,11 @@ export function decodeGraph(
   return native.decodeGraph(bytes, fileName, inferShapes);
 }
 
+/**
+ * Retains bytes in the native handle without copying their tensor payloads.
+ * Do not mutate the buffer while the handle is in use. fileName is a display
+ * label, not a path to read or save.
+ */
 export function loadModel(bytes: Uint8Array, fileName: string): NativeModel {
   return native.loadModel(bytes, fileName);
 }

@@ -1,3 +1,9 @@
+/**
+ * Builds the static shell; model-derived text arrives later through messages.
+ * @param resource Resolves bundled media files to VS Code webview URIs.
+ * @param cspSource Source allowed to load local images and styles.
+ * @param nonce Per-panel nonce authorizing the bundled viewer script.
+ */
 export function webviewHtml(
   resource: (name: string) => string,
   cspSource: string,

@@ -1,0 +1,256 @@
+Application design
+==================
+
+The application has three boundaries: VS Code owns files and panels, a native
+Node-API addon owns ONNX models and analysis, and a webview owns the interactive
+display. Python is not part of the runtime. See :doc:`features` for user controls
+and :doc:`development` for building and testing.
+
+Architecture
+------------
+
+.. code-block:: text
+
+   Local ONNX file                 Released backend test catalog
+         | workspace.fs.readFile             |
+         v                                   v
+   VS Code extension host: src/extension.ts
+         |
+         | typed calls through src/graph.ts
+         v
+   Node-API addon: native/addon.cc <--> published onnx-light C++ libraries
+         |
+         | graph / tensor / metadata snapshots returned to the host
+         v
+   Extension host <-- postMessage --> webview
+                                      |
+                                      +-- src/webview.ts: HTML shell
+                                      +-- media/viewer.js: SVG and interaction
+                                      +-- media/viewer.css: presentation
+
+File access and native calls happen in the extension host, not in the webview.
+Native methods are synchronous; there is no worker or model-execution service.
+Only the selected graph is projected for display, rather than recursively
+serializing all its descendants.
+
+TypeScript source guide
+-----------------------
+
+``src/extension.ts``
+~~~~~~~~~~~~~~~~~~~~
+
+:download:`Source: extension.ts <../src/extension.ts>`.
+
+``activate`` registers the demo and symbolic-model commands, plus the custom
+editor for ``.onnx`` files. ``readGraph`` reads bytes with VS Code's filesystem
+API and creates a retained native model with its initial graph snapshot.
+
+``configurePanel`` owns a panel-local ``LoadedModel``: its native handle,
+currently displayed ``Graph`` and optional cached ``GraphMetadata``. It
+configures media access, installs the message router and supplies the HTML.
+The message subscription is disposed with the panel.
+
+Opening another model replaces that state only after successful loading.
+Navigation changes the current graph and clears its metadata snapshot.
+A subsequent ``ready`` message resends the current graph and any cached
+metadata; it does not reload the source file or return to the root graph.
+
+``isGraphPath`` checks incoming message structure. Native path resolution
+also validates indices against the retained model. Native failures are
+reported through VS Code notifications; navigation, shape and metadata errors
+also have dedicated webview responses.
+
+``src/graph.ts``
+~~~~~~~~~~~~~~~~
+
+:download:`Source: graph.ts <../src/graph.ts>`.
+
+This file defines the snapshot contracts and loads
+``dist/native/onnx_light_viewer.node``. Its wrappers expose ``loadModel``,
+``decodeGraph``, ``listBackendTests`` and ``loadBackendTest``.
+
+* ``Graph`` contains nodes, input/output names, tensor descriptions, an
+  initializer count and breadcrumbs. ``GraphNode`` contains explicit inputs,
+  implicit captures, attributes, initializer metadata and an optional schema.
+* ``TensorInformation`` preserves dimensions as strings, including symbols.
+  A shape of ``[]`` means scalar, ``null`` means unknown rank, and an omitted
+  shape is used for non-tensor types. Unknown element types can be ``null``.
+* ``GraphMetadata`` is a separate analysis snapshot, not a replacement graph.
+  It contains stored metadata entries, constant/tag information and per-node
+  lifetime lists.
+* ``BackendTest.id`` is the original native collection index. Sorting names
+  for the selector does not change IDs; names need not be unique.
+
+The retained model interface is:
+
+.. code-block:: typescript
+
+   interface NativeModel {
+     graph(inferShapes?: boolean, path?: GraphPath): Graph;
+     metadata(path?: GraphPath): GraphMetadata;
+   }
+
+An omitted path selects the root graph. ``graph()`` does not infer shapes;
+``graph(true, path)`` first infers the enclosing model and then returns the
+selected graph. ``decodeGraph`` instead produces a one-shot snapshot, skipping
+raw tensor bytes by default, without retaining a model for future refreshes.
+
+``src/webview.ts``
+~~~~~~~~~~~~~~~~~~
+
+:download:`Source: webview.ts <../src/webview.ts>`.
+
+``webviewHtml`` generates the static toolbar, SVG canvas, inspector,
+breadcrumbs and operator-documentation dialog. Its resource callback converts
+bundled media filenames to webview URIs. The content security policy permits
+local images/styles and authorizes the viewer script with a per-panel nonce.
+The host restricts local resource roots to ``media/``.
+
+Model-derived strings are not interpolated into this HTML. They arrive through
+messages and are inserted as DOM text by the viewer, including schema
+documentation and metadata values.
+
+Native C++ source guide
+-----------------------
+
+:download:`Source: native/addon.cc <../native/addon.cc>`.
+
+``Initialize`` exports ``loadModel``, ``decodeGraph``, ``getSchema``,
+``listBackendTests`` and ``loadBackendTest`` through Node-API. The addon
+validates JavaScript arguments and converts C++ exceptions to JavaScript errors
+at this boundary.
+
+Parsing and ownership
+~~~~~~~~~~~~~~~~~~~~~
+
+``ReadModel`` parses bytes with onnx-light and checks that a model graph and
+valid IR version exist. The retained loading path uses borrowed fields rather
+than copying tensor payloads. ``StoredModel`` therefore holds a persistent
+reference to the source ``Uint8Array`` alongside the parsed model. Callers must
+not modify those bytes while the handle is in use.
+
+Backend models instead retain their owning native ``TestCase``. Expected-output
+generation is disabled; opening a case is not running a backend test.
+``ModelHandle`` captures shared ownership in its ``graph`` and ``metadata``
+method closures, so keeping just one method alive still keeps its backing
+storage alive.
+
+The display filename is only a label. Neither native loading nor refreshing
+saves the model or opens external weight files. Initializer snapshots contain
+type, dimensions and storage locations, not weight values. Attribute previews
+are bounded separately.
+
+Graph projection and nested scopes
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``ReadPath``, ``ChildGraph`` and ``GraphScopes`` resolve an absolute
+``GraphPath`` from the root. Each step contains a node index, attribute index
+and graph index: zero for a ``GRAPH`` attribute, or an item index for ``GRAPHS``.
+Paths use indices, not potentially duplicate graph or node names.
+
+``ModelGraph`` walks enclosing scopes to inherit tensor descriptions and
+initializer metadata. Local inputs, weights and node outputs shadow enclosing
+names. ``CollectNodeInputs`` identifies implicit dependencies, including
+captures in nested attributes. Captured values appear as input ports, whereas
+captured initializers remain parameters.
+
+Graph-valued attributes expose lightweight ``SubgraphLink`` objects containing
+a name, path and node count. Breadcrumbs carry paths back to ancestors.
+``Schema`` selects the newest matching onnx-light ``LightOpSchema`` not newer
+than the model's imported opset, supplying documentation and attribute defaults.
+Defaults do not overwrite explicit attribute values.
+
+Shape inference versus metadata analysis
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``InferShapes`` registers onnx-light's shape functions and computes a
+``ShapesContext`` for the whole retained model. It applies root information to
+the model; ``ApplySubgraphShapes`` then applies retained child contexts to
+``GRAPH`` attributes recursively. This persists inferred outputs and
+intermediate ``value_info`` inside the in-memory model, not just in labels.
+
+``ModelMetadata`` analyzes only the selected graph using ``InferConstants``,
+``InferValueAndNodeTags`` and ``ComputeResultLifetimeInfo(graph, false)``.
+Constant analysis is seeded from enclosing scopes. Results distinguish
+releasable intermediates, caller-owned values reaching their last read and
+unused non-output results. Metadata analysis is read-only: it does not infer
+shapes or execute operators.
+
+Host and webview protocol
+-------------------------
+
+The viewer sends requests with ``acquireVsCodeApi().postMessage``; the host
+replies with ``panel.webview.postMessage``.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 22 35 43
+
+   * - Request
+     - Host action
+     - Response
+   * - ``ready``
+     - Resend current snapshots.
+     - ``graph`` with optional cached metadata.
+   * - ``open``
+     - Choose and load a local model.
+     - ``graph`` on success; cancellation leaves the view unchanged.
+   * - ``open-backend-test``
+     - Search the released native catalog and load a case.
+     - ``graph`` on success; cancellation leaves the view unchanged.
+   * - ``navigate`` with ``path``
+     - Project the selected graph and discard cached metadata.
+     - ``graph`` or ``navigation-error``.
+   * - ``refresh-shapes``
+     - Infer the retained model and update the current graph snapshot.
+     - ``shape-info`` containing tensors, or ``shape-error``.
+   * - ``metadata``
+     - Recompute analysis for the current graph and cache the snapshot.
+     - ``metadata-info`` or ``metadata-error``.
+
+Opening failures are shown as VS Code notifications without replacing the
+displayed graph. Refresh/navigation errors clear their busy state and show a
+toolbar error without replacing the previous display.
+
+The ``graph`` response rebuilds the display and resets its layout/selection.
+``shape-info`` updates tensor labels and the inspector in place, preserving
+positions and the camera. ``metadata-info`` updates the separate analysis
+view. The metadata toggle requests analysis only if none is available;
+**Refresh metadata** always requests a fresh snapshot, even with the panel closed.
+
+Browser-side state and layout
+-----------------------------
+
+``media/viewer.js`` owns selection, node positions, zoom/pan, gestures, tensor
+labels and metadata display state. Moving nodes, selecting, zooming and
+**Refresh positions** are local operations; they do not call native methods or
+change the model. ``media/viewer.css`` supplies the layout and SVG styles.
+
+The initial layout places inputs above node-index rows and outputs below them,
+with randomized operator horizontal positions. Operator dimensions account for
+full labels and clickable subgraph rows. Connections attach using those
+dimensions. Subgraph entries and inspector buttons send the same navigation
+request; breadcrumbs navigate with the same path contract.
+
+Positions are stable objects indexed to their incident connections.
+``moveNodes`` updates only moved groups and affected edges, rather than
+rebuilding the graph on every pointer move. Selection rendering also tracks
+changed nodes. A gesture caches its viewport mapping; changes that resize the
+canvas invalidate that mapping. Zoom and pan change the SVG ``viewBox``, not
+model coordinates.
+
+Build and verification boundaries
+---------------------------------
+
+``CMakeLists.txt`` downloads a pinned, checksum-verified onnx-light C++ release
+for the target platform and links its operator, shape and backend-test
+libraries. Only the C++20 addon is compiled locally. ``scripts/build-native.cjs``
+drives CMake through ``cmake-js``; TypeScript compilation and the native output
+are placed in ``dist/``. The native binary must match the extension host's OS
+and architecture, including Remote WSL.
+
+Tests follow the same boundaries: ``test/graph.test.cjs`` exercises the real
+addon and retained models; ``test/extension.test.cjs`` exercises host message
+routing; ``test/viewer.test.cjs`` exercises DOM/SVG interactions in jsdom.
+``test/start.test.cjs`` checks the launcher. The Sphinx build checks this
+documentation with warnings treated as errors.
