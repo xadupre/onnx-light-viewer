@@ -437,7 +437,7 @@ function fit() {
 
 function changeZoom(factor) {
   endGesture();
-  zoom = Math.min(4, Math.max(0.25, zoom * factor));
+  zoom = Math.max(0.25, zoom * factor);
   fit();
 }
 

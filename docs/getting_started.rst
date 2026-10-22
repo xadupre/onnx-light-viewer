@@ -56,7 +56,9 @@ or focus it and press Enter or Space, to inspect its name, domain, inputs and
 outputs. Use the zoom buttons or hold Ctrl while scrolling the mouse wheel
 to zoom in and out. Scrolling without Ctrl moves the view vertically;
 Shift+wheel moves it horizontally. Horizontal trackpad scrolling is also
-supported. **Fit** recenters the graph and resets zoom and scrolling.
+supported. Zooming in has no fixed maximum relative to **Fit**, so even large
+graphs can be enlarged to a readable scale. **Fit** recenters the graph and
+resets zoom and scrolling.
 
 **Backend test** opens a VS Code selector with a search bar for onnx-light's
 native C++ backend tests. Type part of a test name, model name or category,

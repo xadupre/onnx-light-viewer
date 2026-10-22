@@ -922,6 +922,35 @@ test("zooms in and out with buttons and Ctrl+wheel without rearranging the graph
   assert.deepEqual(nodePositions(document), positions);
 });
 
+test("zooms large graphs to a readable scale beyond four times Fit with buttons and Ctrl+wheel", (t) => {
+  const { document, window, load } = openViewer(t);
+  load(chainGraph(400));
+  const graph = document.getElementById("graph");
+  const initial = graph.getAttribute("viewBox");
+  const positions = nodePositions(document);
+  for (const zoomIn of [
+    () => document.getElementById("zoom-in").click(),
+    () =>
+      graph.dispatchEvent(
+        new window.WheelEvent("wheel", { deltaY: -100, ctrlKey: true }),
+      ),
+  ]) {
+    for (let step = 0; step < 30; step++) zoomIn();
+    const viewBox = graph.getAttribute("viewBox").split(" ").map(Number);
+    assert.ok(viewBox.every(Number.isFinite));
+    assert.ok((19 * 350) / viewBox[3] >= 19);
+    document.getElementById("zoom-out").click();
+    assert.ok(
+      Math.abs(
+        Number(graph.getAttribute("viewBox").split(" ")[3]) / viewBox[3] - 1.25,
+      ) < 1e-9,
+    );
+    document.getElementById("zoom-fit").click();
+    assert.equal(graph.getAttribute("viewBox"), initial);
+    assert.deepEqual(nodePositions(document), positions);
+  }
+});
+
 test("wheel scrolling pans vertically and Shift+wheel pans horizontally without zooming", (t) => {
   const { document, window, load, resize } = openViewer(t);
   load(chainGraph());
