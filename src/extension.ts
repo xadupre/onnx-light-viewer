@@ -8,6 +8,7 @@ import {
   Graph,
   NativeModel,
   GraphMetadata,
+  GraphPath,
 } from "./graph";
 import { webviewHtml } from "./webview";
 
@@ -57,6 +58,23 @@ async function readGraph(uri: vscode.Uri): Promise<LoadedModel> {
   return { graph: native.graph(), native };
 }
 
+function isGraphPath(path: unknown): path is GraphPath {
+  return (
+    Array.isArray(path) &&
+    path.every(
+      (step: unknown) =>
+        typeof step === "object" &&
+        step !== null &&
+        ["node", "attribute", "graph"].every((key) => {
+          const index: unknown = Reflect.get(step, key);
+          return (
+            typeof index === "number" && Number.isInteger(index) && index >= 0
+          );
+        }),
+    )
+  );
+}
+
 function configurePanel(
   context: vscode.ExtensionContext,
   panel: vscode.WebviewPanel,
@@ -76,7 +94,7 @@ function configurePanel(
       ...(model.metadata ? { metadata: model.metadata } : {}),
     });
   const messages = panel.webview.onDidReceiveMessage(
-    async (message: { type?: string } | null) => {
+    async (message: { type?: string; path?: unknown } | null) => {
       if (message?.type === "ready") {
         await sendGraph();
       } else if (message?.type === "open-backend-test") {
@@ -130,10 +148,32 @@ function configurePanel(
           panel.title = `ONNX: ${posix.basename(selection[0].path)}`;
           await sendGraph();
         }
+      } else if (message?.type === "navigate") {
+        let graph: Graph;
+        try {
+          if (!isGraphPath(message.path))
+            throw new Error("Invalid subgraph path.");
+          graph = model.native.graph(false, message.path);
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error);
+          await panel.webview.postMessage({
+            type: "navigation-error",
+            error: detail,
+          });
+          await vscode.window.showErrorMessage(
+            `Could not open ONNX subgraph: ${detail}`,
+          );
+          return;
+        }
+        model.graph = graph;
+        model.metadata = undefined;
+        await sendGraph();
       } else if (message?.type === "metadata") {
         let metadata: GraphMetadata;
         try {
-          metadata = model.native.metadata();
+          metadata = model.native.metadata(
+            model.graph.breadcrumbs.at(-1)?.path,
+          );
         } catch (error) {
           const detail = error instanceof Error ? error.message : String(error);
           await panel.webview.postMessage({
@@ -150,7 +190,10 @@ function configurePanel(
       } else if (message?.type === "refresh-shapes") {
         let refreshed: Graph;
         try {
-          refreshed = model.native.graph(true);
+          refreshed = model.native.graph(
+            true,
+            model.graph.breadcrumbs.at(-1)?.path,
+          );
         } catch (error) {
           const detail = error instanceof Error ? error.message : String(error);
           await panel.webview.postMessage({

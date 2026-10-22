@@ -109,6 +109,42 @@ async function openExtension(customModel, command = "onnxLightViewer.open") {
   };
 }
 
+test("navigates retained subgraphs, scopes refreshes and reports invalid paths without replacing the view", async () => {
+  const extension = await openExtension("nested-if.onnx");
+  await extension.receive({ type: "ready" });
+  const root = extension.messages.at(-1).graph;
+  const path = root.nodes[0].attributes.find(
+    ({ name }) => name === "then_branch",
+  ).graphs[0].path;
+  const reads = extension.reads.length;
+  await extension.receive({ type: "navigate", path });
+  const child = extension.messages.at(-1).graph;
+  assert.equal(child.breadcrumbs.length, 2);
+  assert.equal(child.nodes.length, 2);
+  await extension.receive({ type: "metadata" });
+  assert.equal(extension.messages.at(-1).metadata.nodes.length, 2);
+  await extension.receive({ type: "refresh-shapes" });
+  assert.equal(extension.messages.at(-1).type, "shape-info");
+  assert.deepEqual(
+    extension.messages.at(-1).tensors.find(({ name }) => name === "sum").shape,
+    ["N", "3"],
+  );
+  await extension.receive({ type: "ready" });
+  assert.equal(extension.messages.at(-1).graph.breadcrumbs.length, 2);
+  for (const path of [null, [{ node: 99, attribute: 0, graph: 0 }]]) {
+    await extension.receive({ type: "navigate", path });
+    assert.equal(extension.messages.at(-1).type, "navigation-error");
+  }
+  await extension.receive({ type: "ready" });
+  assert.equal(extension.messages.at(-1).graph.breadcrumbs.length, 2);
+  await extension.receive({ type: "navigate", path: [] });
+  assert.equal(extension.messages.at(-1).graph.breadcrumbs.length, 1);
+  assert.equal(extension.messages.at(-1).metadata, undefined);
+  assert.equal(extension.reads.length, reads);
+  await extension.open("relu.onnx");
+  assert.equal(extension.messages.at(-1).graph.breadcrumbs.length, 1);
+});
+
 test("refreshes the bundled demo and the currently opened model using its retained native model", async () => {
   const extension = await openExtension();
   await extension.receive({ type: "ready" });

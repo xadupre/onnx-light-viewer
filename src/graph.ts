@@ -6,6 +6,24 @@ export interface GraphParameter {
 
 export interface GraphAttribute extends GraphParameter {
   default: boolean;
+  graphs?: SubgraphLink[];
+}
+
+export interface GraphStep {
+  node: number;
+  attribute: number;
+  graph: number;
+}
+
+export type GraphPath = GraphStep[];
+
+export interface GraphBreadcrumb {
+  name: string;
+  path: GraphPath;
+}
+
+export interface SubgraphLink extends GraphBreadcrumb {
+  nodeCount: number;
 }
 
 export interface InitializerStorage {
@@ -33,6 +51,7 @@ export interface GraphNode {
   opType: string;
   domain: string;
   inputs: string[];
+  captures: string[];
   outputs: string[];
   opset: string | null;
   attributes: GraphAttribute[];
@@ -48,6 +67,7 @@ export interface TensorInformation {
 
 export interface Graph {
   name: string;
+  breadcrumbs: GraphBreadcrumb[];
   nodes: GraphNode[];
   inputs: string[];
   outputs: string[];
@@ -56,8 +76,8 @@ export interface Graph {
 }
 
 export interface NativeModel {
-  graph(inferShapes?: boolean): Graph;
-  metadata(): GraphMetadata;
+  graph(inferShapes?: boolean, path?: GraphPath): Graph;
+  metadata(path?: GraphPath): GraphMetadata;
 }
 
 export interface MetadataEntry {
@@ -111,6 +131,7 @@ const native: {
 
 export const demoGraph: Graph = {
   name: "A first ONNX graph",
+  breadcrumbs: [{ name: "A first ONNX graph", path: [] }],
   nodes: [
     {
       id: "node-0",
@@ -118,6 +139,7 @@ export const demoGraph: Graph = {
       opType: "Relu",
       domain: "ai.onnx",
       inputs: ["input"],
+      captures: [],
       outputs: ["output"],
       opset: "13",
       attributes: [],

@@ -266,3 +266,94 @@ for proto, key, value in [
 save_model(metadata_model, Path(__file__).with_name("analysis.onnx"))
 metadata_model.graph.output.append(value_info(shared_name))
 save_model(metadata_model, Path(__file__).with_name("analysis-kept-output.onnx"))
+
+branch_output = helper.make_tensor_value_info(
+    "branch_output", TensorProto.FLOAT, ["N", 3]
+)
+inner_branch = helper.make_graph(
+    [helper.make_node("Identity", ["sum"], ["branch_output"])],
+    "inner <branch>",
+    [],
+    [branch_output],
+)
+then_branch = helper.make_graph(
+    [
+        helper.make_node("Add", ["x", "bias"], ["sum"]),
+        helper.make_node(
+            "If",
+            ["condition"],
+            ["branch_output"],
+            then_branch=inner_branch,
+            else_branch=inner_branch,
+        ),
+    ],
+    "branch <graph>",
+    [],
+    [branch_output],
+)
+else_branch = helper.make_graph(
+    [helper.make_node("Identity", ["x"], ["branch_output"])],
+    "branch <graph>",
+    [],
+    [branch_output],
+)
+empty_branch = helper.make_graph(
+    [],
+    "empty branch",
+    [helper.make_tensor_value_info("x", TensorProto.FLOAT, ["N", 3])],
+    [helper.make_tensor_value_info("x", TensorProto.FLOAT, ["N", 3])],
+)
+shadow_branch = helper.make_graph(
+    [helper.make_node("Add", ["x", "bias"], ["shadow_output"])],
+    "local scope",
+    [helper.make_tensor_value_info("x", TensorProto.FLOAT, [2])],
+    [helper.make_tensor_value_info("shadow_output", TensorProto.FLOAT, [2])],
+    initializer=[helper.make_tensor("bias", TensorProto.FLOAT, [2], [0.0, 0.0])],
+)
+subgraphs_model = helper.make_model(
+    helper.make_graph(
+        [
+            helper.make_node(
+                "If",
+                ["condition"],
+                ["y"],
+                name="choose_branch",
+                then_branch=then_branch,
+                else_branch=else_branch,
+            ),
+            helper.make_node(
+                "GraphList",
+                ["y"],
+                ["z"],
+                domain="example",
+                branches=[empty_branch, shadow_branch],
+            ),
+        ],
+        "Subgraph navigation",
+        [
+            helper.make_tensor_value_info("condition", TensorProto.BOOL, []),
+            helper.make_tensor_value_info("x", TensorProto.FLOAT, ["N", 3]),
+        ],
+        [helper.make_tensor_value_info("z", TensorProto.FLOAT, ["N", 3])],
+        initializer=[
+            helper.make_tensor("bias", TensorProto.FLOAT, [3], [0.0, 0.0, 0.0])
+        ],
+    ),
+    ir_version=9,
+    opset_imports=[helper.make_opsetid("", 13), helper.make_opsetid("example", 1)],
+)
+checker.check_model(subgraphs_model)
+save_model(subgraphs_model, Path(__file__).with_name("subgraphs.onnx"))
+if_model = helper.make_model(
+    helper.make_graph(
+        [subgraphs_model.graph.node[0]],
+        "Nested If",
+        list(subgraphs_model.graph.input),
+        [helper.make_tensor_value_info("y", TensorProto.FLOAT, ["N", 3])],
+        initializer=list(subgraphs_model.graph.initializer),
+    ),
+    ir_version=9,
+    opset_imports=[helper.make_opsetid("", 13)],
+)
+checker.check_model(if_model)
+save_model(if_model, Path(__file__).with_name("nested-if.onnx"))
