@@ -61,6 +61,15 @@ also validates indices against the retained model. Native failures are
 reported through VS Code notifications; navigation, shape and metadata errors
 also have dedicated webview responses.
 
+``src/log.ts``
+~~~~~~~~~~~~~~
+
+:download:`Source: log.ts <../src/log.ts>`.
+
+Defines structured action entries, retains each panel's history and publishes
+status updates. It validates incoming click events and correlates native
+operations with the webview's action IDs.
+
 ``src/graph.ts``
 ~~~~~~~~~~~~~~~~
 
@@ -101,7 +110,7 @@ raw tensor bytes by default, without retaining a model for future refreshes.
 
 :download:`Source: webview.ts <../src/webview.ts>`.
 
-``webviewHtml`` generates the static toolbar, SVG canvas, inspector,
+``webviewHtml`` generates the Model/Logs tabs, toolbar, SVG canvas, inspector,
 breadcrumbs and operator-documentation dialog. Its resource callback converts
 bundled media filenames to webview URIs. The content security policy permits
 local images/styles and authorizes the viewer script with a per-panel nonce.
@@ -197,10 +206,11 @@ replies with ``panel.webview.postMessage``.
      - Response
    * - ``ready``
      - Resend current snapshots.
-     - ``graph`` with optional cached metadata.
-   * - ``show-logs``
-     - Show the shared Output channel.
-     - No graph change.
+     - ``log-history`` and ``graph`` with optional cached metadata,
+       or ``load-state`` before a model is available.
+   * - ``interaction`` with ``entry``
+     - Retain a timestamped local click event.
+     - ``log-entry``.
    * - ``open``
      - Choose and load a local model.
      - ``graph`` on success; cancellation leaves the view unchanged.
@@ -217,9 +227,9 @@ replies with ``panel.webview.postMessage``.
      - Recompute analysis for the current graph and cache the snapshot.
      - ``metadata-info`` or ``metadata-error``.
 
-Opening failures are shown as VS Code notifications without replacing the
-displayed graph. Refresh/navigation errors clear their busy state and show a
-toolbar error without replacing the previous display.
+Opening failures produce ``load-error`` and VS Code notifications without
+replacing the displayed graph. Refresh/navigation errors clear their busy state
+and show a toolbar error without replacing the previous display.
 
 The ``graph`` response rebuilds the display and resets its layout/selection.
 ``shape-info`` updates tensor labels and the inspector in place, preserving
@@ -230,12 +240,22 @@ view. The metadata toggle requests analysis only if none is available;
 Action history and recovery
 ---------------------------
 
-``activate`` creates one **ONNX Light Viewer** Output channel for the extension
-session. ``runAction`` records UTC timestamps and ``RUNNING``, ``SUCCEEDED`` or
-``FAILED`` status for file/backend loading, navigation and native refreshes.
-Failures include their full error stack and are rethrown to the existing UI
-error handlers. The toolbar's **Logs** button and the **Show Logs** command
-open this channel without clearing its history.
+Each panel owns an ``ActionLog`` (``src/log.ts``). Entries have an ID, UTC
+timestamp, action, status and optional error details. ``ActionLog.run`` publishes
+``RUNNING`` then ``SUCCEEDED`` or ``FAILED``; cancelled pickers use
+``CANCELLED``. Failures retain their full error stack and are rethrown to the UI
+error handlers. The panel exists before initial loading so even loading
+failures are inspectable.
+
+The webview captures clicks before target handlers, immediately displays an
+entry and sends ``interaction``. Native requests carry the same ``actionId``:
+host ``log-entry`` updates replace that row rather than adding duplicate
+click/completion rows. Local actions finish in the webview. ``ready`` replays
+the history after webview recreation. Model replacement does not clear it.
+
+The **Model** and **Logs** tab panels hide/show existing DOM; switching tabs
+does not render the graph again or reset browser-side state. The **Show Logs**
+command reveals the viewer and sends ``show-logs`` to select its Logs tab.
 
 A failed shape or metadata refresh invalidates the native handle, not the
 last displayed snapshots. Before the next native action, ``nativeModel``

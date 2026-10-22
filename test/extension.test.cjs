@@ -5,6 +5,7 @@ const { createRequire } = require("node:module");
 const path = require("node:path");
 const vm = require("node:vm");
 const { test } = require("node:test");
+const { JSDOM } = require("jsdom");
 
 async function openExtension(customModel, command = "onnxLightViewer.open") {
   const messages = [];
@@ -13,17 +14,30 @@ async function openExtension(customModel, command = "onnxLightViewer.open") {
   const picks = [];
   const logs = [];
   const logViews = [];
+  const events = [];
   const nativeModels = [];
   const commands = new Map();
   let receive;
   let selection;
   let editor;
   let backendSelection;
+  let client;
   const disposable = () => ({ dispose() {} });
   const root = path.resolve(__dirname, "..");
   const webview = {
     postMessage: async (message) => {
-      messages.push(message);
+      events.push(message);
+      client?.(message);
+      if (message.type === "log-entry") {
+        const { entry } = message;
+        logs.push(
+          `[${entry.timestamp}] [${entry.status}] ${entry.action}${entry.details ? `\n${entry.details}` : ""}`,
+        );
+      } else if (message.type === "show-logs") {
+        logViews.push(true);
+      } else if (message.type !== "log-history") {
+        messages.push(message);
+      }
       return true;
     },
     onDidReceiveMessage: (callback) => {
@@ -32,7 +46,12 @@ async function openExtension(customModel, command = "onnxLightViewer.open") {
     },
     asWebviewUri: (uri) => ({ toString: () => `file://${uri.path}` }),
   };
-  const panel = { webview, onDidDispose: disposable };
+  const panel = {
+    webview,
+    onDidDispose: disposable,
+    onDidChangeViewState: disposable,
+    reveal() {},
+  };
   const vscode = {
     Uri: {
       joinPath: (base, ...parts) => ({
@@ -55,14 +74,6 @@ async function openExtension(customModel, command = "onnxLightViewer.open") {
       },
     },
     window: {
-      createOutputChannel: (name) => {
-        assert.equal(name, "ONNX Light Viewer");
-        return {
-          appendLine: (line) => logs.push(line),
-          show: (preserveFocus) => logViews.push(preserveFocus),
-          dispose() {},
-        };
-      },
       createWebviewPanel: () => panel,
       registerCustomEditorProvider: (_viewType, provider) => {
         editor = provider;
@@ -124,6 +135,11 @@ async function openExtension(customModel, command = "onnxLightViewer.open") {
     picks,
     logs,
     logViews,
+    events,
+    webview,
+    connect: (callback) => {
+      client = callback;
+    },
     nativeModels,
     showLogs: () => commands.get("onnxLightViewer.showLogs")(),
     receive: (message) => receive(message),
@@ -137,6 +153,117 @@ async function openExtension(customModel, command = "onnxLightViewer.open") {
     },
   };
 }
+
+test("shows actual load, refresh and click outcomes in the viewer's Logs tab", async (t) => {
+  const extension = await openExtension();
+  const dom = new JSDOM(extension.webview.html, { runScripts: "outside-only" });
+  t.after(() => dom.window.close());
+  const { window } = dom;
+  const { document } = window;
+  const requests = [];
+  window.HTMLCanvasElement.prototype.getContext = () => ({
+    font: "",
+    measureText(text) {
+      return { width: text.length * 8 };
+    },
+  });
+  document.getElementById("canvas").getBoundingClientRect = () =>
+    new window.DOMRect(0, 0, 1060, 350);
+  window.acquireVsCodeApi = () => ({
+    postMessage: (message) => requests.push(extension.receive(message)),
+  });
+  extension.connect((data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data })),
+  );
+  window.eval(
+    readFileSync(path.resolve(__dirname, "../media/viewer.js"), "utf8"),
+  );
+  const flush = async () => {
+    while (requests.length) await Promise.all(requests.splice(0));
+  };
+  await flush();
+  const entries = () => [...document.querySelectorAll(".log-entry")];
+  assert.ok(
+    entries().some(
+      (row) =>
+        row.dataset.status === "SUCCEEDED" &&
+        /Load model:/.test(row.textContent),
+    ),
+  );
+  assert.equal(
+    document.getElementById("logs-view").parentElement,
+    document.querySelector(".workspace"),
+  );
+
+  for (const id of ["refresh-shapes", "refresh-metadata"]) {
+    document.getElementById(id).click();
+    const row = entries().at(-1);
+    assert.equal(row.dataset.status, "RUNNING");
+    document.getElementById("logs-tab").click();
+    assert.equal(document.getElementById("model-view").hidden, true);
+    await flush();
+    assert.equal(row.dataset.status, "SUCCEEDED");
+    assert.equal(row.querySelector(".log-status").textContent, "OK");
+    document.getElementById("model-tab").click();
+    await flush();
+  }
+
+  document.getElementById("refresh-positions").click();
+  const positions = entries().at(-1);
+  await flush();
+  assert.match(positions.textContent, /OKClick: Refresh node positions/);
+  document
+    .querySelector(".graph-node")
+    .dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  const selection = entries().at(-1);
+  await flush();
+  assert.equal(selection.dataset.status, "SUCCEEDED");
+  assert.match(selection.textContent, /Relu/);
+
+  await extension.open("invalid-graph.onnx");
+  document.getElementById("refresh-shapes").click();
+  const failure = entries().at(-1);
+  await flush();
+  assert.equal(failure.dataset.status, "FAILED");
+  assert.match(failure.querySelector("pre").textContent, /Error: VerifyModel:/);
+  await extension.receive({ type: "ready" });
+  const replay = extension.events
+    .filter(({ type }) => type === "log-history")
+    .at(-1).entries;
+  assert.equal(entries().length, replay.length);
+  assert.equal(new Set(replay.map(({ id }) => id)).size, replay.length);
+});
+
+test("keeps failed initial loading inspectable and can open Logs before any model", async () => {
+  const failed = await openExtension("missing-ir.onnx");
+  await failed.receive({ type: "ready" });
+  const history = failed.events.find(
+    ({ type }) => type === "log-history",
+  ).entries;
+  assert.equal(history.length, 1);
+  assert.equal(history[0].status, "FAILED");
+  assert.match(history[0].details, /ONNX model graph/);
+  assert.match(failed.messages.at(-1).error, /ONNX model graph/);
+  failed.showLogs();
+  assert.deepEqual(failed.logViews, [true]);
+  await failed.open("inference.onnx");
+  assert.equal(failed.messages.at(-1).type, "graph");
+
+  const empty = await openExtension(undefined, "onnxLightViewer.showLogs");
+  assert.match(empty.webview.html, /id="logs-tab"[^>]*aria-selected="true"/);
+  await empty.receive({ type: "ready" });
+  assert.equal(empty.messages.at(-1).type, "load-state");
+  assert.equal(empty.messages.at(-1).pending, false);
+  await empty.receive({ type: "open", actionId: "ui:cancelled-file-picker" });
+  assert.ok(
+    empty.events.some(
+      ({ type, entry }) =>
+        type === "log-entry" &&
+        entry.id === "ui:cancelled-file-picker" &&
+        entry.status === "CANCELLED",
+    ),
+  );
+});
 
 test("keeps timestamped action history, verifies invalid graphs and reloads before retrying", async () => {
   const extension = await openExtension();
@@ -155,7 +282,7 @@ test("keeps timestamped action history, verifies invalid graphs and reloads befo
   assert.match(extension.messages.at(-1).error, /^VerifyModel:/);
   assert.ok(
     extension.logs.some((line) =>
-      /\[FAILED\] Refresh shapes:[\s\S]*Error: VerifyModel:/.test(line),
+      /\[FAILED\] Refresh shapes[\s\S]*Error: VerifyModel:/.test(line),
     ),
   );
   assert.ok(extension.logs.some((line) => line.includes("[INVALIDATED]")));
@@ -176,10 +303,10 @@ test("keeps timestamped action history, verifies invalid graphs and reloads befo
   await extension.receive({ type: "refresh-shapes" });
   assert.equal(extension.messages.at(-1).type, "shape-info");
   assert.ok(
-    extension.logs.some((line) => line.includes("[SUCCEEDED] Refresh shapes:")),
+    extension.logs.some((line) => line.includes("[SUCCEEDED] Refresh shapes")),
   );
   assert.ok(
-    extension.logs.some((line) => line.includes("[FAILED] Refresh metadata:")),
+    extension.logs.some((line) => line.includes("[FAILED] Refresh metadata")),
   );
   await extension.open("missing-ir.onnx");
   assert.ok(
