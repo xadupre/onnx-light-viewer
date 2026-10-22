@@ -678,18 +678,22 @@ Napi::Object ModelGraph(Napi::Env env, const ol::ModelProto &model, const std::s
   return result;
 }
 
-/** With raw data retained, the caller must keep bytes alive for borrowed fields. */
-void ReadModel(ol::ModelProto &model, const Napi::Uint8Array &bytes, bool skip_raw_data) {
-  ol::utils::StringStream stream(bytes.Data(), bytes.ByteLength());
-  ol::ParseOptions options;
-  options.skip_raw_data = skip_raw_data;
-  options.no_copy = !skip_raw_data;
+void ReadModel(ol::ModelProto &model, ol::utils::BinaryStream &stream, ol::ParseOptions options) {
   if (!model.ParseFromStream(stream, options)) {
     throw std::runtime_error("Could not decode the ONNX model.");
   }
   if (!model.has_graph() || !model.has_ir_version() || model.ir_version() <= 0) {
     throw std::runtime_error("This file does not contain an ONNX model graph.");
   }
+}
+
+/** With raw data retained, the caller must keep bytes alive for borrowed fields. */
+void ReadModel(ol::ModelProto &model, const Napi::Uint8Array &bytes, bool skip_raw_data) {
+  ol::utils::StringStream stream(bytes.Data(), bytes.ByteLength());
+  ol::ParseOptions options;
+  options.skip_raw_data = skip_raw_data;
+  options.no_copy = !skip_raw_data;
+  ReadModel(model, stream, options);
 }
 
 /**
@@ -817,6 +821,59 @@ Napi::Value LoadModel(const Napi::CallbackInfo &info) {
   }
 }
 
+class LoadModelWorker : public Napi::AsyncWorker {
+public:
+  LoadModelWorker(Napi::Env env, std::string path, std::string file_name)
+      : Napi::AsyncWorker(env), deferred_(Napi::Promise::Deferred::New(env)),
+        path_(std::move(path)), model_(std::make_shared<StoredModel>()) {
+    model_->file_name = std::move(file_name);
+    model_->model = std::make_shared<ol::ModelProto>();
+  }
+
+  Napi::Promise Promise() const { return deferred_.Promise(); }
+
+  void Execute() override {
+    try {
+      ol::utils::FileStream stream(path_);
+      ol::ParseOptions options;
+      options.skip_raw_data = true;
+      ReadModel(*model_->model, stream, options);
+    } catch (const std::exception &error) {
+      SetError(error.what());
+    }
+  }
+
+  void OnOK() override { deferred_.Resolve(ModelHandle(Env(), model_)); }
+  void OnError(const Napi::Error &error) override { deferred_.Reject(error.Value()); }
+
+private:
+  Napi::Promise::Deferred deferred_;
+  std::string path_;
+  std::shared_ptr<StoredModel> model_;
+};
+
+Napi::Value LoadModelFile(const Napi::CallbackInfo &info) {
+  const auto env = info.Env();
+  if (info.Length() != 2 || !info[0].IsString() || !info[1].IsString()) {
+    Napi::TypeError::New(env, "Expected a file path and a file name.").ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  try {
+    const auto path = info[0].As<Napi::String>().Utf8Value();
+    if (path.find('\0') != std::string::npos)
+      throw std::runtime_error("Invalid model file path.");
+    auto worker =
+        std::make_unique<LoadModelWorker>(env, path, info[1].As<Napi::String>().Utf8Value());
+    const auto promise = worker->Promise();
+    worker->Queue();
+    worker.release();
+    return promise;
+  } catch (const std::exception &error) {
+    Napi::Error::New(env, error.what()).ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+}
+
 Napi::Value ListBackendTests(const Napi::CallbackInfo &info) {
   const auto env = info.Env();
   try {
@@ -873,6 +930,7 @@ Napi::Object Initialize(Napi::Env env, Napi::Object exports) {
   exports.Set("decodeGraph", Napi::Function::New(env, DecodeGraph));
   exports.Set("getSchema", Napi::Function::New(env, GetSchema));
   exports.Set("loadModel", Napi::Function::New(env, LoadModel));
+  exports.Set("loadModelFile", Napi::Function::New(env, LoadModelFile));
   exports.Set("listBackendTests", Napi::Function::New(env, ListBackendTests));
   exports.Set("loadBackendTest", Napi::Function::New(env, LoadBackendTest));
   return exports;

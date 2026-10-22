@@ -35,6 +35,7 @@ export function webviewHtml(
         <div><button id="show-metadata" class="icon-button" aria-expanded="false" aria-controls="metadata-panel" title="Show native constants, tags, lifetimes and stored metadata">Metadata</button><button id="open-backend-test" class="icon-button" title="Search and open an onnx-light backend test">Backend test</button></div>
         <div class="graph-stats" aria-live="polite"><span id="graph-summary">No model loaded</span><span id="initializer-count">0 initializers</span><span id="onnx-light-version" title="onnx-light C++ release used by this viewer">onnx-light ${onnxLightVersion}</span><span id="shape-status" role="status"></span><span id="metadata-status" role="status"></span><span id="navigation-status" role="status"></span><span id="load-status" role="status"></span></div>
         <nav id="graph-navigation" aria-label="Graph breadcrumbs" hidden></nav>
+        <progress id="load-progress" aria-label="Loading ONNX model" hidden></progress>
       </header>
       <div class="graph-body">
         <div class="canvas" id="canvas">

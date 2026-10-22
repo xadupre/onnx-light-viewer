@@ -139,6 +139,7 @@ const native: {
     opset: number,
   ): OperatorSchema | null;
   loadModel(bytes: Uint8Array, fileName: string): NativeModel;
+  loadModelFile(filePath: string, fileName: string): Promise<NativeModel>;
   listBackendTests(): BackendTest[];
   loadBackendTest(id: number): NativeModel;
 } = require("./native/onnx_light_viewer.node");
@@ -191,6 +192,14 @@ export function decodeGraph(
  */
 export function loadModel(bytes: Uint8Array, fileName: string): NativeModel {
   return native.loadModel(bytes, fileName);
+}
+
+/** Streams a local file off the host thread, skipping large tensor payloads. */
+export function loadModelFile(
+  filePath: string,
+  fileName: string,
+): Promise<NativeModel> {
+  return native.loadModelFile(filePath, fileName);
 }
 
 export function listBackendTests(): BackendTest[] {

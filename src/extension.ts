@@ -9,6 +9,7 @@ import {
   listBackendTests,
   loadBackendTest,
   loadModel,
+  loadModelFile,
   onnxLightVersion,
   Graph,
   NativeModel,
@@ -23,7 +24,7 @@ const viewType = "onnxLightViewer.graph";
 interface LoadedModel {
   graph: Graph;
   native?: NativeModel;
-  reload: () => NativeModel;
+  reload: () => NativeModel | Promise<NativeModel>;
   metadata?: GraphMetadata;
 }
 
@@ -113,10 +114,15 @@ async function readGraph(
   log: ActionLog,
 ): Promise<LoadedModel> {
   return log.run(`Load model: ${uri.path}`, async () => {
-    const bytes = await vscode.workspace.fs.readFile(uri);
     const fileName = posix.basename(uri.path);
-    const reload = () => loadModel(bytes, fileName);
-    const native = reload();
+    let reload: LoadedModel["reload"];
+    if (uri.scheme === "file") {
+      reload = () => loadModelFile(uri.fsPath, fileName);
+    } else {
+      const bytes = await vscode.workspace.fs.readFile(uri);
+      reload = () => loadModel(bytes, fileName);
+    }
+    const native = await reload();
     return { graph: native.graph(), native, reload };
   });
 }

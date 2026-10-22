@@ -115,6 +115,8 @@ function requestAction(type, action, parameters = {}) {
 }
 
 function setLoading(pending, message = "") {
+  byId("load-progress").hidden = !pending;
+  byId("model-view").setAttribute("aria-busy", String(pending));
   for (const id of ["open-model", "open-backend-test"])
     byId(id).disabled = pending;
   for (const id of [

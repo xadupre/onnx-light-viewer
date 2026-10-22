@@ -7,7 +7,11 @@ const vm = require("node:vm");
 const { test } = require("node:test");
 const { JSDOM } = require("jsdom");
 
-async function openExtension(customModel, command = "onnxLightViewer.open") {
+async function openExtension(
+  customModel,
+  command = "onnxLightViewer.open",
+  localFiles = false,
+) {
   const messages = [];
   const errors = [];
   const reads = [];
@@ -24,6 +28,11 @@ async function openExtension(customModel, command = "onnxLightViewer.open") {
   let client;
   const disposable = () => ({ dispose() {} });
   const root = path.resolve(__dirname, "..");
+  const uri = (filePath) => ({
+    path: filePath,
+    fsPath: filePath,
+    scheme: localFiles ? "file" : "virtual",
+  });
   const webview = {
     postMessage: async (message) => {
       events.push(message);
@@ -56,9 +65,7 @@ async function openExtension(customModel, command = "onnxLightViewer.open") {
   };
   const vscode = {
     Uri: {
-      joinPath: (base, ...parts) => ({
-        path: path.posix.join(base.path, ...parts),
-      }),
+      joinPath: (base, ...parts) => uri(path.posix.join(base.path, ...parts)),
     },
     ViewColumn: { One: 1 },
     commands: {
@@ -106,6 +113,12 @@ async function openExtension(customModel, command = "onnxLightViewer.open") {
       return native;
     };
   }
+  const loadFile = graph.loadModelFile;
+  graph.loadModelFile = async (...args) => {
+    const native = await loadFile(...args);
+    nativeModels.push(native);
+    return native;
+  };
   const module = { exports: {} };
   const execute = vm.runInThisContext(
     `(function(require, module, exports) { ${readFileSync(filename, "utf8")}\n})`,
@@ -124,7 +137,7 @@ async function openExtension(customModel, command = "onnxLightViewer.open") {
   module.exports.activate({ extensionUri: { path: root }, subscriptions: [] });
   if (customModel) {
     await editor.resolveCustomEditor(
-      { uri: { path: path.join(__dirname, "models", customModel) } },
+      { uri: uri(path.join(__dirname, "models", customModel)) },
       panel,
     );
   } else {
@@ -146,7 +159,7 @@ async function openExtension(customModel, command = "onnxLightViewer.open") {
     showLogs: () => commands.get("onnxLightViewer.showLogs")(),
     receive: (message) => receive(message),
     open: async (name) => {
-      selection = [{ path: path.join(__dirname, "models", name) }];
+      selection = [uri(path.join(__dirname, "models", name))];
       await receive({ type: "open" });
     },
     chooseBackend: async (name) => {
@@ -155,6 +168,27 @@ async function openExtension(customModel, command = "onnxLightViewer.open") {
     },
   };
 }
+
+test("streams local custom-editor files and replacements without reading whole files into the host", async () => {
+  const extension = await openExtension("inference.onnx", undefined, true);
+  assert.deepEqual(extension.reads, []);
+  await extension.receive({ type: "ready" });
+  assert.equal(extension.messages.at(-1).type, "graph");
+  await extension.receive({ type: "refresh-shapes" });
+  assert.deepEqual(
+    extension.messages.at(-1).tensors.find(({ name }) => name === "reshaped")
+      .shape,
+    ["N", "3", "1"],
+  );
+  await extension.open("invalid-graph.onnx");
+  await extension.receive({ type: "metadata" });
+  const count = extension.nativeModels.length;
+  await extension.receive({ type: "metadata" });
+  assert.equal(extension.nativeModels.length, count + 1);
+  await extension.open("initializers.onnx");
+  assert.equal(extension.messages.at(-1).type, "graph");
+  assert.deepEqual(extension.reads, []);
+});
 
 test("keeps operation logs quiet and exposes real native exception recovery in Status", async (t) => {
   const extension = await openExtension();

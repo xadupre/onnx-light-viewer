@@ -97,6 +97,54 @@ function openViewer(t) {
   };
 }
 
+test("shows loading progress until success, failure or cancellation, including initial loads", (t) => {
+  const { document, window, load, messages } = openViewer(t);
+  const progress = document.getElementById("load-progress");
+  const state = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  assert.equal(progress.hidden, false);
+  assert.equal(progress.hasAttribute("value"), false);
+  assert.equal(progress.getAttribute("aria-label"), "Loading ONNX model");
+  assert.equal(document.getElementById("open-model").disabled, true);
+  load(demoGraph);
+  assert.equal(progress.hidden, true);
+  for (const button of ["open-model", "open-backend-test"]) {
+    document.getElementById(button).click();
+    assert.equal(progress.hidden, false);
+    const request = messages.at(-1);
+    state({
+      type: "log-entry",
+      entry: {
+        id: request.actionId,
+        action: "Open model",
+        timestamp: new Date().toISOString(),
+        status: "CANCELLED",
+      },
+    });
+    assert.equal(progress.hidden, true);
+  }
+  state({ type: "load-state", pending: true });
+  assert.equal(progress.hidden, false);
+  assert.equal(
+    document.getElementById("model-view").getAttribute("aria-busy"),
+    "true",
+  );
+  state({ type: "load-error", error: "Invalid model" });
+  assert.equal(progress.hidden, true);
+  assert.match(
+    document.getElementById("load-status").textContent,
+    /Invalid model/,
+  );
+  assert.equal(document.getElementById("open-model").disabled, false);
+  state({ type: "load-state", pending: true });
+  load(demoGraph);
+  assert.equal(progress.hidden, true);
+  assert.equal(
+    document.getElementById("model-view").getAttribute("aria-busy"),
+    "false",
+  );
+});
+
 test("switches all tabs without logging clicks or changing graph, selection or camera", async (t) => {
   const { document, load, window, events } = openViewer(t);
   load(demoGraph);

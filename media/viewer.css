@@ -154,6 +154,11 @@ p {
   gap: 6px 16px;
   border-bottom: 1px solid var(--border);
 }
+#load-progress {
+  width: 100%;
+  height: 4px;
+  accent-color: var(--mint);
+}
 .graph-toolbar > div {
   min-width: 0;
   display: flex;

@@ -1,12 +1,22 @@
 const assert = require("node:assert/strict");
 const { execFileSync } = require("node:child_process");
-const { readFileSync } = require("node:fs");
+const {
+  readFileSync,
+  mkdtempSync,
+  openSync,
+  writeSync,
+  ftruncateSync,
+  closeSync,
+  rmSync,
+} = require("node:fs");
+const { tmpdir } = require("node:os");
 const path = require("node:path");
 const { test } = require("node:test");
 const {
   decodeGraph,
   demoGraph,
   loadModel,
+  loadModelFile,
   listBackendTests,
   loadBackendTest,
 } = require("../dist/graph");
@@ -14,6 +24,94 @@ const {
 function modelBytes(name) {
   return readFileSync(path.join(__dirname, "models", name));
 }
+
+test("streams local models, retains small shape constants and never opens external weights", async () => {
+  for (const name of [
+    "inference.onnx",
+    "initializers.onnx",
+    "subgraphs.onnx",
+  ]) {
+    const file = path.join(__dirname, "models", name);
+    const model = await loadModelFile(file, name);
+    assert.deepEqual(model.graph(), loadModel(modelBytes(name), name).graph());
+    if (name === "inference.onnx") {
+      const inferred = model.graph(true);
+      assert.deepEqual(
+        inferred.tensors.find(({ name }) => name === "reshaped").shape,
+        ["N", "3", "1"],
+      );
+      assert.deepEqual(model.graph(), inferred);
+    }
+  }
+  await assert.rejects(
+    loadModelFile(path.join(__dirname, "models", "absent.onnx"), "absent"),
+  );
+  await assert.rejects(
+    loadModelFile(path.join(__dirname, "models", "missing-ir.onnx"), "invalid"),
+    /ONNX model graph/,
+  );
+  assert.throws(() => loadModelFile(null, "invalid"), TypeError);
+  assert.throws(
+    () => loadModelFile("invalid\0path", "invalid"),
+    /Invalid model file path/,
+  );
+});
+
+test("skips a large embedded weight without allocating its payload or blocking the host", async (t) => {
+  const directory = mkdtempSync(path.join(tmpdir(), "onnx-light-viewer-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const file = path.join(directory, "large.onnx");
+  const varint = (value) => {
+    const bytes = [];
+    do {
+      bytes.push((value % 128) | (value >= 128 ? 128 : 0));
+      value = Math.floor(value / 128);
+    } while (value);
+    return Buffer.from(bytes);
+  };
+  // Model -> graph -> initializer -> raw_data, ending in a sparse file hole.
+  const size = 256 * 1024 * 1024;
+  const tensorHeader = Buffer.concat([
+    Buffer.from([0x08]),
+    varint(size), // dims
+    Buffer.from([0x10, 0x02, 0x42, 0x01, 0x77, 0x4a]),
+    varint(size),
+  ]);
+  const graphHeader = Buffer.concat([
+    Buffer.from([0x12, 0x05]),
+    Buffer.from("large"),
+    Buffer.from([0x2a]),
+    varint(tensorHeader.length + size),
+    tensorHeader,
+  ]);
+  const header = Buffer.concat([
+    Buffer.from([0x08, 0x08, 0x3a]),
+    varint(graphHeader.length + size),
+    graphHeader,
+  ]);
+  const fd = openSync(file, "w");
+  try {
+    writeSync(fd, header);
+    ftruncateSync(fd, header.length + size);
+  } finally {
+    closeSync(fd);
+  }
+  const rss = process.memoryUsage().rss;
+  let settled = false;
+  const pending = loadModelFile(file, "large.onnx").then((model) => {
+    settled = true;
+    return model;
+  });
+  await Promise.resolve();
+  assert.equal(settled, false);
+  const model = await pending;
+  assert.equal(model.graph().name, "large");
+  assert.equal(model.graph().initializerCount, 1);
+  assert.deepEqual(model.graph().tensors, [
+    { name: "w", type: "UINT8", shape: [String(size)] },
+  ]);
+  assert.ok(process.memoryUsage().rss - rss < 64 * 1024 * 1024);
+});
 
 test("verifies invalid graph connectivity before inference and metadata without changing the model", () => {
   const bytes = modelBytes("invalid-graph.onnx");
