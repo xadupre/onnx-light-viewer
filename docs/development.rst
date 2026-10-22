@@ -42,6 +42,24 @@ checks JavaScript/C++ formatting on pull requests and pushes to ``main``.
 Its documentation job also builds Sphinx with warnings treated as errors.
 Results appear in the PR's **Checks** tab and the repository's **Actions** tab.
 
+Releases
+--------
+
+Push a new tag to build binaries and create a GitHub release automatically, with
+generated release notes. The **Release** workflow runs for all tag names and also
+when a release is published through GitHub.
+
+The workflow builds and tests the native binding on Linux, macOS and Windows
+(x64 and ARM64), then attaches a platform-specific ``.vsix`` extension package
+for each target. Each package includes the compiled extension, native binding
+and third-party licenses. All builds must succeed before assets are published.
+Rerunning the workflow replaces existing assets with the same filenames.
+
+Download the package matching the extension host's OS and architecture (Linux
+for Remote WSL), then use **Extensions: Install from VSIX...** in VS Code.
+GitHub also includes the tagged source code as ZIP and tar.gz archives.
+The workflow does not publish to the VS Code Marketplace.
+
 Test models
 -----------
 

@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="media/logo.svg" width="96" alt="ONNX Light Viewer logo">
+  <img src="media/logo.png" width="96" alt="ONNX Light Viewer logo">
 </p>
 
 # ONNX Light Viewer
