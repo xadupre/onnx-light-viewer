@@ -37,6 +37,15 @@ chosen case is materialized, with reference-output generation disabled, and its
 native owner is retained alongside the model so borrowed buffers remain valid.
 Cases come from the released C++ library, not Python backend tests or downloads.
 
+The retained native model also exposes a read-only metadata snapshot. It uses
+``core::compute::InferConstants``, ``InferValueAndNodeTags`` and
+``ComputeResultLifetimeInfo`` from the published library, without shape
+inference or tensor evaluation. Lifetime analysis includes nested-subgraph
+captures and preserves graph outputs and caller-owned inputs/initializers.
+Release lists are exposed as arrays of names, not parsed from semicolon-delimited
+metadata strings. Stored ``metadata_props`` remain separate from computed
+classifications, and arbitrary keys and values are displayed as plain text.
+
 Extension host compatibility
 ----------------------------
 

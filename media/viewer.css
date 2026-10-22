@@ -329,6 +329,34 @@ button:disabled {
   overflow-wrap: anywhere;
   font: inherit;
 }
+#metadata-panel dl {
+  margin: 6px 0 14px;
+}
+#metadata-panel dd {
+  white-space: pre-wrap;
+}
+#metadata-panel details {
+  margin-top: 14px;
+}
+#metadata-panel summary {
+  cursor: pointer;
+  font-size: 11px;
+}
+.metadata-hint {
+  color: var(--muted);
+}
+.edge.released {
+  stroke: #e2b77a;
+  stroke-dasharray: 5 4;
+}
+.tensor-label.released {
+  fill: #e2b77a;
+  text-decoration: line-through;
+}
+.graph-node .unused-label {
+  fill: #e2b77a;
+  font-size: 9px;
+}
 #operator-doc {
   width: min(900px, 95vw);
   max-height: 90vh;

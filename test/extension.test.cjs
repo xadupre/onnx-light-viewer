@@ -181,6 +181,32 @@ test("opens a searchable native backend selector, preserves the model on cancell
   assert.deepEqual(extension.errors, []);
 });
 
+test("analyzes retained native metadata on demand, preserves it on ready and resets it for another model", async () => {
+  const extension = await openExtension("analysis.onnx");
+  await extension.receive({ type: "ready" });
+  assert.equal(extension.messages.at(-1).metadata, undefined);
+  const reads = extension.reads.length;
+  await extension.receive({ type: "metadata" });
+  const info = extension.messages.at(-1);
+  assert.equal(info.type, "metadata-info");
+  assert.deepEqual(info.metadata.nodes[5].releaseAfter, [
+    "shared;activation",
+    "constant_sum",
+  ]);
+  assert.equal(extension.reads.length, reads);
+  await extension.receive({ type: "ready" });
+  assert.deepEqual(extension.messages.at(-1).metadata, info.metadata);
+  await extension.open("relu.onnx");
+  assert.equal(extension.messages.at(-1).metadata, undefined);
+  await extension.receive({ type: "metadata" });
+  assert.deepEqual(extension.messages.at(-1).metadata.model, []);
+  assert.deepEqual(
+    extension.messages.at(-1).metadata.nodes[0].releaseAfter,
+    [],
+  );
+  assert.deepEqual(extension.errors, []);
+});
+
 test("reports a backend model loading failure without replacing the open graph", async () => {
   const extension = await openExtension();
   await extension.receive({ type: "ready" });

@@ -17,6 +17,14 @@ let inspectedNode;
 let inspectedView;
 let tensorInformation = new Map();
 let tensorLabels = [];
+let metadataVisible = false;
+let metadataPending = false;
+let graphMetadata;
+let nodeMetadata = new Map();
+let valueMetadata = new Map();
+let connectionsByName = new Map();
+let releasedValues = new Set();
+let unusedLabels = [];
 
 function element(tag, attributes, text) {
   const node = document.createElementNS(svgNS, tag);
@@ -204,6 +212,132 @@ function inspect(view) {
       }),
     );
   }
+  inspectMetadata();
+}
+
+function metadataEntries(parent, entries) {
+  parent.replaceChildren();
+  if (!entries.length) {
+    parent.append(document.createTextNode("None"));
+    return;
+  }
+  for (const { key, value } of entries) {
+    const term = document.createElement("dt");
+    const description = document.createElement("dd");
+    term.textContent = key;
+    description.textContent = value;
+    parent.append(term, description);
+  }
+}
+
+function metadataNames(id, names) {
+  byId(id).replaceChildren(
+    ...(names.length ? names : ["None"]).map((name) => {
+      const item = document.createElement("li");
+      item.textContent = name;
+      return item;
+    }),
+  );
+}
+
+function updateReleases() {
+  const next = new Set(
+    metadataVisible
+      ? (nodeMetadata.get(inspectedView?.node?.id)?.releaseAfter ?? [])
+      : [],
+  );
+  for (const name of new Set([...releasedValues, ...next])) {
+    const released = next.has(name);
+    if (released === releasedValues.has(name)) continue;
+    for (const { path, text } of connectionsByName.get(name) ?? []) {
+      path.classList.toggle("released", released);
+      text.classList.toggle("released", released);
+      path.setAttribute(
+        "aria-label",
+        released
+          ? `${name}: releasable after ${inspectedView.node.name}`
+          : name,
+      );
+    }
+  }
+  releasedValues = next;
+}
+
+function inspectMetadata() {
+  updateReleases();
+  if (!metadataVisible || !graphMetadata) return;
+  const node = inspectedView?.node;
+  const port = inspectedView?.port;
+  const info = node ? nodeMetadata.get(node.id) : valueMetadata.get(port?.name);
+  metadataEntries(byId("metadata-analysis"), [
+    { key: "Name", value: node?.name ?? port?.name ?? "No selection" },
+    { key: "Tag", value: info?.tag ?? "Unknown" },
+    {
+      key: "Constant",
+      value: info ? (info.constant ? "Yes" : "No") : "Unknown",
+    },
+  ]);
+  metadataNames("metadata-releases", node ? info.releaseAfter : []);
+  metadataNames("metadata-last-use", node ? info.lastUse : []);
+  metadataNames("metadata-unused", node ? info.unusedOutputs : []);
+  metadataEntries(byId("metadata-node"), node ? info.entries : []);
+  const names = new Set(
+    node ? [...node.inputs, ...node.outputs] : port ? [port.name] : [],
+  );
+  byId("metadata-values").replaceChildren(
+    ...[...names].map((name) => {
+      const value = valueMetadata.get(name);
+      const item = document.createElement("li");
+      const heading = document.createElement("strong");
+      heading.textContent = name;
+      const description = document.createElement("div");
+      description.textContent = `${tensorDescription(name)} · Tag: ${value?.tag ?? "Unknown"} · Constant: ${value ? (value.constant ? "Yes" : "No") : "Unknown"}`;
+      const entries = document.createElement("dl");
+      metadataEntries(entries, value?.entries ?? []);
+      item.append(heading, description, entries);
+      return item;
+    }),
+  );
+}
+
+function acceptMetadata(metadata) {
+  graphMetadata = metadata;
+  nodeMetadata = new Map(metadata.nodes.map((node) => [node.id, node]));
+  valueMetadata = new Map(metadata.values.map((value) => [value.name, value]));
+  metadataPending = false;
+  byId("show-metadata").setAttribute("aria-busy", "false");
+  byId("metadata-status").textContent = "";
+  byId("metadata-content").hidden = false;
+  metadataEntries(byId("metadata-model"), metadata.model);
+  metadataEntries(byId("metadata-graph"), metadata.graph);
+  for (const label of unusedLabels) label.remove();
+  unusedLabels = [];
+  for (const { id, unusedOutputs } of metadata.nodes) {
+    if (!unusedOutputs.length) continue;
+    const view = nodeViews.get(id);
+    const text = label(
+      view.group,
+      view.initial.x,
+      view.initial.y - 30,
+      `Unused: ${unusedOutputs.length}`,
+      "unused-label",
+    );
+    text.append(
+      element("title", {}, `Unused outputs: ${unusedOutputs.join(", ")}`),
+    );
+    text.setAttribute("visibility", metadataVisible ? "visible" : "hidden");
+    unusedLabels.push(text);
+  }
+  inspectMetadata();
+}
+
+function requestMetadata() {
+  if (metadataPending) return;
+  metadataPending = true;
+  byId("show-metadata").setAttribute("aria-busy", "true");
+  byId("metadata-content").hidden = true;
+  byId("metadata-status").textContent = "Analyzing metadata…";
+  vscode.postMessage({ type: "metadata" });
 }
 
 function initializerList(parameters) {
@@ -441,7 +575,7 @@ function changeZoom(factor) {
   fit();
 }
 
-function render(graph) {
+function render(graph, metadata) {
   endGesture();
   resetDocumentation();
   inspectedNode = undefined;
@@ -452,6 +586,16 @@ function render(graph) {
   renderedSelection = new Set();
   connectionsByPosition = new Map();
   hasOperators = graph.nodes.length > 0;
+  graphMetadata = undefined;
+  metadataPending = false;
+  nodeMetadata = new Map();
+  valueMetadata = new Map();
+  connectionsByName = new Map();
+  releasedValues = new Set();
+  unusedLabels = [];
+  byId("metadata-content").hidden = true;
+  byId("metadata-status").textContent = "";
+  byId("show-metadata").setAttribute("aria-busy", "false");
   const tensors = new Set([
     ...graph.inputs,
     ...graph.outputs,
@@ -545,6 +689,8 @@ function render(graph) {
       text,
       information,
     };
+    if (!connectionsByName.has(name)) connectionsByName.set(name, []);
+    connectionsByName.get(name).push(connection);
     for (const position of new Set([from, to])) {
       if (!connectionsByPosition.has(position)) {
         connectionsByPosition.set(position, new Set());
@@ -633,6 +779,8 @@ function render(graph) {
   updateSelection(undefined, true);
   refreshStatus(false);
   byId("refresh-positions").disabled = false;
+  if (metadata) acceptMetadata(metadata);
+  else if (metadataVisible) requestMetadata();
 }
 
 svg.addEventListener("pointerdown", (event) => {
@@ -724,6 +872,17 @@ byId("open-model").addEventListener("click", () =>
 byId("open-backend-test").addEventListener("click", () =>
   vscode.postMessage({ type: "open-backend-test" }),
 );
+byId("show-metadata").addEventListener("click", () => {
+  metadataVisible = !metadataVisible;
+  byId("show-metadata").setAttribute("aria-expanded", String(metadataVisible));
+  byId("node-details").hidden = metadataVisible;
+  byId("metadata-panel").hidden = !metadataVisible;
+  byId("metadata-panel").parentElement.scrollTop = 0;
+  for (const label of unusedLabels)
+    label.setAttribute("visibility", metadataVisible ? "visible" : "hidden");
+  inspectMetadata();
+  if (metadataVisible && !graphMetadata) requestMetadata();
+});
 byId("refresh-shapes").addEventListener("click", () => {
   refreshStatus(true, "Inferring shapes/types…");
   vscode.postMessage({ type: "refresh-shapes" });
@@ -783,7 +942,14 @@ window.addEventListener("resize", () => {
 });
 window.addEventListener("message", (event) => {
   if (event.data?.type === "graph") {
-    render(event.data.graph);
+    render(event.data.graph, event.data.metadata);
+  } else if (event.data?.type === "metadata-info") {
+    acceptMetadata(event.data.metadata);
+  } else if (event.data?.type === "metadata-error") {
+    metadataPending = false;
+    byId("show-metadata").setAttribute("aria-busy", "false");
+    byId("metadata-status").textContent =
+      `Metadata analysis failed: ${event.data.error}`;
   } else if (event.data?.type === "shape-info") {
     updateTensorInformation(event.data.tensors);
     inspect(inspectedView);

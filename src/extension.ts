@@ -7,6 +7,7 @@ import {
   loadModel,
   Graph,
   NativeModel,
+  GraphMetadata,
 } from "./graph";
 import { webviewHtml } from "./webview";
 
@@ -15,6 +16,7 @@ const viewType = "onnxLightViewer.graph";
 interface LoadedModel {
   graph: Graph;
   native: NativeModel;
+  metadata?: GraphMetadata;
 }
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -68,7 +70,11 @@ function configurePanel(
   panel.iconPath = vscode.Uri.joinPath(mediaRoot, "logo.svg");
   let model = initialModel;
   const sendGraph = () =>
-    panel.webview.postMessage({ type: "graph", graph: model.graph });
+    panel.webview.postMessage({
+      type: "graph",
+      graph: model.graph,
+      ...(model.metadata ? { metadata: model.metadata } : {}),
+    });
   const messages = panel.webview.onDidReceiveMessage(
     async (message: { type?: string } | null) => {
       if (message?.type === "ready") {
@@ -124,6 +130,23 @@ function configurePanel(
           panel.title = `ONNX: ${posix.basename(selection[0].path)}`;
           await sendGraph();
         }
+      } else if (message?.type === "metadata") {
+        let metadata: GraphMetadata;
+        try {
+          metadata = model.native.metadata();
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error);
+          await panel.webview.postMessage({
+            type: "metadata-error",
+            error: detail,
+          });
+          await vscode.window.showErrorMessage(
+            `Could not analyze ONNX metadata: ${detail}`,
+          );
+          return;
+        }
+        model.metadata = metadata;
+        await panel.webview.postMessage({ type: "metadata-info", metadata });
       } else if (message?.type === "refresh-shapes") {
         let refreshed: Graph;
         try {

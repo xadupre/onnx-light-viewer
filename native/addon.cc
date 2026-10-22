@@ -1,5 +1,8 @@
 #include <napi.h>
 #include <onnx_core/backend_test/test_case.h>
+#include <onnx_core/compute/constant_info.h>
+#include <onnx_core/compute/result_lifetime.h>
+#include <onnx_core/compute/value_tags.h>
 #include <onnx_core/shapes/shape_inference.h>
 #include <onnx_extensions/shapes/dispatch_table.h>
 #include <onnx_op/operator_sets.h>
@@ -14,6 +17,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_set>
+#include <vector>
 
 namespace ol = ONNX_LIGHT_NAMESPACE;
 
@@ -287,6 +291,88 @@ Napi::Object StorageInformation(Napi::Env env, const ol::TensorProto &tensor) {
   return result;
 }
 
+template <typename Proto> Napi::Array MetadataEntries(Napi::Env env, const Proto &proto) {
+  auto result = Napi::Array::New(env);
+  uint32_t index = 0;
+  for (const auto &entry : proto.metadata_props()) {
+    auto item = Napi::Object::New(env);
+    item.Set("key", Text(env, entry.key()));
+    item.Set("value", Text(env, entry.value()));
+    result.Set(index++, item);
+  }
+  return result;
+}
+
+Napi::Object ModelMetadata(Napi::Env env, const ol::ModelProto &model) {
+  const auto &graph = model.graph();
+  const auto [constants, constant_nodes] = ol::core::compute::InferConstants(graph);
+  const auto [tags, node_tags] = ol::core::compute::InferValueAndNodeTags(graph);
+  const auto lifetimes = ol::core::compute::ComputeResultLifetimeInfo(graph, false);
+  std::map<std::string, Napi::Object> values;
+  const auto add_value = [&](std::string_view name) {
+    const std::string key(name);
+    if (key.empty() || values.contains(key))
+      return;
+    auto item = Napi::Object::New(env);
+    item.Set("name", Text(env, name));
+    item.Set("entries", Napi::Array::New(env));
+    item.Set("constant", constants.contains(key));
+    const auto tag = tags.find(key);
+    item.Set("tag", tag == tags.end() || tag->second.empty() ? Napi::Value(env.Null())
+                                                             : Napi::Value(Text(env, tag->second)));
+    values.emplace(key, item);
+  };
+  const auto add_entries = [&](const auto &proto) {
+    add_value(proto.name());
+    if (proto.name().empty())
+      return;
+    auto entries = values.at(std::string(proto.name())).Get("entries").As<Napi::Array>();
+    const auto additional = MetadataEntries(env, proto);
+    for (uint32_t i = 0; i < additional.Length(); ++i)
+      entries.Set(entries.Length(), additional.Get(i));
+  };
+  for (const auto *declarations : {&graph.input(), &graph.output(), &graph.value_info()})
+    for (const auto &value : *declarations)
+      add_entries(value);
+  for (const auto &value : graph.initializer())
+    add_entries(value);
+  for (const auto &value : graph.sparse_initializer())
+    add_entries(value.values());
+  auto nodes = Napi::Array::New(env);
+  uint32_t index = 0;
+  for (const auto &node : graph.node()) {
+    for (const auto &name : node.input())
+      add_value(name);
+    std::vector<std::string> unused;
+    for (const auto &name : node.output()) {
+      add_value(name);
+      if (!name.empty() && !lifetimes.keep.contains(std::string(name)) &&
+          !lifetimes.last_use.contains(std::string(name)))
+        unused.emplace_back(name);
+    }
+    auto item = Napi::Object::New(env);
+    item.Set("id", "node-" + std::to_string(index));
+    item.Set("entries", MetadataEntries(env, node));
+    item.Set("constant", constant_nodes.at(index) == ol::core::compute::ConstantInfo::kConstant);
+    item.Set("tag", node_tags.at(index).empty() ? Napi::Value(env.Null())
+                                                : Napi::Value(Text(env, node_tags.at(index))));
+    item.Set("releaseAfter", Ports(env, lifetimes[index].release_after));
+    item.Set("lastUse", Ports(env, lifetimes[index].not_used_after));
+    item.Set("unusedOutputs", Ports(env, unused));
+    nodes.Set(index++, item);
+  }
+  auto value_list = Napi::Array::New(env);
+  index = 0;
+  for (const auto &[name, value] : values)
+    value_list.Set(index++, value);
+  auto result = Napi::Object::New(env);
+  result.Set("model", MetadataEntries(env, model));
+  result.Set("graph", MetadataEntries(env, graph));
+  result.Set("nodes", nodes);
+  result.Set("values", value_list);
+  return result;
+}
+
 Napi::Object ModelGraph(Napi::Env env, const ol::ModelProto &model, const std::string &file_name) {
   const auto &graph = model.graph();
   std::map<std::string, Napi::Object> tensor_information;
@@ -453,6 +539,21 @@ struct StoredModel {
 
 Napi::Object ModelHandle(Napi::Env env, std::shared_ptr<StoredModel> model) {
   auto result = Napi::Object::New(env);
+  result.Set("metadata",
+             Napi::Function::New(env, [model](const Napi::CallbackInfo &call) -> Napi::Value {
+               const auto env = call.Env();
+               if (call.Length() != 0) {
+                 Napi::TypeError::New(env, "Expected no metadata analysis arguments.")
+                     .ThrowAsJavaScriptException();
+                 return env.Undefined();
+               }
+               try {
+                 return ModelMetadata(env, *model->model);
+               } catch (const std::exception &error) {
+                 Napi::Error::New(env, error.what()).ThrowAsJavaScriptException();
+                 return env.Undefined();
+               }
+             }));
   result.Set(
       "graph", Napi::Function::New(env, [model](const Napi::CallbackInfo &call) -> Napi::Value {
         const auto env = call.Env();

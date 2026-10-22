@@ -2,7 +2,7 @@ const assert = require("node:assert/strict");
 const { readFileSync } = require("node:fs");
 const { test } = require("node:test");
 const { JSDOM } = require("jsdom");
-const { decodeGraph, demoGraph } = require("../dist/graph");
+const { decodeGraph, demoGraph, loadModel } = require("../dist/graph");
 const { webviewHtml } = require("../dist/webview");
 
 function openViewer(t) {
@@ -85,6 +85,137 @@ function openViewer(t) {
     pointer,
   };
 }
+
+test("shows native metadata in the sidebar and marks released and never-used results without changing the layout", (t) => {
+  const { document, window, messages, load, pointer } = openViewer(t);
+  const model = loadModel(
+    readFileSync(require.resolve("./models/analysis.onnx")),
+    "analysis.onnx",
+  );
+  load(model.graph());
+  const graph = document.getElementById("graph");
+  const positions = nodePositions(document);
+  const viewBox = graph.getAttribute("viewBox");
+  const toggle = document.getElementById("show-metadata");
+  toggle.click();
+  assert.equal(messages.at(-1).type, "metadata");
+  assert.equal(toggle.getAttribute("aria-expanded"), "true");
+  assert.equal(document.getElementById("metadata-panel").hidden, false);
+  assert.equal(document.getElementById("node-details").hidden, true);
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: { type: "metadata-info", metadata: model.metadata() },
+    }),
+  );
+  assert.equal(toggle.getAttribute("aria-busy"), "false");
+  assert.equal(document.getElementById("metadata-content").hidden, false);
+  assert.match(
+    document.getElementById("metadata-analysis").textContent,
+    /ConstantYes/,
+  );
+  assert.match(
+    document.getElementById("metadata-model").textContent,
+    /metadata <inspection>/,
+  );
+  assert.equal(document.querySelectorAll(".unused-label").length, 2);
+  assert.match(
+    document.querySelector('[data-id="node-3"] .unused-label title')
+      .textContent,
+    /dimensions/,
+  );
+  const select = (index) => {
+    const group = document.querySelector(`[data-id="node-${index}"]`);
+    const point = positions[index];
+    pointer(group, "pointerdown", point.x, point.y);
+    pointer(graph, "pointerup", point.x, point.y);
+  };
+  select(3);
+  assert.match(
+    document.getElementById("metadata-analysis").textContent,
+    /Tagshape/,
+  );
+  assert.equal(document.querySelectorAll(".edge.released").length, 0);
+  select(5);
+  assert.equal(document.querySelectorAll(".edge.released").length, 4);
+  assert.equal(document.querySelectorAll(".tensor-label.released").length, 4);
+  assert.deepEqual(
+    Array.from(
+      document.querySelectorAll("#metadata-releases li"),
+      (item) => item.textContent,
+    ),
+    ["shared;activation", "constant_sum"],
+  );
+  assert.equal(document.querySelectorAll("#metadata-node script").length, 0);
+  assert.match(
+    document.getElementById("metadata-node").textContent,
+    /<script>not executable<\/script>/,
+  );
+  assert.match(
+    document.getElementById("metadata-values").textContent,
+    /A result used by three nodes/,
+  );
+  select(1);
+  assert.equal(document.querySelectorAll(".edge.released").length, 1);
+  assert.equal(
+    document.getElementById("metadata-last-use").textContent,
+    "bias",
+  );
+  assert.deepEqual(nodePositions(document), positions);
+  assert.equal(graph.getAttribute("viewBox"), viewBox);
+  toggle.click();
+  assert.equal(document.querySelectorAll(".edge.released").length, 0);
+  assert.equal(document.getElementById("node-details").hidden, false);
+  assert.ok(
+    Array.from(document.querySelectorAll(".unused-label")).every(
+      (label) => label.getAttribute("visibility") === "hidden",
+    ),
+  );
+  const count = messages.length;
+  toggle.click();
+  assert.equal(messages.length, count);
+  assert.equal(document.querySelectorAll(".edge.released").length, 1);
+});
+
+test("reports metadata errors, allows retry and clears stale metadata and release markers on replacement", (t) => {
+  const { document, window, load, messages } = openViewer(t);
+  load(demoGraph);
+  const toggle = document.getElementById("show-metadata");
+  toggle.click();
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: { type: "metadata-error", error: "analysis failed" },
+    }),
+  );
+  assert.match(
+    document.getElementById("metadata-status").textContent,
+    /analysis failed/,
+  );
+  assert.equal(toggle.getAttribute("aria-busy"), "false");
+  toggle.click();
+  toggle.click();
+  assert.equal(
+    messages.filter((message) => message.type === "metadata").length,
+    2,
+  );
+  const model = loadModel(
+    readFileSync(require.resolve("./models/analysis.onnx")),
+    "analysis.onnx",
+  );
+  load(model.graph());
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: { type: "metadata-info", metadata: model.metadata() },
+    }),
+  );
+  assert.equal(document.querySelectorAll(".unused-label").length, 2);
+  load(demoGraph);
+  assert.equal(messages.at(-1).type, "metadata");
+  assert.equal(document.getElementById("metadata-content").hidden, true);
+  assert.equal(
+    document.querySelectorAll(".unused-label, .edge.released").length,
+    0,
+  );
+});
 
 test("renders the demo, inspects its operator and requests a real file", (t) => {
   const { document, messages, load, window } = openViewer(t);

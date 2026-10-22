@@ -16,7 +16,7 @@ export function webviewHtml(
   <main class="workspace" aria-label="ONNX graph explorer">
       <header class="graph-toolbar">
         <div><a id="repository-link" href="https://github.com/xadupre/onnx-light-viewer" title="ONNX Light Viewer on GitHub" aria-label="Open the ONNX Light Viewer GitHub repository"><img src="${resource("logo.svg")}" alt="" width="24" height="24"></a><button id="open-model" class="primary">Open ONNX model</button><button id="refresh-shapes" class="icon-button" disabled title="Refresh shape and type information with onnx-light" aria-label="Refresh shape and type information"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2 6M20 4v7h-7"/></svg>Refresh shapes</button><button id="refresh-positions" class="icon-button" disabled title="Reset the portrait layout with new random horizontal positions" aria-label="Refresh node positions"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2 6M20 4v7h-7"/></svg>Refresh positions</button></div>
-        <button id="open-backend-test" class="icon-button" title="Search and open an onnx-light backend test">Backend test</button>
+        <div><button id="show-metadata" class="icon-button" aria-expanded="false" aria-controls="metadata-panel" title="Show native constants, tags, lifetimes and stored metadata">Metadata</button><button id="open-backend-test" class="icon-button" title="Search and open an onnx-light backend test">Backend test</button></div>
         <div class="graph-stats" aria-live="polite"><span id="graph-summary">1 node / 2 tensors</span><span id="initializer-count">0 initializers</span><span id="shape-status" role="status"></span></div>
       </header>
       <div class="graph-body">
@@ -26,12 +26,27 @@ export function webviewHtml(
         </div>
         <aside aria-label="Node inspector">
           <div class="eyebrow">INSPECTOR</div><div class="inspector-heading"><h2 id="node-title">Relu</h2><button id="show-doc" disabled aria-haspopup="dialog">Doc</button></div><p id="node-description">Select a node to explore its connections.</p>
-          <dl><dt>NODE NAME</dt><dd id="node-name">activation</dd><dt>DOMAIN</dt><dd id="node-domain">ai.onnx</dd><dt>OPSET</dt><dd id="node-opset">—</dd></dl>
+          <div id="node-details"><dl><dt>NODE NAME</dt><dd id="node-name">activation</dd><dt>DOMAIN</dt><dd id="node-domain">ai.onnx</dd><dt>OPSET</dt><dd id="node-opset">—</dd></dl>
           <h3>Inputs <span id="input-count">1</span></h3><ul id="node-inputs"></ul>
           <h3>Outputs <span id="output-count">1</span></h3><ul id="node-outputs"></ul>
           <section id="node-parameters" hidden>
             <h3>Attributes <span id="attribute-count">0</span></h3><ul id="node-attributes"></ul>
             <h3>Initializers <span id="parameter-count">0</span></h3><ul id="node-initializers"></ul>
+          </section></div>
+          <section id="metadata-panel" hidden>
+            <p id="metadata-status" role="status"></p>
+            <div id="metadata-content" hidden>
+              <h3>Selected node / tensor</h3><dl id="metadata-analysis"></dl>
+              <h3>Releasable after this node</h3><ul id="metadata-releases"></ul>
+              <p class="metadata-hint">Dashed, crossed-out connections are no longer needed after the selected node. Static analysis only; the model is not executed.</p>
+              <h3>Last use: inputs / weights</h3><ul id="metadata-last-use"></ul>
+              <p class="metadata-hint">Caller-owned values are not released.</p>
+              <h3>Unused outputs</h3><ul id="metadata-unused"></ul>
+              <details open><summary>Selected node metadata</summary><dl id="metadata-node"></dl></details>
+              <details open><summary>Connected tensor metadata</summary><ul id="metadata-values"></ul></details>
+              <details><summary>Model metadata</summary><dl id="metadata-model"></dl></details>
+              <details><summary>Graph metadata</summary><dl id="metadata-graph"></dl></details>
+            </div>
           </section>
         </aside>
       </div>
