@@ -11,44 +11,26 @@ for tool in node npm code; do
     fi
 done
 
+CODE=""
+while IFS= read -r candidate; do
+    if [[ "$candidate" != */remote-cli/* ]]; then
+        CODE="$candidate"
+        break
+    fi
+done < <(type -a -p code)
+
+if [[ -z "$CODE" ]]; then
+    printf '%s\n' \
+        'The remote VS Code CLI cannot launch an extension development window.' \
+        'Add the desktop VS Code bin directory to PATH, or run from a local terminal.' >&2
+    exit 1
+fi
+
 if [[ ! -d node_modules ]]; then
     npm ci
 fi
 npm run compile
 
-node <<'NODE'
-const { writeFileSync } = require("node:fs");
-const { onnx } = require("onnx-proto");
-const { demoGraph } = require("./dist/graph");
-
-const valueInfo = (name) => ({
-    name,
-    type: {
-        tensorType: {
-            elemType: onnx.TensorProto.DataType.FLOAT,
-            shape: { dim: [{ dimParam: "N" }] },
-        },
-    },
-});
-const model = onnx.ModelProto.create({
-    irVersion: 9,
-    producerName: "onnx-light-viewer",
-    opsetImport: [{ domain: "", version: 13 }],
-    graph: {
-        name: demoGraph.name,
-        input: demoGraph.inputs.map(valueInfo),
-        output: demoGraph.outputs.map(valueInfo),
-        node: demoGraph.nodes.map((node) => ({
-            name: node.name,
-            opType: node.opType,
-            domain: node.domain === "ai.onnx" ? "" : node.domain,
-            input: node.inputs,
-            output: node.outputs,
-        })),
-    },
-});
-writeFileSync("dist/demo.onnx", onnx.ModelProto.encode(model).finish());
-NODE
-
-exec code --new-window --disable-extensions --extensionDevelopmentPath="$ROOT" \
-    "$ROOT" "$ROOT/dist/demo.onnx"
+exec env -u VSCODE_IPC_HOOK_CLI "$CODE" \
+    --new-window --disable-extensions --extensionDevelopmentPath="$ROOT" \
+    "$ROOT/.vscode/development.code-workspace" "$ROOT/test/models/relu.onnx"

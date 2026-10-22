@@ -22,12 +22,19 @@ From a Bash terminal, run:
 ```
 
 The script installs dependencies on the first run, recompiles the extension,
-and opens a new VS Code development window with a real, single-node demo ONNX
-file already open in the viewer. Other extensions are disabled in that test
+and opens a new VS Code development window with `test/models/relu.onnx`
+already open in the viewer. A dedicated development workspace explicitly
+associates `.onnx` files with ONNX Light Viewer, overriding any user-level
+association with Netron. Other extensions are disabled in that test
 window to avoid conflicts with other ONNX viewers. No F5 or Command Palette
 step is needed.
 After making changes, close that development window and run the script again.
 The script also works when called from another directory.
+
+Inside a VS Code WSL terminal, the script uses the desktop `code` launcher
+instead of the remote terminal CLI, which ignores extension development flags.
+The desktop VS Code `bin` directory must be on `PATH`; the script reports an
+error if only the remote CLI is available.
 
 ### Manual launch with F5
 

@@ -1,19 +1,37 @@
 const assert = require("node:assert/strict");
 const { execFileSync } = require("node:child_process");
-const { mkdtempSync, writeFileSync, readFileSync, rmSync } = require("node:fs");
+const {
+  mkdirSync,
+  mkdtempSync,
+  writeFileSync,
+  readFileSync,
+  rmSync,
+} = require("node:fs");
 const { tmpdir } = require("node:os");
 const path = require("node:path");
 const { test } = require("node:test");
-const { decodeGraph, demoGraph } = require("../dist/graph");
+const { parseConfigFileTextToJson } = require("typescript");
 
-test("the launcher compiles and opens the demo in a new VS Code window from any directory", (t) => {
+test("the launcher bypasses the remote CLI and forces the developed ONNX editor", (t) => {
   const temporary = mkdtempSync(path.join(tmpdir(), "onnx viewer launch "));
   t.after(() => rmSync(temporary, { recursive: true, force: true }));
   const argumentsFile = path.join(temporary, "arguments.json");
+  const remoteBin = path.join(temporary, "remote-cli");
+  const desktopBin = path.join(temporary, "desktop bin");
+  mkdirSync(remoteBin);
+  mkdirSync(desktopBin);
   writeFileSync(
-    path.join(temporary, "code"),
+    path.join(remoteBin, "code"),
+    "#!/bin/sh\nprintf 'The remote CLI must not be used\\n' >&2\nexit 1\n",
+    { mode: 0o755 },
+  );
+  writeFileSync(
+    path.join(desktopBin, "code"),
     `#!${process.execPath}
-require("node:fs").writeFileSync(process.env.LAUNCH_ARGUMENTS_FILE, JSON.stringify(process.argv.slice(2)));
+require("node:fs").writeFileSync(process.env.LAUNCH_ARGUMENTS_FILE, JSON.stringify({
+  args: process.argv.slice(2),
+  ipcHook: process.env.VSCODE_IPC_HOOK_CLI ?? null,
+}));
 `,
     { mode: 0o755 },
   );
@@ -22,23 +40,37 @@ require("node:fs").writeFileSync(process.env.LAUNCH_ARGUMENTS_FILE, JSON.stringi
     cwd: temporary,
     env: {
       ...process.env,
-      PATH: `${temporary}${path.delimiter}${process.env.PATH}`,
+      PATH: [remoteBin, desktopBin, process.env.PATH].join(path.delimiter),
+      VSCODE_IPC_HOOK_CLI: "/unused/test-vscode.sock",
       LAUNCH_ARGUMENTS_FILE: argumentsFile,
     },
     stdio: "pipe",
   });
-  assert.deepEqual(JSON.parse(readFileSync(argumentsFile, "utf8")), [
+  const launch = JSON.parse(readFileSync(argumentsFile, "utf8"));
+  assert.equal(launch.ipcHook, null);
+  const workspacePath = path.join(
+    root,
+    ".vscode",
+    "development.code-workspace",
+  );
+  assert.deepEqual(launch.args, [
     "--new-window",
     "--disable-extensions",
     `--extensionDevelopmentPath=${root}`,
-    root,
-    path.join(root, "dist", "demo.onnx"),
+    workspacePath,
+    path.join(root, "test", "models", "relu.onnx"),
   ]);
-  assert.deepEqual(
-    decodeGraph(
-      readFileSync(path.join(root, "dist", "demo.onnx")),
-      "demo.onnx",
-    ),
-    demoGraph,
+  const parsedWorkspace = parseConfigFileTextToJson(
+    workspacePath,
+    readFileSync(workspacePath, "utf8"),
+  );
+  assert.equal(parsedWorkspace.error, undefined);
+  const workspace = parsedWorkspace.config;
+  const manifest = JSON.parse(
+    readFileSync(path.join(root, "package.json"), "utf8"),
+  );
+  assert.equal(
+    workspace.settings["workbench.editorAssociations"]["*.onnx"],
+    manifest.contributes.customEditors[0].viewType,
   );
 });
