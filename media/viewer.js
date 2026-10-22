@@ -1279,6 +1279,8 @@ window.addEventListener("message", (event) => {
     displayLog(event.data.entry);
   } else if (event.data?.type === "log-history") {
     for (const entry of event.data.entries) displayLog(entry);
+    const panel = byId("logs-view");
+    if (!panel.hidden) panel.scrollTop = panel.scrollHeight;
   } else if (event.data?.type === "show-logs") {
     showTab("logs", true);
   } else if (event.data?.type === "load-state") {
