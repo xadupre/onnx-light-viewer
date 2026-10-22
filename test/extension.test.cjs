@@ -11,6 +11,9 @@ async function openExtension(customModel, command = "onnxLightViewer.open") {
   const errors = [];
   const reads = [];
   const picks = [];
+  const logs = [];
+  const logViews = [];
+  const nativeModels = [];
   const commands = new Map();
   let receive;
   let selection;
@@ -52,6 +55,14 @@ async function openExtension(customModel, command = "onnxLightViewer.open") {
       },
     },
     window: {
+      createOutputChannel: (name) => {
+        assert.equal(name, "ONNX Light Viewer");
+        return {
+          appendLine: (line) => logs.push(line),
+          show: (preserveFocus) => logViews.push(preserveFocus),
+          dispose() {},
+        };
+      },
       createWebviewPanel: () => panel,
       registerCustomEditorProvider: (_viewType, provider) => {
         editor = provider;
@@ -73,13 +84,27 @@ async function openExtension(customModel, command = "onnxLightViewer.open") {
   };
   const filename = path.join(root, "dist", "extension.js");
   const requireExtension = createRequire(filename);
+  const graph = { ...requireExtension("./graph") };
+  for (const name of ["loadModel", "loadBackendTest"]) {
+    const load = graph[name];
+    graph[name] = (...args) => {
+      const native = load(...args);
+      nativeModels.push(native);
+      return native;
+    };
+  }
   const module = { exports: {} };
   const execute = vm.runInThisContext(
     `(function(require, module, exports) { ${readFileSync(filename, "utf8")}\n})`,
     { filename },
   );
   execute(
-    (name) => (name === "vscode" ? vscode : requireExtension(name)),
+    (name) =>
+      name === "vscode"
+        ? vscode
+        : name === "./graph"
+          ? graph
+          : requireExtension(name),
     module,
     module.exports,
   );
@@ -97,6 +122,10 @@ async function openExtension(customModel, command = "onnxLightViewer.open") {
     errors,
     reads,
     picks,
+    logs,
+    logViews,
+    nativeModels,
+    showLogs: () => commands.get("onnxLightViewer.showLogs")(),
     receive: (message) => receive(message),
     open: async (name) => {
       selection = [{ path: path.join(__dirname, "models", name) }];
@@ -108,6 +137,60 @@ async function openExtension(customModel, command = "onnxLightViewer.open") {
     },
   };
 }
+
+test("keeps timestamped action history, verifies invalid graphs and reloads before retrying", async () => {
+  const extension = await openExtension();
+  assert.match(
+    extension.logs[0],
+    /^\[\d{4}-\d{2}-\d{2}T[\d:.]+Z\] \[RUNNING\] Load model:/,
+  );
+  assert.match(extension.logs[1], /\[SUCCEEDED\] Load model:/);
+  await extension.open("invalid-graph.onnx");
+  const before = extension.messages.at(-1).graph;
+  const reads = extension.reads.length;
+  const failedNative = extension.nativeModels.at(-1);
+  const nativeCount = extension.nativeModels.length;
+  await extension.receive({ type: "refresh-shapes" });
+  assert.equal(extension.messages.at(-1).type, "shape-error");
+  assert.match(extension.messages.at(-1).error, /^VerifyModel:/);
+  assert.ok(
+    extension.logs.some((line) =>
+      /\[FAILED\] Refresh shapes:[\s\S]*Error: VerifyModel:/.test(line),
+    ),
+  );
+  assert.ok(extension.logs.some((line) => line.includes("[INVALIDATED]")));
+  await extension.receive({ type: "ready" });
+  assert.deepEqual(extension.messages.at(-1).graph, before);
+  await extension.receive({ type: "metadata" });
+  assert.equal(extension.messages.at(-1).type, "metadata-error");
+  assert.match(extension.messages.at(-1).error, /^VerifyModel:/);
+  assert.equal(extension.nativeModels.length, nativeCount + 1);
+  assert.notEqual(extension.nativeModels.at(-1), failedNative);
+  assert.ok(
+    extension.logs.some((line) =>
+      line.includes("[SUCCEEDED] Reload native model: Invalid graph"),
+    ),
+  );
+  assert.equal(extension.reads.length, reads);
+  await extension.open("inference.onnx");
+  await extension.receive({ type: "refresh-shapes" });
+  assert.equal(extension.messages.at(-1).type, "shape-info");
+  assert.ok(
+    extension.logs.some((line) => line.includes("[SUCCEEDED] Refresh shapes:")),
+  );
+  assert.ok(
+    extension.logs.some((line) => line.includes("[FAILED] Refresh metadata:")),
+  );
+  await extension.open("missing-ir.onnx");
+  assert.ok(
+    extension.logs.some((line) =>
+      /\[FAILED\] Load model:[\s\S]*Error:.*ONNX model graph/.test(line),
+    ),
+  );
+  extension.showLogs();
+  await extension.receive({ type: "show-logs" });
+  assert.deepEqual(extension.logViews, [true, true]);
+});
 
 test("navigates retained subgraphs, scopes refreshes and reports invalid paths without replacing the view", async () => {
   const extension = await openExtension("nested-if.onnx");
@@ -287,10 +370,22 @@ test("reports native inference errors without publishing partial results or chan
   const before = extension.messages.at(-1).graph;
   await extension.receive({ type: "refresh-shapes" });
   assert.equal(extension.messages.at(-1).type, "shape-error");
-  assert.match(extension.messages.at(-1).error, /unsupported domain.*example/);
+  assert.match(
+    extension.messages.at(-1).error,
+    /ComputeShapeModel:[\s\S]*unsupported domain.*example/,
+  );
   assert.match(extension.errors[0], /Could not infer ONNX shapes\/types/);
   await extension.receive({ type: "ready" });
   assert.deepEqual(extension.messages.at(-1).graph, before);
+  const reads = extension.reads.length;
+  await extension.receive({ type: "metadata" });
+  assert.equal(extension.messages.at(-1).type, "metadata-info");
+  assert.equal(extension.reads.length, reads);
+  assert.ok(
+    extension.logs.some((line) =>
+      line.includes("[SUCCEEDED] Reload native model: Custom operators"),
+    ),
+  );
   await extension.open("inference.onnx");
   await extension.receive({ type: "refresh-shapes" });
   assert.equal(extension.messages.at(-1).type, "shape-info");

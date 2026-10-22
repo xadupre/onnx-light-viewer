@@ -48,7 +48,8 @@ API and creates a retained native model with its initial graph snapshot.
 ``configurePanel`` owns a panel-local ``LoadedModel``: its native handle,
 currently displayed ``Graph`` and optional cached ``GraphMetadata``. It
 configures media access, installs the message router and supplies the HTML.
-The message subscription is disposed with the panel.
+The message subscription is disposed with the panel. A reload factory retains
+the original model bytes or backend case ID independently of the native handle.
 
 Opening another model replaces that state only after successful loading.
 Navigation changes the current graph and clears its metadata snapshot.
@@ -169,6 +170,11 @@ the model; ``ApplySubgraphShapes`` then applies retained child contexts to
 ``GRAPH`` attributes recursively. This persists inferred outputs and
 intermediate ``value_info`` inside the in-memory model, not just in labels.
 
+Both shape inference and metadata analysis first call the schema-free
+``VerifyModel`` validator. Snapshot projection remains available for inspecting
+invalid connectivity without running analysis. Native algorithm boundaries add
+the failing algorithm's name to exceptions, preserving its complete error text.
+
 ``ModelMetadata`` analyzes only the selected graph using ``InferConstants``,
 ``InferValueAndNodeTags`` and ``ComputeResultLifetimeInfo(graph, false)``.
 Constant analysis is seeded from enclosing scopes. Results distinguish
@@ -192,6 +198,9 @@ replies with ``panel.webview.postMessage``.
    * - ``ready``
      - Resend current snapshots.
      - ``graph`` with optional cached metadata.
+   * - ``show-logs``
+     - Show the shared Output channel.
+     - No graph change.
    * - ``open``
      - Choose and load a local model.
      - ``graph`` on success; cancellation leaves the view unchanged.
@@ -217,6 +226,23 @@ The ``graph`` response rebuilds the display and resets its layout/selection.
 positions and the camera. ``metadata-info`` updates the separate analysis
 view. The metadata toggle requests analysis only if none is available;
 **Refresh metadata** always requests a fresh snapshot, even with the panel closed.
+
+Action history and recovery
+---------------------------
+
+``activate`` creates one **ONNX Light Viewer** Output channel for the extension
+session. ``runAction`` records UTC timestamps and ``RUNNING``, ``SUCCEEDED`` or
+``FAILED`` status for file/backend loading, navigation and native refreshes.
+Failures include their full error stack and are rethrown to the existing UI
+error handlers. The toolbar's **Logs** button and the **Show Logs** command
+open this channel without clearing its history.
+
+A failed shape or metadata refresh invalidates the native handle, not the
+last displayed snapshots. Before the next native action, ``nativeModel``
+logs and recreates that handle from the original bytes or backend case.
+It does not reread or save the source file. This discards potentially partial
+native inference state; previously inferred information may need refreshing
+after recovery. Reload failures are logged and surfaced like other failures.
 
 Browser-side state and layout
 -----------------------------

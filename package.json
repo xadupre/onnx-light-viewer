@@ -24,6 +24,10 @@
   "contributes": {
     "commands": [
       {
+        "command": "onnxLightViewer.showLogs",
+        "title": "ONNX Light Viewer: Show Logs"
+      },
+      {
         "command": "onnxLightViewer.open",
         "title": "ONNX Light Viewer: Open Graph",
         "icon": "media/logo.svg"

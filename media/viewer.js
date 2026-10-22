@@ -1032,6 +1032,9 @@ byId("open-model").addEventListener("click", () =>
 byId("open-backend-test").addEventListener("click", () =>
   vscode.postMessage({ type: "open-backend-test" }),
 );
+byId("show-logs").addEventListener("click", () =>
+  vscode.postMessage({ type: "show-logs" }),
+);
 byId("show-metadata").addEventListener("click", () => {
   metadataVisible = !metadataVisible;
   byId("show-metadata").setAttribute("aria-expanded", String(metadataVisible));

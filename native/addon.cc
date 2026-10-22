@@ -14,6 +14,7 @@
 #include <onnx_extensions/shapes/dispatch_table.h>
 #include <onnx_op/operator_sets.h>
 #include <onnx_proto/onnx.h>
+#include <onnx_proto/onnx_verify.h>
 
 #include <algorithm>
 #include <cmath>
@@ -30,6 +31,14 @@
 namespace ol = ONNX_LIGHT_NAMESPACE;
 
 namespace {
+
+template <typename Action> auto RunAlgorithm(const char *name, Action action) {
+  try {
+    return action();
+  } catch (const std::exception &error) {
+    throw std::runtime_error(std::string(name) + ": " + error.what());
+  }
+}
 
 struct GraphStep {
   int node;
@@ -384,14 +393,20 @@ template <typename Proto> Napi::Array MetadataEntries(Napi::Env env, const Proto
 /** Seeds captured constants from enclosing scopes without modifying the model. */
 Napi::Object ModelMetadata(Napi::Env env, const ol::ModelProto &model, const GraphPath &path) {
   const auto scopes = GraphScopes(model, path);
+  RunAlgorithm("VerifyModel", [&] { ol::VerifyModel(model); });
   const auto &graph = *scopes.back();
   std::unordered_set<std::string> outer_constants;
   for (size_t index = 0; index + 1 < scopes.size(); ++index)
-    outer_constants = ol::core::compute::InferConstants(*scopes[index], outer_constants).first;
-  const auto [constants, constant_nodes] =
-      ol::core::compute::InferConstants(graph, outer_constants);
-  const auto [tags, node_tags] = ol::core::compute::InferValueAndNodeTags(graph);
-  const auto lifetimes = ol::core::compute::ComputeResultLifetimeInfo(graph, false);
+    outer_constants = RunAlgorithm("InferConstants (enclosing graph)", [&] {
+                        return ol::core::compute::InferConstants(*scopes[index], outer_constants);
+                      }).first;
+  const auto [constants, constant_nodes] = RunAlgorithm(
+      "InferConstants", [&] { return ol::core::compute::InferConstants(graph, outer_constants); });
+  const auto [tags, node_tags] = RunAlgorithm(
+      "InferValueAndNodeTags", [&] { return ol::core::compute::InferValueAndNodeTags(graph); });
+  const auto lifetimes = RunAlgorithm("ComputeResultLifetimeInfo", [&] {
+    return ol::core::compute::ComputeResultLifetimeInfo(graph, false);
+  });
   std::map<std::string, Napi::Object> values;
   const auto add_value = [&](std::string_view name) {
     const std::string key(name);
@@ -695,11 +710,12 @@ void ApplySubgraphShapes(ol::GraphProto &graph, const ol::core::shapes::ShapesCo
 }
 
 void InferShapes(ol::ModelProto &model) {
-  ol::onnx_shapes::RegisterShapeFunctions();
+  RunAlgorithm("VerifyModel", [&] { ol::VerifyModel(model); });
+  RunAlgorithm("RegisterShapeFunctions", [] { ol::onnx_shapes::RegisterShapeFunctions(); });
   ol::core::shapes::ShapesContext context;
-  context.ComputeShapeModel(model);
-  context.ApplyInferredShapesToModel(model);
-  ApplySubgraphShapes(model.ref_graph(), context);
+  RunAlgorithm("ComputeShapeModel", [&] { context.ComputeShapeModel(model); });
+  RunAlgorithm("ApplyInferredShapesToModel", [&] { context.ApplyInferredShapesToModel(model); });
+  RunAlgorithm("ApplySubgraphShapes", [&] { ApplySubgraphShapes(model.ref_graph(), context); });
 }
 
 Napi::Value DecodeGraph(const Napi::CallbackInfo &info) {

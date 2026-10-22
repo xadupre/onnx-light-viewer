@@ -86,6 +86,17 @@ function openViewer(t) {
   };
 }
 
+test("opens the action log without changing the graph or inspector", (t) => {
+  const { document, messages, load } = openViewer(t);
+  load(demoGraph);
+  const graph = document.getElementById("nodes").innerHTML;
+  const inspector = document.querySelector("aside").textContent;
+  document.getElementById("show-logs").click();
+  assert.equal(messages.at(-1).type, "show-logs");
+  assert.equal(document.getElementById("nodes").innerHTML, graph);
+  assert.equal(document.querySelector("aside").textContent, inspector);
+});
+
 test("opens graph attributes and nested breadcrumbs, including empty graphs and failed navigation", (t) => {
   const { document, window, messages, load } = openViewer(t);
   const model = loadModel(

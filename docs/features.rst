@@ -104,3 +104,21 @@ subgraph navigation and shape refresh. Escape cancels the selector.
 The viewer opens the test model; it does not run the test, compare reference
 outputs, report pass/fail or benchmark it. No Python or network access is needed
 to browse these cases, and external weight files are not downloaded or opened.
+
+Action logs and failures
+------------------------
+
+**Logs** opens the **ONNX Light Viewer** channel in VS Code's Output panel.
+The **ONNX Light Viewer: Show Logs** command is also available if opening a
+model fails before the viewer is created. The session history keeps UTC
+timestamps, ``RUNNING``/``SUCCEEDED``/``FAILED`` status and full error details for
+model loading, navigation, shape inference and metadata refreshes. Opening another
+model does not clear earlier entries.
+
+Shape and metadata algorithms first call onnx-light's structural ``VerifyModel``.
+Invalid graphs can still be inspected, but verification failures prevent these
+algorithms from running. Errors identify the failing native algorithm.
+After a failed refresh, the native handle is discarded and recreated from
+the original in-memory bytes (or backend case) before the next native action.
+The previous display remains visible; inferred information may need refreshing
+after this reload. The source file is never modified or reread for recovery.
