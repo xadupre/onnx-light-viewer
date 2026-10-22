@@ -4,7 +4,7 @@
  */
 import * as vscode from "vscode";
 import { randomBytes } from "node:crypto";
-import { posix } from "node:path";
+import { join, posix } from "node:path";
 import {
   listBackendTests,
   loadBackendTest,
@@ -18,6 +18,11 @@ import {
 } from "./graph";
 import { webviewHtml } from "./webview";
 import { ActionLog, LogEntry } from "./log";
+import {
+  cachedHuggingFaceModel,
+  listHuggingFaceModels,
+  parseHuggingFaceInput,
+} from "./huggingface";
 
 const viewType = "onnxLightViewer.graph";
 
@@ -142,14 +147,15 @@ export function activate(context: vscode.ExtensionContext): void {
 /**
  * Streams local files or reads virtual files through VS Code's filesystem.
  * The reload closure retains a local path or virtual-file bytes for recovery.
+ * @param fileName Original basename when the URI points to a temporary/cache file.
  * @returns Root snapshot, retained handle and its recovery factory.
  */
 async function readGraph(
   uri: vscode.Uri,
   log: ActionLog,
+  fileName = posix.basename(uri.path),
 ): Promise<LoadedModel> {
   return log.run(`Load model: ${uri.path}`, async () => {
-    const fileName = posix.basename(uri.path);
     let reload: LoadedModel["reload"];
     if (uri.scheme === "file") {
       reload = () => loadModelFile(uri.fsPath, fileName);
@@ -184,13 +190,13 @@ function isGraphPath(path: unknown): path is GraphPath {
  * Retains the model, current graph and optional metadata snapshot for this panel.
  * Installs the message router before loading so initial errors remain inspectable.
  *
- * ready replays snapshots/history; open and open-backend-test replace the model
- * only on success. navigate replaces the graph and clears cached metadata.
+ * ready replays snapshots/history; local, backend and Hugging Face opens replace
+ * the model only on success. navigate replaces the graph and clears cached metadata.
  * refresh-shapes returns tensor labels in shape-info; metadata returns a separate
  * metadata-info snapshot. Both refresh failures discard the native handle, not
  * the last display. actionId correlates requests with their UI log entries.
  *
- * @param context Supplies bundled media resources.
+ * @param context Supplies bundled media resources and persistent download storage.
  * @param panel Panel whose message and view-state subscriptions are disposed on close.
  * @param uri Optional model to load initially; omitted leaves the viewer empty.
  * @param initialTab Tab selected in the initial HTML shell.
@@ -289,6 +295,152 @@ async function configurePanel(
           await panel.webview.postMessage({ type: "show-logs" });
           showLogsRequested = false;
         }
+      } else if (message?.type === "open") {
+        try {
+          const loaded = await log.run(
+            "Open ONNX model",
+            async (id) => {
+              const location = await vscode.window.showQuickPick(
+                [
+                  { id: "local", label: "Local file" },
+                  { id: "huggingface", label: "Hugging Face" },
+                ],
+                {
+                  title: "Open an ONNX model",
+                  placeHolder: "Choose where to open the model from",
+                },
+              );
+              if (!location) {
+                log.record("CANCELLED", "Open ONNX model", id);
+                return;
+              }
+              if (location.id === "local") {
+                const selection = await vscode.window.showOpenDialog({
+                  canSelectMany: false,
+                  filters: { "ONNX models": ["onnx"] },
+                  openLabel: "Open ONNX graph",
+                });
+                if (!selection?.[0]) {
+                  log.record("CANCELLED", "Open ONNX model", id);
+                  return;
+                }
+                return {
+                  model: await readGraph(selection[0], log),
+                  name: posix.basename(selection[0].path),
+                };
+              }
+              const input = await vscode.window.showInputBox({
+                title: "Open a Hugging Face ONNX model",
+                prompt:
+                  "Enter a public repository ID, repository URL or ONNX file URL. External weight files are not downloaded.",
+                placeHolder: "onnx-community/Kokoro-82M-v1.0-ONNX",
+                ignoreFocusOut: true,
+                validateInput: (value) => {
+                  try {
+                    parseHuggingFaceInput(value);
+                    return undefined;
+                  } catch (error) {
+                    return error instanceof Error
+                      ? error.message
+                      : String(error);
+                  }
+                },
+              });
+              if (input === undefined) {
+                log.record("CANCELLED", "Open ONNX model", id);
+                return;
+              }
+              const target = parseHuggingFaceInput(input);
+              return vscode.window.withProgress(
+                {
+                  location: vscode.ProgressLocation.Notification,
+                  title: `Hugging Face: ${"fileName" in target ? target.fileName : target.url}`,
+                  cancellable: true,
+                },
+                async (_progress, token) => {
+                  const controller = new AbortController();
+                  const cancellation = token.onCancellationRequested(() =>
+                    controller.abort(),
+                  );
+                  if (token.isCancellationRequested) controller.abort();
+                  try {
+                    let source;
+                    if ("fileName" in target) source = target;
+                    else {
+                      const files = await listHuggingFaceModels(
+                        target,
+                        controller.signal,
+                      );
+                      const selection =
+                        files.length === 1
+                          ? { source: files[0] }
+                          : await vscode.window.showQuickPick(
+                              files.map((file) => ({
+                                label: file.path,
+                                source: file,
+                              })),
+                              {
+                                title: "Choose an ONNX file",
+                                placeHolder:
+                                  "Select a model variant to download",
+                              },
+                              token,
+                            );
+                      if (!selection) {
+                        log.record("CANCELLED", "Open ONNX model", id);
+                        return;
+                      }
+                      source = selection.source;
+                    }
+                    controller.signal.throwIfAborted();
+                    const result = await cachedHuggingFaceModel(
+                      source,
+                      join(context.globalStorageUri.fsPath, "huggingface"),
+                      (path) =>
+                        readGraph(vscode.Uri.file(path), log, source.fileName),
+                      controller.signal,
+                    );
+                    result.value.reload = () =>
+                      loadModelFile(result.filePath, source.fileName);
+                    log.record(
+                      "SUCCEEDED",
+                      `${result.cached ? "Cache hit" : "Downloaded and cached"}: ${source.url}`,
+                      undefined,
+                      result.filePath,
+                    );
+                    return { model: result.value, name: source.fileName };
+                  } catch (error) {
+                    if (
+                      controller.signal.aborted &&
+                      error instanceof Error &&
+                      error.name === "AbortError"
+                    ) {
+                      log.record("CANCELLED", "Open ONNX model", id);
+                      return;
+                    }
+                    throw error;
+                  } finally {
+                    cancellation.dispose();
+                  }
+                },
+              );
+            },
+            message.actionId,
+          );
+          if (!loaded) return;
+          model = loaded.model;
+          panel.title = `ONNX: ${loaded.name}`;
+          await sendGraph();
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error);
+          await panel.webview.postMessage({
+            type: "load-error",
+            error: detail,
+          });
+          await vscode.window.showErrorMessage(
+            `Could not open ONNX model: ${detail}`,
+          );
+        }
       } else if (message?.type === "open-backend-test") {
         let loaded: { model: LoadedModel; name: string } | undefined;
         try {
@@ -347,38 +499,6 @@ async function configurePanel(
         model = loaded.model;
         panel.title = `ONNX: ${loaded.name}`;
         await sendGraph();
-      } else if (message?.type === "open") {
-        try {
-          const loaded = await log.run(
-            "Open ONNX model",
-            async (id) => {
-              const selection = await vscode.window.showOpenDialog({
-                canSelectMany: false,
-                filters: { "ONNX models": ["onnx"] },
-                openLabel: "Open ONNX graph",
-              });
-              if (!selection?.[0]) {
-                log.record("CANCELLED", "Open ONNX model", id);
-                return;
-              }
-              const loadedModel = await readGraph(selection[0], log);
-              return { loadedModel, uri: selection[0] };
-            },
-            message.actionId,
-          );
-          if (!loaded) return;
-          model = loaded.loadedModel;
-          panel.title = `ONNX: ${posix.basename(loaded.uri.path)}`;
-          await sendGraph();
-        } catch (error) {
-          await panel.webview.postMessage({
-            type: "load-error",
-            error: error instanceof Error ? error.message : String(error),
-          });
-          await vscode.window.showErrorMessage(
-            `Could not open ONNX model: ${error instanceof Error ? error.message : String(error)}`,
-          );
-        }
       } else if (message?.type === "navigate") {
         const requestedModel = model;
         let graph: Graph;
