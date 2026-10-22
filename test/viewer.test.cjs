@@ -2,7 +2,12 @@ const assert = require("node:assert/strict");
 const { readFileSync } = require("node:fs");
 const { test } = require("node:test");
 const { JSDOM } = require("jsdom");
-const { decodeGraph, demoGraph, loadModel } = require("../dist/graph");
+const {
+  decodeGraph,
+  demoGraph,
+  loadModel,
+  onnxLightVersion,
+} = require("../dist/graph");
 const { webviewHtml } = require("../dist/webview");
 
 function openViewer(t) {
@@ -12,6 +17,7 @@ function openViewer(t) {
       (name) => `https://viewer.invalid/${name}`,
       "https://viewer.invalid",
       "test-nonce",
+      onnxLightVersion,
     ),
     { runScripts: "outside-only" },
   );
@@ -85,6 +91,24 @@ function openViewer(t) {
     pointer,
   };
 }
+
+test("shows the compiled onnx-light release before loading a graph and after model replacement", (t) => {
+  const { document, load } = openViewer(t);
+  const version = readFileSync(
+    require.resolve("../CMakeLists.txt"),
+    "utf8",
+  ).match(/set\(ONNX_LIGHT_VERSION\s+"([^"]+)"\)/)[1];
+  const release = document.getElementById("onnx-light-version");
+  assert.equal(release.textContent, `onnx-light ${version}`);
+  load(demoGraph);
+  load(
+    decodeGraph(
+      readFileSync(require.resolve("./models/passthrough.onnx")),
+      "passthrough.onnx",
+    ),
+  );
+  assert.equal(release.textContent, `onnx-light ${version}`);
+});
 
 test("opens graph attributes and nested breadcrumbs, including empty graphs and failed navigation", (t) => {
   const { document, window, messages, load } = openViewer(t);
