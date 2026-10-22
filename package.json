@@ -16,6 +16,11 @@
     "Visualization"
   ],
   "main": "./dist/extension.js",
+  "binary": {
+    "napi_versions": [
+      8
+    ]
+  },
   "contributes": {
     "commands": [
       {
@@ -57,22 +62,19 @@
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
-    "compile": "tsc -p .",
+    "build:native": "node scripts/build-native.cjs",
+    "compile": "npm run build:native && tsc -p .",
     "watch": "tsc -w -p .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "npm run compile && node --test test/*.test.cjs"
   },
-  "dependencies": {
-    "onnx-proto": "^8.0.1"
-  },
-  "overrides": {
-    "protobufjs": "^8.8.1"
-  },
   "devDependencies": {
     "@types/node": "^22.0.0",
     "@types/vscode": "^1.96.0",
+    "cmake-js": "^8.0.0",
     "jsdom": "^27.0.0",
+    "node-addon-api": "^8.9.2",
     "prettier": "^3.6.0",
     "typescript": "^5.9.0"
   }

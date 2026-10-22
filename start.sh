@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 cd -- "$ROOT"
 
-for tool in node npm code; do
+for tool in node npm cmake code; do
     if ! command -v "$tool" > /dev/null 2>&1; then
         printf 'Required command not found: %s\n' "$tool" >&2
         exit 1
@@ -26,7 +26,8 @@ if [[ -z "$CODE" ]]; then
     exit 1
 fi
 
-if [[ ! -d node_modules ]]; then
+if [[ ! -d node_modules || ! -f node_modules/cmake-js/bin/cmake-js ||
+      ! -f node_modules/node-addon-api/napi.h ]]; then
     npm ci
 fi
 npm run compile
