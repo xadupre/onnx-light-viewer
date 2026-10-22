@@ -1,77 +1,105 @@
 /**
  * Snapshot contracts shared by the native addon, extension host and webview.
  * These describe the view, not the model's tensor payloads.
+ * Native calls are synchronous and report parsing/analysis failures as errors.
  */
+
+/** Display-ready attribute preview, rather than an editable ONNX value. */
 export interface GraphParameter {
   name: string;
   type: string;
   value: string;
 }
 
+/** Explicit node attribute or schema default, optionally linking child graphs. */
 export interface GraphAttribute extends GraphParameter {
+  /** True for a schema-supplied default, false for a stored node attribute. */
   default: boolean;
   graphs?: SubgraphLink[];
 }
 
-/** Native node/attribute indices plus the graph index within that attribute. */
+/**
+ * Zero-based native node/attribute indices within the current graph scope.
+ * graph is zero for a GRAPH attribute or the item index in a GRAPHS attribute.
+ */
 export interface GraphStep {
   node: number;
   attribute: number;
   graph: number;
 }
 
-/** Absolute path from the model's root graph; an empty path selects the root. */
+/**
+ * Absolute path from the model's root graph; an empty path selects the root.
+ * Indices, rather than names, distinguish potentially duplicate nodes/graphs.
+ */
 export type GraphPath = GraphStep[];
 
+/** Named ancestor (including the current graph) with an absolute navigation path. */
 export interface GraphBreadcrumb {
   name: string;
   path: GraphPath;
 }
 
+/** Lightweight child-graph reference; does not recursively include its nodes. */
 export interface SubgraphLink extends GraphBreadcrumb {
   nodeCount: number;
 }
 
+/** Storage description only; the viewer does not open external weight files. */
 export interface InitializerStorage {
   external: boolean;
+  /** External-data location when present, otherwise null. */
   location: string | null;
 }
 
+/** Dense or sparse weight metadata, excluding the tensor's payload. */
 export interface GraphInitializer {
   name: string;
   type: string;
   shape: string[];
   storage: InitializerStorage;
+  /** Present for sparse initializers, describing their indices tensor. */
   indicesStorage?: InitializerStorage;
 }
 
+/** Newest matching operator schema not newer than the model's imported opset. */
 export interface OperatorSchema {
   sinceVersion: number;
   doc: string;
   defaults: GraphAttribute[];
 }
 
+/** One operator in the selected graph, with resolved schema and weight metadata. */
 export interface GraphNode {
+  /** Graph-local node index encoded as node-N; not the optional ONNX node name. */
   id: string;
   name: string;
   opType: string;
   domain: string;
   inputs: string[];
+  /** Implicit dependencies from nested graph attributes, excluding explicit inputs. */
   captures: string[];
   outputs: string[];
+  /** Imported domain opset as text, or null when the domain has no import. */
   opset: string | null;
   attributes: GraphAttribute[];
   parameters: GraphInitializer[];
+  /** Null when no matching native operator schema is available. */
   schema: OperatorSchema | null;
 }
 
+/** Tensor labels for ports and intermediate values, without tensor data. */
 export interface TensorInformation {
   name: string;
   type: string | null;
-  /** Empty for a scalar, null for unknown rank, omitted for non-tensor types. */
+  /**
+   * Dimensions stay strings to preserve symbolic names. Empty for a scalar,
+   * null for unknown rank, omitted for non-tensor types.
+   */
   shape?: string[] | null;
 }
 
+/** Display snapshot of one graph, not a recursive serialization of the model. */
 export interface Graph {
   name: string;
   breadcrumbs: GraphBreadcrumb[];
@@ -82,21 +110,34 @@ export interface Graph {
   tensors: TensorInformation[];
 }
 
+/**
+ * Retained native model whose inferred information survives graph projections.
+ * Methods neither save the model nor execute its operators.
+ */
 export interface NativeModel {
   /**
    * Projects one graph. When requested, inference first updates the entire
    * retained model in memory, including nested graph value_info.
+   * @param inferShapes Defaults to false; true runs model-wide shape inference.
+   * @param path Absolute graph path; omitted or empty selects the root.
+   * @returns A fresh display snapshot of the selected graph.
    */
   graph(inferShapes?: boolean, path?: GraphPath): Graph;
-  /** Recomputes analysis for one graph without inferring shapes or editing it. */
+  /**
+   * Recomputes constants, tags and lifetimes without inferring shapes or editing
+   * the model. This is separate from the graph snapshot.
+   * @param path Absolute graph path; omitted or empty selects the root.
+   */
   metadata(path?: GraphPath): GraphMetadata;
 }
 
+/** Stored ONNX metadata property, preserved as a key/value pair. */
 export interface MetadataEntry {
   key: string;
   value: string;
 }
 
+/** Stored properties and native constant/tag analysis for a named value. */
 export interface ValueMetadata {
   name: string;
   entries: MetadataEntry[];
@@ -104,16 +145,21 @@ export interface ValueMetadata {
   tag: string | null;
 }
 
+/** Analysis for a node identified by the same graph-local ID as GraphNode. */
 export interface NodeMetadata {
   id: string;
   entries: MetadataEntry[];
   constant: boolean;
   tag: string | null;
+  /** Intermediate values releasable after this node. */
   releaseAfter: string[];
+  /** Caller-owned inputs/weights reaching their last read, not to be released. */
   lastUse: string[];
+  /** Unused results that are not graph outputs. */
   unusedOutputs: string[];
 }
 
+/** Read-only analysis snapshot for the selected graph, including model properties. */
 export interface GraphMetadata {
   model: MetadataEntry[];
   graph: MetadataEntry[];
@@ -121,6 +167,7 @@ export interface GraphMetadata {
   values: ValueMetadata[];
 }
 
+/** Catalog entry for a bundled native backend case; listing does not run it. */
 export interface BackendTest {
   /** Original native collection index, independent of name sorting. */
   id: number;
@@ -143,8 +190,10 @@ const native: {
   loadBackendTest(id: number): NativeModel;
 } = require("./native/onnx_light_viewer.node");
 
+/** C++ library release embedded in the addon, independent of the loaded model. */
 export const onnxLightVersion = native.onnxLightVersion;
 
+/** Minimal Relu snapshot with native schema documentation, requiring no model file. */
 export const demoGraph: Graph = {
   name: "A first ONNX graph",
   breadcrumbs: [{ name: "A first ONNX graph", path: [] }],
@@ -175,6 +224,10 @@ export const demoGraph: Graph = {
 /**
  * One-shot projection, skipping raw tensor bytes unless inference is requested.
  * Use loadModel instead when inferred value_info must survive subsequent calls.
+ * @param bytes Serialized ONNX ModelProto bytes.
+ * @param fileName Display label only; no file is opened or saved.
+ * @param inferShapes Whether to infer shapes before projecting the root graph.
+ * @returns Root graph snapshot without a retained native handle.
  */
 export function decodeGraph(
   bytes: Uint8Array,
@@ -188,17 +241,26 @@ export function decodeGraph(
  * Retains bytes in the native handle without copying their tensor payloads.
  * Do not mutate the buffer while the handle is in use. fileName is a display
  * label, not a path to read or save.
+ * @param bytes Serialized ONNX ModelProto bytes kept alive by the native handle.
+ * @param fileName Display label used for the model.
+ * @returns A handle for repeated graph projection and analysis.
  */
 export function loadModel(bytes: Uint8Array, fileName: string): NativeModel {
   return native.loadModel(bytes, fileName);
 }
 
+/** Lists cases sorted by name, preserving native IDs even for duplicate names. */
 export function listBackendTests(): BackendTest[] {
   return native
     .listBackendTests()
     .sort((left, right) => left.name.localeCompare(right.name));
 }
 
+/**
+ * Loads a catalog case without executing it or generating expected outputs.
+ * @param id Native collection ID from listBackendTests, not its sorted position.
+ * @returns A retained model backed by the native test case.
+ */
 export function loadBackendTest(id: number): NativeModel {
   return native.loadBackendTest(id);
 }
