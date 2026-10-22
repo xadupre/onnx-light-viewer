@@ -30,7 +30,8 @@ The refresh action registers the released ``onnx_shapes`` algorithms and calls
 ``core::shapes::InferShapesModel``. See :doc:`shape_information` for the
 displayed metadata, refresh behavior and inference limitations.
 
-The backend-test selector calls ``core::backend_test::CollectTestCases()``.
+The backend-test selector calls ``core::backend_test::CollectTestCases("", true)``
+for both listing and loading, including large cases such as Qwen3.
 Listing reads case metadata without materializing models or datasets. Only the
 chosen case is materialized, with reference-output generation disabled, and its
 native owner is retained alongside the model so borrowed buffers remain valid.

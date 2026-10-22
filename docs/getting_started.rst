@@ -64,8 +64,9 @@ then choose a result with the mouse or Enter. Both single-node and multi-node
 model cases are available. Escape cancels without changing the current graph.
 The selected case opens in the same viewer and supports normal inspection,
 position changes and **Refresh shapes**. No Python or network access is needed.
-The catalog is from the pinned onnx-light release; large ``_big_`` cases and
-benchmark mode are excluded by the library's default collection settings.
+The catalog is from the pinned onnx-light release and includes large ``_big_``
+cases, including the four-layer Qwen3 models (search for ``qwen``). Benchmark
+mode is not used. External weights are not downloaded or opened.
 
 The inspector also shows the imported opset, typed operator attributes and
 all connected dense or sparse initializers, without a limit on their number.
@@ -102,6 +103,8 @@ inputs/outputs, and fits the camera without discarding inferred shapes.
 
 The workspace fills the editor and adapts when it is resized. Resizing and
 zooming preserve node positions.
+Operator types and node names are shown in full: boxes widen up to 280 graph
+units, then reduce the corresponding font size for longer labels.
 
 Moving and selecting nodes
 ~~~~~~~~~~~~~~~~~~~~~~~~~~

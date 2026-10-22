@@ -209,11 +209,6 @@ li > .tensor-info {
   fill: #98c1b7;
   font-size: 10px;
 }
-.graph-node .operator-tag {
-  fill: var(--mint);
-  font-size: 9px;
-  letter-spacing: 1.5px;
-}
 .port rect {
   fill: #17232f;
   stroke: #42576d;
@@ -230,11 +225,6 @@ li > .tensor-info {
 .port:hover rect {
   stroke: var(--mint);
   stroke-width: 2;
-}
-.port .port-type {
-  fill: var(--muted);
-  font-size: 9px;
-  letter-spacing: 1.2px;
 }
 .zoom-controls {
   position: absolute;
