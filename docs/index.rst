@@ -1,6 +1,10 @@
 ONNX Light Viewer
 =================
 
+.. image:: https://codecov.io/gh/xadupre/onnx-light-viewer/branch/main/graph/badge.svg
+   :target: https://codecov.io/gh/xadupre/onnx-light-viewer
+   :alt: Code coverage
+
 ONNX Light Viewer is an interactive environment for exploring, optimizing and
 running ONNX models in VS Code, powered by native onnx-light. Open local models
 or download and cache them from Hugging Face; navigate graphs and subgraphs,
