@@ -273,8 +273,9 @@ replies with ``panel.webview.postMessage``.
      - Retain a timestamped explicit operation or viewer error.
      - ``log-entry``.
    * - ``open``
-     - Choose a local file or a public Hugging Face URL; load the file or
-       download/reuse the persistent cache.
+     - Choose a local file, a public Hugging Face model or a backend test;
+       load the file, download/reuse the persistent cache or search the native
+       catalog.
      - ``graph`` or ``load-error``; cancellation leaves the view unchanged.
    * - ``open-backend-test``
      - Search the released native catalog and load a case.

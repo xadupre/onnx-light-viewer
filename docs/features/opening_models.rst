@@ -5,7 +5,7 @@ Opening models
    :alt: Open ONNX model button in the viewer toolbar.
    :width: 200px
 
-* **Open ONNX model** offers **Local file** or **Hugging Face**.
+* **Open ONNX model** offers **Local file**, **Hugging Face** or **Backend test**.
   Opening an ``.onnx`` file in VS Code
   also uses the viewer; use **Reopen Editor With...** if another editor handles it.
 * **ONNX Light Viewer: Open Graph** opens the bundled Relu demo.

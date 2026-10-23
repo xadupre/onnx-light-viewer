@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img" aria-labelledby="title description">
+  <title id="title">onnx-light and ONNX Runtime interoperability</title>
+  <desc id="description">A bright neural-network graph with play symbols in each node.</desc>
+  <rect x="4" y="4" width="120" height="120" rx="28" fill="#111827"/>
+  <g fill="none" stroke="#22B8FF" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M32 25 96 25M32 25 18 64M32 25 110 64M32 25 38 103M32 25 90 103M96 25 18 64M96 25 110 64M96 25 38 103M96 25 90 103M18 64 110 64M18 64 38 103M18 64 90 103M110 64 38 103M110 64 90 103M38 103 90 103" stroke-opacity=".55" stroke-width="2"/>
+    <path d="M32 25 64 64M96 25 64 64M18 64 64 64M110 64 64 64M38 103 64 64M90 103 64 64" stroke-opacity=".9" stroke-width="2.5"/>
+  </g>
+  <g fill="#00AFFF" stroke="#B9F0FF" stroke-width="1.5">
+    <circle cx="32" cy="25" r="10"/>
+    <circle cx="96" cy="25" r="10"/>
+    <circle cx="18" cy="64" r="10"/>
+    <circle cx="110" cy="64" r="10"/>
+    <circle cx="38" cy="103" r="10"/>
+    <circle cx="90" cy="103" r="10"/>
+  </g>
+  <g fill="#FFFFFF">
+    <path d="M30 20v10l8-5z"/>
+    <path d="M94 20v10l8-5z"/>
+    <path d="M16 59v10l8-5z"/>
+    <path d="M108 59v10l8-5z"/>
+    <path d="M36 98v10l8-5z"/>
+    <path d="M88 98v10l8-5z"/>
+  </g>
+  <circle cx="64" cy="64" r="21" fill="#A855F7" stroke="#E9D5FF" stroke-width="2"/>
+  <circle cx="64" cy="64" r="15" fill="#C084FC"/>
+  <path d="M60 54v20l16-10z" fill="#FFFFFF"/>
+</svg>
