@@ -2,6 +2,7 @@ const assert = require("node:assert/strict");
 const { readFileSync } = require("node:fs");
 const { copyFile, mkdir, mkdtemp, readFile, rm } = require("node:fs/promises");
 const { createHash } = require("node:crypto");
+const { createServer } = require("node:http");
 const { tmpdir } = require("node:os");
 const { createRequire } = require("node:module");
 const path = require("node:path");
@@ -12,7 +13,9 @@ const { JSDOM } = require("jsdom");
 async function openExtension(
   customModel,
   command = "onnxLightViewer.open",
+  localFiles = false,
   storage,
+  downloadUrl,
 ) {
   const messages = [];
   const errors = [];
@@ -32,6 +35,7 @@ async function openExtension(
   let editor;
   let backendSelection;
   let client;
+  const fileLoadGates = [];
   let huggingFaceInput;
   let cancelDownload = false;
   let modelSource = "local";
@@ -40,6 +44,11 @@ async function openExtension(
   const listedRepositories = [];
   const disposable = () => ({ dispose() {} });
   const root = path.resolve(__dirname, "..");
+  const uri = (filePath) => ({
+    path: filePath,
+    fsPath: filePath,
+    scheme: localFiles ? "file" : "virtual",
+  });
   const webview = {
     postMessage: async (message) => {
       events.push(message);
@@ -75,10 +84,12 @@ async function openExtension(
   };
   const vscode = {
     Uri: {
-      file: (filePath) => ({ path: filePath, fsPath: filePath }),
-      joinPath: (base, ...parts) => ({
-        path: path.posix.join(base.path, ...parts),
+      file: (filePath) => ({
+        path: filePath,
+        fsPath: filePath,
+        scheme: "file",
       }),
+      joinPath: (base, ...parts) => uri(path.posix.join(base.path, ...parts)),
     },
     ViewColumn: { One: 1 },
     ProgressLocation: { Notification: 15 },
@@ -138,6 +149,11 @@ async function openExtension(
   const graph = { ...requireExtension("./graph") };
   const huggingface = {
     ...requireExtension("./huggingface"),
+    cachedHuggingFaceModel: (source, ...args) =>
+      requireExtension("./huggingface").cachedHuggingFaceModel(
+        downloadUrl ? { ...source, url: downloadUrl } : source,
+        ...args,
+      ),
     listHuggingFaceModels: async (repository) => {
       listedRepositories.push(repository);
       if (!repositoryFiles)
@@ -153,6 +169,14 @@ async function openExtension(
       return native;
     };
   }
+  const loadFile = graph.loadModelFile;
+  graph.loadModelFile = async (...args) => {
+    const gate = fileLoadGates.shift();
+    const native = await loadFile(...args);
+    if (gate) await gate;
+    nativeModels.push(native);
+    return native;
+  };
   const module = { exports: {} };
   const execute = vm.runInThisContext(
     `(function(require, module, exports) { ${readFileSync(filename, "utf8")}\n})`,
@@ -177,7 +201,7 @@ async function openExtension(
   });
   if (customModel) {
     await editor.resolveCustomEditor(
-      { uri: { path: path.join(__dirname, "models", customModel) } },
+      { uri: uri(path.join(__dirname, "models", customModel)) },
       panel,
     );
   } else {
@@ -217,12 +241,20 @@ async function openExtension(
       client = callback;
     },
     nativeModels,
+    pauseNextFileLoad: () => {
+      let resume;
+      const gate = new Promise((resolve) => {
+        resume = resolve;
+      });
+      fileLoadGates.push(gate);
+      return resume;
+    },
     listedRepositories,
     showLogs: () => commands.get("onnxLightViewer.showLogs")(),
     receive: (message) => receive(message),
     open: async (name) => {
       modelSource = "local";
-      selection = [{ path: path.join(__dirname, "models", name) }];
+      selection = [uri(path.join(__dirname, "models", name))];
       await receive({ type: "open" });
     },
     chooseBackend: async (name) => {
@@ -244,6 +276,167 @@ async function openExtension(
   };
 }
 
+test("streams local custom-editor files and replacements without reading whole files into the host", async () => {
+  const extension = await openExtension("inference.onnx", undefined, true);
+  assert.deepEqual(extension.reads, []);
+  await extension.receive({ type: "ready" });
+  assert.equal(extension.messages.at(-1).type, "graph");
+  await extension.receive({ type: "refresh-shapes" });
+  assert.deepEqual(
+    extension.messages.at(-1).tensors.find(({ name }) => name === "reshaped")
+      .shape,
+    ["N", "3", "1"],
+  );
+  await extension.open("invalid-graph.onnx");
+  await extension.receive({ type: "metadata" });
+  const count = extension.nativeModels.length;
+  await extension.receive({ type: "metadata" });
+  assert.equal(extension.nativeModels.length, count + 1);
+  await extension.open("initializers.onnx");
+  assert.equal(extension.messages.at(-1).type, "graph");
+  assert.deepEqual(extension.reads, []);
+});
+
+test("ignores stale recovery results and errors after replacing a local model", async () => {
+  for (const type of ["navigate", "metadata", "refresh-shapes"]) {
+    const extension = await openExtension("inference.onnx", undefined, true);
+    for (const path of [[], [{ node: 9999, attribute: 0, graph: 0 }]]) {
+      await extension.open("invalid-graph.onnx");
+      await extension.receive({ type: "metadata" });
+      const resume = extension.pauseNextFileLoad();
+      const recovery = extension.receive({ type, path });
+      await extension.open("relu.onnx");
+      const count = extension.messages.length;
+      const errors = extension.errors.length;
+      const nativeCount = extension.nativeModels.length;
+      resume();
+      await recovery;
+      assert.equal(extension.messages.length, count);
+      assert.equal(extension.errors.length, errors);
+      await extension.receive({ type: "ready" });
+      assert.equal(extension.messages.at(-1).graph.nodes[0].opType, "Relu");
+      await extension.receive({ type: "refresh-shapes" });
+      assert.equal(extension.nativeModels.length, nativeCount + 1);
+    }
+  }
+});
+
+test("shares concurrent native recovery and keeps inferred state for navigation", async () => {
+  const extension = await openExtension("inference.onnx", undefined, true);
+  const initial = extension.nativeModels.at(-1);
+  const graph = initial.graph;
+  let failInference = true;
+  initial.graph = (infer, ...args) => {
+    if (infer && failInference) {
+      failInference = false;
+      throw new Error("temporary inference failure");
+    }
+    return graph(infer, ...args);
+  };
+  await extension.receive({ type: "refresh-shapes" });
+  assert.equal(extension.messages.at(-1).type, "shape-error");
+
+  const count = extension.nativeModels.length;
+  const resumeShape = extension.pauseNextFileLoad();
+  const shapes = extension.receive({ type: "refresh-shapes" });
+  const resumeMetadata = extension.pauseNextFileLoad();
+  const metadata = extension.receive({ type: "metadata" });
+  resumeShape();
+  await shapes;
+  resumeMetadata();
+  await metadata;
+  assert.equal(extension.nativeModels.length, count + 1);
+  for (const type of ["shape-info", "metadata-info"]) {
+    assert.equal(
+      extension.messages.filter((message) => message.type === type).length,
+      1,
+    );
+  }
+  await extension.receive({ type: "navigate", path: [] });
+  assert.deepEqual(
+    extension.messages
+      .at(-1)
+      .graph.tensors.find(({ name }) => name === "reshaped").shape,
+    ["N", "3", "1"],
+  );
+});
+
+test("ignores delayed recovery results and errors after disposing the panel", async () => {
+  for (const message of [
+    { type: "navigate", path: [] },
+    { type: "navigate", path: [{ node: 9999, attribute: 0, graph: 0 }] },
+    { type: "metadata" },
+    { type: "refresh-shapes" },
+  ]) {
+    const extension = await openExtension(
+      "invalid-graph.onnx",
+      undefined,
+      true,
+    );
+    await extension.receive({ type: "metadata" });
+    const resume = extension.pauseNextFileLoad();
+    const recovery = extension.receive(message);
+    extension.dispose();
+    const events = extension.events.length;
+    const errors = extension.errors.length;
+    resume();
+    await recovery;
+    assert.equal(extension.events.length, events);
+    assert.equal(extension.errors.length, errors);
+  }
+});
+
+test("discards analysis from the previous graph when navigation shares delayed recovery", async () => {
+  for (const type of ["refresh-shapes", "metadata"]) {
+    const extension = await openExtension("nested-if.onnx", undefined, true);
+    const native = extension.nativeModels.at(-1);
+    const graph = native.graph;
+    const root = graph(false);
+    const path = root.nodes[0].attributes.find(
+      ({ name }) => name === "then_branch",
+    ).graphs[0].path;
+    native.graph = (infer, ...args) => {
+      if (infer) throw new Error("temporary inference failure");
+      return graph(infer, ...args);
+    };
+    await extension.receive({ type: "refresh-shapes" });
+    assert.equal(extension.messages.at(-1).type, "shape-error");
+
+    const resume = extension.pauseNextFileLoad();
+    const navigation = extension.receive({ type: "navigate", path });
+    const analysis = extension.receive({ type });
+    resume();
+    await Promise.all([navigation, analysis]);
+
+    const child = extension.messages
+      .filter(({ type }) => type === "graph")
+      .at(-1).graph;
+    assert.equal(child.breadcrumbs.length, 2);
+    assert.equal(child.nodes.length, 2);
+    assert.equal(
+      extension.messages.some(({ type: messageType }) =>
+        type === "refresh-shapes"
+          ? messageType === "shape-info"
+          : messageType === "metadata-info",
+      ),
+      false,
+    );
+
+    await extension.receive({ type });
+    if (type === "refresh-shapes") {
+      assert.equal(extension.messages.at(-1).type, "shape-info");
+      assert.deepEqual(
+        extension.messages.at(-1).tensors.find(({ name }) => name === "sum")
+          .shape,
+        ["N", "3"],
+      );
+    } else {
+      assert.equal(extension.messages.at(-1).type, "metadata-info");
+      assert.equal(extension.messages.at(-1).metadata.nodes.length, 2);
+    }
+  }
+});
+
 test("opens a cached Hugging Face model and preserves the display on invalid input or cancellation", async (t) => {
   const storage = await mkdtemp(path.join(tmpdir(), "onnx-viewer-hf-host-"));
   t.after(() => rm(storage, { recursive: true }));
@@ -259,6 +452,7 @@ test("opens a cached Hugging Face model and preserves the display on invalid inp
   const extension = await openExtension(
     undefined,
     "onnxLightViewer.open",
+    false,
     storage,
   );
   await extension.openHuggingFace(url.replace("/resolve/", "/blob/"));
@@ -298,9 +492,7 @@ test("opens a cached Hugging Face model and preserves the display on invalid inp
   );
   await extension.receive({ type: "refresh-shapes" });
   assert.equal(extension.messages.at(-1).type, "shape-info");
-  assert.ok(
-    extension.reads.some((file) => file === path.join(cache, "model.onnx")),
-  );
+  assert.ok(!extension.reads.includes(path.join(cache, "model.onnx")));
   await extension.openHuggingFace("https://example.com/model.onnx");
   assert.equal(extension.messages.at(-1).type, "load-error");
   await extension.receive({ type: "ready" });
@@ -322,6 +514,41 @@ test("opens a cached Hugging Face model and preserves the display on invalid inp
     4,
   );
 });
+test("recovers a downloaded model from its published cache path after the temporary file is renamed", async (t) => {
+  const storage = await mkdtemp(
+    path.join(tmpdir(), "onnx-viewer-hf-recovery-"),
+  );
+  t.after(() => rm(storage, { recursive: true }));
+  const bytes = await readFile(path.join(__dirname, "models/custom.onnx"));
+  let downloads = 0;
+  const server = createServer((_request, response) => {
+    downloads++;
+    response.end(bytes);
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(async () => {
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+  });
+  const extension = await openExtension(
+    undefined,
+    undefined,
+    true,
+    storage,
+    `http://127.0.0.1:${server.address().port}/custom.onnx`,
+  );
+  await extension.openHuggingFace(
+    "https://huggingface.co/viewer-tests/fixtures/resolve/main/custom.onnx",
+  );
+  assert.equal(extension.messages.at(-1).type, "graph");
+  await extension.receive({ type: "refresh-shapes" });
+  assert.equal(extension.messages.at(-1).type, "shape-error");
+  await extension.receive({ type: "metadata" });
+  assert.equal(extension.messages.at(-1).type, "metadata-info");
+  assert.equal(downloads, 1);
+  assert.deepEqual(extension.reads, []);
+});
+
 test("keeps operation logs quiet and exposes real native exception recovery in Status", async (t) => {
   const extension = await openExtension();
   const dom = new JSDOM(extension.webview.html, { runScripts: "outside-only" });

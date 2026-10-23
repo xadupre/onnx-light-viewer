@@ -17,10 +17,12 @@ or opens an empty viewer if none exists.
 Shape and metadata algorithms first call onnx-light's structural ``VerifyModel``.
 Invalid graphs can still be inspected, but verification failures prevent these
 algorithms from running. Errors identify the failing native algorithm.
-After a failed refresh, the native handle is discarded and recreated from
-the original in-memory bytes (or backend case) before the next native action.
+After a failed refresh, the native handle is discarded and recreated before
+the next native action: local files (including Hugging Face cache entries) are
+streamed again, virtual files use retained bytes, and backend cases are rebuilt.
 The previous display remains visible; inferred information may need refreshing
-after this reload. The source file is never modified or reread for recovery.
+after this reload. The source file is never modified, but local files must remain
+available for recovery.
 
 **Status** shows the loaded native library and its version, the current graph,
 native model handle, running operations and the last failed action with its

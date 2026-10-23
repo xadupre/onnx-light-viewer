@@ -41,10 +41,12 @@ export function webviewHtml(
         <div><button id="show-metadata" class="icon-button" aria-expanded="false" aria-controls="metadata-panel" title="Show native constants, tags, lifetimes and stored metadata" aria-describedby="metadata-status">Metadata</button><button id="open-backend-test" class="icon-button" title="Search and open an onnx-light backend test">Backend test</button></div>
         <div class="graph-stats" aria-live="polite"><span id="graph-summary">No model loaded</span><span id="initializer-count">0 initializers</span><span id="onnx-light-version" title="onnx-light C++ release used by this viewer">onnx-light ${onnxLightVersion}</span><span id="shape-status" role="status"></span><span id="metadata-status" role="status"></span><span id="navigation-status" role="status"></span><span id="load-status" role="status"></span></div>
         <nav id="graph-navigation" aria-label="Graph breadcrumbs" hidden></nav>
+        <progress id="load-progress" aria-label="Loading ONNX model" hidden></progress>
       </header>
       <div class="graph-body">
         <div class="canvas" id="canvas">
-          <svg id="graph" role="group" aria-label="Interactive ONNX graph" tabindex="0"><defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs><g id="edges"></g><g id="nodes"></g></svg>
+          <form id="find-node" role="search"><input id="node-search" type="search" placeholder="Find node or operator" aria-label="Find a node by name or operator" autocomplete="off"><button type="submit" title="Go to the next matching node" aria-label="Go to the next matching node">Go</button><span id="node-search-result" role="status"></span></form>
+          <svg id="graph" role="group" aria-label="Interactive ONNX graph" tabindex="0"><defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs><g id="graph-overview" aria-hidden="true" display="none"><path id="overview-edges"/><path id="overview-nodes"/></g><path id="crossing-edges" class="crossing-edge"/><path id="released-crossing-edges" class="crossing-edge released"/><g id="edges"></g><g id="nodes"></g></svg>
           <div class="zoom-controls" aria-label="Graph zoom"><button id="zoom-out" aria-label="Zoom out">−</button><button id="zoom-fit" title="Fit graph">Fit</button><button id="zoom-readable" title="Zoom to readable size (100%), centered on the inspected node" aria-label="Zoom to readable size"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="m8 17 4-10 4 10M10 13h4M4 8V4h4M16 4h4v4M20 16v4h-4M8 20H4v-4"/></svg></button><button id="zoom-in" aria-label="Zoom in">+</button></div>
         </div>
         <aside aria-label="Node inspector">
@@ -99,30 +101,45 @@ export function webviewHtml(
     <section id="controls-view" role="tabpanel" aria-labelledby="controls-tab" tabindex="0" hidden>
       <h2>Keyboard and mouse controls</h2>
       <p>Graph shortcuts apply when the graph or one of its nodes has focus. Use Cmd on macOS where Ctrl/Cmd is shown.</p>
-      <h3>Mouse and trackpad</h3>
-      <ul>
-        <li>Click a node, input or output to select it and show its details in the inspector. Click the background to clear selection.</li>
-        <li>Ctrl/Cmd or Shift + click toggles a node in the selection.</li>
-        <li>Drag a node to move it; drag a selected node to move the whole selection.</li>
-        <li>Drag the background to select nodes in a rectangle. Hold Ctrl/Cmd or Shift to add to the selection.</li>
-        <li>Scroll to pan vertically; Shift + scroll pans horizontally. Horizontal trackpad scrolling also pans horizontally.</li>
-        <li>Ctrl + scroll zooms in or out.</li>
-      </ul>
-      <h3>Graph keyboard shortcuts</h3>
-      <ul>
-        <li>Enter or Space selects the focused node, input or output. Hold Ctrl/Cmd or Shift to toggle it in the selection.</li>
-        <li>Ctrl/Cmd + A selects all nodes, inputs and outputs.</li>
-        <li>Escape cancels the current drag or selection rectangle; otherwise it clears selection.</li>
-      </ul>
-      <h3>Navigation and buttons</h3>
-      <ul>
-        <li>Tab / Shift + Tab moves focus between controls and graph nodes. Enter or Space activates a focused button or subgraph link.</li>
-        <li>Left / Right arrow switches tabs when a tab header has focus. Home / End selects the first / last tab.</li>
-        <li>Use the + and − buttons to zoom, Fit to fit the graph, or Zoom to readable size to zoom to 100% centered on the inspected node.</li>
-        <li>Use Refresh positions to reset the node layout.</li>
-        <li>Activate a subgraph link to open it; use the graph breadcrumbs to return to a parent graph.</li>
-        <li>Use Doc in the inspector to open operator documentation, and Close or Escape to dismiss it.</li>
-      </ul>
+      <h3 id="mouse-controls-heading">Mouse and trackpad</h3>
+      <table class="controls-table" aria-labelledby="mouse-controls-heading">
+        <thead><tr><th scope="col">Control</th><th scope="col">Action</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">Click a node, input or output</th><td>Select it and show its details in the inspector.</td></tr>
+          <tr><th scope="row">Click the background</th><td>Clear selection.</td></tr>
+          <tr><th scope="row"><kbd>Ctrl/Cmd</kbd> or <kbd>Shift</kbd> + click</th><td>Toggle a node in the selection.</td></tr>
+          <tr><th scope="row">Drag a node</th><td>Move it. Drag a selected node to move the whole selection.</td></tr>
+          <tr><th scope="row">Drag the background</th><td>Select nodes in a rectangle. Hold <kbd>Ctrl/Cmd</kbd> or <kbd>Shift</kbd> to add to the selection.</td></tr>
+          <tr><th scope="row">Scroll</th><td>Pan vertically.</td></tr>
+          <tr><th scope="row"><kbd>Shift</kbd> + scroll</th><td>Pan horizontally. Horizontal trackpad scrolling also pans horizontally.</td></tr>
+          <tr><th scope="row"><kbd>Ctrl</kbd> + scroll</th><td>Zoom in or out.</td></tr>
+        </tbody>
+      </table>
+      <h3 id="keyboard-controls-heading">Graph keyboard shortcuts</h3>
+      <table class="controls-table" aria-labelledby="keyboard-controls-heading">
+        <thead><tr><th scope="col">Control</th><th scope="col">Action</th></tr></thead>
+        <tbody>
+          <tr><th scope="row"><kbd>Enter</kbd> or <kbd>Space</kbd></th><td>Select the focused node, input or output. Hold <kbd>Ctrl/Cmd</kbd> or <kbd>Shift</kbd> to toggle it in the selection.</td></tr>
+          <tr><th scope="row"><kbd>Ctrl/Cmd + A</kbd></th><td>Select all nodes, inputs and outputs.</td></tr>
+          <tr><th scope="row"><kbd>Escape</kbd></th><td>Cancel the current drag or selection rectangle; otherwise clear selection.</td></tr>
+        </tbody>
+      </table>
+      <h3 id="navigation-controls-heading">Navigation and buttons</h3>
+      <table class="controls-table" aria-labelledby="navigation-controls-heading">
+        <thead><tr><th scope="col">Control</th><th scope="col">Action</th></tr></thead>
+        <tbody>
+          <tr><th scope="row"><kbd>Tab</kbd> / <kbd>Shift + Tab</kbd></th><td>Move focus between controls and graph nodes.</td></tr>
+          <tr><th scope="row"><kbd>Enter</kbd> or <kbd>Space</kbd></th><td>Activate a focused button or subgraph link.</td></tr>
+          <tr><th scope="row"><kbd>Left</kbd> / <kbd>Right</kbd> arrow</th><td>Switch tabs when a tab header has focus.</td></tr>
+          <tr><th scope="row"><kbd>Home</kbd> / <kbd>End</kbd></th><td>Select the first / last tab when a tab header has focus.</td></tr>
+          <tr><th scope="row">+ / − buttons</th><td>Zoom in / out.</td></tr>
+          <tr><th scope="row">Fit</th><td>Fit the whole graph in the view.</td></tr>
+          <tr><th scope="row">Zoom to readable size</th><td>Zoom to 100%, centered on the inspected node.</td></tr>
+          <tr><th scope="row">Refresh positions</th><td>Reset the node layout.</td></tr>
+          <tr><th scope="row">Subgraph link / breadcrumbs</th><td>Open a subgraph / return to a parent graph.</td></tr>
+          <tr><th scope="row">Doc</th><td>Open operator documentation from the inspector. Use Close or <kbd>Escape</kbd> to dismiss it.</td></tr>
+        </tbody>
+      </table>
     </section>
   </main>
   <dialog id="operator-doc" aria-labelledby="doc-title">

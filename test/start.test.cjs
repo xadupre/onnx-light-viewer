@@ -10,9 +10,9 @@ const {
 const { tmpdir } = require("node:os");
 const path = require("node:path");
 const { test } = require("node:test");
-const { parseConfigFileTextToJson } = require("typescript");
+const { format } = require("prettier");
 
-test("the launcher bypasses the remote CLI and forces the developed ONNX editor", (t) => {
+test("the launcher bypasses the remote CLI and forces the developed ONNX editor", async (t) => {
   const temporary = mkdtempSync(path.join(tmpdir(), "onnx viewer launch "));
   t.after(() => rmSync(temporary, { recursive: true, force: true }));
   const argumentsFile = path.join(temporary, "arguments.json");
@@ -60,12 +60,11 @@ require("node:fs").writeFileSync(process.env.LAUNCH_ARGUMENTS_FILE, JSON.stringi
     workspacePath,
     path.join(root, "test", "models", "relu.onnx"),
   ]);
-  const parsedWorkspace = parseConfigFileTextToJson(
-    workspacePath,
-    readFileSync(workspacePath, "utf8"),
+  const workspace = JSON.parse(
+    await format(readFileSync(workspacePath, "utf8"), {
+      parser: "json-stringify",
+    }),
   );
-  assert.equal(parsedWorkspace.error, undefined);
-  const workspace = parsedWorkspace.config;
   const manifest = JSON.parse(
     readFileSync(path.join(root, "package.json"), "utf8"),
   );
