@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 400" role="img" aria-labelledby="title description">
+  <title id="title">Model state versus display state</title>
+  <desc id="description">Browser gestures change only the view. Shape refresh infers the whole model in memory and patches tensors. Metadata analyzes the selected graph without modifying it. Opening or navigating sends a graph snapshot that rebuilds the view.</desc>
+  <style>
+    .background { fill: #f8fafc; }
+    .card { fill: #dbeafe; stroke: #2563eb; stroke-width: 2; }
+    .native { fill: #dcfce7; stroke: #15803d; }
+    .replace { fill: #f3e8ff; stroke: #9333ea; }
+    .step { fill: #f8fafc; stroke: #475569; }
+    .text { fill: #0f172a; font-family: sans-serif; font-size: 18px; }
+    .heading { font-size: 22px; font-weight: bold; }
+    .note { font-size: 16px; }
+    .arrow { fill: none; stroke: #475569; stroke-width: 2; }
+    .arrow-head { fill: #475569; }
+    @media (prefers-color-scheme: dark) {
+      .background, .step { fill: #0f172a; }
+      .step { stroke: #94a3b8; }
+      .card { fill: #172554; stroke: #60a5fa; }
+      .native { fill: #052e16; stroke: #4ade80; }
+      .replace { fill: #3b0764; stroke: #c084fc; }
+      .text { fill: #e2e8f0; }
+      .arrow { stroke: #94a3b8; }
+      .arrow-head { fill: #94a3b8; }
+    }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 Z" class="arrow-head"/>
+    </marker>
+  </defs>
+  <rect width="960" height="400" rx="16" class="background"/>
+  <g class="text">
+    <rect x="20" y="20" width="440" height="165" rx="12" class="card"/>
+    <rect x="500" y="20" width="440" height="165" rx="12" class="card native"/>
+    <rect x="20" y="215" width="440" height="165" rx="12" class="card native"/>
+    <rect x="500" y="215" width="440" height="165" rx="12" class="card replace"/>
+    <text x="40" y="58" class="heading">Move / zoom / select</text>
+    <text x="520" y="58" class="heading">Refresh shapes</text>
+    <text x="40" y="253" class="heading">Refresh metadata</text>
+    <text x="520" y="253" class="heading">Open / navigate</text>
+    <g class="step">
+      <rect x="40" y="95" width="95" height="42" rx="6"/>
+      <rect x="165" y="95" width="95" height="42" rx="6"/>
+      <rect x="290" y="95" width="150" height="42" rx="6"/>
+      <rect x="520" y="95" width="80" height="42" rx="6"/>
+      <rect x="630" y="95" width="90" height="42" rx="6"/>
+      <rect x="750" y="95" width="170" height="42" rx="6"/>
+      <rect x="40" y="290" width="95" height="42" rx="6"/>
+      <rect x="165" y="290" width="95" height="42" rx="6"/>
+      <rect x="290" y="290" width="150" height="42" rx="6"/>
+      <rect x="520" y="290" width="80" height="42" rx="6"/>
+      <rect x="630" y="290" width="90" height="42" rx="6"/>
+      <rect x="750" y="290" width="170" height="42" rx="6"/>
+    </g>
+    <g class="arrow" marker-end="url(#arrow)">
+      <path d="M 135 116 H 165 M 260 116 H 290"/>
+      <path d="M 600 116 H 630 M 720 116 H 750"/>
+      <path d="M 135 311 H 165 M 260 311 H 290"/>
+      <path d="M 600 311 H 630 M 720 311 H 750"/>
+    </g>
+    <g text-anchor="middle" class="note">
+      <text x="87" y="122">gesture</text>
+      <text x="212" y="122">SVG</text>
+      <text x="365" y="122">camera / layout</text>
+      <text x="560" y="122">model</text>
+      <text x="675" y="122">infer</text>
+      <text x="835" y="122">tensor patch</text>
+      <text x="87" y="317">graph</text>
+      <text x="212" y="317">analyze</text>
+      <text x="365" y="317">metadata</text>
+      <text x="560" y="317">graph</text>
+      <text x="675" y="317">snapshot</text>
+      <text x="835" y="317">rebuild view</text>
+    </g>
+    <text x="40" y="165" class="note">No native call; no model change.</text>
+    <text x="520" y="165" class="note">Whole model changes in memory; view stays.</text>
+    <text x="40" y="360" class="note">Selected graph; read-only; view stays.</text>
+    <text x="520" y="360" class="note">Layout and selection reset.</text>
+  </g>
+</svg>

@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 535" role="img" aria-labelledby="title description">
+  <title id="title">Viewer ownership and message boundaries</title>
+  <desc id="description">The browser owns the SVG view. The VS Code host owns panel state, sources and recovery. The native addon owns the model and onnx-light analysis. Requests go down; lightweight snapshots and errors return up.</desc>
+  <style>
+    .background { fill: #f8fafc; }
+    .card { fill: #dbeafe; stroke: #2563eb; stroke-width: 2; }
+    .native { fill: #dcfce7; stroke: #15803d; }
+    .text { fill: #0f172a; font-family: sans-serif; font-size: 18px; }
+    .heading { font-size: 23px; font-weight: bold; }
+    .code { font-family: monospace; font-size: 16px; }
+    .note { font-size: 16px; }
+    .arrow { fill: none; stroke: #475569; stroke-width: 2; }
+    .arrow-head { fill: #475569; }
+    @media (prefers-color-scheme: dark) {
+      .background { fill: #0f172a; }
+      .card { fill: #172554; stroke: #60a5fa; }
+      .native { fill: #052e16; stroke: #4ade80; }
+      .text { fill: #e2e8f0; }
+      .arrow { stroke: #94a3b8; }
+      .arrow-head { fill: #94a3b8; }
+    }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 Z" class="arrow-head"/>
+    </marker>
+  </defs>
+  <rect width="960" height="535" rx="16" class="background"/>
+  <g class="text">
+    <rect x="80" y="25" width="800" height="110" rx="12" class="card"/>
+    <text x="110" y="65" class="heading">Webview</text>
+    <text x="110" y="100" class="code">media/viewer.js + viewer.css</text>
+    <text x="510" y="65">SVG, camera, selection</text>
+    <text x="510" y="100">Lightweight snapshots only</text>
+    <rect x="80" y="215" width="800" height="120" rx="12" class="card"/>
+    <text x="110" y="250" class="heading">VS Code host</text>
+    <text x="110" y="280" class="code">src/extension.ts + graph.ts</text>
+    <text x="510" y="250">Panel state, sources, logs</text>
+    <text x="510" y="280">HF cache, pickers, recovery</text>
+    <text x="110" y="312" class="note">Local-file parsing uses a worker; graph projection and analysis are synchronous.</text>
+    <rect x="80" y="415" width="800" height="95" rx="12" class="card native"/>
+    <text x="110" y="453" class="heading">Native addon</text>
+    <text x="110" y="485" class="code">native/addon.cc</text>
+    <text x="510" y="453">Retained model + onnx-light</text>
+    <text x="510" y="485">Parsing, inference, static analysis</text>
+    <g class="arrow" marker-end="url(#arrow)">
+      <path d="M 330 135 V 215"/>
+      <path d="M 630 215 V 135"/>
+      <path d="M 330 335 V 415"/>
+      <path d="M 630 415 V 335"/>
+    </g>
+    <text x="200" y="180" text-anchor="middle">requests</text>
+    <text x="650" y="172" class="note">graph / tensor /</text>
+    <text x="650" y="194" class="note">metadata snapshots</text>
+    <text x="200" y="380" text-anchor="middle">typed calls</text>
+    <text x="650" y="380" class="note">snapshots / errors</text>
+  </g>
+</svg>
