@@ -3621,6 +3621,11 @@ test("suggests matching nodes in the sidebar and selects individual results", (t
     "node-2",
   );
   assert.equal(status.textContent, "3 / 3");
+  assert.equal(suggestions.hidden, true);
+  assert.equal(input.value, " ReLU ");
+  input.click();
+  assert.equal(suggestions.hidden, false);
+  assert.equal(suggestions.children.length, 3);
   assert.equal(
     Number(
       document.getElementById("graph").getAttribute("viewBox").split(" ")[2],
@@ -3633,7 +3638,17 @@ test("suggests matching nodes in the sidebar and selects individual results", (t
     "node-0",
   );
   assert.equal(status.textContent, "1 / 3");
+  assert.equal(suggestions.hidden, true);
+  input.focus();
+  assert.equal(suggestions.hidden, true);
+  input.click();
+  assert.equal(suggestions.hidden, false);
+  assert.equal(suggestions.children.length, 3);
+  form.dispatchEvent(new window.Event("submit", { cancelable: true }));
+  assert.equal(status.textContent, "2 / 3");
+  assert.equal(suggestions.hidden, true);
   search("ACTIVATION_0");
+  assert.equal(suggestions.hidden, false);
   assert.equal(suggestions.children.length, 2);
   search("does-not-exist");
   assert.equal(suggestions.hidden, true);

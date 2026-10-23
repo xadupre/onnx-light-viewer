@@ -6,23 +6,28 @@
 
 [![Code coverage](https://codecov.io/gh/xadupre/onnx-light-viewer/branch/main/graph/badge.svg)](https://codecov.io/gh/xadupre/onnx-light-viewer)
 
-ONNX Light Viewer is an interactive environment for exploring, optimizing and
-running ONNX models in VS Code, powered by native onnx-light. Open local models
-or download and cache them from Hugging Face; navigate graphs and subgraphs,
-inspect operators and parameters, and refresh shapes and metadata with visible
-update counts. Inspect tensor statistics, histograms and color maps, including
-quantized tensors and low-bit encoded values, with support for OpaqueProto,
-StructProto and EncodedValueProto.
+ONNX Light Viewer explores ONNX models in VS Code, powered by native onnx-light.
+The current viewer inspects models without executing them or changing source
+files.
 
-Apply fusion patterns, including Layer patterns, quantize selected weights, and
-step through rewriting scenarios and pipelines. Save transformed models with
-embedded or separate weights, and encrypt saved protos or decrypt them on load.
-Run and benchmark whole models or selected subgraphs using onnx-light,
-onnx-light-cpu or ONNX Runtime on CPU or CUDA, compare execution engines, and
-export inputs and outputs with a Python script to reproduce runs locally.
-An action log records operations, timing, status and errors.
-The **Repositories** tab links to official ONNX projects and the onnx-light
-ecosystem, with an icon and a short summary for each project.
+## Implemented features
+
+- Open local ONNX files, download and cache public Hugging Face models, or browse
+  bundled onnx-light backend test graphs.
+- Search nodes and operators with live suggestions; zoom, pan, select and move
+  nodes, including in large graphs.
+- Navigate nested subgraphs and model-local function definitions with breadcrumbs.
+- Inspect shapes, attributes, dense/sparse initializer metadata and small available
+  tensor values; open operator documentation rendered as Markdown.
+- Refresh inferred shapes/types and static constant, tag and lifetime metadata,
+  with visible update counts.
+- Use **Logs**, **Status** and **Controls** for diagnostics and shortcuts, and
+  **Repositories** for ONNX ecosystem links.
+
+See the [feature guide](docs/features.rst) for controls, examples and limitations.
+Model saving and encrypted I/O are under review in [#115](https://github.com/xadupre/onnx-light-viewer/pull/115),
+not yet available on `main`. Graph rewriting, weight quantization, full tensor
+analytics, execution and benchmarking are planned, not current viewer features.
 
 <img src="docs/_static/viewer-snapshot.png" width="75%" alt="ONNX Light Viewer showing a graph with symbolic tensor shapes and the Reshape node's parameters">
 
@@ -44,13 +49,19 @@ Choose **Open ONNX model**, then **Local file** to load your own file or
 download and cache the selected file. After editing the application, close the
 development window and run `./start.sh` again.
 
+For a guided first inspection, including a Python snippet that creates a small
+ONNX model with symbolic shapes and a weight initializer, see
+[getting started](docs/getting_started.rst). Python is optional, not a viewer
+dependency.
+
 ## Documentation
 
-Use **Fuse**, beside **Save**, on the main graph. Choosing a pattern automatically
-previews and highlights its first match. Patterns appear in the sidebar;
-**Approve** immediately applies one fusion, or use **Fuse selected** for a batch. **Save**
-writes a separate copy with embedded weights, fresh external files, or reused
-unchanged external weights. See the [fusion walkthrough](docs/features/fusion_patterns.rst).
+Use **Fuse** in the right sidebar on the main graph. Check one or more patterns,
+click **Run Matching**, then check candidates and click **Fuse selected**.
+Clicking a candidate highlights its nodes. **Open** and **Save** use mutually
+exclusive inline file selectors; **Save** writes a separate copy with embedded
+weights, fresh external files, or reused unchanged external weights.
+See the [fusion walkthrough](docs/features/fusion_patterns.rst).
 
 Sphinx documentation: [getting started](docs/getting_started.rst),
 [implemented features and viewer controls](docs/features.rst),

@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 430" role="img" aria-labelledby="title description">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 580" role="img" aria-labelledby="title description">
   <title id="title">The onnx-light projects</title>
-  <desc id="description">onnx-light decodes ONNX models for the viewer. onnx-light-cpu supplies CPU kernels for onnx-light. onnx-light-ort connects onnx-light and ONNX Runtime in both directions.</desc>
+  <desc id="description">onnx-light decodes ONNX models for the viewer. onnx-light-cpu supplies CPU kernels for onnx-light. onnx-light-kernel-images supplies ImageDecoder kernels for onnx-light. onnx-light-ort connects onnx-light and ONNX Runtime in both directions.</desc>
   <style>
     @media (prefers-color-scheme: dark) {
       [fill="#f8fafc"] { fill: #0f172a; }
@@ -23,17 +23,19 @@
       <path d="M 0 0 L 10 5 L 0 10 Z" fill="#475569"/>
     </marker>
   </defs>
-  <rect width="800" height="430" rx="16" fill="#f8fafc"/>
+  <rect width="800" height="580" rx="16" fill="#f8fafc"/>
   <g fill="none" stroke="#475569" stroke-width="2" marker-end="url(#arrow)">
     <path d="M 400 162 V 112"/>
     <path d="M 200 320 L 320 258"/>
     <path d="M 600 320 L 480 258" marker-start="url(#arrow)"/>
+    <path d="M 400 470 V 258"/>
   </g>
   <g font-family="sans-serif" text-anchor="middle">
     <g fill="#334155" font-size="15">
       <text x="490" y="140">model decoding</text>
       <text x="215" y="282">CPU kernels</text>
       <text x="598" y="282">interoperability</text>
+      <text x="505" y="447">ImageDecoder kernels</text>
     </g>
     <rect x="250" y="22" width="300" height="90" rx="10" fill="#dbeafe" stroke="#2563eb" stroke-width="2"/>
     <text x="400" y="57" fill="#1e3a8a" font-size="21" font-weight="bold">onnx-light-viewer</text>
@@ -47,5 +49,8 @@
     <rect x="435" y="320" width="330" height="90" rx="10" fill="#f3e8ff" stroke="#9333ea" stroke-width="2"/>
     <text x="600" y="355" fill="#581c87" font-size="21" font-weight="bold">onnx-light-ort</text>
     <text x="600" y="383" fill="#334155" font-size="16">Bridge to / from ONNX Runtime</text>
+    <rect x="235" y="470" width="330" height="90" rx="10" fill="#dcfce7" stroke="#15803d" stroke-width="2"/>
+    <text x="400" y="505" fill="#14532d" font-size="21" font-weight="bold">onnx-light-kernel-images</text>
+    <text x="400" y="533" fill="#334155" font-size="16">Decode images for onnx-light</text>
   </g>
 </svg>
