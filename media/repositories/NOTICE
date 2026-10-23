@@ -1,7 +1,7 @@
 Repository logos
 ===============
 
-These unmodified upstream images identify the linked projects. All trademarks
+These upstream images identify the linked projects. All trademarks
 belong to their respective owners; their use does not imply endorsement.
 
 onnx.png
@@ -12,6 +12,7 @@ onnx-light.svg
   Source: https://github.com/xadupre/onnx-light/blob/main/docs/_static/logo.svg
   onnx-light — Copyright 2026 ONNX Contributors
   License: Apache-2.0 (see the root LICENSE).
+  Changes: trailing blank lines removed; artwork unchanged.
 
 onnx-light-cpu.svg
   Source: https://github.com/xadupre/onnx-light-cpu/blob/main/docs/_static/logo.svg
