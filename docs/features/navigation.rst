@@ -5,8 +5,9 @@ Zoom, navigation and moving nodes
    :alt: Interactive graph with a selected Relu node and the minus, Fit and plus zoom controls.
    :width: 480px
 
-The **Controls** tab lists the keyboard shortcuts, mouse gestures and navigation
-buttons in the app, even before a model is loaded.
+The **Controls** tab groups keyboard shortcuts, mouse gestures and navigation
+buttons into two-column tables: **Control** and **Action**. It is available even
+before a model is loaded.
 
 * **+**, **-** or Ctrl+wheel zoom without rearranging nodes. Ctrl+wheel zooms
   around the pointer, both in and out. **Fit** recenters the view and includes
