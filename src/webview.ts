@@ -33,6 +33,7 @@ export function webviewHtml(
       <button id="model-tab" role="tab" aria-controls="model-view" aria-selected="${initialTab === "model"}" tabindex="${initialTab === "model" ? 0 : -1}">Model</button>
       <button id="logs-tab" role="tab" aria-controls="logs-view" aria-selected="${initialTab === "logs"}" tabindex="${initialTab === "logs" ? 0 : -1}">Logs</button>
       <button id="status-tab" role="tab" aria-controls="status-view" aria-selected="false" tabindex="-1">Status</button>
+      <button id="controls-tab" role="tab" aria-controls="controls-view" aria-selected="false" tabindex="-1">Controls</button>
     </nav>
     <section id="model-view" role="tabpanel" aria-labelledby="model-tab"${initialTab === "logs" ? " hidden" : ""}>
       <header class="graph-toolbar">
@@ -96,6 +97,34 @@ export function webviewHtml(
         <p id="status-failure-time"></p>
         <pre id="status-failure-details"></pre>
       </section>
+    </section>
+    <section id="controls-view" role="tabpanel" aria-labelledby="controls-tab" tabindex="0" hidden>
+      <h2>Keyboard and mouse controls</h2>
+      <p>Graph shortcuts apply when the graph or one of its nodes has focus. Use Cmd on macOS where Ctrl/Cmd is shown.</p>
+      <h3>Mouse and trackpad</h3>
+      <ul>
+        <li>Click a node, input or output to select it and show its details in the inspector. Click the background to clear selection.</li>
+        <li>Ctrl/Cmd or Shift + click toggles a node in the selection.</li>
+        <li>Drag a node to move it; drag a selected node to move the whole selection.</li>
+        <li>Drag the background to select nodes in a rectangle. Hold Ctrl/Cmd or Shift to add to the selection.</li>
+        <li>Scroll to pan vertically; Shift + scroll pans horizontally. Horizontal trackpad scrolling also pans horizontally.</li>
+        <li>Ctrl + scroll zooms in or out.</li>
+      </ul>
+      <h3>Graph keyboard shortcuts</h3>
+      <ul>
+        <li>Enter or Space selects the focused node, input or output. Hold Ctrl/Cmd or Shift to toggle it in the selection.</li>
+        <li>Ctrl/Cmd + A selects all nodes, inputs and outputs.</li>
+        <li>Escape cancels the current drag or selection rectangle; otherwise it clears selection.</li>
+      </ul>
+      <h3>Navigation and buttons</h3>
+      <ul>
+        <li>Tab / Shift + Tab moves focus between controls and graph nodes. Enter or Space activates a focused button or subgraph link.</li>
+        <li>Left / Right arrow switches tabs when a tab header has focus. Home / End selects the first / last tab.</li>
+        <li>Use the + and − buttons to zoom, Fit to fit the graph, or Zoom to readable size to zoom to 100% centered on the inspected node.</li>
+        <li>Use Refresh positions to reset the node layout.</li>
+        <li>Activate a subgraph link to open it; use the graph breadcrumbs to return to a parent graph.</li>
+        <li>Use Doc in the inspector to open operator documentation, and Close or Escape to dismiss it.</li>
+      </ul>
     </section>
   </main>
   <dialog id="operator-doc" aria-labelledby="doc-title">

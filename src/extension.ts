@@ -25,6 +25,7 @@ import {
 } from "./huggingface";
 
 const viewType = "onnxLightViewer.graph";
+const panelSessions = new WeakMap<vscode.WebviewPanel, () => void>();
 
 /**
  * Panel-local display state, independent of the recoverable native handle.
@@ -209,6 +210,10 @@ async function configurePanel(
   initialTab: "model" | "logs",
   activatePanel: (showLogs: (() => void) | undefined) => void,
 ): Promise<void> {
+  panelSessions.get(panel)?.();
+  let active = true;
+  const postMessage = (message: unknown) =>
+    active ? panel.webview.postMessage(message) : Promise.resolve(false);
   const mediaRoot = vscode.Uri.joinPath(context.extensionUri, "media");
   panel.webview.options = {
     enableScripts: true,
@@ -223,7 +228,7 @@ async function configurePanel(
   let initialError: string | undefined;
   let lastFailure: LogEntry | undefined;
   const sendStatus = () =>
-    panel.webview.postMessage({
+    postMessage({
       type: "application-status",
       library: { loaded: true, version: onnxLightVersion },
       model: {
@@ -238,13 +243,13 @@ async function configurePanel(
     });
   const log = new ActionLog((entry) => {
     if (entry.status === "FAILED") lastFailure = entry;
-    void panel.webview.postMessage({ type: "log-entry", entry });
+    void postMessage({ type: "log-entry", entry });
     void sendStatus();
   });
   const showLogs = () => {
     showLogsRequested = true;
     if (ready) {
-      void panel.webview.postMessage({ type: "show-logs" });
+      void postMessage({ type: "show-logs" });
       showLogsRequested = false;
     }
   };
@@ -259,7 +264,7 @@ async function configurePanel(
   const sendGraph = () => {
     const current = requireModel();
     void sendStatus();
-    return panel.webview.postMessage({
+    return postMessage({
       type: "graph",
       graph: current.graph,
       ...(current.metadata ? { metadata: current.metadata } : {}),
@@ -274,26 +279,27 @@ async function configurePanel(
         entry?: unknown;
       } | null,
     ) => {
+      if (!active) return;
       if (message?.type === "show-logs") {
         showLogs();
       } else if (message?.type === "interaction") {
         log.interaction(message.entry);
       } else if (message?.type === "ready") {
         ready = true;
-        await panel.webview.postMessage({
+        await postMessage({
           type: "log-history",
           entries: log.snapshot(),
         });
         await sendStatus();
         if (model) await sendGraph();
         else
-          await panel.webview.postMessage({
+          await postMessage({
             type: "load-state",
             pending: initialLoading,
             error: initialError,
           });
         if (showLogsRequested) {
-          await panel.webview.postMessage({ type: "show-logs" });
+          await postMessage({ type: "show-logs" });
           showLogsRequested = false;
         }
       } else if (message?.type === "open") {
@@ -428,13 +434,14 @@ async function configurePanel(
             },
             message.actionId,
           );
-          if (!loaded) return;
+          if (!active || !loaded) return;
           model = loaded.model;
           panel.title = `ONNX: ${loaded.name}`;
           await sendGraph();
         } catch (error) {
+          if (!active) return;
           const detail = error instanceof Error ? error.message : String(error);
-          await panel.webview.postMessage({
+          await postMessage({
             type: "load-error",
             error: detail,
           });
@@ -487,7 +494,8 @@ async function configurePanel(
             message.actionId,
           );
         } catch (error) {
-          await panel.webview.postMessage({
+          if (!active) return;
+          await postMessage({
             type: "load-error",
             error: error instanceof Error ? error.message : String(error),
           });
@@ -496,7 +504,7 @@ async function configurePanel(
           );
           return;
         }
-        if (!loaded) return;
+        if (!active || !loaded) return;
         model = loaded.model;
         panel.title = `ONNX: ${loaded.name}`;
         await sendGraph();
@@ -520,12 +528,13 @@ async function configurePanel(
           );
         } catch (error) {
           if (
+            !active ||
             model !== requestedModel ||
             graphRevision !== requestedGraphRevision
           )
             return;
           const detail = error instanceof Error ? error.message : String(error);
-          await panel.webview.postMessage({
+          await postMessage({
             type: "navigation-error",
             error: detail,
           });
@@ -535,6 +544,7 @@ async function configurePanel(
           return;
         }
         if (
+          !active ||
           model !== requestedModel ||
           graphRevision !== requestedGraphRevision
         )
@@ -561,13 +571,14 @@ async function configurePanel(
           );
         } catch (error) {
           if (
+            !active ||
             model !== requestedModel ||
             graphRevision !== requestedGraphRevision
           )
             return;
           if (model) invalidateModel(model, log);
           const detail = error instanceof Error ? error.message : String(error);
-          await panel.webview.postMessage({
+          await postMessage({
             type: "metadata-error",
             error: detail,
           });
@@ -577,12 +588,13 @@ async function configurePanel(
           return;
         }
         if (
+          !active ||
           model !== requestedModel ||
           graphRevision !== requestedGraphRevision
         )
           return;
         requireModel().metadata = metadata;
-        await panel.webview.postMessage({ type: "metadata-info", metadata });
+        await postMessage({ type: "metadata-info", metadata });
       } else if (message?.type === "refresh-shapes") {
         const requestedModel = model;
         const requestedGraphRevision = graphRevision;
@@ -601,13 +613,14 @@ async function configurePanel(
           );
         } catch (error) {
           if (
+            !active ||
             model !== requestedModel ||
             graphRevision !== requestedGraphRevision
           )
             return;
           if (model) invalidateModel(model, log);
           const detail = error instanceof Error ? error.message : String(error);
-          await panel.webview.postMessage({
+          await postMessage({
             type: "shape-error",
             error: detail,
           });
@@ -617,24 +630,29 @@ async function configurePanel(
           return;
         }
         if (
+          !active ||
           model !== requestedModel ||
           graphRevision !== requestedGraphRevision
         )
           return;
         requireModel().graph = refreshed;
-        graphRevision++;
-        await panel.webview.postMessage({
+        await postMessage({
           type: "shape-info",
           tensors: refreshed.tensors,
         });
       }
     },
   );
-  panel.onDidDispose(() => {
+  const dispose = () => {
+    active = false;
     messages.dispose();
     viewState.dispose();
+    disposal.dispose();
+    panelSessions.delete(panel);
     activatePanel(undefined);
-  });
+  };
+  const disposal = panel.onDidDispose(dispose);
+  panelSessions.set(panel, dispose);
   const resource = (name: string) =>
     panel.webview.asWebviewUri(vscode.Uri.joinPath(mediaRoot, name)).toString();
   const nonce = randomBytes(16).toString("hex");
@@ -648,13 +666,15 @@ async function configurePanel(
   if (uri) {
     try {
       model = await readGraph(uri, log);
+      if (!active) return;
       initialLoading = false;
       if (ready) await sendGraph();
       else void sendStatus();
     } catch (error) {
+      if (!active) return;
       initialLoading = false;
       initialError = error instanceof Error ? error.message : String(error);
-      await panel.webview.postMessage({
+      await postMessage({
         type: "load-error",
         error: error instanceof Error ? error.message : String(error),
       });

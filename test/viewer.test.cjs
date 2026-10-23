@@ -204,7 +204,9 @@ test("switches all tabs without logging clicks or changing graph, selection or c
     .dispatchEvent(
       new window.KeyboardEvent("keydown", { key: "End", bubbles: true }),
     );
-  assert.equal(document.activeElement.id, "status-tab");
+  assert.equal(document.activeElement.id, "controls-tab");
+  assert.equal(document.getElementById("controls-view").hidden, false);
+  assert.equal(document.getElementById("status-view").hidden, true);
   document.getElementById("logs-tab").click();
   document
     .getElementById("logs-tab")
@@ -223,6 +225,71 @@ test("switches all tabs without logging clicks or changing graph, selection or c
     camera,
   );
 });
+
+for (const initialTab of ["model", "logs"]) {
+  test(`opens Controls without a model from ${initialTab} and supports keyboard tab navigation`, (t) => {
+    const { document, window, messages } = openViewer(t, initialTab);
+    const tab = document.getElementById("controls-tab");
+    const panel = document.getElementById("controls-view");
+    assert.equal(panel.hidden, true);
+    assert.equal(tab.getAttribute("aria-selected"), "false");
+    assert.equal(tab.tabIndex, -1);
+    assert.equal(tab.getAttribute("role"), "tab");
+    assert.equal(tab.getAttribute("aria-controls"), panel.id);
+    assert.equal(panel.getAttribute("role"), "tabpanel");
+    assert.equal(panel.getAttribute("aria-labelledby"), tab.id);
+    assert.equal(panel.tabIndex, 0);
+    tab.click();
+    assert.equal(panel.hidden, false);
+    assert.equal(tab.getAttribute("aria-selected"), "true");
+    assert.equal(tab.tabIndex, 0);
+    for (const name of ["model", "logs", "status"]) {
+      assert.equal(document.getElementById(`${name}-view`).hidden, true);
+      assert.equal(
+        document.getElementById(`${name}-tab`).getAttribute("aria-selected"),
+        "false",
+      );
+      assert.equal(document.getElementById(`${name}-tab`).tabIndex, -1);
+    }
+    assert.deepEqual(
+      [...panel.querySelectorAll("h3")].map((heading) => heading.textContent),
+      [
+        "Mouse and trackpad",
+        "Graph keyboard shortcuts",
+        "Navigation and buttons",
+      ],
+    );
+    for (const control of [
+      "Ctrl + scroll",
+      "Shift + scroll",
+      "Ctrl/Cmd + A",
+      "Enter or Space",
+      "Escape",
+      "Drag the background",
+      "Home / End",
+    ])
+      assert.ok(panel.textContent.includes(control), control);
+    tab.focus();
+    for (const [key, expected] of [
+      ["ArrowRight", "model"],
+      ["ArrowLeft", "controls"],
+      ["ArrowLeft", "status"],
+      ["ArrowRight", "controls"],
+      ["Home", "model"],
+      ["End", "controls"],
+    ]) {
+      document.activeElement.dispatchEvent(
+        new window.KeyboardEvent("keydown", { key, bubbles: true }),
+      );
+      assert.equal(document.activeElement.id, `${expected}-tab`);
+      assert.equal(document.getElementById(`${expected}-view`).hidden, false);
+    }
+    assert.deepEqual(
+      messages.map(({ type }) => type),
+      ["ready"],
+    );
+  });
+}
 
 test("shows the compiled onnx-light release before loading a graph and after model replacement", (t) => {
   const { document, load } = openViewer(t);
@@ -687,6 +754,44 @@ test("counts metadata changes and replaces cached analysis and graph markers on 
   assert.deepEqual(errors, []);
 });
 
+test("keeps the metadata button highlighted until its panel is closed", (t) => {
+  const { document, window, load } = openViewer(t);
+  const style = document.createElement("style");
+  style.textContent = readFileSync(
+    require.resolve("../media/viewer.css"),
+    "utf8",
+  );
+  document.head.append(style);
+  const model = loadModel(
+    readFileSync(require.resolve("./models/analysis.onnx")),
+    "analysis.onnx",
+  );
+  load(model.graph());
+  const toggle = document.getElementById("show-metadata");
+  const color = () => window.getComputedStyle(toggle).color;
+  const inactive = color();
+  assert.equal(toggle.getAttribute("aria-expanded"), "false");
+  toggle.click();
+  const active = color();
+  assert.notEqual(active, inactive);
+  assert.equal(toggle.getAttribute("aria-expanded"), "true");
+  assert.equal(document.getElementById("metadata-panel").hidden, false);
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: { type: "metadata-info", metadata: model.metadata() },
+    }),
+  );
+  assert.equal(color(), active);
+  load(model.graph());
+  assert.equal(color(), active);
+  toggle.click();
+  assert.equal(toggle.getAttribute("aria-expanded"), "false");
+  assert.equal(document.getElementById("metadata-panel").hidden, true);
+  assert.equal(color(), inactive);
+  toggle.click();
+  assert.equal(color(), active);
+});
+
 test("shows native metadata in the sidebar and marks released and never-used results without changing the layout", (t) => {
   const { document, window, messages, load, pointer } = openViewer(t);
   const model = loadModel(
@@ -991,6 +1096,103 @@ test("shows actual attributes, connected initializer parameters and versioned de
     assert.match(attributes.textContent, /axis \(INT\) \[default\]/);
     assert.equal(attributes.querySelector("pre").textContent, axis);
   }
+});
+
+test("shows every connected initializer's name, type and shape inside its operator rectangle", (t) => {
+  const { document, load } = openViewer(t);
+  for (const file of ["parameters", "initializers"]) {
+    const graph = decodeGraph(
+      readFileSync(require.resolve(`./models/${file}.onnx`)),
+      `${file}.onnx`,
+    );
+    load(graph);
+    for (const node of graph.nodes) {
+      const group = document.querySelector(`[data-id="${node.id}"]`);
+      const rows = group.querySelectorAll(".node-initializer");
+      assert.equal(rows.length, node.parameters.length);
+      const body = group.querySelector("rect");
+      const bottom =
+        Number(body.getAttribute("y")) + Number(body.getAttribute("height"));
+      for (const [index, row] of Array.from(rows).entries()) {
+        const parameter = node.parameters[index];
+        const description = `${parameter.name}: ${parameter.type} [${parameter.shape.join(", ")}]`;
+        assert.equal(row.getAttribute("aria-label"), description);
+        assert.equal(row.querySelector("title").textContent, description);
+        assert.equal(row.firstChild.textContent, description);
+        assert.ok(Number(row.getAttribute("y")) < bottom);
+      }
+    }
+  }
+  load(demoGraph);
+  assert.equal(document.querySelector(".node-initializer"), null);
+  assert.equal(
+    document.querySelector(".graph-node > rect").getAttribute("height"),
+    "94",
+  );
+});
+
+test("fits initializer previews safely above subgraph links and preserves layout and dragging", (t) => {
+  const { document, load, pointer } = openViewer(t);
+  const graph = chainGraph(2);
+  const description =
+    '<img src=x onerror="alert(1)">' + "long_weight".repeat(10);
+  graph.nodes[0].parameters = [{ name: description, type: "FLOAT", shape: [] }];
+  graph.nodes[0].attributes = [
+    {
+      name: "body",
+      graphs: [{ name: "child", path: [], nodeCount: 0 }],
+    },
+  ];
+  load(graph);
+  const group = document.querySelector('[data-id="node-0"]');
+  const body = group.querySelector("rect");
+  const row = group.querySelector(".node-initializer");
+  assert.equal(
+    row.querySelector("title").textContent,
+    `${description}: FLOAT []`,
+  );
+  assert.equal(
+    row.firstChild.textContent,
+    `${description}: FLOAT []`.slice(0, 37) + "…",
+  );
+  assert.equal(group.querySelector("img"), null);
+  const width = Number(body.getAttribute("width"));
+  assert.ok(width >= 160 && width <= 280);
+  assert.ok(
+    row.firstChild.textContent.length * parseFloat(row.style.fontSize) * 0.6 <=
+      width - 24,
+  );
+  assert.ok(
+    Number(row.getAttribute("y")) <
+      Number(group.querySelector(".subgraph-link rect").getAttribute("y")),
+  );
+  const top = Number(body.getAttribute("y"));
+  const bottom = top + Number(body.getAttribute("height"));
+  assert.ok(
+    Number(
+      document.querySelector('[data-id="node-1"] > rect').getAttribute("y"),
+    ) > bottom,
+  );
+  const edge = document.querySelector(".edge");
+  assert.ok(edge.getAttribute("d").endsWith(`,${top}`));
+  const before = nodePositions(document);
+  pointer(row, "pointerdown", before[0].x, Number(row.getAttribute("y")));
+  const svg = document.getElementById("graph");
+  pointer(
+    svg,
+    "pointermove",
+    before[0].x + 30,
+    Number(row.getAttribute("y")) + 20,
+  );
+  pointer(
+    svg,
+    "pointerup",
+    before[0].x + 30,
+    Number(row.getAttribute("y")) + 20,
+  );
+  assertMoved(before, nodePositions(document), [0], 30, 20);
+  const endpoint = Number(edge.getAttribute("d").split(",").at(-1));
+  assert.ok(Math.abs(endpoint - top - 20) < 1e-8);
 });
 
 test("lists more than eight initializer metadata entries, including external dense/sparse filenames, as literal text", (t) => {
@@ -1718,6 +1920,7 @@ test("refreshes operator and port positions independently while retaining shapes
   const graph = document.getElementById("graph");
   const initialViewBox = graph.getAttribute("viewBox");
   const ports = nodePositions(document, ".port rect");
+  const initialNodeY = nodePositions(document).map(({ y }) => y);
   const nodes = document.querySelectorAll(".graph-node");
   nodes[1].dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter" }));
   for (const port of document.querySelectorAll(".port")) {
@@ -1747,7 +1950,7 @@ test("refreshes operator and port positions independently while retaining shapes
   assert.deepEqual(nodePositions(document, ".port rect"), ports);
   assert.deepEqual(
     nodePositions(document).map(({ y }) => y),
-    [180, 325, 470, 615],
+    initialNodeY,
   );
   assert.notDeepEqual(nodePositions(document), moved);
   assert.equal(graph.getAttribute("viewBox"), initialViewBox);
@@ -1898,7 +2101,14 @@ test("jumps to readable zoom and culls offscreen SVG content without rebuilding 
 
 test("virtualizes thousands of nodes, finds distant operators and uses a batched overview", (t) => {
   const { document, window, load } = openViewer(t);
-  load(chainGraph(4000));
+  const model = chainGraph(4000);
+  model.nodes[3998].parameters = [
+    { name: "weight", type: "FLOAT", shape: ["3", "4"] },
+  ];
+  model.nodes[3998].attributes = [
+    { name: "body", graphs: [{ name: "child", path: [], nodeCount: 0 }] },
+  ];
+  load(model);
   const graph = document.getElementById("graph");
   const mounted = () => document.querySelectorAll(".graph-node").length;
   assert.ok(mounted() > 0 && mounted() < 20);
@@ -1943,6 +2153,13 @@ test("virtualizes thousands of nodes, finds distant operators and uses a batched
   assert.match(
     document.querySelector(".graph-node.selected .unused-label").textContent,
     /Unused: 1/,
+  );
+  const selected = document.querySelector(".graph-node.selected");
+  const initializer = selected.querySelector(".node-initializer");
+  assert.equal(initializer.getAttribute("aria-label"), "weight: FLOAT [3, 4]");
+  assert.ok(
+    Number(initializer.getAttribute("y")) <
+      Number(selected.querySelector(".subgraph-link rect").getAttribute("y")),
   );
   assert.equal(first.isConnected, false);
   assert.ok(mounted() < 20);

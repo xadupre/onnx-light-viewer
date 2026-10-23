@@ -57,6 +57,9 @@ of the native handle.
 
 Opening another model replaces that state only after successful loading.
 Navigation changes the current graph and clears its metadata snapshot.
+Asynchronous recovery results are ignored after panel disposal, model replacement
+or navigation to another graph. Shape and metadata refreshes of the same graph
+can share recovery without invalidating each other's results.
 A subsequent ``ready`` message resends the current graph and any cached
 metadata; it does not reload the source file or return to the root graph.
 
