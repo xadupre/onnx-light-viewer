@@ -40,6 +40,12 @@ let connectionsByName = new Map();
 let releasedValues = new Set();
 let unusedLabels = [];
 let hasModel = false;
+let fusionGraph;
+let fusionRequest = 0;
+let fusionPreview;
+let fusionBusy = false;
+const fileRequests = { open: 0, save: 0 };
+const fileParents = {};
 let replacementPending = false;
 let nextAction = 0;
 const logSession = crypto.randomUUID();
@@ -120,6 +126,7 @@ function displayLog(entry) {
     } else if (type === "save") {
       byId("save-model").setAttribute("aria-busy", "false");
       byId("save-model").disabled = replacementPending || !hasModel;
+      byId("save-submit").disabled = false;
       if (entry.status === "CANCELLED")
         byId("save-status").textContent = "Save cancelled.";
     }
@@ -148,6 +155,7 @@ function requestAction(type, action, parameters = {}) {
     byId("save-model").disabled = true;
     byId("save-model").setAttribute("aria-busy", "true");
     byId("save-status").textContent = "Saving model…";
+    byId("save-submit").disabled = true;
   }
   vscode.postMessage({ type, ...parameters, actionId: entry.id });
 }
@@ -156,17 +164,157 @@ function setLoading(pending, message = "") {
   byId("load-progress").hidden = !pending;
   byId("model-view").setAttribute("aria-busy", String(pending));
   byId("open-model").disabled = pending;
+  byId("open-submit").disabled = pending;
   for (const id of [
     "refresh-shapes",
     "refresh-metadata",
     "refresh-positions",
-    "show-metadata",
     "save-model",
   ])
     byId(id).disabled =
       pending || !hasModel || byId(id).getAttribute("aria-busy") === "true";
   byId("load-status").textContent =
     message || (pending ? "Loading model…" : "");
+  byId("fuse-pattern").disabled =
+    pending || !hasModel || fusionGraph?.breadcrumbs?.length !== 1;
+}
+
+function fusionControls(busy, message = "") {
+  fusionBusy = busy;
+  for (const control of byId("fusion-matches").querySelectorAll(
+    "input, button",
+  ))
+    control.disabled = busy;
+  byId("fusion-panel").setAttribute("aria-busy", String(busy));
+  const patterns = byId("fusion-pattern");
+  patterns.disabled = busy || !patterns.querySelector("input");
+  byId("select-patterns").disabled = patterns.disabled;
+  byId("clear-patterns").disabled =
+    busy || !patterns.querySelector("input:checked");
+  byId("preview-fusion").disabled =
+    busy || !patterns.querySelector("input:checked");
+  byId("select-fusions").disabled = busy || !fusionPreview?.matches.length;
+  byId("clear-fusions").disabled = busy || !fusionSelection().length;
+  byId("apply-fusion").disabled = busy || !fusionSelection().length;
+  byId("fuse-pattern").disabled =
+    replacementPending || !hasModel || fusionGraph?.breadcrumbs?.length !== 1;
+  if (message) byId("fusion-feedback").textContent = message;
+  else if (fusionPreview) updateFusionSelection();
+}
+
+function fusionSelection() {
+  return [...byId("fusion-matches").querySelectorAll("input:checked")].map(
+    (input) => Number(input.value),
+  );
+}
+
+function updateFusionSelection() {
+  const candidates = new Set(fusionSelection());
+  const nodes = new Set();
+  let overlap = false;
+  for (const match of fusionPreview?.matches ?? []) {
+    if (!candidates.has(match.id)) continue;
+    for (const node of match.nodes) {
+      if (nodes.has(node)) overlap = true;
+      nodes.add(node);
+    }
+  }
+  byId("apply-fusion").disabled = fusionBusy || !candidates.size || overlap;
+  byId("clear-fusions").disabled = fusionBusy || !candidates.size;
+  byId("fusion-feedback").textContent = overlap
+    ? "Selected matches overlap. Select disjoint matches."
+    : `${candidates.size} selected / ${fusionPreview?.matches.length ?? 0} matches. Check candidates, then click Fuse selected.`;
+}
+
+function clearFusionPreview() {
+  if (fusionPreview) {
+    selected = new Set();
+    updateSelection();
+  }
+  fusionPreview = undefined;
+  byId("fusion-matches").replaceChildren();
+  fusionControls(false);
+}
+
+function previewFusion() {
+  clearFusionPreview();
+  byId("fusion-status").textContent = "";
+  fusionControls(true, "Matching patterns and building replacements…");
+  requestAction("preview-fusion", "Preview fusion pattern", {
+    requestId: ++fusionRequest,
+    patterns: [...byId("fusion-pattern").querySelectorAll("input:checked")].map(
+      (input) => input.value,
+    ),
+  });
+}
+
+function applyFusion(candidates) {
+  const message = `Applying ${candidates.length} fusion match${candidates.length === 1 ? "" : "es"}…`;
+  fusionControls(true, message);
+  byId("fusion-status").textContent = message;
+  requestAction("apply-fusion", "Apply fusion pattern", {
+    requestId: ++fusionRequest,
+    previewId: fusionPreview.id,
+    candidates,
+  });
+}
+
+function focusFusionMatch(match) {
+  for (const item of byId("fusion-matches").children)
+    item.setAttribute(
+      "aria-current",
+      String(Number(item.dataset.candidate) === match.id),
+    );
+  selected = new Set(match.nodes.map((index) => `node-${index}`));
+  updateSelection(`node-${match.nodes[0]}`);
+  readableZoom();
+}
+
+function showFusionMatches(data) {
+  fusionPreview = {
+    id: data.previewId,
+    matches: data.matches.map((match, id) => ({ ...match, id })),
+  };
+  byId("fusion-matches").replaceChildren();
+  for (const match of fusionPreview.matches) {
+    const item = document.createElement("li");
+    item.className = "fusion-match";
+    item.dataset.candidate = String(match.id);
+    const label = document.createElement("label");
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.value = String(match.id);
+    checkbox.addEventListener("change", () => {
+      focusFusionMatch(match);
+      updateFusionSelection();
+    });
+    const names = match.nodes.map((index) => {
+      const node = fusionGraph.nodes[index];
+      return `${node.name || node.id} (${node.opType})`;
+    });
+    label.append(
+      checkbox,
+      document.createTextNode(
+        `${match.pattern ? `${match.pattern}: ` : ""}${names.join(" + ")}`,
+      ),
+    );
+    const replacement = document.createElement("pre");
+    replacement.textContent = match.replacement.length
+      ? match.replacement
+          .map(
+            (node) =>
+              `${node.domain ? `${node.domain}::` : ""}${node.opType}(${node.inputs.join(", ")}) -> ${node.outputs.join(", ")}${node.attributes.length ? `\n  ${node.attributes.map((attribute) => `${attribute.name}=${attribute.value}`).join(", ")}` : ""}`,
+          )
+          .join("\n")
+      : "Remove matched nodes (no replacement operators).";
+    item.append(label, replacement);
+    item.addEventListener("click", () => {
+      if (!fusionBusy) focusFusionMatch(match);
+    });
+    byId("fusion-matches").append(item);
+  }
+  fusionControls(false);
+  updateFusionSelection();
 }
 
 window.addEventListener("error", (event) => {
@@ -419,7 +567,6 @@ function refreshStatus(
 
 function resetDocumentation() {
   if (byId("operator-doc").open) byId("operator-doc").close();
-  if (byId("save-options").open) byId("save-options").close();
   byId("doc-title").textContent = "";
   byId("doc-version").textContent = "";
   byId("doc-body").textContent = "";
@@ -618,10 +765,9 @@ function metadataStatus(
   status = pending ? RefreshStatus.PENDING : RefreshStatus.IDLE,
 ) {
   metadataPending = pending;
-  byId("show-metadata").setAttribute("aria-busy", String(pending));
+  byId("metadata-panel").setAttribute("aria-busy", String(pending));
   byId("refresh-metadata").disabled = pending;
   byId("refresh-metadata").setAttribute("aria-busy", String(pending));
-  refreshButtonStatus("show-metadata", status, message);
   refreshButtonStatus("refresh-metadata", status, message);
   byId("metadata-status").textContent = message;
   byId("metadata-status").title = message;
@@ -1695,39 +1841,183 @@ byId("close-doc").addEventListener("click", () => byId("operator-doc").close());
 byId("open-function").addEventListener("click", () => {
   if (inspectedNode?.function) navigate(inspectedNode.function.path);
 });
-byId("open-model").addEventListener("click", () =>
-  requestAction("open", "Open ONNX model"),
-);
-byId("save-model").addEventListener("click", () => {
-  byId("save-form").reset();
-  byId("external-size").hidden = true;
-  byId("weight-file-size").disabled = true;
-  byId("save-options-error").textContent = "";
-  byId("save-options").showModal();
+function browseFiles(target) {
+  byId(target === "open" ? "open-error" : "save-options-error").textContent =
+    "";
+  byId(`${target}-files`).setAttribute("aria-busy", "true");
+  vscode.postMessage({
+    type: "browse-files",
+    target,
+    source: target === "open" ? byId("open-source").value : "local",
+    location: byId(`${target}-location`).value,
+    requestId: ++fileRequests[target],
+  });
+}
+function toggleFilePanel(target, visible) {
+  if (visible) toggleFilePanel(target === "open" ? "save" : "open", false);
+  const panel = byId(target === "open" ? "open-panel" : "save-options");
+  panel.hidden = !visible;
+  byId(`${target}-model`).setAttribute("aria-expanded", String(visible));
+  if (visible) {
+    revealSidebarPanel(panel);
+    if (target === "save" || byId("open-source").value !== "huggingface")
+      browseFiles(target);
+  } else {
+    fileRequests[target]++;
+    byId(`${target}-files`).setAttribute("aria-busy", "false");
+    for (const input of panel.querySelectorAll('input[type="password"]'))
+      input.value = "";
+  }
+}
+for (const target of ["open", "save"]) {
+  byId(`${target}-model`).addEventListener("click", () =>
+    toggleFilePanel(
+      target,
+      byId(target === "open" ? "open-panel" : "save-options").hidden,
+    ),
+  );
+  byId(`cancel-${target}`).addEventListener("click", () =>
+    toggleFilePanel(target, false),
+  );
+  byId(`${target}-browse`).addEventListener("submit", (event) => {
+    event.preventDefault();
+    browseFiles(target);
+  });
+  byId(`${target}-parent`).addEventListener("click", () => {
+    byId(`${target}-location`).value = fileParents[target];
+    browseFiles(target);
+  });
+}
+byId("open-source").addEventListener("change", () => {
+  fileRequests.open++;
+  byId("open-error").textContent = "";
+  byId("open-location").value = "";
+  byId("open-file").value = "";
+  byId("open-filter").value = "";
+  byId("open-password").value = "";
+  byId("open-files").replaceChildren();
+  byId("open-files").setAttribute("aria-busy", "false");
+  byId("open-parent").disabled = true;
+  byId("open-browse").hidden = byId("open-source").value === "backend";
+  if (byId("open-source").value !== "huggingface") browseFiles("open");
 });
-byId("save-form").addEventListener("change", () => {
-  const external =
-    document.querySelector('input[name="save-format"]:checked').value ===
-    "external-plain";
+function filterModelFiles() {
+  const filter = byId("open-filter").value.toLocaleLowerCase();
+  for (const item of byId("open-files").children)
+    item.hidden = !item.dataset.search.includes(filter);
+}
+byId("open-filter").addEventListener("input", filterModelFiles);
+byId("open-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  if (replacementPending) return;
+  if (!byId("open-file").value.trim()) {
+    byId("open-error").textContent = "Select a model or enter its path.";
+    return;
+  }
+  byId("open-error").textContent = "";
+  requestAction("open", "Open ONNX model", {
+    source: byId("open-source").value,
+    location: byId("open-file").value,
+    password: byId("open-password").value,
+  });
+  byId("open-password").value = "";
+});
+byId("fuse-pattern").addEventListener("click", () => {
+  if (!byId("fusion-panel").hidden) {
+    byId("close-fusion").click();
+    return;
+  }
+  byId("fusion-panel").hidden = false;
+  revealSidebarPanel(byId("fusion-panel"));
+  byId("fuse-pattern").setAttribute("aria-expanded", "true");
+  clearFusionPreview();
+  byId("fusion-pattern").replaceChildren();
+  fusionControls(true, "Listing applicable pattern anchors…");
+  fit();
+  requestAction("fusion-patterns", "List fusion patterns", {
+    requestId: ++fusionRequest,
+  });
+});
+byId("close-fusion").addEventListener("click", () => {
+  fusionRequest++;
+  byId("fusion-panel").hidden = true;
+  byId("fuse-pattern").setAttribute("aria-expanded", "false");
+  clearFusionPreview();
+  fit();
+  vscode.postMessage({ type: "cancel-fusion" });
+});
+function changeFusionPatterns() {
+  fusionRequest++;
+  clearFusionPreview();
+  byId("fusion-feedback").textContent =
+    "Click Run Matching to find candidates for the selected patterns.";
+  vscode.postMessage({ type: "cancel-fusion" });
+}
+byId("fusion-pattern").addEventListener("change", changeFusionPatterns);
+for (const [id, checked] of [
+  ["select-patterns", true],
+  ["clear-patterns", false],
+])
+  byId(id).addEventListener("click", () => {
+    for (const input of byId("fusion-pattern").querySelectorAll("input"))
+      input.checked = checked;
+    changeFusionPatterns();
+  });
+byId("preview-fusion").addEventListener("click", previewFusion);
+byId("select-fusions").addEventListener("click", () => {
+  const used = new Set();
+  for (const input of byId("fusion-matches").querySelectorAll("input")) {
+    const match = fusionPreview.matches.find(
+      (candidate) => candidate.id === Number(input.value),
+    );
+    input.checked = !match.nodes.some((node) => used.has(node));
+    if (input.checked) for (const node of match.nodes) used.add(node);
+  }
+  updateFusionSelection();
+});
+byId("clear-fusions").addEventListener("click", () => {
+  for (const input of byId("fusion-matches").querySelectorAll("input"))
+    input.checked = false;
+  updateFusionSelection();
+});
+byId("apply-fusion").addEventListener("click", () => {
+  applyFusion(fusionSelection());
+});
+byId("save-form").addEventListener("change", (event) => {
+  const external = ["external-plain", "reuse-plain"].includes(
+    document.querySelector('input[name="save-format"]:checked').value,
+  );
   byId("external-size").hidden = !external;
   byId("weight-file-size").disabled = !external;
+  const encrypted =
+    document.querySelector('input[name="save-format"]:checked').value ===
+    "embedded-encrypted";
+  byId("save-encryption").hidden = !encrypted;
+  byId("save-password").required = encrypted;
+  byId("save-confirmation").required = encrypted;
+  if (event.target.name === "save-format")
+    byId("save-file").value = byId("save-file").value.replace(
+      /\.onnx(?:\.enc)?$/i,
+      `.onnx${encrypted ? ".enc" : ""}`,
+    );
   byId("save-options-error").textContent = "";
 });
-byId("cancel-save").addEventListener("click", () =>
-  byId("save-options").close(),
-);
 byId("save-form").addEventListener("submit", (event) => {
   event.preventDefault();
+  if (byId("save-submit").disabled) return;
   const format = document.querySelector(
     'input[name="save-format"]:checked',
   ).value;
-  const external = format === "external-plain";
+  const external = format === "external-plain" || format === "reuse-plain";
   const maxExternalFileSize =
     Number(byId("weight-file-size").value) * 1024 * 1024;
   if (
-    !["embedded-plain", "embedded-encrypted", "external-plain"].includes(
-      format,
-    ) ||
+    ![
+      "embedded-plain",
+      "embedded-encrypted",
+      "external-plain",
+      "reuse-plain",
+    ].includes(format) ||
     (external &&
       (!Number.isSafeInteger(maxExternalFileSize) ||
         maxExternalFileSize < 1024 * 1024 ||
@@ -1737,24 +2027,58 @@ byId("save-form").addEventListener("submit", (event) => {
       "Choose a supported format and a positive whole-number file size in MiB.";
     return;
   }
-  byId("save-options").close();
+  if (!byId("save-file").value.trim()) {
+    byId("save-options-error").textContent = "Enter a destination path.";
+    return;
+  }
+  if (
+    format === "embedded-encrypted" &&
+    (!byId("save-password").value ||
+      byId("save-password").value !== byId("save-confirmation").value)
+  ) {
+    byId("save-options-error").textContent =
+      "Enter and confirm the same non-empty password.";
+    return;
+  }
+  byId("save-options-error").textContent = "";
   requestAction("save", "Save ONNX model", {
-    storage: external ? "external" : "embedded",
+    location: byId("save-file").value,
+    password: byId("save-password").value,
+    confirmation: byId("save-confirmation").value,
+    overwrite: byId("save-overwrite").checked,
+    storage:
+      format === "reuse-plain" ? "reuse" : external ? "external" : "embedded",
     encrypted: format === "embedded-encrypted",
     ...(external ? { maxExternalFileSize } : {}),
   });
+  byId("save-password").value = "";
+  byId("save-confirmation").value = "";
 });
-byId("show-metadata").addEventListener("click", () => {
-  metadataVisible = !metadataVisible;
-  byId("show-metadata").setAttribute("aria-expanded", String(metadataVisible));
-  byId("node-details").hidden = metadataVisible;
-  byId("metadata-panel").hidden = !metadataVisible;
-  byId("metadata-panel").parentElement.scrollTop = 0;
-  for (const label of unusedLabels)
-    label.setAttribute("visibility", metadataVisible ? "visible" : "hidden");
-  inspectMetadata();
-  if (metadataVisible && !graphMetadata) requestMetadata();
-});
+function revealSidebarPanel(panel) {
+  panel.parentElement.scrollTop = Math.max(
+    0,
+    panel.offsetTop - byId("sidebar-controls").offsetHeight - 12,
+  );
+}
+for (const id of ["show-operator", "show-find", "show-metadata"])
+  byId(id).addEventListener("click", () => {
+    const button = byId(id);
+    const panel = byId(button.getAttribute("aria-controls"));
+    panel.hidden = !panel.hidden;
+    button.setAttribute("aria-expanded", String(!panel.hidden));
+    if (!panel.hidden) revealSidebarPanel(panel);
+    if (id === "show-metadata") {
+      metadataVisible = !panel.hidden;
+      for (const label of unusedLabels)
+        label.setAttribute(
+          "visibility",
+          metadataVisible ? "visible" : "hidden",
+        );
+      inspectMetadata();
+      if (metadataVisible && !graphMetadata && hasModel && !replacementPending)
+        requestMetadata();
+    }
+  });
 byId("refresh-metadata").addEventListener("click", requestMetadata);
 byId("refresh-shapes").addEventListener("click", () => {
   refreshStatus(true, "Inferring shapes/types…");
@@ -1854,12 +2178,119 @@ window.addEventListener("message", (event) => {
       if (type === "open") pendingActions.delete(id);
     }
     setLoading(false, `Could not open model: ${event.data.error}`);
+    byId("open-error").textContent = event.data.error;
+  } else if (
+    event.data?.type === "file-list" ||
+    event.data?.type === "file-list-error"
+  ) {
+    const data = event.data;
+    if (
+      !["open", "save"].includes(data.target) ||
+      data.requestId !== fileRequests[data.target]
+    )
+      return;
+    const target = data.target;
+    const list = byId(`${target}-files`);
+    list.setAttribute("aria-busy", "false");
+    if (data.type === "file-list-error") {
+      list.replaceChildren();
+      byId(`${target}-parent`).disabled = true;
+      byId(
+        target === "open" ? "open-error" : "save-options-error",
+      ).textContent = data.error;
+      return;
+    }
+    byId(`${target}-location`).value = data.location;
+    fileParents[target] = data.parent;
+    byId(`${target}-parent`).disabled =
+      !data.parent || data.parent === data.location;
+    if (target === "save" && data.location) {
+      const name =
+        byId("save-file").value.split(/[\\/]/).pop() || "model-copy.onnx";
+      const separator = /^(?:[a-z]:\\|\\\\)/i.test(data.location) ? "\\" : "/";
+      byId("save-file").value =
+        `${data.location.replace(/[\\/]$/, "")}${separator}${name}`;
+    }
+    list.replaceChildren(
+      ...data.entries.map((entry) => {
+        const item = document.createElement("li");
+        item.dataset.search =
+          `${entry.name} ${entry.description ?? ""}`.toLocaleLowerCase();
+        const button = document.createElement("button");
+        button.type = "button";
+        button.textContent = `${entry.directory ? "[Folder] " : ""}${entry.name}`;
+        button.title = entry.path;
+        button.addEventListener("click", () => {
+          if (entry.directory) {
+            byId(`${target}-location`).value = entry.path;
+            browseFiles(target);
+          } else {
+            byId(`${target}-file`).value = entry.path;
+            for (const row of list.children)
+              row.removeAttribute("aria-current");
+            item.setAttribute("aria-current", "true");
+          }
+        });
+        item.append(button);
+        return item;
+      }),
+    );
+    if (target === "open") filterModelFiles();
   } else if (event.data?.type === "graph") {
+    for (const target of ["open", "save"]) {
+      fileRequests[target]++;
+      byId(`${target}-files`).setAttribute("aria-busy", "false");
+    }
+    fusionGraph = event.data.graph;
+    fusionRequest++;
+    byId("fusion-panel").hidden = true;
+    byId("fuse-pattern").setAttribute("aria-expanded", "false");
+    clearFusionPreview();
     byId("save-status").textContent = "";
+    byId("fusion-status").textContent = "";
     render(event.data.graph, event.data.metadata);
+    if (event.data.file) {
+      if (byId("open-source").value === "local")
+        byId("open-location").value = event.data.file.directory;
+      byId("save-location").value = event.data.file.directory;
+      byId("save-file").value =
+        event.data.file.savePath +
+        (document.querySelector('input[name="save-format"]:checked').value ===
+        "embedded-encrypted"
+          ? ".enc"
+          : "");
+    }
+    fusionControls(false);
+  } else if (event.data?.type === "fusion-patterns") {
+    if (event.data.requestId !== fusionRequest) return;
+    byId("fusion-pattern").replaceChildren();
+    for (const pattern of [...event.data.patterns].sort()) {
+      const label = document.createElement("label");
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.value = pattern;
+      label.append(checkbox, document.createTextNode(pattern));
+      byId("fusion-pattern").append(label);
+    }
+    fusionControls(
+      false,
+      event.data.patterns.length
+        ? `${event.data.patterns.length} native patterns available. Select patterns, then click Run Matching.`
+        : "No native patterns have compatible anchors in this graph.",
+    );
+  } else if (event.data?.type === "fusion-preview") {
+    if (event.data.requestId === fusionRequest) showFusionMatches(event.data);
+  } else if (event.data?.type === "fusion-error") {
+    if (event.data.requestId !== fusionRequest) return;
+    fusionControls(false, event.data.error);
+    byId("fusion-status").textContent = `Fusion failed: ${event.data.error}`;
+  } else if (event.data?.type === "fusion-info") {
+    byId("fusion-status").textContent =
+      `Applied ${event.data.count} fusion matches. Save a copy to keep changes.`;
   } else if (event.data?.type === "save-info") {
     byId("save-status").textContent = `Saved ${event.data.name}`;
   } else if (event.data?.type === "save-error") {
+    byId("save-options-error").textContent = event.data.error;
     byId("save-status").textContent =
       `Could not save model: ${event.data.error}`;
   } else if (event.data?.type === "navigation-error") {

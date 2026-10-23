@@ -38,10 +38,10 @@ export function webviewHtml(
     </nav>
     <section id="model-view" role="tabpanel" aria-labelledby="model-tab"${initialTab === "logs" ? " hidden" : ""}>
       <header class="graph-toolbar">
-        <div><a id="repository-link" href="https://github.com/xadupre/onnx-light-viewer" title="ONNX Light Viewer on GitHub" aria-label="Open the ONNX Light Viewer GitHub repository"><img src="${resource("logo.svg")}" alt="" width="24" height="24"></a><button id="open-model" class="primary" title="Open an ONNX model">Open</button><button id="save-model" class="primary" disabled title="Save a plain or encrypted copy of the whole ONNX model" aria-haspopup="dialog" aria-controls="save-options" aria-describedby="save-status">Save</button><button id="refresh-shapes" class="icon-button" disabled title="Refresh shape and type information with onnx-light" aria-label="Refresh shape and type information" aria-describedby="shape-status"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2 6M20 4v7h-7"/></svg>Refresh shapes</button><button id="refresh-metadata" class="icon-button" disabled title="Recompute constants, tags and lifetimes for the displayed graph with onnx-light" aria-label="Refresh metadata for the displayed graph" aria-describedby="metadata-status"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2 6M20 4v7h-7"/></svg>Refresh metadata</button><button id="refresh-positions" class="icon-button" disabled title="Reset the portrait layout with new random horizontal positions" aria-label="Refresh node positions"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2 6M20 4v7h-7"/></svg>Refresh positions</button></div>
-        <div><button id="show-metadata" class="icon-button" aria-expanded="false" aria-controls="metadata-panel" title="Show native constants, tags, lifetimes and stored metadata" aria-describedby="metadata-status"><span class="toggle-indicator" aria-hidden="true">&#10003;</span>Metadata</button></div>
+        <div><a id="repository-link" href="https://github.com/xadupre/onnx-light-viewer" title="ONNX Light Viewer on GitHub" aria-label="Open the ONNX Light Viewer GitHub repository"><img src="${resource("logo.svg")}" alt="" width="24" height="24"></a><button id="refresh-shapes" class="icon-button" disabled title="Refresh shape and type information with onnx-light" aria-label="Refresh shape and type information" aria-describedby="shape-status"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2 6M20 4v7h-7"/></svg>Refresh shapes</button><button id="refresh-metadata" class="icon-button" disabled title="Recompute constants, tags and lifetimes for the displayed graph with onnx-light" aria-label="Refresh metadata for the displayed graph" aria-describedby="metadata-status"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2 6M20 4v7h-7"/></svg>Refresh metadata</button><button id="refresh-positions" class="icon-button" disabled title="Reset the portrait layout with new random horizontal positions" aria-label="Refresh node positions"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2 6M20 4v7h-7"/></svg>Refresh positions</button></div>
         <div class="graph-stats" aria-live="polite"><span id="graph-summary">No model loaded</span><span id="initializer-count">0 initializers</span><span id="onnx-light-version" title="onnx-light C++ release used by this viewer">onnx-light ${onnxLightVersion}</span><span id="shape-status" role="status"></span><span id="metadata-status" role="status"></span><span id="navigation-status" role="status"></span><span id="load-status" role="status"></span></div>
         <span id="save-status" role="status"></span>
+        <span id="fusion-status" role="status"></span>
         <nav id="graph-navigation" aria-label="Graph breadcrumbs" hidden></nav>
         <progress id="load-progress" aria-label="Loading ONNX model" hidden></progress>
       </header>
@@ -50,19 +50,34 @@ export function webviewHtml(
           <svg id="graph" role="group" aria-label="Interactive ONNX graph" tabindex="0"><defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs><g id="graph-overview" aria-hidden="true" display="none"><path id="overview-edges"/><path id="overview-nodes"/></g><path id="crossing-edges" class="crossing-edge"/><path id="released-crossing-edges" class="crossing-edge released"/><g id="edges"></g><g id="nodes"></g></svg>
           <div class="zoom-controls" aria-label="Graph zoom"><button id="zoom-out" title="Zoom out (-)" aria-label="Zoom out" aria-keyshortcuts="-">−</button><button id="zoom-fit" title="Fit graph (F)" aria-keyshortcuts="F">Fit</button><button id="zoom-readable" title="Zoom to readable size (100%), centered on the inspected node (R)" aria-label="Zoom to readable size" aria-keyshortcuts="R"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="m8 17 4-10 4 10M10 13h4M4 8V4h4M16 4h4v4M20 16v4h-4M8 20H4v-4"/></svg></button><button id="zoom-area" title="Drag a rectangle to zoom into an area; Alt+drag also works. Escape cancels." aria-pressed="false"><span class="toggle-indicator" aria-hidden="true">&#10003;</span> Zoom area</button><button id="zoom-in" title="Zoom in (+)" aria-label="Zoom in" aria-keyshortcuts="+">+</button></div>
         </div>
-        <aside aria-label="Node inspector">
-          <form id="find-node" role="search"><label for="node-search">Find node or operator</label><div class="node-search-controls"><input id="node-search" type="search" placeholder="Name or operator" aria-controls="node-search-suggestions" autocomplete="off"><button type="submit" title="Go to the next matching node" aria-label="Go to the next matching node">Go</button></div><span id="node-search-result" role="status"></span><ul id="node-search-suggestions" aria-label="Matching nodes" hidden></ul></form>
-          <div class="eyebrow">INSPECTOR</div><div class="inspector-heading"><h2 id="node-title">No model loaded</h2><button id="show-doc" disabled aria-haspopup="dialog">Doc</button></div><p id="node-description">Open an ONNX model to explore its connections.</p>
-          <button id="open-function" class="icon-button" hidden>Open function</button>
-          <div id="node-details"><dl><dt>NODE NAME</dt><dd id="node-name">—</dd><dt>DOMAIN</dt><dd id="node-domain">—</dd><dt>OPSET</dt><dd id="node-opset">—</dd></dl>
-          <h3>Inputs <span id="input-count">0</span></h3><ul id="node-inputs"></ul>
-          <h3>Outputs <span id="output-count">0</span></h3><ul id="node-outputs"></ul>
-          <section id="node-captures" hidden><h3>Captured inputs</h3><ul id="captured-inputs"></ul></section>
-          <section id="node-parameters" hidden>
-            <h3>Attributes <span id="attribute-count">0</span></h3><ul id="node-attributes"></ul>
-            <h3>Initializers <span id="parameter-count">0</span></h3><ul id="node-initializers"></ul>
-          </section></div>
-          <section id="metadata-panel" hidden>
+        <aside aria-label="Graph panels">
+          <nav id="sidebar-controls" aria-label="Sidebar panels and model actions">
+            <button id="open-model" class="icon-button" title="Show or hide the model file selector" aria-expanded="false" aria-controls="open-panel">Open</button>
+            <button id="save-model" class="icon-button" disabled title="Show or hide model save options" aria-expanded="false" aria-controls="save-options" aria-describedby="save-status">Save</button>
+            <button id="show-find" class="icon-button" aria-expanded="true" aria-controls="find-panel" title="Show or hide node search">Find</button>
+            <button id="fuse-pattern" class="icon-button" disabled title="Show or hide fusion patterns and select candidates to fuse on the main graph" aria-expanded="false" aria-controls="fusion-panel">Fuse</button>
+            <button id="show-operator" class="icon-button" aria-expanded="true" aria-controls="operator-panel" title="Show or hide operator and tensor details">Op</button>
+            <button id="show-metadata" class="icon-button" aria-expanded="false" aria-controls="metadata-panel" title="Show or hide native constants, tags, lifetimes and stored metadata">Data</button>
+          </nav>
+          <section id="find-panel" class="inspector-panel" aria-labelledby="find-title">
+            <h2 id="find-title" class="eyebrow panel-title">Find</h2>
+            <form id="find-node" role="search"><label for="node-search">Find node or operator</label><div class="node-search-controls"><input id="node-search" type="search" placeholder="Name or operator" aria-controls="node-search-suggestions" autocomplete="off"><button type="submit" title="Go to the next matching node" aria-label="Go to the next matching node">Go</button></div><span id="node-search-result" role="status"></span><ul id="node-search-suggestions" aria-label="Matching nodes" hidden></ul></form>
+          </section>
+          <section id="operator-panel" class="inspector-panel" aria-labelledby="operator-title">
+            <h2 id="operator-title" class="eyebrow panel-title">INSPECTOR</h2>
+            <div class="inspector-heading"><h2 id="node-title">No model loaded</h2><button id="show-doc" disabled aria-haspopup="dialog">Doc</button></div><p id="node-description">Open an ONNX model to explore its connections.</p>
+            <button id="open-function" class="icon-button" hidden>Open function</button>
+            <div id="node-details"><dl><dt>NODE NAME</dt><dd id="node-name">—</dd><dt>DOMAIN</dt><dd id="node-domain">—</dd><dt>OPSET</dt><dd id="node-opset">—</dd></dl>
+            <h3>Inputs <span id="input-count">0</span></h3><ul id="node-inputs"></ul>
+            <h3>Outputs <span id="output-count">0</span></h3><ul id="node-outputs"></ul>
+            <section id="node-captures" hidden><h3>Captured inputs</h3><ul id="captured-inputs"></ul></section>
+            <section id="node-parameters" hidden>
+              <h3>Attributes <span id="attribute-count">0</span></h3><ul id="node-attributes"></ul>
+              <h3>Initializers <span id="parameter-count">0</span></h3><ul id="node-initializers"></ul>
+            </section></div>
+          </section>
+          <section id="metadata-panel" class="inspector-panel" aria-labelledby="metadata-title" hidden>
+            <h2 id="metadata-title" class="eyebrow panel-title">Data</h2>
             <div id="metadata-content" hidden>
               <dl id="metadata-analysis"></dl>
               <section id="metadata-releases-section" hidden><h3>Releasable after this node</h3><ul id="metadata-releases"></ul></section>
@@ -73,6 +88,79 @@ export function webviewHtml(
               <details><summary>Model metadata</summary><dl id="metadata-model"></dl></details>
               <details><summary>Graph metadata</summary><dl id="metadata-graph"></dl></details>
             </div>
+          </section>
+          <section id="fusion-panel" class="inspector-panel" aria-labelledby="fusion-title" hidden>
+            <h2 id="fusion-title" class="eyebrow panel-title">Fusion patterns</h2>
+            <p>Select one or more patterns, then click Run Matching. Check the candidates to fuse; clicking a candidate highlights its nodes in the graph. Click Fuse selected to apply them, then Save to keep the result.</p>
+            <details class="fusion-picker" open>
+              <summary>Native patterns</summary>
+              <div class="fusion-selection-controls"><button id="select-patterns" disabled>Select all</button><button id="clear-patterns" disabled>Clear selection</button></div>
+              <fieldset id="fusion-pattern" disabled aria-label="Native patterns" aria-describedby="fusion-feedback"></fieldset>
+            </details>
+            <button id="preview-fusion" disabled>Run Matching</button>
+            <button id="close-fusion">Close</button>
+            <p id="fusion-feedback" role="status"></p>
+            <details class="fusion-picker" open>
+              <summary>Fusion candidates</summary>
+              <div class="fusion-selection-controls"><button id="select-fusions" disabled>Select all compatible</button><button id="clear-fusions" disabled>Clear selection</button></div>
+              <ul id="fusion-matches" aria-label="Fusion candidates"></ul>
+            </details>
+            <footer><button id="apply-fusion" class="primary" disabled>Fuse selected</button></footer>
+          </section>
+          <section id="open-panel" class="inspector-panel file-panel" aria-labelledby="open-title" hidden>
+            <h2 id="open-title" class="eyebrow panel-title">Open model</h2>
+            <label for="open-source">Source</label>
+            <select id="open-source"><option value="local">Local file</option><option value="huggingface">Hugging Face</option><option value="backend">Backend test</option></select>
+            <form id="open-browse" class="file-browse">
+              <label for="open-location">Directory or Hugging Face repository / URL</label>
+              <input id="open-location" type="text" autocomplete="off">
+              <div><button type="submit">Browse</button><button id="open-parent" type="button" disabled>Parent folder</button></div>
+            </form>
+            <label for="open-filter">Filter models and folders</label>
+            <input id="open-filter" type="search" aria-controls="open-files">
+            <ul id="open-files" class="file-list" aria-label="Models and folders"></ul>
+            <form id="open-form">
+              <label for="open-file">Model path, URL or backend test ID</label>
+              <input id="open-file" type="text" required autocomplete="off">
+              <label for="open-password">Password (encrypted models only)</label>
+              <input id="open-password" type="password" autocomplete="off">
+              <p id="open-error" role="alert"></p>
+              <footer><button id="cancel-open" type="button">Close</button><button id="open-submit" class="primary" type="submit">Open model</button></footer>
+            </form>
+          </section>
+          <section id="save-options" class="inspector-panel file-panel" aria-labelledby="save-title" hidden>
+            <h2 id="save-title" class="eyebrow panel-title">Save model copy</h2>
+            <form id="save-browse" class="file-browse">
+              <label for="save-location">Destination directory</label>
+              <input id="save-location" type="text" autocomplete="off">
+              <div><button type="submit">Browse</button><button id="save-parent" type="button" disabled>Parent folder</button></div>
+            </form>
+            <ul id="save-files" class="file-list" aria-label="Destination folders and models"></ul>
+            <form id="save-form">
+              <label for="save-file">Destination path</label><input id="save-file" type="text" value="model-copy.onnx" required autocomplete="off">
+              <fieldset class="save-grid">
+                <legend>Weight storage and encryption</legend>
+                <label><input type="radio" name="save-format" value="embedded-plain" checked>Single .onnx file</label>
+                <label><input type="radio" name="save-format" value="embedded-encrypted">Encrypted .onnx.enc file, including all weights</label>
+                <label><input type="radio" name="save-format" value="external-plain">.onnx model and separate weight files</label>
+                <label class="unavailable"><input type="radio" name="save-format" value="external-encrypted" disabled aria-describedby="external-encryption-note">Separate encrypted weight files (unavailable)</label>
+                <p id="external-encryption-note">Unavailable in onnx-light. <a href="https://github.com/xadupre/onnx-light/issues/5533">Track native support</a>.</p>
+                <label><input type="radio" name="save-format" value="reuse-plain">Reuse unchanged external files</label>
+                <p>For reuse, save in the source folder. Embedded weights still need saving.</p>
+              </fieldset>
+              <div id="external-size" hidden>
+                <label for="weight-file-size">Maximum weight file size (MiB)</label>
+                <input id="weight-file-size" type="number" min="1" max="8589934591" step="1" value="5120" required disabled aria-describedby="weight-size-note">
+                <p id="weight-size-note">1 MiB = 1,048,576 bytes. A tensor cannot span files; choose a size large enough for the largest tensor.</p>
+              </div>
+              <div id="save-encryption" hidden>
+                <label for="save-password">Password</label><input id="save-password" type="password" autocomplete="new-password">
+                <label for="save-confirmation">Confirm password</label><input id="save-confirmation" type="password" autocomplete="new-password">
+              </div>
+              <label><input id="save-overwrite" type="checkbox">Replace an existing destination copy</label>
+              <p id="save-options-error" role="alert"></p>
+              <footer><button id="cancel-save" type="button">Close</button><button id="save-submit" class="primary" type="submit">Save copy</button></footer>
+            </form>
           </section>
         </aside>
       </div>
@@ -138,6 +226,7 @@ export function webviewHtml(
         <tbody>
           <tr><th scope="row"><kbd>Tab</kbd> / <kbd>Shift + Tab</kbd></th><td>Move focus between controls and graph nodes.</td></tr>
           <tr><th scope="row">Save</th><td>Choose embedded or external weights and plain or encrypted output. Embedded encrypted output protects all weights. External plain output asks for the maximum weight file size; external encrypted output awaits native support.</td></tr>
+          <tr><th scope="row">Op / Data / Find / Fuse</th><td>Show or hide each sidebar panel independently. Visible panels stack vertically.</td></tr>
           <tr><th scope="row"><kbd>Enter</kbd> or <kbd>Space</kbd></th><td>Activate a focused button or subgraph link.</td></tr>
           <tr><th scope="row"><kbd>Left</kbd> / <kbd>Right</kbd> arrow</th><td>Switch tabs when a tab header has focus.</td></tr>
           <tr><th scope="row"><kbd>Home</kbd> / <kbd>End</kbd></th><td>Select the first / last tab when a tab header has focus.</td></tr>
@@ -201,26 +290,6 @@ export function webviewHtml(
       </ul>
     </section>
   </main>
-  <dialog id="save-options" aria-labelledby="save-title">
-    <form id="save-form">
-      <h2 id="save-title">Save an ONNX model copy</h2>
-      <table class="save-grid">
-        <caption>Choose weight storage and encryption</caption>
-        <thead><tr><td></td><th scope="col">Plain ONNX</th><th scope="col">Encrypted (AES-256-GCM)</th></tr></thead>
-        <tbody>
-          <tr><th scope="row">Embedded weights</th><td><label><input type="radio" name="save-format" value="embedded-plain" checked>Single .onnx file</label></td><td><label><input type="radio" name="save-format" value="embedded-encrypted">Single .onnx.enc file, including all weights</label></td></tr>
-          <tr><th scope="row">External weights</th><td><label><input type="radio" name="save-format" value="external-plain">.onnx model and separate weight files</label></td><td><label class="unavailable"><input type="radio" name="save-format" value="external-encrypted" disabled aria-describedby="external-encryption-note">Model and separate encrypted weight files</label><p id="external-encryption-note">Unavailable in onnx-light. <a href="https://github.com/xadupre/onnx-light/issues/5533">Track native support</a>.</p></td></tr>
-        </tbody>
-      </table>
-      <div id="external-size" hidden>
-        <label for="weight-file-size">Maximum weight file size (MiB)</label>
-        <input id="weight-file-size" type="number" min="1" max="8589934591" step="1" value="5120" required disabled aria-describedby="weight-size-note">
-        <p id="weight-size-note">1 MiB = 1,048,576 bytes. A tensor cannot span files; choose a size large enough for the largest tensor.</p>
-      </div>
-      <p id="save-options-error" role="alert"></p>
-      <footer><button id="cancel-save" type="button">Cancel</button><button class="primary" type="submit">Save copy</button></footer>
-    </form>
-  </dialog>
   <dialog id="operator-doc" aria-labelledby="doc-title">
     <header class="inspector-heading"><h2 id="doc-title"></h2><button id="close-doc" autofocus>Close</button></header>
     <p id="doc-version"></p><div id="doc-body"></div>

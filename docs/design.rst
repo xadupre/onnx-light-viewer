@@ -25,6 +25,9 @@ Who owns what?
   loading and atomic publication. Recovery uses the final local cache path.
 * Graph projection and analysis are synchronous. Only the selected graph is
   projected, not every descendant.
+* Inline Open/Save submit masked password fields, cleared after submission or
+  closing their panel. Direct editor opening uses a host password prompt.
+  Decryption passwords remain in panel-local reload closures and are never logged.
 
 What does an action change?
 ---------------------------
@@ -50,9 +53,18 @@ The protocol uses ``postMessage`` in both directions:
    * - ``open`` / ``navigate``
      - ``graph``
      - Replace the displayed graph.
+   * - ``browse-files``
+     - ``file-list`` or ``file-list-error``
+     - List folders, model files or backend cases inside the sidebar.
    * - ``save``
      - ``save-info`` or ``save-error``
      - Write a plain or encrypted model copy, optionally with external weights.
+   * - ``fusion-patterns`` / ``preview-fusion``
+     - ``fusion-patterns`` / ``fusion-preview``
+     - List native patterns and preview their candidates without editing.
+   * - ``apply-fusion`` / ``cancel-fusion``
+     - ``graph`` and ``fusion-info`` / no reply
+     - Apply selected disjoint candidates or discard the preview.
    * - ``refresh-shapes``
      - ``shape-info``
      - Patch tensor descriptions.
@@ -84,6 +96,8 @@ results **and errors** after disposal, model replacement or superseding
 navigation. A reload can lose prior in-memory inference; local sources must
 remain available. Logs retain failures across model changes and webview
 recreation. This recovers caught exceptions, not native process crashes.
+After fusion, recovery clones the retained edited model instead of reloading
+the original source, preserving applied rewrites.
 
 Contracts worth keeping
 ------------------------
@@ -92,6 +106,12 @@ Contracts worth keeping
   inference updates the enclosing model first. ``metadata(path?)`` returns a
   separate, read-only analysis snapshot. ``serialize`` and ``serializeFiles``
   save the retained model as a new plain, encrypted or external-weight copy.
+* Fusion materializes weights in an independent native snapshot. Selected
+  patterns apply together against original node indices; overlapping candidates
+  are rejected. Graph replacement or cancellation invalidates previews.
+  Replacement previews share one trial builder per pattern without rewriting
+  the matched graph. External-weight reuse indexes candidates by name, element
+  type and dimensions before comparing their payloads and checking backing files.
 * ``GraphPath`` uses validated indices, not potentially duplicate names.
   Functions use their own imports and formal names, not the caller's weights;
   nested graph attributes can capture enclosing values.

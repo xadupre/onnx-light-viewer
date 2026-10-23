@@ -6,6 +6,8 @@
  */
 #include <napi.h>
 #include <onnx_core/backend_test/test_case.h>
+#include <onnx_core/builder/graph_graph.h>
+#include <onnx_core/builder/pattern_registry.h>
 #include <onnx_core/compute/constant_info.h>
 #include <onnx_core/compute/result_lifetime.h>
 #include <onnx_core/compute/value_tags.h>
@@ -14,6 +16,7 @@
 #include <onnx_core/runtime/kernels/cast_helper.h>
 #include <onnx_core/runtime/memory/simple_tensor.h>
 #include <onnx_core/shapes/shape_inference.h>
+#include <onnx_extensions/patterns/dispatch_table.h>
 #include <onnx_extensions/shapes/dispatch_table.h>
 #include <onnx_op/operator_sets.h>
 #include <onnx_proto/onnx.h>
@@ -1437,7 +1440,12 @@ Napi::Value DecodeGraph(const Napi::CallbackInfo &info) {
  * source buffer or backend case alive until after the model is destroyed.
  */
 struct StoredModel {
+  struct ExternalWeight {
+    ol::TensorProto reference;
+    ol::TensorProto value;
+  };
   Napi::Reference<Napi::Uint8Array> source;
+  std::shared_ptr<StoredModel> backing;
   std::shared_ptr<ol::core::backend_test::TestCase> backend_case;
   std::shared_ptr<ol::ModelProto> model;
   std::string file_name;
@@ -1446,6 +1454,7 @@ struct StoredModel {
   std::filesystem::file_time_type source_time;
   std::vector<SkippedTensorPayload> skipped;
   bool has_training_info = false;
+  std::vector<ExternalWeight> external_weights;
 };
 
 bool HasTrainingInfo(const uint8_t *bytes, size_t length) {
@@ -1695,65 +1704,124 @@ std::vector<ol::TensorProto *> ModelSaveTensors(ol::ModelProto &model) {
   return tensors;
 }
 
+void RestoreModelPayloads(ol::ModelProto &snapshot, const StoredModel &source,
+                          const std::string &file_path) {
+  if (source.has_training_info)
+    throw std::runtime_error(
+        "Editing or saving models containing training_info is not supported by onnx-light 0.2.0.");
+  if (source.skipped.empty())
+    return;
+  const auto path = ModelFilePath(file_path);
+  const auto check_source = [&] {
+    if (std::filesystem::file_size(path) != source.source_size ||
+        std::filesystem::last_write_time(path) != source.source_time)
+      throw std::runtime_error("The source model changed on disk. Reopen it before saving.");
+  };
+  check_source();
+  FileDescriptor file(OpenModelFile(file_path));
+  if (file.get() < 0)
+    throw std::system_error(errno, std::generic_category(), "Could not reopen source model");
+  ol::utils::FdReadStream stream(file.get());
+  ol::ModelProto original;
+  ReadModel(original, stream, ol::ParseOptions{});
+  check_source();
+  for (const auto &payload : source.skipped) {
+    auto *target = FindTensor(snapshot, payload);
+    const auto *tensor = FindTensor(original, payload);
+    if (!target || !tensor || target->name() != tensor->name() ||
+        target->data_type() != tensor->data_type() ||
+        target->dims().size() != tensor->dims().size() ||
+        !std::equal(target->dims().begin(), target->dims().end(), tensor->dims().begin()))
+      throw std::runtime_error("Could not restore an omitted tensor payload.");
+    *target = tensor->SharedCopy();
+  }
+}
+
+bool SameWeight(const ol::TensorProto &left, const ol::TensorProto &right) {
+  if (left.name() != right.name() || left.data_type() != right.data_type() ||
+      left.dims().size() != right.dims().size() ||
+      !std::equal(left.dims().begin(), left.dims().end(), right.dims().begin()))
+    return false;
+  if (left.data_type() == ol::TensorProto::STRING)
+    return left.string_data().size() == right.string_data().size() &&
+           std::equal(left.string_data().begin(), left.string_data().end(),
+                      right.string_data().begin());
+  const auto a = ol::core::runtime::TensorFromProto(left);
+  const auto b = ol::core::runtime::TensorFromProto(right);
+  return a.size_bytes() == b.size_bytes() &&
+         (!a.size_bytes() || std::memcmp(a.bytes(), b.bytes(), a.size_bytes()) == 0);
+}
+
 /** Serializes an independent snapshot; omitted inline payloads must first be restored. */
 class SerializeModelWorker : public Napi::AsyncWorker {
 public:
   SerializeModelWorker(Napi::Env env, std::shared_ptr<StoredModel> source,
                        std::optional<std::string> password, std::string file_path,
-                       size_t max_external_file_size = 0, std::string external_file_prefix = "")
+                       size_t max_external_file_size = 0, std::string external_file_prefix = "",
+                       bool reuse_weights = false)
       : Napi::AsyncWorker(env), deferred_(Napi::Promise::Deferred::New(env)),
         source_(std::move(source)), snapshot_(source_->model->SharedCopy()),
         password_(std::move(password)), file_path_(std::move(file_path)),
         max_external_file_size_(max_external_file_size),
-        external_file_prefix_(std::move(external_file_prefix)) {}
+        external_file_prefix_(std::move(external_file_prefix)), reuse_weights_(reuse_weights) {}
 
   Napi::Promise Promise() const { return deferred_.Promise(); }
 
   void Execute() override {
     try {
-      if (source_->has_training_info)
-        throw std::runtime_error(
-            "Saving models containing training_info is not supported by onnx-light 0.2.0. "
-            "Export was cancelled to avoid losing training or initialization graphs.");
-      if (!source_->skipped.empty()) {
-        const auto path = ModelFilePath(file_path_);
-        const auto check_source = [&] {
-          if (std::filesystem::file_size(path) != source_->source_size ||
-              std::filesystem::last_write_time(path) != source_->source_time)
-            throw std::runtime_error("The source model changed on disk. Reopen it before saving.");
-        };
-        check_source();
-        FileDescriptor file(OpenModelFile(file_path_));
-        if (file.get() < 0)
-          throw std::system_error(errno, std::generic_category(), "Could not reopen source model");
-        ol::utils::FdReadStream stream(file.get());
-        ol::ModelProto original;
-        ReadModel(original, stream, ol::ParseOptions{});
-        check_source();
-        for (const auto &payload : source_->skipped) {
-          auto *target = FindTensor(snapshot_, payload);
-          auto *tensor = FindTensor(original, payload);
-          if (!target || !tensor || target->name() != tensor->name() ||
-              target->data_type() != tensor->data_type() ||
-              target->dims().size() != tensor->dims().size() ||
-              !std::equal(target->dims().begin(), target->dims().end(), tensor->dims().begin()))
-            throw std::runtime_error("Could not restore an omitted tensor payload.");
-          *target = tensor->SharedCopy();
-        }
-      }
+      RestoreModelPayloads(snapshot_, *source_, file_path_);
       const auto tensors = ModelSaveTensors(snapshot_);
+      auto external_weights = source_->external_weights;
       for (auto *tensor : tensors)
         if (tensor->data_location() == ol::TensorProto::EXTERNAL) {
           if (file_path_.empty())
             throw std::runtime_error(
                 "External weights require a local source model path when saving.");
+          auto reference = tensor->SharedCopy();
           LoadExternalTensor(*tensor, ModelFilePath(file_path_).parent_path());
+          external_weights.push_back({std::move(reference), tensor->SharedCopy()});
         }
+      std::set<const ol::TensorProto *> reused;
+      if (reuse_weights_) {
+        using WeightKey = std::tuple<std::string, int32_t, std::vector<int64_t>>;
+        const auto weight_key = [](const ol::TensorProto &tensor) -> WeightKey {
+          return {tensor.name().value(),
+                  tensor.data_type(),
+                  {tensor.dims().begin(), tensor.dims().end()}};
+        };
+        std::map<WeightKey, std::vector<const StoredModel::ExternalWeight *>> weights_by_key;
+        for (const auto &weight : external_weights)
+          weights_by_key[weight_key(weight.value)].push_back(&weight);
+        for (auto *tensor : tensors) {
+          const auto candidates = weights_by_key.find(weight_key(*tensor));
+          if (candidates == weights_by_key.end())
+            continue;
+          for (const auto *weight : candidates->second)
+            if (SameWeight(*tensor, weight->value)) {
+              auto fresh = weight->reference.SharedCopy();
+              LoadExternalTensor(fresh, ModelFilePath(file_path_).parent_path());
+              if (!SameWeight(fresh, weight->value))
+                throw std::runtime_error("External weights changed on disk. Reopen the model.");
+              tensor->ref_external_data() = weight->reference.external_data();
+              tensor->set_data_location(ol::TensorProto::EXTERNAL);
+              tensor->clear_raw_data();
+              tensor->clear_float_data();
+              tensor->clear_double_data();
+              tensor->clear_int32_data();
+              tensor->clear_int64_data();
+              tensor->clear_uint64_data();
+              tensor->clear_string_data();
+              reused.insert(tensor);
+              break;
+            }
+        }
+      }
       if (max_external_file_size_) {
         const ol::SerializeOptions options;
         for (auto *value : tensors) {
           auto &tensor = *value;
-          if (tensor.has_raw_data() || tensor.data_type() == ol::TensorProto::STRING ||
+          if (reused.contains(value) || tensor.has_raw_data() ||
+              tensor.data_type() == ol::TensorProto::STRING ||
               (tensor.float_data().empty() && tensor.double_data().empty() &&
                tensor.int32_data().empty() && tensor.int64_data().empty() &&
                tensor.uint64_data().empty()))
@@ -1768,6 +1836,15 @@ public:
           tensor.clear_int64_data();
           tensor.clear_uint64_data();
         }
+        // The split serializer requires payloads for every EXTERNAL tensor.
+        // Partition only new payloads, then restore the retained references.
+        std::map<size_t, ol::TensorProto> references;
+        for (size_t i = 0; i < tensors.size(); ++i)
+          if (reused.contains(tensors[i])) {
+            references.emplace(i, tensors[i]->SharedCopy());
+            tensors[i]->set_data_location(ol::TensorProto::DEFAULT);
+            tensors[i]->clear_external_data();
+          }
         if (!snapshot_.SerializeToString(bytes_, external_files_, max_external_file_size_,
                                          external_file_prefix_, options))
           throw std::runtime_error("Could not serialize the ONNX model with external weights.");
@@ -1775,6 +1852,23 @@ public:
           if (bytes.size() > max_external_file_size_)
             throw std::runtime_error(
                 "A tensor exceeds the maximum external weight file size. Choose a larger size.");
+        if (!references.empty()) {
+          ol::ModelProto partitioned;
+          if (!partitioned.ParseFromString(bytes_))
+            throw std::runtime_error("Could not restore reused external weight references.");
+          const auto partitioned_tensors = ModelSaveTensors(partitioned);
+          if (partitioned_tensors.size() != tensors.size())
+            throw std::runtime_error("The serializer changed tensor positions.");
+          for (const auto &[position, reference] : references) {
+            if (partitioned_tensors[position]->name() != reference.name())
+              throw std::runtime_error("The serializer changed tensor positions.");
+            *partitioned_tensors[position] = reference.SharedCopy();
+          }
+          std::string finished;
+          if (!partitioned.SerializeToString(finished))
+            throw std::runtime_error("Could not serialize reused external weight references.");
+          bytes_ = std::move(finished);
+        }
       } else if (password_) {
 #ifdef ONNX_LIGHT_HAS_OPENSSL
         bytes_ = ol::SaveEncryptedModelToString(snapshot_, *password_, "AES-256-GCM");
@@ -1822,11 +1916,319 @@ private:
   size_t max_external_file_size_;
   std::string external_file_prefix_;
   std::unordered_map<std::string, std::string> external_files_;
+  bool reuse_weights_;
+};
+
+Napi::Object ModelHandle(Napi::Env env, std::shared_ptr<StoredModel> model);
+
+Napi::Object FusionNode(Napi::Env env, const ol::NodeProto &node) {
+  auto result = Napi::Object::New(env);
+  result.Set("opType", node.op_type().value());
+  result.Set("domain", node.domain().value());
+  result.Set("name", node.name().value());
+  const auto names = [&](const auto &values) {
+    auto array = Napi::Array::New(env, values.size());
+    for (uint32_t i = 0; i < values.size(); ++i)
+      array.Set(i, values[i].value());
+    return array;
+  };
+  result.Set("inputs", names(node.input()));
+  result.Set("outputs", names(node.output()));
+  auto attributes = Napi::Array::New(env, node.attribute_size());
+  for (uint32_t i = 0; i < static_cast<uint32_t>(node.attribute_size()); ++i) {
+    auto value = Napi::Object::New(env);
+    value.Set("name", node.attribute(i).name().value());
+    value.Set("value", AttributePreview(node.attribute(i)));
+    attributes.Set(i, value);
+  }
+  result.Set("attributes", attributes);
+  return result;
+}
+
+class FusionWorker : public Napi::AsyncWorker {
+public:
+  FusionWorker(Napi::Env env, std::shared_ptr<StoredModel> source,
+               std::vector<std::string> patterns, std::optional<std::vector<size_t>> anchors,
+               std::string path)
+      : Napi::AsyncWorker(env), deferred_(Napi::Promise::Deferred::New(env)),
+        source_(std::move(source)), snapshot_(source_->model->SharedCopy()),
+        patterns_(std::move(patterns)), anchors_(std::move(anchors)), path_(std::move(path)),
+        weights_(source_->external_weights) {}
+  Napi::Promise Promise() const { return deferred_.Promise(); }
+  void Execute() override {
+    try {
+      RestoreModelPayloads(snapshot_, *source_, path_);
+      for (auto *tensor : ModelSaveTensors(snapshot_))
+        if (tensor->data_location() == ol::TensorProto::EXTERNAL) {
+          if (path_.empty())
+            throw std::runtime_error("Fusion needs a local source path for external weights.");
+          auto reference = tensor->SharedCopy();
+          LoadExternalTensor(*tensor, ModelFilePath(path_).parent_path());
+          weights_.push_back({std::move(reference), tensor->SharedCopy()});
+        }
+      ol::VerifyModel(snapshot_);
+      namespace builder = ol::core::builder;
+      std::map<std::string, std::unique_ptr<builder::PatternOptimization>> patterns;
+      for (const auto &name : patterns_)
+        if (!patterns.contains(name))
+          patterns.emplace(name, builder::CreateRegisteredPattern(name));
+      builder::GraphBuilder graph(snapshot_);
+      if (graph.Nodes().size() != snapshot_.graph().node().size())
+        throw std::runtime_error("The native builder changed node indices before fusion.");
+      for (size_t i = 0; i < graph.Nodes().size(); ++i) {
+        const auto &node = graph.Nodes()[i];
+        const auto &original = snapshot_.graph().node(i);
+        if (node.op_type() != original.op_type() || node.domain() != original.domain() ||
+            node.input_size() != original.input_size() ||
+            node.output_size() != original.output_size() ||
+            !std::equal(node.input().begin(), node.input().end(), original.input().begin()) ||
+            !std::equal(node.output().begin(), node.output().end(), original.output().begin()))
+          throw std::runtime_error("The native builder changed node indices before fusion.");
+      }
+      builder::GraphGraph index(graph,
+                                std::vector<std::unique_ptr<builder::PatternOptimization>>{});
+      std::vector<std::pair<builder::PatternOptimization *, builder::MatchResult>> accepted;
+      std::set<size_t> removed;
+      std::set<std::pair<std::string, size_t>> requested;
+      if (anchors_) {
+        for (size_t i = 0; i < anchors_->size(); ++i)
+          requested.emplace(patterns_.size() == 1 ? patterns_[0] : patterns_[i], (*anchors_)[i]);
+        if (requested.empty() || requested.size() != anchors_->size())
+          throw std::runtime_error("Select distinct fusion matches.");
+      }
+      for (const auto &[name, pattern] : patterns) {
+        const auto fast = pattern->FastOpType();
+        std::optional<builder::GraphBuilder> trial;
+        std::optional<builder::GraphGraph> trial_index;
+        for (size_t i = 0; i < graph.Nodes().size(); ++i) {
+          if ((anchors_ && !requested.contains({name, i})) ||
+              (!fast.empty() && !fast.contains(graph.Nodes()[i].op_type().value())))
+            continue;
+          auto match = pattern->Match(index, graph.Nodes()[i]);
+          if (!match.pattern)
+            continue;
+          std::vector<size_t> nodes;
+          for (const auto *node : match.nodes)
+            if (node) {
+              const auto position = index.Position(*node);
+              if (std::find(nodes.begin(), nodes.end(), position) == nodes.end())
+                nodes.push_back(position);
+            }
+          if (nodes.empty())
+            throw std::runtime_error("The pattern returned an empty fusion match.");
+          if (anchors_) {
+            for (const auto position : nodes)
+              if (!removed.insert(position).second)
+                throw std::runtime_error("Selected matches overlap. Select disjoint matches.");
+            accepted.emplace_back(pattern.get(), std::move(match));
+          } else {
+            if (!trial) {
+              trial.emplace(snapshot_);
+              trial_index.emplace(*trial,
+                                  std::vector<std::unique_ptr<builder::PatternOptimization>>{});
+            }
+            const auto trial_match = pattern->Match(*trial_index, trial->Nodes()[i]);
+            if (!trial_match.pattern)
+              throw std::runtime_error("The fusion match could not be reproduced.");
+            matches_.push_back(
+                {i, std::move(nodes), pattern->Apply(*trial_index, trial_match.nodes)});
+          }
+        }
+      }
+      if (!anchors_)
+        return;
+      if (accepted.size() != requested.size())
+        throw std::runtime_error("The selected fusion preview is no longer applicable.");
+      ol::RewritingProto plan;
+      auto *edit = plan.add_rewrites();
+      edit->set_pattern_name(patterns_.size() == 1 ? patterns_[0] : "Selected fusion patterns");
+      for (const auto position : removed)
+        edit->add_matched_nodes(position);
+      const auto initializer_count = graph.Initializers().size();
+      std::map<size_t, std::vector<ol::NodeProto>> insertions;
+      for (const auto &[pattern, match] : accepted) {
+        size_t position = graph.Nodes().size();
+        if (match.insert_at)
+          position = index.Position(*match.insert_at);
+        else
+          for (const auto *node : match.nodes)
+            if (node)
+              position = std::min(position, index.Position(*node));
+        auto replacement = pattern->Apply(index, match.nodes);
+        for (const auto &node : replacement)
+          insertions[position].push_back(node.SharedCopy());
+      }
+      size_t output_position = 0;
+      for (size_t i = 0; i <= graph.Nodes().size(); ++i) {
+        for (const auto &node : insertions[i]) {
+          *edit->add_added_nodes() = node.SharedCopy();
+          edit->add_added_nodes_positions(output_position++);
+        }
+        if (i < graph.Nodes().size() && !removed.contains(i))
+          ++output_position;
+      }
+      for (size_t i = initializer_count; i < graph.Initializers().size(); ++i) {
+        *edit->add_added_initializers() = graph.Initializers()[i].SharedCopy();
+        edit->add_added_initializer_positions(i);
+      }
+      auto declarations = graph.ToModel(snapshot_.ir_version());
+      plan.ref_added_functions() = declarations.functions();
+      plan.ref_required_opset_imports() = declarations.opset_import();
+      builder::GraphBuilder original(snapshot_);
+      auto rewritten = original.ApplyRewritings(plan);
+      snapshot_ = rewritten.ToModel(snapshot_.ir_version());
+      ol::VerifyModel(snapshot_);
+    } catch (const std::exception &error) {
+      SetError(error.what());
+    }
+  }
+  void OnOK() override {
+    auto stored = std::make_shared<StoredModel>();
+    stored->backing = source_;
+    stored->model = std::make_shared<ol::ModelProto>(std::move(snapshot_));
+    stored->file_name = source_->file_name;
+    stored->file_path = path_;
+    stored->external_weights = std::move(weights_);
+    if (anchors_) {
+      deferred_.Resolve(ModelHandle(Env(), stored));
+      return;
+    }
+    auto result = Napi::Object::New(Env());
+    result.Set("model", ModelHandle(Env(), stored));
+    auto matches = Napi::Array::New(Env(), matches_.size());
+    for (uint32_t i = 0; i < matches_.size(); ++i) {
+      auto item = Napi::Object::New(Env());
+      item.Set("anchor", Napi::Number::New(Env(), matches_[i].anchor));
+      auto nodes = Napi::Array::New(Env(), matches_[i].nodes.size());
+      for (uint32_t j = 0; j < matches_[i].nodes.size(); ++j)
+        nodes.Set(j, Napi::Number::New(Env(), matches_[i].nodes[j]));
+      item.Set("nodes", nodes);
+      auto replacement = Napi::Array::New(Env(), matches_[i].replacement.size());
+      for (uint32_t j = 0; j < matches_[i].replacement.size(); ++j)
+        replacement.Set(j, FusionNode(Env(), matches_[i].replacement[j]));
+      item.Set("replacement", replacement);
+      matches.Set(i, item);
+    }
+    result.Set("matches", matches);
+    deferred_.Resolve(result);
+  }
+  void OnError(const Napi::Error &error) override { deferred_.Reject(error.Value()); }
+
+private:
+  struct Match {
+    size_t anchor;
+    std::vector<size_t> nodes;
+    ol::utils::RepeatedProtoField<ol::NodeProto> replacement;
+  };
+  Napi::Promise::Deferred deferred_;
+  std::shared_ptr<StoredModel> source_;
+  ol::ModelProto snapshot_;
+  std::vector<std::string> patterns_;
+  std::optional<std::vector<size_t>> anchors_;
+  std::string path_;
+  std::vector<StoredModel::ExternalWeight> weights_;
+  std::vector<Match> matches_;
 };
 
 /** Method closures share ownership, even if JavaScript retains only one method. */
 Napi::Object ModelHandle(Napi::Env env, std::shared_ptr<StoredModel> model) {
   auto result = Napi::Object::New(env);
+  result.Set("clone",
+             Napi::Function::New(env, [model](const Napi::CallbackInfo &call) -> Napi::Value {
+               try {
+                 auto copy = std::make_shared<StoredModel>();
+                 copy->backing = model;
+                 copy->model = std::make_shared<ol::ModelProto>(model->model->SharedCopy());
+                 copy->file_name = model->file_name;
+                 copy->file_path = model->file_path;
+                 copy->source_size = model->source_size;
+                 copy->source_time = model->source_time;
+                 copy->skipped = model->skipped;
+                 copy->has_training_info = model->has_training_info;
+                 copy->external_weights = model->external_weights;
+                 return ModelHandle(call.Env(), copy);
+               } catch (const std::exception &error) {
+                 Napi::Error::New(call.Env(), error.what()).ThrowAsJavaScriptException();
+                 return call.Env().Undefined();
+               }
+             }));
+  result.Set("fusionPatterns",
+             Napi::Function::New(env, [model](const Napi::CallbackInfo &call) -> Napi::Value {
+               try {
+                 ol::onnx_patterns::RegisterPatterns();
+                 std::set<std::string> operators;
+                 for (const auto &node : model->model->graph().node())
+                   operators.insert(node.op_type().value());
+                 auto values = Napi::Array::New(call.Env());
+                 uint32_t i = 0;
+                 for (const auto &pattern : ol::core::builder::CreateRegisteredPatterns()) {
+                   const auto fast = pattern->FastOpType();
+                   if (fast.empty() || std::any_of(fast.begin(), fast.end(), [&](const auto &name) {
+                         return operators.contains(name);
+                       }))
+                     values.Set(i++, pattern->Name());
+                 }
+                 return values;
+               } catch (const std::exception &error) {
+                 Napi::Error::New(call.Env(), error.what()).ThrowAsJavaScriptException();
+                 return call.Env().Undefined();
+               }
+             }));
+  for (const bool apply : {false, true})
+    result.Set(
+        apply ? "applyFusion" : "previewFusion",
+        Napi::Function::New(env, [model, apply](const Napi::CallbackInfo &call) -> Napi::Value {
+          try {
+            if ((!call[0].IsString() && !(apply && call[0].IsArray())) ||
+                (apply && !call[1].IsArray()) ||
+                (!apply && !call[1].IsUndefined() && !call[1].IsString()))
+              throw std::runtime_error(
+                  "Expected a fusion pattern and selected match indices or source path.");
+            ol::onnx_patterns::RegisterPatterns();
+            ol::onnx_shapes::RegisterShapeFunctions();
+            std::vector<std::string> patterns;
+            if (call[0].IsString())
+              patterns.push_back(call[0].As<Napi::String>().Utf8Value());
+            else {
+              const auto values = call[0].As<Napi::Array>();
+              if (!values.Length() || values.Length() != call[1].As<Napi::Array>().Length())
+                throw std::runtime_error("Expected one fusion pattern per selected match.");
+              for (uint32_t i = 0; i < values.Length(); ++i) {
+                if (!values.Get(i).IsString())
+                  throw std::runtime_error("Invalid fusion pattern.");
+                patterns.push_back(values.Get(i).As<Napi::String>().Utf8Value());
+              }
+            }
+            std::optional<std::vector<size_t>> anchors;
+            if (apply) {
+              anchors.emplace();
+              const auto values = call[1].As<Napi::Array>();
+              for (uint32_t i = 0; i < values.Length(); ++i) {
+                const auto value = values.Get(i);
+                if (!value.IsNumber())
+                  throw std::runtime_error("Invalid fusion match index.");
+                const double index = value.As<Napi::Number>().DoubleValue();
+                if (!std::isfinite(index) || index < 0 || std::floor(index) != index ||
+                    index >= model->model->graph().node().size())
+                  throw std::runtime_error("Invalid fusion match index.");
+                anchors->push_back(static_cast<size_t>(index));
+              }
+            }
+            const auto path = !apply && call[1].IsString() ? call[1].As<Napi::String>().Utf8Value()
+                                                           : model->file_path;
+            if (path.find('\0') != std::string::npos)
+              throw std::runtime_error("Invalid source model file path.");
+            auto worker = std::make_unique<FusionWorker>(call.Env(), model, std::move(patterns),
+                                                         std::move(anchors), path);
+            const auto promise = worker->Promise();
+            worker->Queue();
+            worker.release();
+            return promise;
+          } catch (const std::exception &error) {
+            Napi::Error::New(call.Env(), error.what()).ThrowAsJavaScriptException();
+            return call.Env().Undefined();
+          }
+        }));
   result.Set("externalDataLocations",
              Napi::Function::New(env, [model](const Napi::CallbackInfo &call) -> Napi::Value {
                try {
@@ -1840,6 +2242,8 @@ Napi::Object ModelHandle(Napi::Env env, std::shared_ptr<StoredModel> model) {
                    omitted.insert(tensor);
                  }
                  std::set<std::string> locations;
+                 for (const auto &weight : model->external_weights)
+                   locations.insert(ExternalDataLocation(weight.reference));
                  for (const auto *tensor : ModelSaveTensors(*model->model))
                    if (tensor->data_location() == ol::TensorProto::EXTERNAL &&
                        !omitted.contains(tensor))
@@ -1858,8 +2262,9 @@ Napi::Object ModelHandle(Napi::Env env, std::shared_ptr<StoredModel> model) {
       "serializeFiles",
       Napi::Function::New(env, [model](const Napi::CallbackInfo &call) -> Napi::Value {
         try {
-          if (call.Length() < 2 || call.Length() > 3 || !call[0].IsNumber() ||
-              !call[1].IsString() || (!call[2].IsUndefined() && !call[2].IsString()))
+          if (call.Length() < 2 || call.Length() > 4 || !call[0].IsNumber() ||
+              !call[1].IsString() || (!call[2].IsUndefined() && !call[2].IsString()) ||
+              (!call[3].IsUndefined() && !call[3].IsBoolean()))
             throw std::runtime_error(
                 "Expected a maximum external file size, a prefix and an optional source path.");
           const double maximum = call[0].As<Napi::Number>().DoubleValue();
@@ -1877,7 +2282,8 @@ Napi::Object ModelHandle(Napi::Env env, std::shared_ptr<StoredModel> model) {
           if (file_path.find('\0') != std::string::npos)
             throw std::runtime_error("Invalid source model file path.");
           auto worker = std::make_unique<SerializeModelWorker>(
-              call.Env(), model, std::nullopt, file_path, static_cast<size_t>(maximum), prefix);
+              call.Env(), model, std::nullopt, file_path, static_cast<size_t>(maximum), prefix,
+              call[3].IsBoolean() && call[3].As<Napi::Boolean>().Value());
           const auto promise = worker->Promise();
           worker->Queue();
           worker.release();

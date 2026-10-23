@@ -5,7 +5,11 @@ Opening models
    :alt: Model opening control in the viewer toolbar.
    :width: 200px
 
-* **Open** offers **Local file**, **Hugging Face** or **Backend test**.
+* **Open** toggles an embedded file selector in the right sidebar, offering
+  **Local file**, **Hugging Face** or **Backend test**. Browse folders, enter a
+  directory or repository, select a model, then click **Open model**.
+  **Parent folder** navigates up a local directory. You can also enter a model
+  path or file URL directly. Errors remain visible in the panel.
   Opening an ``.onnx`` file in VS Code
   also uses the viewer; use **Reopen Editor With...** if another editor handles it.
 * **ONNX Light Viewer: Open Graph** opens the bundled Relu demo.
@@ -21,13 +25,17 @@ The viewer detects onnx-light encrypted model envelopes by their header,
 independently of the filename. It reads **ONNXCRY1** (legacy AES-256-CBC),
 **ONNXCRY2** (ChaCha20-Poly1305) and **ONNXCRY3** (AES-256-GCM).
 Open them through **Local file**, or open an ``.onnx.enc`` file directly in
-VS Code. A masked VS Code input asks for the password. Cancelling keeps the
-previous model; a wrong password or damaged file produces a visible error.
-Passwords never enter the webview, settings or logs. They remain in the
+VS Code. The sidebar has a masked password field; opening an encrypted file
+directly in VS Code uses a masked VS Code prompt instead. A wrong password or
+damaged file produces a visible error and keeps the previous model.
+Sidebar password fields are cleared after submission or closing the selector;
+passwords are never written to settings or logs. They remain in the
 extension host's memory while the model is open so native recovery can reload it.
 
-**Open** and **Save** sit side by side with the same design. **Save** opens a
-storage/encryption choice grid:
+**Open** and **Save** sit side by side with the same design. **Save** toggles an
+embedded panel with a destination-folder browser, destination path, storage and
+encryption options. File selection and password confirmation stay inside the
+sidebar; no popup save dialog is used.
 
 .. list-table::
    :header-rows: 1
@@ -46,6 +54,8 @@ storage/encryption choice grid:
 Encrypted output uses **AES-256-GCM / ONNXCRY3** and asks for password confirmation.
 The default filename ends in ``-copy.onnx`` or ``-copy.onnx.enc``; choose a
 different destination from the source model and its external weight files.
+Existing copies are only replaced when **Replace an existing destination copy**
+is checked. The source model and its external weights remain protected.
 Saving always includes the whole ModelProto, not just the selected graph,
 with stored metadata, all weights
 and any persisted shape inference. It does not change the displayed selection,

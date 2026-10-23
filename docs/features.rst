@@ -91,5 +91,6 @@ Detailed guides
    features/inspection
    features/subgraphs
    features/metadata
+   features/fusion_patterns
    features/backend_tests
    features/action_logs
