@@ -223,6 +223,15 @@ test("previews replacements, highlights affected nodes and applies one or all co
   const send = (data) =>
     window.dispatchEvent(new window.MessageEvent("message", { data }));
   const button = document.getElementById("fuse-pattern");
+  assert.equal(
+    document.getElementById("save-model").nextElementSibling,
+    button,
+  );
+  assert.equal(button.textContent, "Fuse");
+  assert.equal(
+    button.className,
+    document.getElementById("save-model").className,
+  );
   assert.equal(button.disabled, true);
   load(native.graph());
   button.click();
@@ -232,7 +241,10 @@ test("previews replacements, highlights affected nodes and applies one or all co
     requestId: messages.at(-1).requestId,
     patterns: ["TransposeTranspose"],
   });
-  document.getElementById("preview-fusion").click();
+  assert.equal(document.getElementById("preview-fusion").disabled, true);
+  const pattern = document.getElementById("fusion-pattern");
+  pattern.value = "TransposeTranspose";
+  pattern.dispatchEvent(new window.Event("change"));
   const requestId = messages.at(-1).requestId;
   assert.equal(messages.at(-1).pattern, "TransposeTranspose");
   send({
@@ -246,9 +258,25 @@ test("previews replacements, highlights affected nodes and applies one or all co
   assert.match(matches.textContent, /first.*second/);
   assert.match(matches.textContent, /Identity\(x\) -> a/);
   assert.equal(document.getElementById("apply-fusion").disabled, true);
-  matches.querySelector("button").click();
   assert.equal(document.querySelectorAll(".graph-node.selected").length, 2);
+  assert.equal(matches.children[0].getAttribute("aria-current"), "true");
+  matches.children[1].querySelector("button").click();
+  assert.deepEqual(
+    [...document.querySelectorAll(".graph-node.selected")].map(
+      (node) => node.dataset.id,
+    ),
+    ["node-2", "node-3"],
+  );
   const first = matches.querySelector("input");
+  first.checked = true;
+  first.dispatchEvent(new window.Event("change"));
+  matches.children[0].querySelectorAll("button")[1].click();
+  assert.equal(first.checked, false);
+  assert.equal(document.getElementById("apply-fusion").disabled, true);
+  assert.equal(
+    messages.some((message) => message.type === "apply-fusion"),
+    false,
+  );
   first.checked = true;
   first.dispatchEvent(new window.Event("change"));
   document.getElementById("apply-fusion").click();
@@ -283,6 +311,58 @@ test("previews replacements, highlights affected nodes and applies one or all co
   assert.equal(button.disabled, true);
 });
 
+test("changing the pattern clears approvals and graph highlights and ignores old previews", async (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const native = loadModel(
+    readFileSync(require.resolve("./models/fusion.onnx")),
+    "fusion",
+  );
+  load(native.graph());
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  document.getElementById("fuse-pattern").click();
+  send({
+    type: "fusion-patterns",
+    requestId: messages.at(-1).requestId,
+    patterns: ["TransposeTranspose", "Identity"],
+  });
+  const pattern = document.getElementById("fusion-pattern");
+  pattern.value = "TransposeTranspose";
+  pattern.dispatchEvent(new window.Event("change"));
+  const previous = messages.at(-1).requestId;
+  const { matches } = await native.previewFusion("TransposeTranspose");
+  send({ type: "fusion-preview", requestId: previous, previewId: 1, matches });
+  const approved = document.querySelector("#fusion-matches input");
+  approved.checked = true;
+  approved.dispatchEvent(new window.Event("change"));
+  assert.equal(document.getElementById("apply-fusion").disabled, false);
+  pattern.value = "Identity";
+  pattern.dispatchEvent(new window.Event("change"));
+  const current = messages.at(-1).requestId;
+  assert.equal(messages.at(-1).pattern, "Identity");
+  assert.notEqual(current, previous);
+  assert.equal(document.querySelectorAll(".graph-node.selected").length, 0);
+  assert.equal(document.querySelectorAll("#fusion-matches input").length, 0);
+  assert.equal(document.getElementById("apply-fusion").disabled, true);
+  send({ type: "fusion-preview", requestId: previous, previewId: 1, matches });
+  assert.equal(document.querySelectorAll("#fusion-matches input").length, 0);
+  send({
+    type: "fusion-preview",
+    requestId: current,
+    previewId: 2,
+    matches: [],
+  });
+  assert.match(
+    document.getElementById("fusion-feedback").textContent,
+    /0 approved \/ 0 matches/,
+  );
+  document.getElementById("close-fusion").click();
+  assert.equal(
+    messages.some((message) => message.type === "apply-fusion"),
+    false,
+  );
+});
+
 test("selects only non-overlapping matches and sends the external-weight reuse choice", async (t) => {
   const { document, window, messages, load } = openViewer(t);
   const native = loadModel(
@@ -298,7 +378,9 @@ test("selects only non-overlapping matches and sends the external-weight reuse c
     requestId: messages.at(-1).requestId,
     patterns: ["TransposeTranspose"],
   });
-  document.getElementById("preview-fusion").click();
+  const pattern = document.getElementById("fusion-pattern");
+  pattern.value = "TransposeTranspose";
+  pattern.dispatchEvent(new window.Event("change"));
   const preview = await native.previewFusion("TransposeTranspose");
   preview.matches[1].nodes = [1, 2];
   send({
@@ -321,6 +403,13 @@ test("selects only non-overlapping matches and sends the external-weight reuse c
     [true, false],
   );
   document.getElementById("close-fusion").click();
+  assert.equal(document.querySelectorAll(".graph-node.selected").length, 0);
+  assert.equal(document.getElementById("fusion-panel").hidden, true);
+  assert.equal(messages.at(-1).type, "cancel-fusion");
+  assert.equal(
+    messages.some((message) => message.type === "apply-fusion"),
+    false,
+  );
   document.getElementById("save-model").click();
   const reuse = document.querySelector('input[value="reuse-plain"]');
   reuse.checked = true;

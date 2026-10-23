@@ -180,13 +180,16 @@ function setLoading(pending, message = "") {
 
 function fusionControls(busy, message = "") {
   fusionBusy = busy;
-  for (const input of byId("fusion-matches").querySelectorAll("input"))
-    input.disabled = busy;
+  for (const control of byId("fusion-matches").querySelectorAll(
+    "input, button",
+  ))
+    control.disabled = busy;
   byId("fusion-panel").setAttribute("aria-busy", String(busy));
   byId("close-fusion").disabled = busy;
   byId("fusion-pattern").disabled =
     busy || !byId("fusion-pattern").options.length;
-  byId("preview-fusion").disabled = byId("fusion-pattern").disabled;
+  byId("preview-fusion").disabled =
+    byId("fusion-pattern").disabled || !byId("fusion-pattern").value;
   byId("select-fusions").disabled = busy || !fusionPreview?.matches.length;
   byId("apply-fusion").disabled = busy || !fusionSelection().length;
   byId("fuse-pattern").disabled =
@@ -217,13 +220,38 @@ function updateFusionSelection() {
   byId("apply-fusion").disabled = fusionBusy || !anchors.size || overlap;
   byId("fusion-feedback").textContent = overlap
     ? "Selected matches overlap. Select disjoint matches."
-    : `${anchors.size} selected / ${fusionPreview?.matches.length ?? 0} matches.`;
+    : `${anchors.size} approved / ${fusionPreview?.matches.length ?? 0} matches.`;
 }
 
 function clearFusionPreview() {
+  if (fusionPreview) {
+    selected = new Set();
+    updateSelection();
+  }
   fusionPreview = undefined;
   byId("fusion-matches").replaceChildren();
   fusionControls(false);
+}
+
+function previewFusion() {
+  clearFusionPreview();
+  byId("fusion-status").textContent = "";
+  fusionControls(true, "Matching pattern and building replacements…");
+  requestAction("preview-fusion", "Preview fusion pattern", {
+    requestId: ++fusionRequest,
+    pattern: byId("fusion-pattern").value,
+  });
+}
+
+function focusFusionMatch(match) {
+  for (const item of byId("fusion-matches").children)
+    item.setAttribute(
+      "aria-current",
+      String(Number(item.dataset.anchor) === match.anchor),
+    );
+  selected = new Set(match.nodes.map((index) => `node-${index}`));
+  updateSelection(`node-${match.nodes[0]}`);
+  readableZoom();
 }
 
 function showFusionMatches(data) {
@@ -232,22 +260,34 @@ function showFusionMatches(data) {
   for (const match of data.matches) {
     const item = document.createElement("li");
     item.className = "fusion-match";
+    item.dataset.anchor = String(match.anchor);
     const label = document.createElement("label");
     const checkbox = document.createElement("input");
     checkbox.type = "checkbox";
     checkbox.value = String(match.anchor);
-    checkbox.addEventListener("change", updateFusionSelection);
+    checkbox.addEventListener("change", () => {
+      focusFusionMatch(match);
+      updateFusionSelection();
+    });
     const names = match.nodes.map((index) => {
       const node = fusionGraph.nodes[index];
       return `${node.name || node.id} (${node.opType})`;
     });
-    label.append(checkbox, document.createTextNode(names.join(" + ")));
+    label.append(
+      checkbox,
+      document.createTextNode(`Approve fusion: ${names.join(" + ")}`),
+    );
     const highlight = document.createElement("button");
     highlight.textContent = "Show nodes";
-    highlight.addEventListener("click", () => {
-      selected = new Set(match.nodes.map((index) => `node-${index}`));
-      updateSelection(`node-${match.nodes[0]}`);
-      readableZoom();
+    highlight.addEventListener("click", () => focusFusionMatch(match));
+    const reject = document.createElement("button");
+    reject.textContent = "Reject";
+    reject.addEventListener("click", () => {
+      checkbox.checked = false;
+      focusFusionMatch(match);
+      updateFusionSelection();
+      byId("fusion-feedback").textContent +=
+        " This fusion is not approved; the model is unchanged.";
     });
     const replacement = document.createElement("pre");
     replacement.textContent = match.replacement.length
@@ -258,11 +298,12 @@ function showFusionMatches(data) {
           )
           .join("\n")
       : "Remove matched nodes (no replacement operators).";
-    item.append(label, highlight, replacement);
+    item.append(label, highlight, reject, replacement);
     byId("fusion-matches").append(item);
   }
   fusionControls(false);
   updateFusionSelection();
+  if (data.matches.length) focusFusionMatch(data.matches[0]);
 }
 
 window.addEventListener("error", (event) => {
@@ -1802,6 +1843,7 @@ byId("save-model").addEventListener("click", () => {
 });
 byId("fuse-pattern").addEventListener("click", () => {
   byId("fusion-panel").hidden = false;
+  byId("fuse-pattern").setAttribute("aria-expanded", "true");
   clearFusionPreview();
   byId("fusion-pattern").replaceChildren();
   fusionControls(true, "Listing applicable pattern anchors…");
@@ -1812,23 +1854,12 @@ byId("fuse-pattern").addEventListener("click", () => {
 byId("close-fusion").addEventListener("click", () => {
   fusionRequest++;
   byId("fusion-panel").hidden = true;
+  byId("fuse-pattern").setAttribute("aria-expanded", "false");
   clearFusionPreview();
   vscode.postMessage({ type: "cancel-fusion" });
 });
-byId("fusion-pattern").addEventListener("change", () => {
-  fusionRequest++;
-  clearFusionPreview();
-  byId("fusion-feedback").textContent =
-    "Preview this pattern to see its matches.";
-});
-byId("preview-fusion").addEventListener("click", () => {
-  clearFusionPreview();
-  fusionControls(true, "Matching pattern and building replacements…");
-  requestAction("preview-fusion", "Preview fusion pattern", {
-    requestId: ++fusionRequest,
-    pattern: byId("fusion-pattern").value,
-  });
-});
+byId("fusion-pattern").addEventListener("change", previewFusion);
+byId("preview-fusion").addEventListener("click", previewFusion);
 byId("select-fusions").addEventListener("click", () => {
   const used = new Set();
   for (const input of byId("fusion-matches").querySelectorAll("input")) {
@@ -2005,6 +2036,7 @@ window.addEventListener("message", (event) => {
     fusionGraph = event.data.graph;
     fusionRequest++;
     byId("fusion-panel").hidden = true;
+    byId("fuse-pattern").setAttribute("aria-expanded", "false");
     clearFusionPreview();
     byId("save-status").textContent = "";
     byId("fusion-status").textContent = "";
@@ -2013,6 +2045,14 @@ window.addEventListener("message", (event) => {
   } else if (event.data?.type === "fusion-patterns") {
     if (event.data.requestId !== fusionRequest) return;
     byId("fusion-pattern").replaceChildren();
+    if (event.data.patterns.length) {
+      const placeholder = document.createElement("option");
+      placeholder.value = "";
+      placeholder.textContent = "Choose a pattern…";
+      placeholder.disabled = true;
+      placeholder.selected = true;
+      byId("fusion-pattern").append(placeholder);
+    }
     for (const pattern of [...event.data.patterns].sort()) {
       const option = document.createElement("option");
       option.value = pattern;

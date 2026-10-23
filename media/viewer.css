@@ -723,6 +723,10 @@ button:disabled {
   padding: 12px 0;
   border-bottom: 1px solid var(--vscode-panel-border, #d0d7de);
 }
+.fusion-match[aria-current="true"] {
+  border-left: 3px solid var(--mint);
+  padding-left: 12px;
+}
 .fusion-match label {
   display: inline-flex;
   gap: 8px;

@@ -46,8 +46,9 @@ development window and run `./start.sh` again.
 
 ## Documentation
 
-Use **Fuse pattern** on the main graph to preview affected nodes and replacement
-operators, then apply individual matches or all compatible matches. **Save**
+Use **Fuse**, beside **Save**, on the main graph. Choosing a pattern automatically
+previews and highlights its first match; approve or reject matches before
+choosing **Fuse approved**. **Save**
 writes a separate copy with embedded weights, fresh external files, or reused
 unchanged external weights. See the [fusion walkthrough](docs/features/fusion_patterns.rst).
 

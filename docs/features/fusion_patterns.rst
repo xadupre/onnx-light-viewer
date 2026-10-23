@@ -1,14 +1,15 @@
 Fusion patterns
 ===============
 
-**Fuse pattern** runs the native onnx-light pattern matcher on the main graph.
+**Fuse**, next to **Save**, runs the native onnx-light pattern matcher on the
+main graph.
 The list keeps patterns whose anchor operator occurs in that graph, plus patterns
 without an anchor restriction. Matching and rewriting do not execute the model.
 Return to the main graph's breadcrumb to enable this control.
 
 .. code-block:: text
 
-   Fuse pattern -> Choose pattern -> Preview matches
+   Fuse -> Choose pattern -> Automatic preview
                                         |
                          +--------------+--------------+
                          |                             |
@@ -16,16 +17,20 @@ Return to the main graph's breadcrumb to enable this control.
                          |                             |
                          +--------------+--------------+
                                         |
-                          Select matches -> Apply selected
+                      Approve or reject -> Fuse approved
                                         |
                                    Save a copy
 
 Each match lists the affected nodes and the replacement operators, tensor names
-and attributes. **Show nodes** selects the affected nodes in the graph.
-Check individual matches or choose **Select all compatible**: overlapping
-matches cannot be applied together, so this selects a disjoint subset and shows
-the selection count. Applying changes only the in-memory model; previewing alone
-changes nothing. Graph replacement or navigation invalidates the preview.
+and attributes. Choosing a pattern automatically previews its matches and
+highlights the first match in the main graph; nothing is approved automatically.
+**Show nodes** highlights another match for review.
+Check **Approve fusion** for a match or use **Reject** to exclude it.
+Choose **Approve all compatible** to approve a disjoint subset of matches.
+Overlapping matches cannot be applied together; the approval count is shown.
+**Fuse approved** applies only approved matches to the in-memory model.
+**Close** discards the preview and approvals without applying anything.
+Graph replacement or navigation invalidates the preview.
 
 For example, two inverse transposes can be replaced with an identity:
 
