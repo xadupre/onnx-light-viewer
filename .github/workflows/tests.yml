@@ -23,6 +23,11 @@ jobs:
         with:
           node-version: "22"
           cache: npm
+      - name: Install OpenMP
+        if: runner.os == 'macOS'
+        run: |
+          brew install libomp
+          echo "CMAKE_PREFIX_PATH=$(brew --prefix libomp)" >> "$GITHUB_ENV"
       - run: npm ci
       - run: npm run format:check
       - if: runner.os == 'Linux'

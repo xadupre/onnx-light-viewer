@@ -44,3 +44,23 @@ test("releases retain native packages for all supported platforms", () => {
   }
   assert.doesNotMatch(source, /sphinx|setup-python/);
 });
+
+for (const name of ["tests.yml", "release.yml"]) {
+  test(`${name} installs OpenMP and exposes its prefix to CMake on macOS`, () => {
+    const source = workflow(name);
+    assert.match(
+      source,
+      /if: runner\.os == 'macOS'\s+run: \|\s+brew install libomp\s+echo "CMAKE_PREFIX_PATH=\$\(brew --prefix libomp\)" >> "\$GITHUB_ENV"/,
+    );
+    assert.ok(source.indexOf("brew install libomp") < source.indexOf("npm ci"));
+  });
+}
+
+test("Windows checkouts preserve LF line endings without changing ONNX binaries", () => {
+  const source = readFileSync(
+    path.resolve(__dirname, "..", ".gitattributes"),
+    "utf8",
+  );
+  assert.match(source, /^\* text=auto eol=lf$/m);
+  assert.match(source, /^\*\.onnx binary$/m);
+});
