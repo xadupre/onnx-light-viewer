@@ -127,19 +127,6 @@ function encodedModel({ external, logical = true, structured = false } = {}) {
   ]);
 }
 
-function encodedGraphSnapshot(model) {
-  const graph = model.graph();
-  // Saving makes the equivalent DEFAULT data location explicit in layout tensors.
-  for (const node of graph.nodes)
-    for (const parameter of node.parameters)
-      if (parameter.encoding)
-        parameter.encoding = parameter.encoding.replaceAll(
-          " data_location: 0",
-          "",
-        );
-  return graph;
-}
-
 test("displays opaque and structured ports, resolving model-scoped struct types", async () => {
   const opaque = bytesField(
     7,
@@ -199,7 +186,7 @@ for (const bits of [2, 3]) {
       loadModel(readFileSync(file), file),
       await loadModelFile(file, file),
     ]) {
-      const graph = encodedGraphSnapshot(model);
+      const graph = model.graph();
       assert.equal(graph.initializerCount, 1);
       assert.deepEqual(graph.inputs, ["x"]);
       const [parameter] = graph.nodes[0].parameters;
@@ -219,7 +206,7 @@ for (const bits of [2, 3]) {
         true,
       );
       assert.deepEqual(
-        encodedGraphSnapshot(loadModel(await model.serialize(), "saved")),
+        loadModel(await model.serialize(), "saved").graph(),
         graph,
       );
       const split = await model.serializeFiles(1024, "weights");
@@ -230,16 +217,10 @@ for (const bits of [2, 3]) {
         path.join(directory, "split.onnx"),
         file,
       );
-      const restored = encodedGraphSnapshot(
-        loadModel(await reloaded.serialize(), "saved"),
+      assert.deepEqual(
+        loadModel(await reloaded.serialize(), "saved").graph(),
+        graph,
       );
-      assert.match(
-        restored.nodes[0].parameters[0].encoding,
-        new RegExp(`^STRUCT .*quantization.v1/q${bits}_k`),
-      );
-      // Split export can convert layout constants from typed fields to raw bytes.
-      restored.nodes[0].parameters[0].encoding = parameter.encoding;
-      assert.deepEqual(restored, graph);
       assert.deepEqual(
         model.graph(true).tensors.find((v) => v.name === "decoded"),
         {
@@ -292,8 +273,8 @@ test("lists and safely embeds external encoded payloads when saving", async (t) 
   const embedded = loadModel(bytes, "embedded");
   assert.deepEqual(embedded.externalDataLocations(), []);
   assert.deepEqual(
-    encodedGraphSnapshot(embedded),
-    encodedGraphSnapshot(loadModel(encodedModel(), "embedded")),
+    embedded.graph(),
+    loadModel(encodedModel(), "embedded").graph(),
   );
   await assert.rejects(
     loadModel(encodedModel({ external: "codes.bin" }), "buffer").serialize(),

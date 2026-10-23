@@ -1694,8 +1694,14 @@ std::optional<std::string> ReadPassword(const Napi::Value &value) {
 
 /** Includes sparse components, which the native generic tensor iterator omits. */
 std::vector<ol::TensorProto *>
-ModelSaveTensors(ol::ModelProto &model, std::vector<ol::EncodedValueProto *> *encoded = nullptr) {
+ModelSaveTensors(ol::ModelProto &model, std::vector<ol::EncodedValueProto *> *encoded = nullptr,
+                 std::set<const ol::TensorProto *> *layout_tensors = nullptr) {
   std::vector<ol::TensorProto *> tensors;
+  const auto layout_tensor = [&](ol::TensorProto &value) {
+    tensors.push_back(&value);
+    if (layout_tensors)
+      layout_tensors->insert(&value);
+  };
   const auto sparse = [&](ol::SparseTensorProto &value) {
     if (value.has_values())
       tensors.push_back(&value.ref_values());
@@ -1726,9 +1732,9 @@ ModelSaveTensors(ol::ModelProto &model, std::vector<ol::EncodedValueProto *> *en
           encoded->push_back(&item);
         if (item.has_affine()) {
           if (item.affine().has_scale())
-            tensors.push_back(&item.ref_affine().ref_scale());
+            layout_tensor(item.ref_affine().ref_scale());
           if (item.affine().has_zero_point())
-            tensors.push_back(&item.ref_affine().ref_zero_point());
+            layout_tensor(item.ref_affine().ref_zero_point());
         }
         if (item.has_struct_type())
           structure(item.ref_struct_type());
@@ -1776,7 +1782,7 @@ ModelSaveTensors(ol::ModelProto &model, std::vector<ol::EncodedValueProto *> *en
     if (value.has_structure())
       for (auto &field : value.ref_structure().ref_field()) {
         if (field.has_constant())
-          tensors.push_back(&field.ref_constant());
+          layout_tensor(field.ref_constant());
         if (field.has_type())
           type(field.ref_type());
       }
@@ -1872,9 +1878,10 @@ public:
     try {
       RestoreModelPayloads(snapshot_, *source_, file_path_);
       std::vector<ol::EncodedValueProto *> encoded;
-      const auto tensors = ModelSaveTensors(snapshot_, &encoded);
+      std::set<const ol::TensorProto *> layout_tensors;
+      const auto tensors = ModelSaveTensors(snapshot_, &encoded, &layout_tensors);
       for (auto *value : encoded)
-        if (value->data_location() == ol::TensorProto::EXTERNAL) {
+        if (value->has_data_location() && value->data_location() == ol::TensorProto::EXTERNAL) {
           if (file_path_.empty())
             throw std::runtime_error(
                 "External weights require a local source model path when saving.");
@@ -1882,7 +1889,8 @@ public:
         }
       auto external_weights = source_->external_weights;
       for (auto *tensor : tensors)
-        if (tensor->data_location() == ol::TensorProto::EXTERNAL) {
+        if ((!layout_tensors.contains(tensor) || tensor->has_data_location()) &&
+            tensor->data_location() == ol::TensorProto::EXTERNAL) {
           if (file_path_.empty())
             throw std::runtime_error(
                 "External weights require a local source model path when saving.");
@@ -1902,6 +1910,8 @@ public:
         for (const auto &weight : external_weights)
           weights_by_key[weight_key(weight.value)].push_back(&weight);
         for (auto *tensor : tensors) {
+          if (layout_tensors.contains(tensor))
+            continue;
           const auto candidates = weights_by_key.find(weight_key(*tensor));
           if (candidates == weights_by_key.end())
             continue;
@@ -1929,7 +1939,8 @@ public:
         const ol::SerializeOptions options;
         for (auto *value : tensors) {
           auto &tensor = *value;
-          if (reused.contains(value) || tensor.has_raw_data() ||
+          // Layout constants are part of versioned codec descriptors, not ordinary weights.
+          if (layout_tensors.contains(value) || reused.contains(value) || tensor.has_raw_data() ||
               tensor.data_type() == ol::TensorProto::STRING ||
               (tensor.float_data().empty() && tensor.double_data().empty() &&
                tensor.int32_data().empty() && tensor.int64_data().empty() &&
@@ -2067,8 +2078,10 @@ public:
   void Execute() override {
     try {
       RestoreModelPayloads(snapshot_, *source_, path_);
-      for (auto *tensor : ModelSaveTensors(snapshot_))
-        if (tensor->data_location() == ol::TensorProto::EXTERNAL) {
+      std::set<const ol::TensorProto *> layout_tensors;
+      for (auto *tensor : ModelSaveTensors(snapshot_, nullptr, &layout_tensors))
+        if ((!layout_tensors.contains(tensor) || tensor->has_data_location()) &&
+            tensor->data_location() == ol::TensorProto::EXTERNAL) {
           if (path_.empty())
             throw std::runtime_error("Fusion needs a local source path for external weights.");
           auto reference = tensor->SharedCopy();
