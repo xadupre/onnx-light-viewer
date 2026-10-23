@@ -42,6 +42,20 @@ checks JavaScript/C++ formatting on pull requests and pushes to ``main``.
 Its documentation job also builds Sphinx with warnings treated as errors.
 Results appear in the PR's **Checks** tab and the repository's **Actions** tab.
 
+Nightly coverage
+----------------
+
+The **Nightly coverage** workflow runs daily at 03:00 UTC on the default branch
+and can also be started manually from the **Actions** tab. Configure the
+repository's ``CODECOV_TOKEN`` Actions secret to authorize uploads to Codecov.
+
+It runs the Node tests with source-mapped TypeScript coverage and an instrumented
+C++ binding, then uploads separate ``typescript``, ``cpp`` and ``python`` reports.
+C++ coverage includes ``native/addon.cc``, not the prebuilt onnx-light libraries.
+Python coverage executes both model generators and the Sphinx build. Coverage
+tools and the matching onnx-light Python wheel are installed only in this workflow;
+normal extension builds and tests do not require them.
+
 Releases
 --------
 
