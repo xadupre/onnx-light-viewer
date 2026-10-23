@@ -226,6 +226,15 @@ function operatorSizes(nodes) {
     nodes.map((node) => {
       const typeWidth = widths.get(node.opType);
       const nameWidth = context.measureText(node.name).width;
+      const initializers = (node.parameters ?? []).map((parameter) => {
+        const description = `${parameter.name}: ${parameter.type} [${parameter.shape.join(", ")}]`;
+        const text = shortName(description, 38);
+        return {
+          description,
+          text,
+          textWidth: context.measureText(text).width,
+        };
+      });
       const subgraphs = (node.attributes ?? []).flatMap((attribute) =>
         (attribute.graphs ?? []).map((graph, index) => {
           const text = subgraphLabel(attribute, index);
@@ -241,6 +250,9 @@ function operatorSizes(nodes) {
         Math.max(
           160,
           Math.ceil(Math.max(typeWidth, nameWidth) + 32),
+          ...initializers.map((parameter) =>
+            Math.ceil(parameter.textWidth + 24),
+          ),
           ...subgraphs.map((graph) => Math.ceil(graph.textWidth + 48)),
         ),
       );
@@ -248,7 +260,8 @@ function operatorSizes(nodes) {
         node.id,
         {
           width,
-          height: 94 + subgraphs.length * 22,
+          height: 94 + initializers.length * 18 + subgraphs.length * 22,
+          initializers,
           subgraphs,
           typeFontSize: Math.min(19, (19 * (width - 32)) / (typeWidth || 1)),
           nameFontSize: Math.min(10, (10 * (width - 32)) / (nameWidth || 1)),
@@ -1114,8 +1127,21 @@ function render(graph, metadata) {
       );
       information.classList.add("node-tensor-info");
     }
+    size.initializers.forEach((parameter, index) => {
+      const text = label(
+        group,
+        position.x - size.width / 2 + 12,
+        top + 99 + index * 18,
+        parameter.text,
+        "tensor-info node-initializer",
+        "start",
+      );
+      text.style.fontSize = `${Math.min(9, (10 * (size.width - 24)) / (parameter.textWidth || 1))}px`;
+      text.setAttribute("aria-label", parameter.description);
+      text.append(element("title", {}, parameter.description));
+    });
     size.subgraphs.forEach((graph, index) => {
-      const y = top + 94 + index * 22;
+      const y = top + 94 + size.initializers.length * 18 + index * 22;
       const link = element("g", {
         class: "subgraph-link",
         role: "button",

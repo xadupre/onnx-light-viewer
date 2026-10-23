@@ -1012,6 +1012,103 @@ test("shows actual attributes, connected initializer parameters and versioned de
   }
 });
 
+test("shows every connected initializer's name, type and shape inside its operator rectangle", (t) => {
+  const { document, load } = openViewer(t);
+  for (const file of ["parameters", "initializers"]) {
+    const graph = decodeGraph(
+      readFileSync(require.resolve(`./models/${file}.onnx`)),
+      `${file}.onnx`,
+    );
+    load(graph);
+    for (const node of graph.nodes) {
+      const group = document.querySelector(`[data-id="${node.id}"]`);
+      const rows = group.querySelectorAll(".node-initializer");
+      assert.equal(rows.length, node.parameters.length);
+      const body = group.querySelector("rect");
+      const bottom =
+        Number(body.getAttribute("y")) + Number(body.getAttribute("height"));
+      for (const [index, row] of Array.from(rows).entries()) {
+        const parameter = node.parameters[index];
+        const description = `${parameter.name}: ${parameter.type} [${parameter.shape.join(", ")}]`;
+        assert.equal(row.getAttribute("aria-label"), description);
+        assert.equal(row.querySelector("title").textContent, description);
+        assert.equal(row.firstChild.textContent, description);
+        assert.ok(Number(row.getAttribute("y")) < bottom);
+      }
+    }
+  }
+  load(demoGraph);
+  assert.equal(document.querySelector(".node-initializer"), null);
+  assert.equal(
+    document.querySelector(".graph-node > rect").getAttribute("height"),
+    "94",
+  );
+});
+
+test("fits initializer previews safely above subgraph links and preserves layout and dragging", (t) => {
+  const { document, load, pointer } = openViewer(t);
+  const graph = chainGraph(2);
+  const description =
+    '<img src=x onerror="alert(1)">' + "long_weight".repeat(10);
+  graph.nodes[0].parameters = [{ name: description, type: "FLOAT", shape: [] }];
+  graph.nodes[0].attributes = [
+    {
+      name: "body",
+      graphs: [{ name: "child", path: [], nodeCount: 0 }],
+    },
+  ];
+  load(graph);
+  const group = document.querySelector('[data-id="node-0"]');
+  const body = group.querySelector("rect");
+  const row = group.querySelector(".node-initializer");
+  assert.equal(
+    row.querySelector("title").textContent,
+    `${description}: FLOAT []`,
+  );
+  assert.equal(
+    row.firstChild.textContent,
+    `${description}: FLOAT []`.slice(0, 37) + "…",
+  );
+  assert.equal(group.querySelector("img"), null);
+  const width = Number(body.getAttribute("width"));
+  assert.ok(width >= 160 && width <= 280);
+  assert.ok(
+    row.firstChild.textContent.length * parseFloat(row.style.fontSize) * 0.6 <=
+      width - 24,
+  );
+  assert.ok(
+    Number(row.getAttribute("y")) <
+      Number(group.querySelector(".subgraph-link rect").getAttribute("y")),
+  );
+  const top = Number(body.getAttribute("y"));
+  const bottom = top + Number(body.getAttribute("height"));
+  assert.ok(
+    Number(
+      document.querySelector('[data-id="node-1"] > rect').getAttribute("y"),
+    ) > bottom,
+  );
+  const edge = document.querySelector(".edge");
+  assert.ok(edge.getAttribute("d").endsWith(`,${top}`));
+  const before = nodePositions(document);
+  pointer(row, "pointerdown", before[0].x, Number(row.getAttribute("y")));
+  const svg = document.getElementById("graph");
+  pointer(
+    svg,
+    "pointermove",
+    before[0].x + 30,
+    Number(row.getAttribute("y")) + 20,
+  );
+  pointer(
+    svg,
+    "pointerup",
+    before[0].x + 30,
+    Number(row.getAttribute("y")) + 20,
+  );
+  assertMoved(before, nodePositions(document), [0], 30, 20);
+  const endpoint = Number(edge.getAttribute("d").split(",").at(-1));
+  assert.ok(Math.abs(endpoint - top - 20) < 1e-8);
+});
+
 test("lists more than eight initializer metadata entries, including external dense/sparse filenames, as literal text", (t) => {
   const { document, load } = openViewer(t);
   const graph = decodeGraph(
@@ -1737,6 +1834,7 @@ test("refreshes operator and port positions independently while retaining shapes
   const graph = document.getElementById("graph");
   const initialViewBox = graph.getAttribute("viewBox");
   const ports = nodePositions(document, ".port rect");
+  const initialNodeY = nodePositions(document).map(({ y }) => y);
   const nodes = document.querySelectorAll(".graph-node");
   nodes[1].dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter" }));
   for (const port of document.querySelectorAll(".port")) {
@@ -1766,7 +1864,7 @@ test("refreshes operator and port positions independently while retaining shapes
   assert.deepEqual(nodePositions(document, ".port rect"), ports);
   assert.deepEqual(
     nodePositions(document).map(({ y }) => y),
-    [180, 325, 470, 615],
+    initialNodeY,
   );
   assert.notDeepEqual(nodePositions(document), moved);
   assert.equal(graph.getAttribute("viewBox"), initialViewBox);
