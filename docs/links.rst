@@ -20,6 +20,8 @@ onnx-light projects
   used by this viewer to decode models locally.
 * `onnx-light-cpu <https://github.com/xadupre/onnx-light-cpu>`_: optimized CPU
   kernels for onnx-light.
+* `onnx-light-kernel-images <https://github.com/xadupre/onnx-light-kernel-images>`_:
+  ImageDecoder kernel extension for onnx-light.
 * `onnx-light-ort <https://github.com/xadupre/onnx-light-ort>`_: bidirectional
   interoperability between onnx-light and ONNX Runtime custom operators and
   execution providers.
