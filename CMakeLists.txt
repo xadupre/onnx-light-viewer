@@ -68,6 +68,16 @@ else()
   target_compile_options(onnx_light_viewer PRIVATE -Wall -Wextra -Werror)
 endif()
 
+add_library(test_locale SHARED test/locale-addon.cc ${CMAKE_JS_SRC})
+target_compile_features(test_locale PRIVATE cxx_std_20)
+target_include_directories(test_locale PRIVATE ${CMAKE_JS_INC})
+target_link_libraries(test_locale PRIVATE ${CMAKE_JS_LIB})
+set_target_properties(test_locale PROPERTIES PREFIX "" SUFFIX ".node")
+if(MSVC)
+  set_property(TARGET test_locale PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreadedDLL")
+  target_compile_options(test_locale PRIVATE /EHsc)
+endif()
+
 file(MAKE_DIRECTORY "${_output}")
 file(DOWNLOAD
   "https://raw.githubusercontent.com/xadupre/onnx-light/${ONNX_LIGHT_VERSION}/LICENSE"

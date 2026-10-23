@@ -28,6 +28,7 @@
 #include <filesystem>
 #include <iomanip>
 #include <limits>
+#include <locale>
 #include <map>
 #include <memory>
 #include <optional>
@@ -826,6 +827,7 @@ std::optional<std::string> TinyTensorValues(const ol::TensorProto &tensor) {
       tensor.string_data().empty())
     return std::nullopt;
   std::stringstream values;
+  values.imbue(std::locale::classic());
   values << std::setprecision(tensor.data_type() == ol::TensorProto::DOUBLE ||
                                       tensor.data_type() == ol::TensorProto::COMPLEX128
                                   ? std::numeric_limits<double>::max_digits10
