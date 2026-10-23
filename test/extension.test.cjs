@@ -172,8 +172,8 @@ async function openExtension(
   const loadFile = graph.loadModelFile;
   graph.loadModelFile = async (...args) => {
     const gate = fileLoadGates.shift();
-    const native = await loadFile(...args);
     if (gate) await gate;
+    const native = await loadFile(...args);
     nativeModels.push(native);
     return native;
   };
@@ -241,10 +241,10 @@ async function openExtension(
       client = callback;
     },
     nativeModels,
-    pauseNextFileLoad: () => {
+    pauseNextFileLoad: (error) => {
       let resume;
-      const gate = new Promise((resolve) => {
-        resume = resolve;
+      const gate = new Promise((resolve, reject) => {
+        resume = () => (error ? reject(error) : resolve());
       });
       fileLoadGates.push(gate);
       return resume;
@@ -437,6 +437,97 @@ test("discards analysis from the previous graph when navigation shares delayed r
     }
   }
 });
+
+for (const [type, buttonId, errorType, infoType] of [
+  ["refresh-shapes", "refresh-shapes", "shape-error", "shape-info"],
+  ["metadata", "refresh-metadata", "metadata-error", "metadata-info"],
+]) {
+  test(`settles ${type} when subsequent navigation shares a rejected reload`, async (t) => {
+    const extension = await openExtension("nested-if.onnx", undefined, true);
+    const native = extension.nativeModels.at(-1);
+    const graph = native.graph;
+    const root = graph(false);
+    const childPath = root.nodes[0].attributes.find(
+      ({ name }) => name === "then_branch",
+    ).graphs[0].path;
+    native.graph = (infer, ...args) => {
+      if (infer) throw new Error("temporary inference failure");
+      return graph(infer, ...args);
+    };
+    await extension.receive({ type: "refresh-shapes" });
+
+    const dom = new JSDOM(extension.webview.html, {
+      runScripts: "outside-only",
+    });
+    t.after(() => dom.window.close());
+    const { window } = dom;
+    const { document } = window;
+    const requests = [];
+    window.HTMLCanvasElement.prototype.getContext = () => ({
+      font: "",
+      measureText: (text) => ({ width: text.length * 8 }),
+    });
+    document.getElementById("canvas").getBoundingClientRect = () =>
+      new window.DOMRect(0, 0, 1060, 350);
+    window.acquireVsCodeApi = () => ({
+      postMessage: (message) => requests.push(extension.receive(message)),
+    });
+    extension.connect((data) =>
+      window.dispatchEvent(new window.MessageEvent("message", { data })),
+    );
+    for (const name of ["vendor/markdown-it.min.js", "viewer.js"]) {
+      window.eval(
+        readFileSync(path.resolve(__dirname, "../media", name), "utf8"),
+      );
+    }
+    const flush = async () => {
+      while (requests.length) await Promise.all(requests.splice(0));
+    };
+    await flush();
+
+    const start = extension.messages.length;
+    const reloads = extension.logs.filter((line) =>
+      line.includes("[RUNNING] Reload native model:"),
+    ).length;
+    const resume = extension.pauseNextFileLoad(new Error("reload failed"));
+    const button = document.getElementById(buttonId);
+    button.click();
+    assert.equal(button.disabled, true);
+    assert.equal(button.getAttribute("aria-busy"), "true");
+    const navigation = extension.receive({
+      type: "navigate",
+      path: childPath,
+    });
+    assert.equal(extension.messages.length, start);
+    resume();
+    await Promise.all([flush(), navigation]);
+
+    const responses = extension.messages.slice(start);
+    assert.equal(responses.filter(({ type }) => type === errorType).length, 1);
+    assert.equal(
+      responses.filter(({ type }) => type === "navigation-error").length,
+      1,
+    );
+    assert.ok(responses.every(({ error }) => error === "reload failed"));
+    assert.equal(
+      extension.logs.filter((line) =>
+        line.includes("[RUNNING] Reload native model:"),
+      ).length,
+      reloads + 1,
+    );
+    assert.equal(button.disabled, false);
+    assert.equal(button.getAttribute("aria-busy"), "false");
+    await extension.receive({ type: "ready" });
+    assert.deepEqual(extension.messages.at(-1).graph, root);
+
+    button.click();
+    assert.equal(button.disabled, true);
+    await flush();
+    assert.equal(extension.messages.at(-1).type, infoType);
+    assert.equal(button.disabled, false);
+    assert.equal(button.getAttribute("aria-busy"), "false");
+  });
+}
 
 test("opens a cached Hugging Face model and preserves the display on invalid input or cancellation", async (t) => {
   const storage = await mkdtemp(path.join(tmpdir(), "onnx-viewer-hf-host-"));
