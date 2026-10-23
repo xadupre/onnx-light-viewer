@@ -705,7 +705,8 @@ button:disabled {
   fill: #e2b77a;
   font-size: 9px;
 }
-#operator-doc {
+#operator-doc,
+#save-options {
   width: min(900px, 95vw);
   max-height: 90vh;
   overflow: auto;
@@ -714,8 +715,58 @@ button:disabled {
   border: 1px solid var(--border);
   border-radius: 8px;
 }
-#operator-doc::backdrop {
+#operator-doc::backdrop,
+#save-options::backdrop {
   background: #0009;
+}
+.save-grid {
+  width: 100%;
+  border-spacing: 8px;
+  table-layout: fixed;
+}
+.save-grid caption {
+  text-align: left;
+  margin-bottom: 12px;
+}
+.save-grid th {
+  text-align: left;
+}
+.save-grid td:has(label) {
+  vertical-align: top;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px;
+}
+.save-grid td:has(input:checked) {
+  border-color: var(--vscode-focusBorder, #3895d3);
+  background: var(--vscode-list-activeSelectionBackground, #264f78);
+}
+.save-grid label {
+  display: block;
+  cursor: pointer;
+}
+.save-grid .unavailable {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+#save-options p {
+  line-height: 1.5;
+}
+#save-options footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 20px;
+}
+#external-size {
+  margin-top: 20px;
+}
+#weight-file-size {
+  margin-left: 12px;
+  width: 120px;
+}
+#save-options-error {
+  color: var(--vscode-errorForeground, #f88);
 }
 #operator-doc h2 {
   font-size: 20px;

@@ -4,12 +4,14 @@
  */
 import * as vscode from "vscode";
 import { randomBytes } from "node:crypto";
+import { open, stat } from "node:fs/promises";
 import { join, posix } from "node:path";
 import {
   listBackendTests,
   loadBackendTest,
   loadModel,
   loadModelFile,
+  isEncryptedModel,
   onnxLightVersion,
   Graph,
   NativeModel,
@@ -39,6 +41,8 @@ interface LoadedModel {
   reload: () => NativeModel | Promise<NativeModel>;
   /** Cached for the current graph; cleared on navigation, not shape refresh. */
   metadata?: GraphMetadata;
+  source?: { uri: vscode.Uri };
+  fileName?: string;
 }
 
 /**
@@ -155,20 +159,118 @@ async function readGraph(
   uri: vscode.Uri,
   log: ActionLog,
   fileName = posix.basename(uri.path),
-): Promise<LoadedModel> {
-  return log.run(`Load model: ${uri.path}`, async () => {
-    let reload: LoadedModel["reload"];
+): Promise<LoadedModel | undefined> {
+  return log.run(`Load model: ${uri.path}`, async (id) => {
+    const source = { uri };
+    let bytes: Uint8Array | undefined;
+    let header: Uint8Array;
     if (uri.scheme === "file") {
-      reload = () => loadModelFile(uri.fsPath, fileName);
+      const file = await open(uri.fsPath, "r");
+      try {
+        const buffer = Buffer.alloc(8);
+        const { bytesRead } = await file.read(buffer, 0, 8, 0);
+        header = buffer.subarray(0, bytesRead);
+      } finally {
+        await file.close();
+      }
     } else {
-      const bytes = await vscode.workspace.fs.readFile(uri);
-      reload = () => loadModel(bytes, fileName);
+      bytes = await vscode.workspace.fs.readFile(uri);
+      header = bytes;
     }
+    const encrypted = isEncryptedModel(header);
+    const password = encrypted
+      ? await vscode.window.showInputBox({
+          title: `Decrypt ONNX model: ${fileName}`,
+          prompt:
+            "Enter the model password. It stays in the extension host's memory for recovery.",
+          password: true,
+          ignoreFocusOut: true,
+          validateInput: (value) =>
+            value.length ? undefined : "A password is required.",
+        })
+      : undefined;
+    if (encrypted && password === undefined) {
+      log.record("CANCELLED", `Load model: ${uri.path}`, id);
+      return;
+    }
+    const retainedBytes = bytes;
+    const reload = retainedBytes
+      ? () => loadModel(retainedBytes, fileName, password)
+      : () => loadModelFile(source.uri.fsPath, fileName, password);
     const native = await reload();
-    return { graph: native.graph(), native, reload };
+    return { graph: native.graph(), native, reload, source, fileName };
   });
 }
 
+async function assertSaveDestination(
+  sources: readonly vscode.Uri[],
+  destination: vscode.Uri,
+): Promise<void> {
+  const reject = () => {
+    throw new Error(
+      "Choose a different destination to preserve the source model and its external weights.",
+    );
+  };
+  for (const source of sources) {
+    if (source.scheme !== destination.scheme) continue;
+    const samePath =
+      process.platform === "win32"
+        ? source.path.toLowerCase() === destination.path.toLowerCase()
+        : source.path === destination.path;
+    if (samePath) reject();
+  }
+  if (destination.scheme !== "file") return;
+  const existingFile = async (uri: vscode.Uri) => {
+    try {
+      return await stat(uri.fsPath, { bigint: true });
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "ENOENT")
+        return undefined;
+      throw error;
+    }
+  };
+  const target = await existingFile(destination);
+  if (!target) return;
+  for (const source of sources) {
+    if (source.scheme !== "file") continue;
+    const original = await existingFile(source);
+    if (original && original.dev === target.dev && original.ino === target.ino)
+      reject();
+  }
+}
+
+/** Publishes a complete file only while the originating model is still current. */
+async function writeModelFile(
+  uri: vscode.Uri,
+  bytes: Uint8Array,
+  overwrite: boolean,
+  canPublish: () => boolean | Promise<boolean>,
+): Promise<boolean> {
+  const temporary = vscode.Uri.joinPath(
+    uri,
+    "..",
+    `.${posix.basename(uri.path)}.${randomBytes(12).toString("hex")}.tmp`,
+  );
+  let renamed = false;
+  try {
+    await vscode.workspace.fs.writeFile(temporary, bytes);
+    if (!(await canPublish())) return false;
+    await vscode.workspace.fs.rename(temporary, uri, { overwrite });
+    renamed = true;
+    return true;
+  } finally {
+    if (!renamed)
+      try {
+        await vscode.workspace.fs.delete(temporary);
+      } catch (error) {
+        if (!(
+          error instanceof vscode.FileSystemError &&
+          error.code === "FileNotFound"
+        ))
+          throw error;
+      }
+  }
+}
 /** Checks message structure; the native layer also checks graph index bounds. */
 function isGraphPath(path: unknown): path is GraphPath {
   return (
@@ -312,6 +414,9 @@ async function configurePanel(
         path?: unknown;
         actionId?: string;
         entry?: unknown;
+        storage?: unknown;
+        encrypted?: unknown;
+        maxExternalFileSize?: unknown;
       } | null,
     ) => {
       if (!active) return;
@@ -362,15 +467,20 @@ async function configurePanel(
               if (location.id === "local") {
                 const selection = await vscode.window.showOpenDialog({
                   canSelectMany: false,
-                  filters: { "ONNX models": ["onnx"] },
+                  filters: { "ONNX models": ["onnx", "enc"] },
                   openLabel: "Open ONNX graph",
                 });
                 if (!selection?.[0]) {
                   log.record("CANCELLED", "Open ONNX model", id);
                   return;
                 }
+                const loadedModel = await readGraph(selection[0], log);
+                if (!loadedModel) {
+                  log.record("CANCELLED", "Open ONNX model", id);
+                  return;
+                }
                 return {
-                  model: await readGraph(selection[0], log),
+                  model: loadedModel,
                   name: posix.basename(selection[0].path),
                 };
               }
@@ -441,12 +551,27 @@ async function configurePanel(
                     const result = await cachedHuggingFaceModel(
                       source,
                       join(context.globalStorageUri.fsPath, "huggingface"),
-                      (path) =>
-                        readGraph(vscode.Uri.file(path), log, source.fileName),
+                      async (path) => {
+                        const loaded = await readGraph(
+                          vscode.Uri.file(path),
+                          log,
+                          source.fileName,
+                        );
+                        if (!loaded) {
+                          controller.abort();
+                          throw new DOMException(
+                            "Model loading was cancelled.",
+                            "AbortError",
+                          );
+                        }
+                        return loaded;
+                      },
                       controller.signal,
                     );
-                    result.value.reload = () =>
-                      loadModelFile(result.filePath, source.fileName);
+                    if (result.value.source)
+                      result.value.source.uri = vscode.Uri.file(
+                        result.filePath,
+                      );
                     log.record(
                       "SUCCEEDED",
                       `${result.cached ? "Cache hit" : "Downloaded and cached"}: ${source.url}`,
@@ -510,6 +635,160 @@ async function configurePanel(
         model = loaded.model;
         panel.title = `ONNX: ${loaded.name}`;
         await sendGraph();
+      } else if (message?.type === "save") {
+        const requestedModel = model;
+        try {
+          await log.run(
+            "Save ONNX model",
+            async (id) => {
+              const current = requireModel();
+              if (
+                (message.storage !== undefined &&
+                  message.storage !== "embedded" &&
+                  message.storage !== "external") ||
+                (message.encrypted !== undefined &&
+                  typeof message.encrypted !== "boolean")
+              )
+                throw new Error("Invalid model save format.");
+              const format = {
+                external: message.storage === "external",
+                encrypted: message.encrypted === true,
+              };
+              if (format.external && format.encrypted)
+                throw new Error(
+                  "Encrypted external weights await onnx-light support: https://github.com/xadupre/onnx-light/issues/5533",
+                );
+              const maxExternalFileSize = message.maxExternalFileSize ?? 0;
+              if (
+                typeof maxExternalFileSize !== "number" ||
+                !Number.isSafeInteger(maxExternalFileSize) ||
+                (format.external && maxExternalFileSize <= 0)
+              )
+                throw new Error(
+                  "Choose a positive, safe integer maximum external weight file size.",
+                );
+              const cancelled = () => {
+                log.record("CANCELLED", "Save ONNX model", id);
+              };
+              let password: string | undefined;
+              if (format.encrypted) {
+                password = await vscode.window.showInputBox({
+                  title: "Encrypt ONNX model",
+                  prompt: "Choose a password for the saved copy.",
+                  password: true,
+                  ignoreFocusOut: true,
+                  validateInput: (value) =>
+                    value.length ? undefined : "A password is required.",
+                });
+                if (password === undefined) return cancelled();
+                const confirmation = await vscode.window.showInputBox({
+                  title: "Confirm ONNX model password",
+                  prompt: "Enter the same password again.",
+                  password: true,
+                  ignoreFocusOut: true,
+                  validateInput: (value) =>
+                    value === password ? undefined : "Passwords do not match.",
+                });
+                if (confirmation === undefined) return cancelled();
+                if (confirmation !== password)
+                  throw new Error("Passwords do not match.");
+              }
+              const fileName = `${(current.fileName ?? "model.onnx").replace(/\.onnx(?:\.enc)?$/i, "")}-copy.onnx${format.encrypted ? ".enc" : ""}`;
+              const destination = await vscode.window.showSaveDialog({
+                title: "Save ONNX model copy",
+                saveLabel: "Save model copy",
+                filters: format.encrypted
+                  ? { "Encrypted ONNX models": ["enc"] }
+                  : { "ONNX models": ["onnx"] },
+                ...(current.source
+                  ? {
+                      defaultUri: vscode.Uri.joinPath(
+                        current.source.uri,
+                        "..",
+                        fileName,
+                      ),
+                    }
+                  : {}),
+              });
+              if (!destination || !active || model !== current)
+                return cancelled();
+              const source = current.source?.uri;
+              await assertSaveDestination(source ? [source] : [], destination);
+              const isCurrent = () => active && model === current;
+              const native = await nativeModel(current, log, () => {
+                void sendStatus();
+              });
+              const sourcePath =
+                current.source?.uri.scheme === "file"
+                  ? current.source.uri.fsPath
+                  : undefined;
+              const serialized = format.external
+                ? await native.serializeFiles(
+                    maxExternalFileSize,
+                    `${posix.basename(destination.path)}.${randomBytes(12).toString("hex")}.data`,
+                    sourcePath,
+                  )
+                : {
+                    model: await native.serialize(password, sourcePath),
+                    weights: [],
+                  };
+              if (!active || model !== current) return cancelled();
+              const sources = source
+                ? [
+                    source,
+                    ...native
+                      .externalDataLocations()
+                      .map((location) =>
+                        vscode.Uri.joinPath(source, "..", location),
+                      ),
+                  ]
+                : [];
+              await assertSaveDestination(sources, destination);
+              if (!isCurrent()) return cancelled();
+              const writtenWeights: vscode.Uri[] = [];
+              let committed = false;
+              try {
+                for (const file of serialized.weights) {
+                  const uri = vscode.Uri.joinPath(destination, "..", file.name);
+                  if (
+                    !(await writeModelFile(uri, file.bytes, false, isCurrent))
+                  )
+                    return cancelled();
+                  writtenWeights.push(uri);
+                  if (!active || model !== current) return cancelled();
+                }
+                const published = await writeModelFile(
+                  destination,
+                  serialized.model,
+                  true,
+                  async () => {
+                    if (!isCurrent()) return false;
+                    await assertSaveDestination(sources, destination);
+                    return isCurrent();
+                  },
+                );
+                if (!published) return cancelled();
+                committed = true;
+              } finally {
+                if (!committed)
+                  for (const uri of writtenWeights)
+                    await vscode.workspace.fs.delete(uri);
+              }
+              await postMessage({
+                type: "save-info",
+                name: posix.basename(destination.path),
+              });
+            },
+            message.actionId,
+          );
+        } catch (error) {
+          if (!active || model !== requestedModel) return;
+          const detail = error instanceof Error ? error.message : String(error);
+          await postMessage({ type: "save-error", error: detail });
+          await vscode.window.showErrorMessage(
+            `Could not save ONNX model: ${detail}`,
+          );
+        }
       } else if (message?.type === "navigate") {
         const requestedModel = model;
         const requestedNavigation = ++navigationRequest;
@@ -647,6 +926,7 @@ async function configurePanel(
   );
   const dispose = () => {
     active = false;
+    model = undefined;
     messages.dispose();
     viewState.dispose();
     disposal.dispose();
@@ -667,10 +947,12 @@ async function configurePanel(
   );
   if (uri) {
     try {
-      model = await readGraph(uri, log);
+      const loaded = await readGraph(uri, log);
       if (!active) return;
+      model = loaded;
       initialLoading = false;
-      if (ready) await sendGraph();
+      if (ready && model) await sendGraph();
+      else if (ready) await postMessage({ type: "load-state", pending: false });
       else void sendStatus();
     } catch (error) {
       if (!active) return;

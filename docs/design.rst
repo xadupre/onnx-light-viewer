@@ -3,8 +3,9 @@ Application design
 
 Three layers: **VS Code manages sources and panel state**, **C++ retains and
 analyzes the model**, and **the webview draws lightweight snapshots**.
-There is no Python runtime, execution engine or model-writing service on the
-default branch. See :doc:`features` for implemented/in-progress capabilities.
+There is no Python runtime or model-execution service on the default branch.
+Saving explicitly writes a new model copy; it does not modify the source file.
+See :doc:`features` for implemented/in-progress capabilities.
 
 Who owns what?
 --------------
@@ -49,6 +50,9 @@ The protocol uses ``postMessage`` in both directions:
    * - ``open`` / ``navigate``
      - ``graph``
      - Replace the displayed graph.
+   * - ``save``
+     - ``save-info`` or ``save-error``
+     - Write a plain or encrypted model copy, optionally with external weights.
    * - ``refresh-shapes``
      - ``shape-info``
      - Patch tensor descriptions.
@@ -86,7 +90,8 @@ Contracts worth keeping
 
 * ``NativeModel.graph(inferShapes?, path?)`` projects one graph; requesting
   inference updates the enclosing model first. ``metadata(path?)`` returns a
-  separate, read-only analysis snapshot.
+  separate, read-only analysis snapshot. ``serialize`` and ``serializeFiles``
+  save the retained model as a new plain, encrypted or external-weight copy.
 * ``GraphPath`` uses validated indices, not potentially duplicate names.
   Functions use their own imports and formal names, not the caller's weights;
   nested graph attributes can capture enclosing values.
