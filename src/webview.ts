@@ -6,7 +6,7 @@
  * @param resource Resolves bundled filenames (viewer.css, viewer.js, logo.svg)
  * to webview URI strings within the panel's allowed media resource root.
  * @param cspSource The panel webview's cspSource, allowing local images/styles.
- * @param nonce Fresh per-panel nonce authorizing only the bundled viewer script.
+ * @param nonce Fresh per-panel nonce authorizing only the bundled scripts.
  * @param onnxLightVersion C++ release embedded in the compiled native addon.
  * @param initialTab Initially selected viewer tab.
  * @returns Complete HTML document; graph and log data require the ready handshake.
@@ -194,6 +194,7 @@ export function webviewHtml(
     <header class="inspector-heading"><h2 id="doc-title"></h2><button id="close-doc" autofocus>Close</button></header>
     <p id="doc-version"></p><div id="doc-body"></div>
   </dialog>
+  <script nonce="${nonce}" src="${resource("vendor/markdown-it.min.js")}"></script>
   <script nonce="${nonce}" src="${resource("viewer.js")}"></script>
 </body>
 </html>`;

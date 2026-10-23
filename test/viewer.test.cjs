@@ -79,7 +79,10 @@ function openViewer(t, initialTab = "model") {
     viewport = { width, height };
     dom.window.dispatchEvent(new dom.window.Event("resize"));
   };
-  dom.window.eval(readFileSync(require.resolve("../media/viewer.js"), "utf8"));
+  for (const script of dom.window.document.querySelectorAll("script[src]")) {
+    const name = new URL(script.src).pathname.slice(1);
+    dom.window.eval(readFileSync(require.resolve(`../media/${name}`), "utf8"));
+  }
   const load = (graph) => {
     dom.window.dispatchEvent(
       new dom.window.MessageEvent("message", {
@@ -1510,10 +1513,8 @@ test("opens native LightOpSchema docs and clears stale docs and parameters on se
   assert.equal(docButton.disabled, false);
   docButton.click();
   assert.equal(dialog.open, true);
-  assert.equal(
-    document.getElementById("doc-body").textContent,
-    demoGraph.nodes[0].schema.doc,
-  );
+  assert.match(document.getElementById("doc-body").textContent, /Relu/);
+  assert.ok(document.querySelector("#doc-body p"));
   assert.match(
     document.getElementById("doc-version").textContent,
     /model opset 13/,
@@ -1554,7 +1555,83 @@ test("opens native LightOpSchema docs and clears stale docs and parameters on se
   assert.equal(document.getElementById("node-initializers").children.length, 0);
 });
 
-test("renders attribute names, values and schema documentation as text, not HTML", (t) => {
+test("renders Markdown documentation with headings, lists, code, tables and links", (t) => {
+  const { document, load } = openViewer(t);
+  const graph = structuredClone(demoGraph);
+  graph.nodes[0].schema.doc = [
+    "# Operator",
+    "",
+    "**Bold** and *italic* with `axis`.",
+    "",
+    "- input",
+    "- output",
+    "",
+    "1. First",
+    "2. Next",
+    "",
+    "```python",
+    "x = '<tag>'",
+    "```",
+    "",
+    "| Input | Type |",
+    "| --- | --- |",
+    "| x | FLOAT |",
+    "",
+    "> Note",
+    "",
+    "[ONNX](https://onnx.ai/)",
+  ].join("\n");
+  load(graph);
+  document.getElementById("show-doc").click();
+  const body = document.getElementById("doc-body");
+  assert.equal(body.querySelector("h1").textContent, "Operator");
+  assert.equal(body.querySelector("strong").textContent, "Bold");
+  assert.equal(body.querySelector("em").textContent, "italic");
+  assert.equal(body.querySelector("p code").textContent, "axis");
+  assert.equal(body.querySelectorAll("ul li").length, 2);
+  assert.equal(body.querySelectorAll("ol li").length, 2);
+  assert.equal(
+    body.querySelector("pre code.language-python").textContent,
+    "x = '<tag>'\n",
+  );
+  assert.equal(body.querySelector("tag"), null);
+  assert.deepEqual(
+    [...body.querySelectorAll("th")].map((cell) => cell.textContent),
+    ["Input", "Type"],
+  );
+  assert.equal(body.querySelector("blockquote").textContent.trim(), "Note");
+  assert.equal(body.querySelector("a").href, "https://onnx.ai/");
+});
+
+test("does not activate HTML, unsafe Markdown links or remote images in documentation", (t) => {
+  const { document, load, window } = openViewer(t);
+  const graph = structuredClone(demoGraph);
+  graph.nodes[0].schema.doc = [
+    "<script>window.docExecuted = true</script>",
+    '<img src=x onerror="window.docExecuted = true">',
+    "",
+    "[run](javascript:alert(1))",
+    "[encoded](jav&#x61;script:alert(1))",
+    "[mixed](JaVaScRiPt:alert(1))",
+    "[command](command:workbench.action.openSettings)",
+    "[file](file:///etc/passwd)",
+    "[data](data:text/html;base64,PHNjcmlwdD4=)",
+    "[relative](../model.onnx)",
+    "[scheme-relative](//tracking.invalid/pixel)",
+    "![image label](https://tracking.invalid/pixel)",
+    '![<img src=x onerror="alert(1)">](https://tracking.invalid/pixel)',
+  ].join("\n");
+  load(graph);
+  document.getElementById("show-doc").click();
+  const body = document.getElementById("doc-body");
+  assert.equal(body.querySelector("a, img, script"), null);
+  assert.match(body.textContent, /<script>window.docExecuted = true<\/script>/);
+  assert.match(body.textContent, /image label/);
+  assert.match(body.textContent, /<img src=x onerror="alert\(1\)">/);
+  assert.equal(window.docExecuted, undefined);
+});
+
+test("renders attribute names, values and raw HTML in schema documentation as text", (t) => {
   const { document, load } = openViewer(t);
   const text = '<img src=x onerror="alert(1)">';
   load({

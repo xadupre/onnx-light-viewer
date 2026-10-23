@@ -72,7 +72,8 @@
   "scripts": {
     "vscode:prepublish": "npm run compile",
     "build:native": "node scripts/build-native.cjs",
-    "compile": "npm run build:native && tsc -p .",
+    "build:webview": "node scripts/build-webview.cjs",
+    "compile": "npm run build:webview && npm run build:native && tsc -p .",
     "watch": "tsc -w -p .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
@@ -83,6 +84,7 @@
     "@types/vscode": "^1.96.0",
     "cmake-js": "^8.0.0",
     "jsdom": "^30.1.3",
+    "markdown-it": "^15.0.3",
     "node-addon-api": "^8.9.2",
     "prettier": "^3.6.0",
     "typescript": "^7.0.2"

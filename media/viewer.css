@@ -684,8 +684,45 @@ button:disabled {
 }
 #doc-body {
   margin-top: 16px;
-  white-space: pre-wrap;
+  line-height: 1.5;
   overflow-wrap: anywhere;
+}
+#doc-body pre {
+  padding: 12px;
+  overflow-x: auto;
+  white-space: pre;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+#doc-body code {
+  font-family: var(--vscode-editor-font-family, monospace);
+}
+#doc-body :not(pre) > code {
+  padding: 1px 4px;
+  background: var(--bg);
+  border-radius: 3px;
+}
+#doc-body table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+}
+#doc-body th,
+#doc-body td {
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  text-align: left;
+}
+#doc-body blockquote {
+  margin-left: 0;
+  padding-left: 12px;
+  color: var(--muted);
+  border-left: 3px solid var(--border);
+}
+#doc-body a {
+  color: var(--mint);
 }
 @media (max-width: 760px) {
   .graph-body {

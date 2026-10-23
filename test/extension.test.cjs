@@ -571,9 +571,11 @@ test("keeps operation logs quiet and exposes real native exception recovery in S
   extension.connect((data) =>
     window.dispatchEvent(new window.MessageEvent("message", { data })),
   );
-  window.eval(
-    readFileSync(path.resolve(__dirname, "../media/viewer.js"), "utf8"),
-  );
+  for (const name of ["vendor/markdown-it.min.js", "viewer.js"]) {
+    window.eval(
+      readFileSync(path.resolve(__dirname, "../media", name), "utf8"),
+    );
+  }
   const flush = async () => {
     while (requests.length) await Promise.all(requests.splice(0));
   };
