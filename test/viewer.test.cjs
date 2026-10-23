@@ -1165,7 +1165,10 @@ test("shows actual attributes, connected initializer parameters and versioned de
     document.getElementById("node-initializers").textContent,
     /kernel \(FLOAT\)[\s\S]*Shape: \[1, 1, 3, 3\][\s\S]*Storage: embedded/,
   );
-  assert.equal(document.querySelector("#node-initializers pre"), null);
+  assert.equal(
+    document.querySelector("#node-initializers pre").textContent,
+    `Values: [${Array(9).fill("0.5").join(", ")}]`,
+  );
   document
     .querySelector('[data-id="node-1"]')
     .dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter" }));
@@ -1209,10 +1212,15 @@ test("shows every connected initializer's name, type and shape inside its operat
         Number(body.getAttribute("y")) + Number(body.getAttribute("height"));
       for (const [index, row] of Array.from(rows).entries()) {
         const parameter = node.parameters[index];
-        const description = `${parameter.name}: ${parameter.type} [${parameter.shape.join(", ")}]`;
+        const description = `${parameter.name}: ${parameter.type} [${parameter.shape.join(", ")}]${parameter.value === undefined ? "" : ` = ${parameter.value}`}`;
         assert.equal(row.getAttribute("aria-label"), description);
         assert.equal(row.querySelector("title").textContent, description);
-        assert.equal(row.firstChild.textContent, description);
+        assert.equal(
+          row.firstChild.textContent,
+          description.length > 38
+            ? `${description.slice(0, 37)}…`
+            : description,
+        );
         assert.ok(Number(row.getAttribute("y")) < bottom);
       }
     }
@@ -1223,6 +1231,36 @@ test("shows every connected initializer's name, type and shape inside its operat
     document.querySelector(".graph-node > rect").getAttribute("height"),
     "94",
   );
+});
+
+test("shows tiny initializer values as safe text and omits large and external payloads", (t) => {
+  const { document, load } = openViewer(t);
+  load(
+    decodeGraph(
+      readFileSync(require.resolve("./models/tiny-initializers.onnx")),
+      "tiny-initializers.onnx",
+    ),
+  );
+  const items = Array.from(document.querySelectorAll("#node-initializers li"));
+  const item = (name) =>
+    items.find((entry) =>
+      entry.querySelector("strong").textContent.startsWith(`${name} (`),
+    );
+  assert.equal(
+    item("raw_int64").querySelector("pre").textContent,
+    "Values: [1152921504606846977, -1152921504606846979]",
+  );
+  assert.equal(
+    item("strings").querySelector("pre").textContent,
+    'Values: ["<img src=x onerror=alert(1)>", "hello"]',
+  );
+  assert.equal(item("strings").querySelector("img"), null);
+  assert.equal(item("sixteen").querySelector("pre"), null);
+  assert.equal(item("external").querySelector("pre"), null);
+  const row = Array.from(document.querySelectorAll(".node-initializer")).find(
+    (entry) => entry.getAttribute("aria-label").startsWith("raw_int64:"),
+  );
+  assert.match(row.querySelector("title").textContent, /1152921504606846977/);
 });
 
 test("fits initializer previews safely above subgraph links and preserves layout and dragging", (t) => {
@@ -1315,7 +1353,9 @@ test("lists more than eight initializer metadata entries, including external den
     /Indices: external file: weights\/indices.bin/,
   );
   assert.equal(list.querySelector("img"), null);
-  assert.equal(list.querySelector("pre"), null);
+  assert.equal(list.querySelectorAll("pre").length, 10);
+  assert.equal(list.children[10].querySelector("pre"), null);
+  assert.equal(list.children[11].querySelector("pre"), null);
 });
 
 test("opens native LightOpSchema docs and clears stale docs and parameters on selection or model changes", (t) => {

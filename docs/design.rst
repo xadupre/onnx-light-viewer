@@ -167,8 +167,9 @@ Parsing and ownership
 ``ReadModel`` parses bytes with onnx-light and checks that a model graph and
 valid IR version exist. ``loadModelFile`` uses a buffered descriptor stream;
 Windows paths are converted from UTF-8 before opening. Large inline raw and typed
-tensor payloads are skipped, while small constants (smaller than onnx-light's
-64-byte threshold) remain available for shape inference. Omitted payloads are
+tensor payloads are skipped, while constants with payloads smaller than
+256 bytes remain available for shape inference and tiny initializer previews.
+This accommodates up to 15 complex128 elements. Omitted payloads are
 represented as external tensors in the retained model so structural validation
 can still verify graph connectivity without requiring the values. Their storage
 is shown as inline in the viewer, and external weight files are not opened. The
@@ -190,9 +191,12 @@ storage alive.
 
 The display filename is only a label, separate from the local loader's file path.
 Neither loading nor refreshing saves the model or opens external weight files.
-Initializer snapshots contain
-type, dimensions and storage locations, not weight values. Attribute previews
-are bounded separately.
+Initializer snapshots contain type, dimensions and storage locations, plus
+formatted values for available embedded tensors with fewer than 16 elements.
+Raw and typed payloads are decoded without converting 64-bit integers to
+JavaScript numbers. Sparse previews contain stored values and indices when
+both components also fit the limit. String previews retain at most 128 bytes
+per element. Attribute previews are bounded separately.
 
 Graph projection and nested scopes
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

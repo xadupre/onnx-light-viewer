@@ -250,7 +250,7 @@ function operatorSizes(nodes) {
       const typeWidth = widths.get(node.opType);
       const nameWidth = context.measureText(node.name).width;
       const initializers = (node.parameters ?? []).map((parameter) => {
-        const description = `${parameter.name}: ${parameter.type} [${parameter.shape.join(", ")}]`;
+        const description = `${parameter.name}: ${parameter.type} [${parameter.shape.join(", ")}]${parameter.value === undefined ? "" : ` = ${parameter.value}`}`;
         const text = shortName(description, 38);
         return {
           description,
@@ -659,6 +659,12 @@ function initializerList(parameters) {
       shape.className = "tensor-info";
       shape.textContent = `Shape: [${parameter.shape.join(", ")}]`;
       item.append(heading, shape);
+      if (parameter.value !== undefined) {
+        const values = document.createElement("pre");
+        values.className = "initializer-values";
+        values.textContent = `Values: ${parameter.value}`;
+        item.append(values);
+      }
       for (const [label, storage] of [
         [parameter.indicesStorage ? "Values" : "Storage", parameter.storage],
         ["Indices", parameter.indicesStorage],

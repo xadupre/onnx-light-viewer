@@ -52,7 +52,7 @@ export interface InitializerStorage {
   location: string | null;
 }
 
-/** Dense or sparse weight metadata, excluding the tensor's payload. */
+/** Dense or sparse weight metadata with bounded previews of tiny inline tensors. */
 export interface GraphInitializer {
   name: string;
   type: string;
@@ -60,6 +60,8 @@ export interface GraphInitializer {
   storage: InitializerStorage;
   /** Present for sparse initializers, describing their indices tensor. */
   indicesStorage?: InitializerStorage;
+  /** Values for inline tensors with fewer than 16 elements; preserves integer precision. */
+  value?: string;
 }
 
 /** Newest matching operator schema not newer than the model's imported opset. */
