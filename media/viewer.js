@@ -39,6 +39,13 @@ const statusLabels = {
   CANCELLED: "Cancelled",
   INVALIDATED: "Reload required",
 };
+const RefreshStatus = Object.freeze({
+  IDLE: "idle",
+  PENDING: "pending",
+  UPDATED: "updated",
+  UNCHANGED: "unchanged",
+  FAILED: "failed",
+});
 const tabs = ["model", "logs", "status"];
 
 function showTab(name, focus = false) {
@@ -341,7 +348,7 @@ function refreshButtonStatus(id, status, message) {
 function refreshStatus(
   pending,
   message = "",
-  status = pending ? "pending" : "idle",
+  status = pending ? RefreshStatus.PENDING : RefreshStatus.IDLE,
 ) {
   byId("refresh-shapes").disabled = pending;
   byId("refresh-shapes").setAttribute("aria-busy", String(pending));
@@ -543,7 +550,7 @@ function inspectMetadata() {
 function metadataStatus(
   pending,
   message = "",
-  status = pending ? "pending" : "idle",
+  status = pending ? RefreshStatus.PENDING : RefreshStatus.IDLE,
 ) {
   metadataPending = pending;
   byId("show-metadata").setAttribute("aria-busy", String(pending));
@@ -569,7 +576,7 @@ function acceptMetadata(metadata) {
   metadataStatus(
     false,
     `Metadata refreshed: ${updates} update${updates === 1 ? "" : "s"}`,
-    updates ? "updated" : "unchanged",
+    updates ? RefreshStatus.UPDATED : RefreshStatus.UNCHANGED,
   );
   byId("metadata-content").hidden = false;
   metadataEntries(byId("metadata-model"), metadata.model);
@@ -1431,7 +1438,7 @@ window.addEventListener("message", (event) => {
     metadataStatus(
       false,
       `Metadata analysis failed: ${event.data.error}`,
-      "failed",
+      RefreshStatus.FAILED,
     );
   } else if (event.data?.type === "shape-info") {
     const updates = updateTensorInformation(event.data.tensors);
@@ -1439,13 +1446,13 @@ window.addEventListener("message", (event) => {
     refreshStatus(
       false,
       `Shapes/types refreshed: ${updates} tensor${updates === 1 ? "" : "s"} updated`,
-      updates ? "updated" : "unchanged",
+      updates ? RefreshStatus.UPDATED : RefreshStatus.UNCHANGED,
     );
   } else if (event.data?.type === "shape-error") {
     refreshStatus(
       false,
       `Shape/type inference failed: ${event.data.error}`,
-      "failed",
+      RefreshStatus.FAILED,
     );
   }
 });

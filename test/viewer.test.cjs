@@ -500,6 +500,7 @@ for (const kind of ["shapes", "metadata"]) {
     const check = (expected) => {
       for (const [index, button] of buttons.entries()) {
         assert.equal(button.dataset.refreshStatus, expected);
+        assert.equal(button.getAttribute("aria-describedby"), status.id);
         assert.equal(
           button.getAttribute("aria-busy"),
           String(expected === "pending"),
