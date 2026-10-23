@@ -1162,6 +1162,7 @@ function matchingNodes() {
 }
 
 function selectSearchMatch(view, index, count) {
+  byId("node-search-suggestions").hidden = true;
   selected = new Set([view.id]);
   updateSelection(view.id);
   readableZoom();
@@ -1781,6 +1782,7 @@ byId("zoom-out").addEventListener("click", () => {
 byId("zoom-readable").addEventListener("click", readableZoom);
 byId("find-node").addEventListener("submit", findNode);
 byId("node-search").addEventListener("input", suggestNodes);
+byId("node-search").addEventListener("click", suggestNodes);
 byId("zoom-fit").addEventListener("click", resetZoom);
 byId("zoom-area").addEventListener("click", () => {
   const active = !zoomAreaMode;
