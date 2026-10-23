@@ -84,13 +84,15 @@ p {
   min-height: 0;
 }
 #logs-view,
-#status-view {
+#status-view,
+#controls-view {
   padding: 16px;
   overflow: auto;
   min-height: 0;
 }
 #logs-view h2,
-#status-view h2 {
+#status-view h2,
+#controls-view h2 {
   margin-top: 0;
 }
 #log-entries {
