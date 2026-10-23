@@ -705,8 +705,8 @@ test("loads typed attributes and dense/sparse initializer parameters without los
       { name: "strides", type: "INTS" },
     ],
   );
-  assert.match(conv.attributes[1].value, /\[2, 2\]/);
-  assert.match(activation.attributes[0].value, /0\.125/);
+  assert.equal(conv.attributes[1].value, "[2, 2]");
+  assert.equal(activation.attributes[0].value, "0.125");
   assert.equal(conv.parameters[0].name, "kernel");
   assert.equal(conv.parameters[0].type, "FLOAT");
   assert.deepEqual(conv.parameters[0].shape, ["1", "1", "3", "3"]);
@@ -720,14 +720,14 @@ test("loads typed attributes and dense/sparse initializer parameters without los
   const attributes = Object.fromEntries(
     custom.attributes.map((a) => [a.name, a]),
   );
-  assert.match(attributes.threshold.value, /1152921504606846977/);
-  assert.match(attributes.ratios.value, /\[0\.5, 1\.5\]/);
-  assert.match(attributes.labels.value, /"left", "right"/);
-  assert.match(attributes.text.value, /<b>model text<\/b>/);
+  assert.equal(attributes.threshold.value, "1152921504606846977");
+  assert.equal(attributes.ratios.value, "[0.5, 1.5]");
+  assert.equal(attributes.labels.value, "['left', 'right']");
+  assert.equal(attributes.text.value, "<b>model text</b>");
   assert.match(attributes.value.value, /int64_data: \[3, 7\]/);
   assert.equal(
     attributes.long_list.value,
-    "{ long_list: [0, 1, 2, 3, 4, 5, 6, 7] } ... (2000 elements)",
+    "[0, 1, 2, 3, 4, 5, 6, 7] ... (2000 elements)",
   );
   for (const name of ["long_floats", "long_strings", "sparse_value"]) {
     assert.match(attributes[name].value, /\.\.\. \(12 elements\)/);

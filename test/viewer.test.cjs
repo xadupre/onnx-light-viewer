@@ -1297,6 +1297,13 @@ test("shows actual attributes, connected initializer parameters and versioned de
     document.getElementById("node-attributes").textContent,
     /strides \(INTS\)[\s\S]*\[2, 2\]/,
   );
+  const strides = Array.from(
+    document.querySelectorAll("#node-attributes li"),
+  ).find(
+    (item) => item.querySelector("strong").textContent === "strides (INTS)",
+  );
+  assert.equal(strides.querySelector("pre").textContent, "[2, 2]");
+  assert.equal(strides.textContent.match(/strides/g).length, 1);
   assert.match(
     document.getElementById("node-initializers").textContent,
     /kernel \(FLOAT\)[\s\S]*Shape: \[1, 1, 3, 3\][\s\S]*Storage: embedded/,

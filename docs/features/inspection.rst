@@ -6,8 +6,9 @@ Operator and tensor inspection
    :width: 240px
 
 Select a node to see its name, domain, imported opset, inputs, outputs and typed
-attributes. Schema defaults are marked ``[default]``; long attribute arrays
-show a bounded preview.
+attributes. Scalar and list values appear below the name/type heading without
+repeating the attribute name. Schema defaults are marked ``[default]``; long
+attribute arrays show a bounded preview.
 
 Graph labels and the inspector show declared tensor types and dimensions,
 including symbolic dimensions, scalars and unknown shapes. Dense and sparse
