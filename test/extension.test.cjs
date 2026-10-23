@@ -205,7 +205,10 @@ async function openExtension(
       return release;
     },
     dispose: () => {
-      for (const callback of [...disposals]) callback();
+      // Ensure idempotency: once disposed, subsequent calls do nothing.
+      const callbacks = [...disposals];
+      disposals.clear();
+      for (const callback of callbacks) callback();
     },
     connect: (callback) => {
       client = callback;
