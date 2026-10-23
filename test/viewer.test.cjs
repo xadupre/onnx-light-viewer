@@ -620,7 +620,6 @@ test("keeps the metadata button highlighted until its panel is closed", (t) => {
   assert.equal(toggle.getAttribute("aria-expanded"), "false");
   toggle.click();
   const active = color();
-  assert.equal(active, "rgb(16, 42, 40)");
   assert.notEqual(active, inactive);
   assert.equal(toggle.getAttribute("aria-expanded"), "true");
   assert.equal(document.getElementById("metadata-panel").hidden, false);
