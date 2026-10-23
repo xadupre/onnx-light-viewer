@@ -109,21 +109,19 @@ test("shows loading progress until success, failure or cancellation, including i
   assert.equal(document.getElementById("open-model").disabled, true);
   load(demoGraph);
   assert.equal(progress.hidden, true);
-  for (const button of ["open-model", "open-backend-test"]) {
-    document.getElementById(button).click();
-    assert.equal(progress.hidden, false);
-    const request = messages.at(-1);
-    state({
-      type: "log-entry",
-      entry: {
-        id: request.actionId,
-        action: "Open model",
-        timestamp: new Date().toISOString(),
-        status: "CANCELLED",
-      },
-    });
-    assert.equal(progress.hidden, true);
-  }
+  document.getElementById("open-model").click();
+  assert.equal(progress.hidden, false);
+  const request = messages.at(-1);
+  state({
+    type: "log-entry",
+    entry: {
+      id: request.actionId,
+      action: "Open model",
+      timestamp: new Date().toISOString(),
+      status: "CANCELLED",
+    },
+  });
+  assert.equal(progress.hidden, true);
   state({ type: "load-state", pending: true });
   assert.equal(progress.hidden, false);
   assert.equal(
@@ -783,8 +781,9 @@ for (const [kind, panelOpen] of [
           );
         }
         if (button.id === "show-metadata") {
+          const shadow = window.getComputedStyle(button).boxShadow;
           assert.equal(
-            Boolean(window.getComputedStyle(button).boxShadow),
+            shadow !== "" && shadow !== "none",
             button.getAttribute("aria-expanded") === "true",
           );
         }
@@ -971,7 +970,7 @@ test("counts metadata changes and replaces cached analysis and graph markers on 
   assert.deepEqual(errors, []);
 });
 
-test("keeps the metadata button highlighted until its panel is closed", (t) => {
+test("keeps Metadata filled and checked until its panel is closed without hiding refresh status", (t) => {
   const { document, window, load } = openViewer(t);
   const style = document.createElement("style");
   style.textContent = readFileSync(
@@ -985,12 +984,26 @@ test("keeps the metadata button highlighted until its panel is closed", (t) => {
   );
   load(model.graph());
   const toggle = document.getElementById("show-metadata");
-  const highlight = () => window.getComputedStyle(toggle).boxShadow;
+  const highlight = () => {
+    const style = window.getComputedStyle(toggle);
+    return {
+      background: style.backgroundColor,
+      shadow: style.boxShadow,
+      weight: style.fontWeight,
+      indicator: window.getComputedStyle(
+        toggle.querySelector(".toggle-indicator"),
+      ).visibility,
+    };
+  };
   const inactive = highlight();
+  assert.equal(inactive.indicator, "hidden");
   assert.equal(toggle.getAttribute("aria-expanded"), "false");
   toggle.click();
   const active = highlight();
-  assert.notEqual(active, inactive);
+  assert.notEqual(active.background, inactive.background);
+  assert.notEqual(active.shadow, inactive.shadow);
+  assert.equal(active.weight, "700");
+  assert.equal(active.indicator, "visible");
   assert.equal(toggle.getAttribute("aria-expanded"), "true");
   assert.equal(document.getElementById("metadata-panel").hidden, false);
   window.dispatchEvent(
@@ -998,15 +1011,19 @@ test("keeps the metadata button highlighted until its panel is closed", (t) => {
       data: { type: "metadata-info", metadata: model.metadata() },
     }),
   );
-  assert.equal(highlight(), active);
+  assert.deepEqual(highlight(), active);
   load(model.graph());
-  assert.equal(highlight(), active);
+  assert.deepEqual(highlight(), active);
   toggle.click();
   assert.equal(toggle.getAttribute("aria-expanded"), "false");
   assert.equal(document.getElementById("metadata-panel").hidden, true);
-  assert.equal(highlight(), inactive);
+  const closed = highlight();
+  assert.notEqual(closed.background, active.background);
+  assert.equal(closed.shadow, inactive.shadow);
+  assert.equal(closed.weight, inactive.weight);
+  assert.equal(closed.indicator, "hidden");
   toggle.click();
-  assert.equal(highlight(), active);
+  assert.deepEqual(highlight(), active);
 });
 
 test("shows native metadata in the sidebar and marks released and never-used results without changing the layout", (t) => {
@@ -1260,11 +1277,7 @@ test("renders the demo, inspects its operator and requests a real file", (t) => 
       },
     }),
   );
-  document.getElementById("open-backend-test").click();
-  assert.equal(
-    messages.filter((message) => message.type === "open-backend-test").length,
-    1,
-  );
+  assert.equal(document.getElementById("open-backend-test"), null);
   const graph = document.getElementById("graph");
   const initialViewBox = graph.getAttribute("viewBox");
   document.getElementById("zoom-in").click();
@@ -2237,10 +2250,20 @@ test("zooms in and out with buttons and Ctrl+wheel without rearranging the graph
 });
 
 test("magnifies a rectangle in either direction without moving or selecting nodes", (t) => {
-  const { document, load, pointer } = openViewer(t);
+  const { document, window, load, pointer } = openViewer(t);
+  const style = document.createElement("style");
+  style.textContent = readFileSync(
+    require.resolve("../media/viewer.css"),
+    "utf8",
+  );
+  document.head.append(style);
   load(chainGraph());
   const graph = document.getElementById("graph");
   const button = document.getElementById("zoom-area");
+  const inactiveBackground = window.getComputedStyle(button).backgroundColor;
+  let activeBackground;
+  const indicator = button.querySelector(".toggle-indicator");
+  assert.equal(window.getComputedStyle(indicator).visibility, "hidden");
   const initial = graph.getAttribute("viewBox");
   const positions = nodePositions(document);
   const nodes = [...document.querySelectorAll(".graph-node")];
@@ -2255,6 +2278,10 @@ test("magnifies a rectangle in either direction without moving or selecting node
       button.click();
       assert.equal(button.getAttribute("aria-pressed"), "true");
       assert.equal(document.activeElement, graph);
+      activeBackground = window.getComputedStyle(button).backgroundColor;
+      assert.notEqual(activeBackground, inactiveBackground);
+      assert.equal(window.getComputedStyle(button).fontWeight, "700");
+      assert.equal(window.getComputedStyle(indicator).visibility, "visible");
     }
     pointer(nodes[0], "pointerdown", start.x, start.y, { altKey: reverse });
     pointer(graph, "pointermove", end.x, end.y);
@@ -2271,6 +2298,12 @@ test("magnifies a rectangle in either direction without moving or selecting node
     assert.ok(Math.abs(width / height - 1060 / 350) < 1e-9);
     assert.equal(document.querySelector(".selection-rectangle"), null);
     assert.equal(button.getAttribute("aria-pressed"), "false");
+    assert.notEqual(
+      window.getComputedStyle(button).backgroundColor,
+      activeBackground,
+    );
+    assert.equal(window.getComputedStyle(button).fontWeight, "400");
+    assert.equal(window.getComputedStyle(indicator).visibility, "hidden");
     assert.equal(graph.hasPointerCapture(1), false);
     assert.deepEqual(selection(), selected);
     assert.deepEqual(nodePositions(document), positions);

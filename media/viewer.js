@@ -106,9 +106,9 @@ function displayLog(entry) {
   if (entry.status !== "RUNNING" && pendingActions.has(entry.id)) {
     const type = pendingActions.get(entry.id);
     pendingActions.delete(entry.id);
-    if (type === "open" || type === "open-backend-test") {
+    if (type === "open") {
       replacementPending = [...pendingActions.values()].some(
-        (pending) => pending === "open" || pending === "open-backend-test",
+        (pending) => pending === "open",
       );
       setLoading(replacementPending);
     }
@@ -130,7 +130,7 @@ function newAction(action) {
 function requestAction(type, action, parameters = {}) {
   const entry = newAction(action);
   pendingActions.set(entry.id, type);
-  if (type === "open" || type === "open-backend-test") {
+  if (type === "open") {
     replacementPending = true;
     setLoading(true);
   }
@@ -140,8 +140,7 @@ function requestAction(type, action, parameters = {}) {
 function setLoading(pending, message = "") {
   byId("load-progress").hidden = !pending;
   byId("model-view").setAttribute("aria-busy", String(pending));
-  for (const id of ["open-model", "open-backend-test"])
-    byId(id).disabled = pending;
+  byId("open-model").disabled = pending;
   for (const id of [
     "refresh-shapes",
     "refresh-metadata",
@@ -1622,9 +1621,6 @@ byId("close-doc").addEventListener("click", () => byId("operator-doc").close());
 byId("open-model").addEventListener("click", () =>
   requestAction("open", "Open ONNX model"),
 );
-byId("open-backend-test").addEventListener("click", () =>
-  requestAction("open-backend-test", "Open backend test"),
-);
 byId("show-metadata").addEventListener("click", () => {
   metadataVisible = !metadataVisible;
   byId("show-metadata").setAttribute("aria-expanded", String(metadataVisible));
@@ -1730,8 +1726,7 @@ window.addEventListener("message", (event) => {
   } else if (event.data?.type === "load-error") {
     replacementPending = false;
     for (const [id, type] of pendingActions) {
-      if (type === "open" || type === "open-backend-test")
-        pendingActions.delete(id);
+      if (type === "open") pendingActions.delete(id);
     }
     setLoading(false, `Could not open model: ${event.data.error}`);
   } else if (event.data?.type === "graph") {
