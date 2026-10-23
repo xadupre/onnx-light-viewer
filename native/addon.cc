@@ -924,7 +924,9 @@ std::optional<std::string> TinyTensorValues(const ol::TensorProto &tensor) {
                << TensorElement<double>(data, index * 2 + 1) << ")";
         break;
       default:
-        throw std::runtime_error("Unsupported initializer element type.");
+        throw std::runtime_error("Unsupported initializer element type '" +
+                                 std::string(ol::TensorProto::DataType_Name(tensor.data_type())) +
+                                 "' for initializer '" + std::string(tensor.name()) + "'.");
       }
     }
   }
