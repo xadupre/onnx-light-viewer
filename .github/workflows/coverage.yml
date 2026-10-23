@@ -13,10 +13,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
@@ -57,7 +57,7 @@ jobs:
       - name: Generate C++ coverage report
         run: python -m gcovr --root . --filter 'native/' --cobertura build/coverage/cpp.xml build/native
       - name: Upload TypeScript coverage
-        uses: codecov/codecov-action@v5.5.3
+        uses: codecov/codecov-action@v7.1.1
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: build/coverage/typescript/lcov.info
@@ -65,7 +65,7 @@ jobs:
           disable_search: true
           fail_ci_if_error: true
       - name: Upload C++ coverage
-        uses: codecov/codecov-action@v5.5.3
+        uses: codecov/codecov-action@v7.1.1
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: build/coverage/cpp.xml
@@ -73,7 +73,7 @@ jobs:
           disable_search: true
           fail_ci_if_error: true
       - name: Upload Python coverage
-        uses: codecov/codecov-action@v5.5.3
+        uses: codecov/codecov-action@v7.1.1
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: build/coverage/python.xml
