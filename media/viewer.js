@@ -1117,10 +1117,9 @@ function readableZoom() {
   fit();
 }
 
-function findNode(event) {
-  event.preventDefault();
+function matchingNodes() {
   const query = byId("node-search").value.trim().toLowerCase();
-  const matches = query
+  return query
     ? [...nodeViews.values()].filter(
         ({ node }) =>
           node &&
@@ -1128,18 +1127,49 @@ function findNode(event) {
             node.opType.toLowerCase().includes(query)),
       )
     : [];
+}
+
+function selectSearchMatch(view, index, count) {
+  selected = new Set([view.id]);
+  updateSelection(view.id);
+  readableZoom();
+  byId("node-search-result").textContent = `${index + 1} / ${count}`;
+}
+
+function suggestNodes() {
+  const matches = matchingNodes();
+  const suggestions = byId("node-search-suggestions");
+  suggestions.replaceChildren();
+  suggestions.hidden = !matches.length;
+  byId("node-search-result").textContent = !byId("node-search").value.trim()
+    ? ""
+    : matches.length
+      ? `${matches.length} matching nodes${matches.length > 20 ? " (first 20 shown)" : ""}`
+      : "No matching node";
+  matches.slice(0, 20).forEach((view, index) => {
+    const item = document.createElement("li");
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = `${view.node.name || "(unnamed)"} — ${view.node.opType}`;
+    button.addEventListener("click", () =>
+      selectSearchMatch(view, index, matches.length),
+    );
+    item.append(button);
+    suggestions.append(item);
+  });
+}
+
+function findNode(event) {
+  event.preventDefault();
+  const matches = matchingNodes();
   if (!matches.length) {
-    byId("node-search-result").textContent = query
+    byId("node-search-result").textContent = byId("node-search").value.trim()
       ? "No matching node"
       : "Enter a name or operator";
     return;
   }
   const index = (matches.indexOf(inspectedView) + 1) % matches.length;
-  const view = matches[index];
-  selected = new Set([view.id]);
-  updateSelection(view.id);
-  readableZoom();
-  byId("node-search-result").textContent = `${index + 1} / ${matches.length}`;
+  selectSearchMatch(matches[index], index, matches.length);
 }
 
 function navigate(path) {
@@ -1153,6 +1183,8 @@ function navigate(path) {
 function render(graph, metadata) {
   hasModel = true;
   byId("node-search-result").textContent = "";
+  byId("node-search-suggestions").replaceChildren();
+  byId("node-search-suggestions").hidden = true;
   if (!replacementPending) setLoading(false);
   endGesture();
   refreshStatus(false);
@@ -1668,6 +1700,7 @@ byId("zoom-out").addEventListener("click", () => {
 });
 byId("zoom-readable").addEventListener("click", readableZoom);
 byId("find-node").addEventListener("submit", findNode);
+byId("node-search").addEventListener("input", suggestNodes);
 byId("zoom-fit").addEventListener("click", resetZoom);
 byId("zoom-area").addEventListener("click", () => {
   const active = !zoomAreaMode;

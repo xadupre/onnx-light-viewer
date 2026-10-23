@@ -2651,6 +2651,108 @@ test("jumps to readable zoom and culls offscreen SVG content without rebuilding 
   assert.deepEqual(nodePositions(document), positions);
 });
 
+test("suggests matching nodes in the sidebar and selects individual results", (t) => {
+  const { document, window, load } = openViewer(t);
+  const input = document.getElementById("node-search");
+  const suggestions = document.getElementById("node-search-suggestions");
+  const status = document.getElementById("node-search-result");
+  const form = document.getElementById("find-node");
+  const search = (value) => {
+    input.value = value;
+    input.dispatchEvent(new window.Event("input", { bubbles: true }));
+  };
+  assert.ok(form.closest("aside"));
+  assert.equal(form.closest("#canvas"), null);
+  assert.equal(suggestions.hidden, true);
+  search("relu");
+  assert.equal(status.textContent, "No matching node");
+  const model = chainGraph(3);
+  model.nodes[1].name = "<img src=x onerror=alert(1)>";
+  model.nodes[2].name = model.nodes[0].name;
+  load(model);
+  search(" ReLU ");
+  assert.equal(suggestions.hidden, false);
+  assert.equal(suggestions.children.length, 3);
+  assert.equal(status.textContent, "3 matching nodes");
+  assert.equal(
+    suggestions.children[1].textContent,
+    "<img src=x onerror=alert(1)> — Relu",
+  );
+  assert.equal(suggestions.querySelector("img"), null);
+  assert.ok(
+    [...suggestions.querySelectorAll("button")].every(
+      (button) => button.type === "button" && button.tabIndex === 0,
+    ),
+  );
+  suggestions.children[2].querySelector("button").click();
+  assert.equal(
+    document.querySelector(".graph-node.selected").getAttribute("data-id"),
+    "node-2",
+  );
+  assert.equal(status.textContent, "3 / 3");
+  assert.equal(
+    Number(
+      document.getElementById("graph").getAttribute("viewBox").split(" ")[2],
+    ),
+    1060,
+  );
+  form.dispatchEvent(new window.Event("submit", { cancelable: true }));
+  assert.equal(
+    document.querySelector(".graph-node.selected").getAttribute("data-id"),
+    "node-0",
+  );
+  assert.equal(status.textContent, "1 / 3");
+  search("ACTIVATION_0");
+  assert.equal(suggestions.children.length, 2);
+  search("does-not-exist");
+  assert.equal(suggestions.hidden, true);
+  assert.equal(suggestions.children.length, 0);
+  assert.equal(status.textContent, "No matching node");
+  search("   ");
+  assert.equal(suggestions.hidden, true);
+  assert.equal(status.textContent, "");
+  form.dispatchEvent(new window.Event("submit", { cancelable: true }));
+  assert.equal(status.textContent, "Enter a name or operator");
+});
+
+test("bounds node suggestions, finds offscreen matches and clears stale results on graph replacement", (t) => {
+  const { document, window, load } = openViewer(t);
+  const input = document.getElementById("node-search");
+  const suggestions = document.getElementById("node-search-suggestions");
+  const search = (value) => {
+    input.value = value;
+    input.dispatchEvent(new window.Event("input", { bubbles: true }));
+  };
+  load(chainGraph(1200));
+  search("relu");
+  assert.equal(suggestions.children.length, 20);
+  assert.equal(
+    document.getElementById("node-search-result").textContent,
+    "1200 matching nodes (first 20 shown)",
+  );
+  search("activation_1199");
+  assert.equal(suggestions.children.length, 1);
+  suggestions.querySelector("button").click();
+  assert.equal(
+    document.getElementById("node-name").textContent,
+    "activation_1199",
+  );
+  assert.equal(
+    document.querySelector(".graph-node.selected").getAttribute("data-id"),
+    "node-1199",
+  );
+  load({ ...demoGraph, nodes: [] });
+  assert.equal(suggestions.children.length, 0);
+  assert.equal(suggestions.hidden, true);
+  assert.equal(document.getElementById("node-search-result").textContent, "");
+  search("relu");
+  assert.equal(suggestions.hidden, true);
+  assert.equal(
+    document.getElementById("node-search-result").textContent,
+    "No matching node",
+  );
+});
+
 test("virtualizes thousands of nodes, finds distant operators and uses a batched overview", (t) => {
   const { document, window, load } = openViewer(t);
   const model = chainGraph(4000);

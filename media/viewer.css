@@ -461,30 +461,55 @@ li > .tensor-info {
   overflow: hidden;
 }
 #find-node {
-  position: absolute;
-  z-index: 1;
-  top: 12px;
-  left: 12px;
+  margin-bottom: 18px;
+}
+#find-node label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 11px;
+}
+.node-search-controls {
   display: flex;
-  align-items: center;
   gap: 6px;
-  max-width: calc(100% - 24px);
-  padding: 5px;
-  border: 1px solid #354757;
-  border-radius: 6px;
-  background: #16212e;
 }
 #node-search {
   min-width: 0;
-  width: 20ch;
+  width: 100%;
   color: var(--text);
   background: #0f1822;
   border: 1px solid #354757;
   padding: 4px;
 }
 #node-search-result {
+  display: block;
   color: var(--muted);
   font-size: 11px;
+}
+#node-search-suggestions {
+  margin-top: 6px;
+  max-height: 200px;
+  overflow: auto;
+}
+#node-search-suggestions li {
+  padding: 0;
+}
+.node-search-controls button,
+#node-search-suggestions button {
+  color: var(--text);
+  background: #16212e;
+}
+#node-search-suggestions button {
+  width: 100%;
+  padding: 6px 9px;
+  border: 0;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+#node-search-suggestions button:hover {
+  background: #293c4e;
+}
+#node-search-suggestions button:focus-visible {
+  outline-offset: -2px;
 }
 .zoom-controls button {
   color: #c2d1df;
