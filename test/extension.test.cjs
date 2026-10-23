@@ -92,7 +92,10 @@ async function openExtension(
       fs: {
         readFile: async (uri) => {
           reads.push(uri.path);
-          await pendingReads.get(path.basename(uri.path));
+          const key = path.basename(uri.path);
+          const pending = pendingReads.get(key);
+          await (pending ?? Promise.resolve());
+          pendingReads.delete(key);
           return readFile(uri.path);
         },
       },
