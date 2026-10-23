@@ -8,11 +8,13 @@ onnx-light projects
 
 .. figure:: _static/onnx-light-projects.svg
    :alt: onnx-light decodes models for onnx-light-viewer, onnx-light-cpu provides
-         CPU kernels for onnx-light, and onnx-light-ort bridges onnx-light and
-         ONNX Runtime in both directions.
+         CPU kernels and onnx-light-kernel-images provides ImageDecoder kernels
+         for onnx-light, and onnx-light-ort bridges onnx-light and ONNX Runtime
+         in both directions.
    :width: 100%
 
-   Local model inspection, CPU execution, and ONNX Runtime interoperability.
+   Local model inspection, CPU execution, image decoding, and ONNX Runtime
+   interoperability.
 
 * `onnx-light-viewer <https://github.com/xadupre/onnx-light-viewer>`_: this VS Code
   extension for inspecting ONNX graphs locally without executing models.
@@ -20,6 +22,8 @@ onnx-light projects
   used by this viewer to decode models locally.
 * `onnx-light-cpu <https://github.com/xadupre/onnx-light-cpu>`_: optimized CPU
   kernels for onnx-light.
+* `onnx-light-kernel-images <https://github.com/xadupre/onnx-light-kernel-images>`_:
+  ImageDecoder kernel extension for onnx-light.
 * `onnx-light-ort <https://github.com/xadupre/onnx-light-ort>`_: bidirectional
   interoperability between onnx-light and ONNX Runtime custom operators and
   execution providers.
