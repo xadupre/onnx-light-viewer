@@ -4,7 +4,8 @@ from math import prod, sqrt
 from pathlib import Path
 from random import Random
 
-from onnx_light.onnx import TensorProto, checker, helper, save_model
+import onnx_light.onnx.helper as oh
+from onnx_light.onnx import TensorProto, checker, save_model
 
 
 def make_model():
@@ -13,14 +14,14 @@ def make_model():
     initializers = []
 
     def tensor(name, shape, values, dtype=TensorProto.FLOAT):
-        initializers.append(helper.make_tensor(name, dtype, shape, values))
+        initializers.append(oh.make_tensor(name, dtype, shape, values))
         return name
 
     def weight(name, shape):
         return tensor(name, shape, [random.uniform(-0.1, 0.1) for _ in range(prod(shape))])
 
     def node(op, inputs, output, **attributes):
-        nodes.append(helper.make_node(op, inputs, [output], name=output, **attributes))
+        nodes.append(oh.make_node(op, inputs, [output], name=output, **attributes))
         return output
 
     def rms_norm(value, name):
@@ -71,10 +72,10 @@ def make_model():
     node("MatMul", [final, lm_head], "logits")
 
     def value_info(name, dtype, shape):
-        return helper.make_tensor_value_info(name, dtype, shape)
+        return oh.make_tensor_value_info(name, dtype, shape)
 
     batch, sequence = "batch_size", "sequence_length"
-    graph = helper.make_graph(
+    graph = oh.make_graph(
         nodes,
         "Tiny symbolic transformer",
         [
@@ -90,11 +91,11 @@ def make_model():
             value_info("attention_scores", TensorProto.FLOAT, [batch, 2, sequence, sequence]),
         ],
     )
-    model = helper.make_model(
+    model = oh.make_model(
         graph,
         producer_name="onnx-light-viewer",
         ir_version=9,
-        opset_imports=[helper.make_opsetid("", 13)],
+        opset_imports=[oh.make_opsetid("", 13)],
     )
     model.doc_string = (
         "One randomly initialized decoder block, 2 heads, hidden size 16, vocabulary 32. "
