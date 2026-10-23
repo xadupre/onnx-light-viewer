@@ -111,6 +111,11 @@ function displayLog(entry) {
         (pending) => pending === "open",
       );
       setLoading(replacementPending);
+    } else if (type === "save") {
+      byId("save-model").setAttribute("aria-busy", "false");
+      byId("save-model").disabled = replacementPending || !hasModel;
+      if (entry.status === "CANCELLED")
+        byId("save-status").textContent = "Save cancelled.";
     }
   }
 }
@@ -133,6 +138,10 @@ function requestAction(type, action, parameters = {}) {
   if (type === "open") {
     replacementPending = true;
     setLoading(true);
+  } else if (type === "save") {
+    byId("save-model").disabled = true;
+    byId("save-model").setAttribute("aria-busy", "true");
+    byId("save-status").textContent = "Saving model…";
   }
   vscode.postMessage({ type, ...parameters, actionId: entry.id });
 }
@@ -146,6 +155,7 @@ function setLoading(pending, message = "") {
     "refresh-metadata",
     "refresh-positions",
     "show-metadata",
+    "save-model",
   ])
     byId(id).disabled =
       pending || !hasModel || byId(id).getAttribute("aria-busy") === "true";
@@ -1627,6 +1637,9 @@ byId("close-doc").addEventListener("click", () => byId("operator-doc").close());
 byId("open-model").addEventListener("click", () =>
   requestAction("open", "Open ONNX model"),
 );
+byId("save-model").addEventListener("click", () =>
+  requestAction("save", "Save ONNX model"),
+);
 byId("show-metadata").addEventListener("click", () => {
   metadataVisible = !metadataVisible;
   byId("show-metadata").setAttribute("aria-expanded", String(metadataVisible));
@@ -1736,7 +1749,13 @@ window.addEventListener("message", (event) => {
     }
     setLoading(false, `Could not open model: ${event.data.error}`);
   } else if (event.data?.type === "graph") {
+    byId("save-status").textContent = "";
     render(event.data.graph, event.data.metadata);
+  } else if (event.data?.type === "save-info") {
+    byId("save-status").textContent = `Saved ${event.data.name}`;
+  } else if (event.data?.type === "save-error") {
+    byId("save-status").textContent =
+      `Could not save model: ${event.data.error}`;
   } else if (event.data?.type === "navigation-error") {
     svg.setAttribute("aria-busy", "false");
     byId("navigation-status").textContent =

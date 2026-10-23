@@ -1,5 +1,6 @@
 const assert = require("node:assert/strict");
 const { execFileSync } = require("node:child_process");
+const { createCipheriv, createDecipheriv, pbkdf2Sync } = require("node:crypto");
 const {
   readFileSync,
   mkdtempSync,
@@ -9,6 +10,7 @@ const {
   closeSync,
   rmSync,
   writeFileSync,
+  renameSync,
 } = require("node:fs");
 const { tmpdir } = require("node:os");
 const path = require("node:path");
@@ -20,6 +22,7 @@ const {
   loadModelFile,
   listBackendTests,
   loadBackendTest,
+  isEncryptedModel,
 } = require("../dist/graph");
 
 function modelBytes(name) {
@@ -44,7 +47,7 @@ function bytesField(number, value) {
   return Buffer.concat([varint(number * 8 + 2), varint(bytes.length), bytes]);
 }
 
-function matmulWithWeight(dataField) {
+function matmulWithWeight(dataField, data = Buffer.alloc(256)) {
   const dimension = (size) =>
     bytesField(
       1,
@@ -69,7 +72,7 @@ function matmulWithWeight(dataField) {
     varintField(1, 8),
     varintField(2, 1),
     bytesField(8, "weight"),
-    bytesField(dataField, Buffer.alloc(256)),
+    bytesField(dataField, data),
   ]);
   const node = Buffer.concat([
     bytesField(1, "x"),
@@ -90,6 +93,121 @@ function matmulWithWeight(dataField) {
     bytesField(7, graph),
   ]);
 }
+
+function encryptModelBytes(bytes, password, version) {
+  const magic = Buffer.from(`ONNXCRY${version}`);
+  const salt = Buffer.alloc(16, 17);
+  const nonce = Buffer.alloc(version === 1 ? 16 : 12, 23);
+  const key = pbkdf2Sync(password, salt, 100000, 32, "sha256");
+  const algorithm = ["aes-256-cbc", "chacha20-poly1305", "aes-256-gcm"][
+    version - 1
+  ];
+  const cipher = createCipheriv(algorithm, key, nonce, { authTagLength: 16 });
+  const header = Buffer.concat([magic, salt, nonce]);
+  if (version === 3) cipher.setAAD(header);
+  const payload = Buffer.concat([cipher.update(bytes), cipher.final()]);
+  return Buffer.concat([
+    header,
+    ...(version === 1 ? [] : [cipher.getAuthTag()]),
+    payload,
+  ]);
+}
+
+test("loads all three encrypted ModelProto formats from buffers and files", async (t) => {
+  const directory = mkdtempSync(
+    path.join(tmpdir(), "onnx-light-viewer-crypt-"),
+  );
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const password = "model round-trip passphrase";
+  const bytes = modelBytes("inference.onnx");
+  const expected = loadModel(bytes, "inference.onnx").graph(true);
+  for (const version of [1, 2, 3]) {
+    const encrypted = encryptModelBytes(bytes, password, version);
+    assert.equal(isEncryptedModel(encrypted), true);
+    const file = path.join(directory, `模型-${version}.onnx.enc`);
+    writeFileSync(file, encrypted);
+    for (const model of [
+      loadModel(encrypted, "inference.onnx", password),
+      await loadModelFile(file, "inference.onnx", password),
+    ]) {
+      assert.deepEqual(model.graph(true), expected);
+      assert.deepEqual(
+        loadModel(await model.serialize(), "inference.onnx").graph(),
+        expected,
+      );
+    }
+    assert.throws(() => loadModel(encrypted, "encrypted", "wrong password"));
+    await assert.rejects(loadModelFile(file, "encrypted", "wrong password"));
+    if (version !== 1) {
+      const corrupted = Buffer.from(encrypted);
+      corrupted[corrupted.length - 1] ^= 1;
+      assert.throws(() => loadModel(corrupted, "corrupted", password));
+    }
+  }
+});
+
+test("saves complete streamed weights, inferred shapes and authenticated encrypted copies", async (t) => {
+  const directory = mkdtempSync(path.join(tmpdir(), "onnx-light-viewer-save-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  for (const field of [4, 9]) {
+    const data = Buffer.alloc(256, 63);
+    const bytes = matmulWithWeight(field, data);
+    const file = path.join(directory, `weights-${field}.onnx`);
+    writeFileSync(file, bytes);
+    const streamed = await loadModelFile(file, "weights.onnx");
+    const complete = loadModel(bytes, "weights.onnx");
+    streamed.graph(true);
+    complete.graph(true);
+    const expected = Buffer.from(await complete.serialize());
+    assert.equal(expected.includes(data), true);
+    assert.deepEqual(Buffer.from(await streamed.serialize()), expected);
+    const password = "export passphrase";
+    const encrypted = Buffer.from(await streamed.serialize(password));
+    assert.equal(encrypted.subarray(0, 8).toString(), "ONNXCRY3");
+    const decipher = createDecipheriv(
+      "aes-256-gcm",
+      pbkdf2Sync(password, encrypted.subarray(8, 24), 100000, 32, "sha256"),
+      encrypted.subarray(24, 36),
+    );
+    decipher.setAAD(encrypted.subarray(0, 36));
+    decipher.setAuthTag(encrypted.subarray(36, 52));
+    assert.deepEqual(
+      Buffer.concat([
+        decipher.update(encrypted.subarray(52)),
+        decipher.final(),
+      ]),
+      expected,
+    );
+    assert.deepEqual(
+      loadModel(encrypted, "weights.onnx", password).graph(),
+      complete.graph(),
+    );
+    assert.notDeepEqual(
+      Buffer.from(await streamed.serialize(password)),
+      encrypted,
+    );
+    assert.deepEqual(readFileSync(file), bytes);
+    const moved = path.join(directory, `moved-${field}.onnx`);
+    renameSync(file, moved);
+    assert.deepEqual(
+      Buffer.from(await streamed.serialize(undefined, moved)),
+      expected,
+    );
+    writeFileSync(moved, Buffer.concat([bytes, Buffer.from([0])]));
+    await assert.rejects(
+      streamed.serialize(undefined, moved),
+      /source model changed/,
+    );
+  }
+  const external = loadModel(
+    modelBytes("initializers.onnx"),
+    "initializers.onnx",
+  );
+  assert.deepEqual(
+    loadModel(await external.serialize(), "initializers.onnx").graph(),
+    external.graph(),
+  );
+});
 
 test("streams local models, retains small shape constants and never opens external weights", async (t) => {
   for (const name of [

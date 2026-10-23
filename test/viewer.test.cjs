@@ -98,6 +98,51 @@ function openViewer(t, initialTab = "model") {
   };
 }
 
+test("saves without replacing the graph and reports success, cancellation and errors", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const button = document.getElementById("save-model");
+  const status = document.getElementById("save-status");
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  assert.equal(button.disabled, true);
+  load(demoGraph);
+  const graph = document.getElementById("nodes").innerHTML;
+  assert.equal(button.disabled, false);
+  for (const result of ["SUCCEEDED", "CANCELLED", "FAILED"]) {
+    button.click();
+    const request = messages.at(-1);
+    assert.equal(request.type, "save");
+    assert.equal(button.disabled, true);
+    assert.equal(button.getAttribute("aria-busy"), "true");
+    const count = messages.length;
+    button.click();
+    assert.equal(messages.length, count);
+    if (result === "SUCCEEDED")
+      send({ type: "save-info", name: "copy.onnx.enc" });
+    if (result === "FAILED") send({ type: "save-error", error: "Disk full" });
+    send({
+      type: "log-entry",
+      entry: {
+        id: request.actionId,
+        action: "Save ONNX model",
+        timestamp: new Date().toISOString(),
+        status: result,
+      },
+    });
+    assert.equal(button.disabled, false);
+    assert.equal(button.getAttribute("aria-busy"), "false");
+    assert.match(
+      status.textContent,
+      result === "SUCCEEDED"
+        ? /Saved copy.onnx.enc/
+        : result === "CANCELLED"
+          ? /cancelled/
+          : /Disk full/,
+    );
+    assert.equal(document.getElementById("nodes").innerHTML, graph);
+  }
+});
+
 test("shows loading progress until success, failure or cancellation, including initial loads", (t) => {
   const { document, window, load, messages } = openViewer(t);
   const progress = document.getElementById("load-progress");

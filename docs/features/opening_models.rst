@@ -14,6 +14,43 @@ Opening models
 * The toolbar shows the native onnx-light C++ release, graph counts, refresh
   progress and errors. Its logo links to the GitHub repository.
 
+Plain and encrypted ModelProto files
+-------------------------------------
+
+The viewer detects onnx-light encrypted model envelopes by their header,
+independently of the filename. It reads **ONNXCRY1** (legacy AES-256-CBC),
+**ONNXCRY2** (ChaCha20-Poly1305) and **ONNXCRY3** (AES-256-GCM).
+Open them through **Local file**, or open an ``.onnx.enc`` file directly in
+VS Code. A masked VS Code input asks for the password. Cancelling keeps the
+previous model; a wrong password or damaged file produces a visible error.
+Passwords never enter the webview, settings or logs. They remain in the
+extension host's memory while the model is open so native recovery can reload it.
+
+**Save model** offers a plain ONNX copy or a password-protected
+**AES-256-GCM / ONNXCRY3** copy. Encryption asks for password confirmation.
+The default filename ends in ``-copy.onnx`` or ``-copy.onnx.enc``; choose a
+different destination from the source model. Saving always includes the whole
+ModelProto, not just the selected graph, with stored metadata, embedded weights
+and any persisted shape inference. It does not change the displayed selection,
+layout or camera. A temporary file is written first and renamed only after the
+write succeeds; failures and cancellations appear in Logs.
+
+.. important::
+
+   External weight references are preserved, but external weight files are
+   **not copied, embedded or encrypted**. Keep their relative locations valid
+   beside the saved proto. Encryption protects the ModelProto and its embedded
+   data, not separately stored weights.
+
+Plain local files still load with bounded tensor payloads. Saving rereads any
+omitted inline data from their source, so the source must remain available and
+unchanged; detected changes require reopening it. Encrypted models are decrypted
+fully in native memory, and serialization also needs a complete in-memory
+payload. Local-file decryption and serialization run on native workers; virtual
+files use VS Code's filesystem and the synchronous byte-buffer loader.
+Decrypted data is written to disk only when explicitly saving
+a plain copy; downloaded encrypted files remain encrypted in the cache.
+
 Hugging Face models
 -------------------
 

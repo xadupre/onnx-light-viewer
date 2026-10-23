@@ -1,6 +1,15 @@
 const assert = require("node:assert/strict");
 const { readFileSync } = require("node:fs");
-const { copyFile, mkdir, mkdtemp, readFile, rm } = require("node:fs/promises");
+const {
+  copyFile,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile,
+  rename,
+  readdir,
+} = require("node:fs/promises");
 const { createHash } = require("node:crypto");
 const { createServer } = require("node:http");
 const { tmpdir } = require("node:os");
@@ -9,6 +18,13 @@ const path = require("node:path");
 const vm = require("node:vm");
 const { test } = require("node:test");
 const { JSDOM } = require("jsdom");
+
+class FileSystemError extends Error {
+  constructor(code) {
+    super(code);
+    this.code = code;
+  }
+}
 
 async function openExtension(
   customModel,
@@ -24,6 +40,9 @@ async function openExtension(
   const logs = [];
   const logViews = [];
   const events = [];
+  const passwordPrompts = [];
+  const saveDialogs = [];
+  const writes = [];
   const nativeModels = [];
   const commands = new Map();
   const receivers = new Set();
@@ -41,6 +60,12 @@ async function openExtension(
   let modelSource = "local";
   let repositoryFiles;
   let repositoryFileSelection;
+  let passwordValues = [];
+  let saveDestination;
+  let saveEncrypted = false;
+  let failSaveWrite = false;
+  let failSaveRename = false;
+  let saveDialogGate;
   const listedRepositories = [];
   const disposable = () => ({ dispose() {} });
   const root = path.resolve(__dirname, "..");
@@ -83,6 +108,7 @@ async function openExtension(
     reveal() {},
   };
   const vscode = {
+    FileSystemError,
     Uri: {
       file: (filePath) => ({
         path: filePath,
@@ -109,6 +135,33 @@ async function openExtension(
           pendingReads.delete(key);
           return readFile(uri.path);
         },
+        writeFile: async (uri, bytes) => {
+          writes.push(uri.path);
+          await writeFile(
+            uri.path,
+            failSaveWrite ? bytes.subarray(0, 8) : bytes,
+          );
+          if (failSaveWrite) {
+            failSaveWrite = false;
+            throw new Error("Test filesystem refused the complete write.");
+          }
+        },
+        rename: async (source, destination) => {
+          if (failSaveRename) {
+            failSaveRename = false;
+            throw new Error("Test filesystem refused the rename.");
+          }
+          await rename(source.path, destination.path);
+        },
+        delete: async (uri) => {
+          try {
+            await rm(uri.path);
+          } catch (error) {
+            if (error.code === "ENOENT")
+              throw new FileSystemError("FileNotFound");
+            throw error;
+          }
+        },
       },
     },
     window: {
@@ -118,7 +171,21 @@ async function openExtension(
         return disposable();
       },
       showOpenDialog: async () => selection,
-      showInputBox: async () => huggingFaceInput,
+      showInputBox: async (options) => {
+        if (!options.password) return huggingFaceInput;
+        passwordPrompts.push(options);
+        return passwordValues.shift();
+      },
+      showSaveDialog: async (options) => {
+        saveDialogs.push(options);
+        const gate = saveDialogGate;
+        saveDialogGate = undefined;
+        if (gate) {
+          gate.arrived();
+          await gate.wait;
+        }
+        return saveDestination;
+      },
       withProgress: async (_options, work) =>
         work(
           { report() {} },
@@ -131,6 +198,8 @@ async function openExtension(
         picks.push({ items, options });
         if (options.title === "Open an ONNX model")
           return items.find(({ id }) => id === modelSource);
+        if (options.title === "Save an ONNX model copy")
+          return items.find(({ encrypted }) => encrypted === saveEncrypted);
         if (options.title === "Choose an ONNX file")
           return items.find(({ label }) => label === repositoryFileSelection);
         return backendSelection === undefined
@@ -215,6 +284,9 @@ async function openExtension(
     logs,
     logViews,
     events,
+    passwordPrompts,
+    saveDialogs,
+    writes,
     webview,
     resolveCustomEditor: (name) =>
       editor.resolveCustomEditor(
@@ -252,6 +324,37 @@ async function openExtension(
     listedRepositories,
     showLogs: () => commands.get("onnxLightViewer.showLogs")(),
     receive: (message) => receive(message),
+    setPasswords: (...values) => {
+      passwordValues = values;
+    },
+    openFile: async (filePath) => {
+      modelSource = "local";
+      selection = [uri(filePath)];
+      await receive({ type: "open" });
+    },
+    save: async (filePath, encrypted = false, passwords = []) => {
+      saveEncrypted = encrypted;
+      saveDestination = filePath ? vscode.Uri.file(filePath) : undefined;
+      passwordValues = passwords;
+      await receive({ type: "save" });
+    },
+    failNextSaveWrite: () => {
+      failSaveWrite = true;
+    },
+    failNextSaveRename: () => {
+      failSaveRename = true;
+    },
+    pauseNextSaveDialog: () => {
+      let release, arrived;
+      const wait = new Promise((resolve) => {
+        release = resolve;
+      });
+      const opened = new Promise((resolve) => {
+        arrived = resolve;
+      });
+      saveDialogGate = { wait, arrived };
+      return { opened, release };
+    },
     open: async (name) => {
       modelSource = "local";
       selection = [uri(path.join(__dirname, "models", name))];
@@ -276,6 +379,148 @@ async function openExtension(
     },
   };
 }
+
+test("saves inferred ModelProto copies as plain or encrypted files and opens encrypted copies", async (t) => {
+  const directory = await mkdtemp(
+    path.join(tmpdir(), "onnx-light-viewer-save-"),
+  );
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const { loadModel } = require("../dist/graph");
+  for (const localFiles of [false, true]) {
+    const extension = await openExtension(
+      "inference.onnx",
+      undefined,
+      localFiles,
+    );
+    await extension.receive({ type: "ready" });
+    await extension.receive({ type: "refresh-shapes" });
+    const expected = extension.nativeModels.at(-1).graph();
+    const plain = path.join(directory, `plain-${localFiles}.onnx`);
+    const encrypted = `${plain}.enc`;
+    const password = "private export passphrase";
+    await extension.save(plain);
+    assert.equal(extension.messages.at(-1).type, "save-info");
+    assert.deepEqual(
+      loadModel(await readFile(plain), expected.name).graph(),
+      expected,
+    );
+    await extension.save(encrypted, true, [password, password]);
+    assert.equal(
+      (await readFile(encrypted)).subarray(0, 8).toString(),
+      "ONNXCRY3",
+    );
+    extension.setPasswords(password);
+    await extension.openFile(encrypted);
+    assert.equal(extension.messages.at(-1).type, "graph");
+    await extension.save(plain);
+    assert.deepEqual(
+      loadModel(await readFile(plain), expected.name).graph(),
+      expected,
+    );
+    assert.equal(extension.passwordPrompts.length, 3);
+    assert.equal(
+      extension.passwordPrompts.every(({ password }) => password === true),
+      true,
+    );
+    assert.equal(JSON.stringify(extension.events).includes(password), false);
+    assert.equal(extension.logs.join("\n").includes(password), false);
+    assert.deepEqual(extension.errors, []);
+  }
+  assert.equal(
+    (await readdir(directory)).some((name) => name.endsWith(".tmp")),
+    false,
+  );
+});
+
+test("cancels password and save dialogs and keeps existing files intact after failed writes", async (t) => {
+  const directory = await mkdtemp(
+    path.join(tmpdir(), "onnx-light-viewer-save-errors-"),
+  );
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const extension = await openExtension("relu.onnx", undefined, true);
+  const destination = path.join(directory, "existing.onnx");
+  const original = Buffer.from("existing destination");
+  await writeFile(destination, original);
+  await extension.save(undefined);
+  await extension.save(destination, true);
+  await extension.save(destination, true, ["password", "different"]);
+  assert.equal(extension.writes.length, 0);
+  for (const fail of [
+    extension.failNextSaveWrite,
+    extension.failNextSaveRename,
+  ]) {
+    fail();
+    await extension.save(destination);
+    assert.equal(extension.messages.at(-1).type, "save-error");
+    assert.deepEqual(await readFile(destination), original);
+    assert.deepEqual(await readdir(directory), ["existing.onnx"]);
+  }
+  const source = path.join(directory, "source.onnx");
+  await copyFile(require.resolve("./models/relu.onnx"), source);
+  await extension.openFile(source);
+  const writes = extension.writes.length;
+  await extension.save(source);
+  assert.equal(extension.writes.length, writes);
+  assert.match(extension.errors.at(-1), /different destination/);
+  const encrypted = path.join(directory, "encrypted.onnx.enc");
+  const { loadModel } = require("../dist/graph");
+  await writeFile(
+    encrypted,
+    await loadModel(
+      readFileSync(require.resolve("./models/relu.onnx")),
+      "relu",
+    ).serialize("password"),
+  );
+  const errors = extension.errors.length;
+  extension.setPasswords(undefined);
+  await extension.openFile(encrypted);
+  assert.equal(extension.errors.length, errors);
+  assert.match(extension.logs.join("\n"), /\[CANCELLED\] Open ONNX model/);
+  extension.setPasswords("wrong");
+  await extension.openFile(encrypted);
+  assert.equal(extension.messages.at(-1).type, "load-error");
+  await extension.receive({ type: "ready" });
+  assert.equal(extension.messages.at(-1).graph.nodes[0].opType, "Relu");
+});
+
+test("reuses a decrypted model's host-only password after native recovery", async (t) => {
+  const directory = await mkdtemp(
+    path.join(tmpdir(), "onnx-light-viewer-save-recovery-"),
+  );
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const extension = await openExtension("invalid-graph.onnx", undefined, true);
+  const encrypted = path.join(directory, "invalid.onnx.enc");
+  const password = "recovery passphrase";
+  await extension.save(encrypted, true, [password, password]);
+  extension.setPasswords(password);
+  await extension.openFile(encrypted);
+  await extension.receive({ type: "metadata" });
+  assert.equal(extension.messages.at(-1).type, "metadata-error");
+  const prompts = extension.passwordPrompts.length;
+  await extension.save(path.join(directory, "recovered.onnx"));
+  assert.equal(extension.messages.at(-1).type, "save-info");
+  assert.equal(extension.passwordPrompts.length, prompts);
+  assert.equal(JSON.stringify(extension.events).includes(password), false);
+});
+
+test("does not write a model after replacement or panel disposal during the save dialog", async (t) => {
+  const directory = await mkdtemp(
+    path.join(tmpdir(), "onnx-light-viewer-stale-save-"),
+  );
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  for (const dispose of [false, true]) {
+    const extension = await openExtension("inference.onnx", undefined, true);
+    const gate = extension.pauseNextSaveDialog();
+    const save = extension.save(path.join(directory, "copy.onnx"));
+    await gate.opened;
+    if (dispose) extension.dispose();
+    else await extension.open("relu.onnx");
+    gate.release();
+    await save;
+    assert.deepEqual(extension.writes, []);
+    assert.deepEqual(await readdir(directory), []);
+  }
+});
 
 test("streams local custom-editor files and replacements without reading whole files into the host", async () => {
   const extension = await openExtension("inference.onnx", undefined, true);

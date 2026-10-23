@@ -114,9 +114,16 @@ export interface Graph {
 
 /**
  * Retained native model whose inferred information survives graph projections.
- * Methods neither save the model nor execute its operators.
+ * Methods do not execute operators or write files.
  */
 export interface NativeModel {
+  /**
+   * Serializes the whole model, including inferred information and inline weights.
+   * A password produces authenticated ONNXCRY3 (AES-256-GCM), otherwise plain ONNX.
+   * External weight references are preserved; their files are not copied or encrypted.
+   * sourceFilePath supplies the new location after a source file is moved into a cache.
+   */
+  serialize(password?: string, sourceFilePath?: string): Promise<Uint8Array>;
   /**
    * Projects one graph. When requested, inference first updates the entire
    * retained model in memory, including nested graph value_info.
@@ -187,8 +194,16 @@ const native: {
     domain: string,
     opset: number,
   ): OperatorSchema | null;
-  loadModel(bytes: Uint8Array, fileName: string): NativeModel;
-  loadModelFile(filePath: string, fileName: string): Promise<NativeModel>;
+  loadModel(
+    bytes: Uint8Array,
+    fileName: string,
+    password?: string,
+  ): NativeModel;
+  loadModelFile(
+    filePath: string,
+    fileName: string,
+    password?: string,
+  ): Promise<NativeModel>;
   listBackendTests(): BackendTest[];
   loadBackendTest(id: number): NativeModel;
 } = require("./native/onnx_light_viewer.node");
@@ -248,16 +263,29 @@ export function decodeGraph(
  * @param fileName Display label used for the model.
  * @returns A handle for repeated graph projection and analysis.
  */
-export function loadModel(bytes: Uint8Array, fileName: string): NativeModel {
-  return native.loadModel(bytes, fileName);
+export function loadModel(
+  bytes: Uint8Array,
+  fileName: string,
+  password?: string,
+): NativeModel {
+  return native.loadModel(bytes, fileName, password);
 }
 
-/** Streams a local file off the host thread, skipping large tensor payloads. */
+/** Streams plain files with bounded payloads, or decrypts a complete encrypted file off-thread. */
 export function loadModelFile(
   filePath: string,
   fileName: string,
+  password?: string,
 ): Promise<NativeModel> {
-  return native.loadModelFile(filePath, fileName);
+  return native.loadModelFile(filePath, fileName, password);
+}
+
+/** Recognizes onnx-light's three encrypted ModelProto envelopes from an eight-byte header. */
+export function isEncryptedModel(bytes: Uint8Array): boolean {
+  return (
+    bytes.length >= 8 &&
+    /^ONNXCRY[123]$/.test(String.fromCharCode(...bytes.subarray(0, 8)))
+  );
 }
 
 /** Lists cases sorted by name, preserving native IDs even for duplicate names. */

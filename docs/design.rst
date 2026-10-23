@@ -129,12 +129,26 @@ The retained model interface is:
    interface NativeModel {
      graph(inferShapes?: boolean, path?: GraphPath): Graph;
      metadata(path?: GraphPath): GraphMetadata;
+     serialize(password?: string, sourceFilePath?: string): Promise<Uint8Array>;
    }
 
 An omitted path selects the root graph. ``graph()`` does not infer shapes;
 ``graph(true, path)`` first infers the enclosing model and then returns the
 selected graph. ``decodeGraph`` instead produces a one-shot snapshot, skipping
 raw tensor bytes by default, without retaining a model for future refreshes.
+``loadModel`` and ``loadModelFile`` accept an optional decryption password.
+``isEncryptedModel`` recognizes the eight-byte ONNXCRY1/2/3 header. Only the host
+prompts for passwords; reload closures retain them in panel-local memory.
+``serialize`` snapshots the whole model and runs on a native worker. Omitted
+inline tensors are restored from the original file after checking its size,
+modification time and tensor identity. ``sourceFilePath`` supplies the current
+location after the Hugging Face cache's atomic rename. Ordinary serialization
+returns plain ONNX bytes; a password selects authenticated AES-256-GCM.
+External weight references remain references.
+
+The host writes the serialized bytes to a temporary sibling of the chosen
+destination, then renames it into place. Failure cleanup removes the temporary
+file. Passwords and model bytes are never included in webview messages.
 
 ``src/webview.ts``
 ~~~~~~~~~~~~~~~~~~

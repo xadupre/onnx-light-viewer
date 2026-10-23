@@ -17,6 +17,7 @@
 #include <onnx_extensions/shapes/dispatch_table.h>
 #include <onnx_op/operator_sets.h>
 #include <onnx_proto/onnx.h>
+#include <onnx_proto/onnx_crypt.h>
 #include <onnx_proto/onnx_verify.h>
 
 #include <algorithm>
@@ -286,6 +287,11 @@ private:
 };
 
 ol::TensorProto *FindTensor(ol::ModelProto &model, const SkippedTensorPayload &payload) {
+  const auto child_at = [](auto &values, size_t index) -> auto & {
+    if (index >= values.size())
+      throw std::runtime_error("Invalid tensor payload path.");
+    return values[index];
+  };
   ProtoKind kind = ProtoKind::Model;
   ol::GraphProto *graph = nullptr;
   ol::NodeProto *node = nullptr;
@@ -300,18 +306,18 @@ ol::TensorProto *FindTensor(ol::ModelProto &model, const SkippedTensorPayload &p
       if (step.field == 7)
         graph = &model.ref_graph();
       else if (step.field == 25)
-        function = &model.ref_functions()[step.index];
+        function = &child_at(model.ref_functions(), step.index);
       break;
     case ProtoKind::Graph:
       if (step.field == 1)
-        node = &graph->ref_node()[step.index];
+        node = &child_at(graph->ref_node(), step.index);
       else if (step.field == 5)
-        tensor = &graph->ref_initializer()[step.index];
+        tensor = &child_at(graph->ref_initializer(), step.index);
       else if (step.field == 15)
-        sparse = &graph->ref_sparse_initializer()[step.index];
+        sparse = &child_at(graph->ref_sparse_initializer(), step.index);
       break;
     case ProtoKind::Node:
-      attribute = &node->ref_attribute()[step.index];
+      attribute = &child_at(node->ref_attribute(), step.index);
       break;
     case ProtoKind::Attribute:
       if (step.field == 5)
@@ -319,22 +325,22 @@ ol::TensorProto *FindTensor(ol::ModelProto &model, const SkippedTensorPayload &p
       else if (step.field == 6)
         graph = &attribute->ref_g();
       else if (step.field == 10)
-        tensor = &attribute->ref_tensors()[step.index];
+        tensor = &child_at(attribute->ref_tensors(), step.index);
       else if (step.field == 11)
-        graph = &attribute->ref_graphs()[step.index];
+        graph = &child_at(attribute->ref_graphs(), step.index);
       else if (step.field == 22)
         sparse = &attribute->ref_sparse_tensor();
       else if (step.field == 23)
-        sparse = &attribute->ref_sparse_tensors()[step.index];
+        sparse = &child_at(attribute->ref_sparse_tensors(), step.index);
       break;
     case ProtoKind::SparseTensor:
       tensor = step.field == 1 ? &sparse->ref_values() : &sparse->ref_indices();
       break;
     case ProtoKind::Function:
       if (step.field == 7)
-        node = &function->ref_node()[step.index];
+        node = &child_at(function->ref_node(), step.index);
       else
-        attribute = &function->ref_attribute_proto()[step.index];
+        attribute = &child_at(function->ref_attribute_proto(), step.index);
       break;
     case ProtoKind::Tensor:
       break;
@@ -391,9 +397,13 @@ void ApplySkippedPayloads(ol::ModelProto &model, const std::vector<SkippedTensor
   }
 }
 
+std::filesystem::path ModelFilePath(const std::string &path) {
+  return std::filesystem::path(std::u8string(path.begin(), path.end()));
+}
+
 int OpenModelFile(const std::string &path) {
 #ifdef _WIN32
-  const auto unicode_path = std::filesystem::u8path(path);
+  const auto unicode_path = ModelFilePath(path);
   return _wopen(unicode_path.c_str(), _O_RDONLY | _O_BINARY);
 #else
   return open(path.c_str(), O_RDONLY);
@@ -1328,11 +1338,125 @@ struct StoredModel {
   std::shared_ptr<ol::core::backend_test::TestCase> backend_case;
   std::shared_ptr<ol::ModelProto> model;
   std::string file_name;
+  std::string file_path;
+  uintmax_t source_size = 0;
+  std::filesystem::file_time_type source_time;
+  std::vector<SkippedTensorPayload> skipped;
+};
+
+void ReadEncryptedModel(ol::ModelProto &model, const std::string &bytes,
+                        const std::string &password) {
+#ifdef ONNX_LIGHT_HAS_OPENSSL
+  ol::LoadEncryptedModelFromString(model, bytes, password);
+  if (!model.has_graph() || !model.has_ir_version() || model.ir_version() <= 0)
+    throw std::runtime_error("This file does not contain an ONNX model graph.");
+#else
+  (void)model;
+  (void)bytes;
+  (void)password;
+  throw std::runtime_error("This native build does not support encrypted ONNX models.");
+#endif
+}
+
+std::optional<std::string> ReadPassword(const Napi::Value &value) {
+  if (value.IsUndefined())
+    return std::nullopt;
+  if (!value.IsString() || value.As<Napi::String>().Utf8Value().empty())
+    throw std::runtime_error("Expected a nonempty password.");
+  return value.As<Napi::String>().Utf8Value();
+}
+
+/** Serializes an independent snapshot; omitted inline payloads must first be restored. */
+class SerializeModelWorker : public Napi::AsyncWorker {
+public:
+  SerializeModelWorker(Napi::Env env, std::shared_ptr<StoredModel> source,
+                       std::optional<std::string> password, std::string file_path)
+      : Napi::AsyncWorker(env), deferred_(Napi::Promise::Deferred::New(env)),
+        source_(std::move(source)), snapshot_(source_->model->SharedCopy()),
+        password_(std::move(password)), file_path_(std::move(file_path)) {}
+
+  Napi::Promise Promise() const { return deferred_.Promise(); }
+
+  void Execute() override {
+    try {
+      if (!source_->skipped.empty()) {
+        const auto path = ModelFilePath(file_path_);
+        const auto check_source = [&] {
+          if (std::filesystem::file_size(path) != source_->source_size ||
+              std::filesystem::last_write_time(path) != source_->source_time)
+            throw std::runtime_error("The source model changed on disk. Reopen it before saving.");
+        };
+        check_source();
+        FileDescriptor file(OpenModelFile(file_path_));
+        if (file.get() < 0)
+          throw std::system_error(errno, std::generic_category(), "Could not reopen source model");
+        ol::utils::FdReadStream stream(file.get());
+        ol::ModelProto original;
+        ReadModel(original, stream, ol::ParseOptions{});
+        check_source();
+        for (const auto &payload : source_->skipped) {
+          auto *target = FindTensor(snapshot_, payload);
+          auto *tensor = FindTensor(original, payload);
+          if (!target || !tensor || target->name() != tensor->name() ||
+              target->data_type() != tensor->data_type() ||
+              target->dims().size() != tensor->dims().size() ||
+              !std::equal(target->dims().begin(), target->dims().end(), tensor->dims().begin()))
+            throw std::runtime_error("Could not restore an omitted tensor payload.");
+          *target = tensor->SharedCopy();
+        }
+      }
+      if (password_) {
+#ifdef ONNX_LIGHT_HAS_OPENSSL
+        bytes_ = ol::SaveEncryptedModelToString(snapshot_, *password_, "AES-256-GCM");
+#else
+        throw std::runtime_error("This native build does not support encrypted ONNX models.");
+#endif
+      } else if (!snapshot_.SerializeToString(bytes_)) {
+        throw std::runtime_error("Could not serialize the ONNX model.");
+      }
+    } catch (const std::exception &error) {
+      SetError(error.what());
+    }
+  }
+
+  void OnOK() override {
+    deferred_.Resolve(Napi::Buffer<uint8_t>::Copy(
+        Env(), reinterpret_cast<const uint8_t *>(bytes_.data()), bytes_.size()));
+  }
+  void OnError(const Napi::Error &error) override { deferred_.Reject(error.Value()); }
+
+private:
+  Napi::Promise::Deferred deferred_;
+  std::shared_ptr<StoredModel> source_;
+  ol::ModelProto snapshot_;
+  std::optional<std::string> password_;
+  std::string file_path_;
+  std::string bytes_;
 };
 
 /** Method closures share ownership, even if JavaScript retains only one method. */
 Napi::Object ModelHandle(Napi::Env env, std::shared_ptr<StoredModel> model) {
   auto result = Napi::Object::New(env);
+  result.Set("serialize",
+             Napi::Function::New(env, [model](const Napi::CallbackInfo &call) -> Napi::Value {
+               try {
+                 if (call.Length() > 2 || (!call[1].IsUndefined() && !call[1].IsString()))
+                   throw std::runtime_error("Expected an optional password and source file path.");
+                 const auto file_path =
+                     call[1].IsString() ? call[1].As<Napi::String>().Utf8Value() : model->file_path;
+                 if (file_path.find('\0') != std::string::npos)
+                   throw std::runtime_error("Invalid source model file path.");
+                 auto worker = std::make_unique<SerializeModelWorker>(
+                     call.Env(), model, ReadPassword(call[0]), file_path);
+                 const auto promise = worker->Promise();
+                 worker->Queue();
+                 worker.release();
+                 return promise;
+               } catch (const std::exception &error) {
+                 Napi::Error::New(call.Env(), error.what()).ThrowAsJavaScriptException();
+                 return call.Env().Undefined();
+               }
+             }));
   result.Set("metadata",
              Napi::Function::New(env, [model](const Napi::CallbackInfo &call) -> Napi::Value {
                const auto env = call.Env();
@@ -1376,7 +1500,7 @@ Napi::Object ModelHandle(Napi::Env env, std::shared_ptr<StoredModel> model) {
 
 Napi::Value LoadModel(const Napi::CallbackInfo &info) {
   const auto env = info.Env();
-  if (info.Length() != 2 || !info[0].IsTypedArray() ||
+  if ((info.Length() != 2 && info.Length() != 3) || !info[0].IsTypedArray() ||
       info[0].As<Napi::TypedArray>().TypedArrayType() != napi_uint8_array || !info[1].IsString()) {
     Napi::TypeError::New(env, "Expected a Uint8Array and a file name.")
         .ThrowAsJavaScriptException();
@@ -1387,7 +1511,15 @@ Napi::Value LoadModel(const Napi::CallbackInfo &info) {
     model->source = Napi::Persistent(info[0].As<Napi::Uint8Array>());
     model->file_name = info[1].As<Napi::String>().Utf8Value();
     model->model = std::make_shared<ol::ModelProto>();
-    ReadModel(*model->model, model->source.Value(), false);
+    const auto password = ReadPassword(info[2]);
+    if (password) {
+      const auto bytes = model->source.Value();
+      ReadEncryptedModel(
+          *model->model,
+          std::string(reinterpret_cast<const char *>(bytes.Data()), bytes.ByteLength()), *password);
+    } else {
+      ReadModel(*model->model, model->source.Value(), false);
+    }
     return ModelHandle(env, model);
   } catch (const std::exception &error) {
     Napi::Error::New(env, error.what()).ThrowAsJavaScriptException();
@@ -1397,9 +1529,11 @@ Napi::Value LoadModel(const Napi::CallbackInfo &info) {
 
 class LoadModelWorker : public Napi::AsyncWorker {
 public:
-  LoadModelWorker(Napi::Env env, std::string path, std::string file_name)
+  LoadModelWorker(Napi::Env env, std::string path, std::string file_name,
+                  std::optional<std::string> password)
       : Napi::AsyncWorker(env), deferred_(Napi::Promise::Deferred::New(env)),
-        path_(std::move(path)), model_(std::make_shared<StoredModel>()) {
+        path_(std::move(path)), model_(std::make_shared<StoredModel>()),
+        password_(std::move(password)) {
     model_->file_name = std::move(file_name);
     model_->model = std::make_shared<ol::ModelProto>();
   }
@@ -1412,11 +1546,25 @@ public:
       if (file.get() < 0)
         throw std::system_error(errno, std::generic_category(), "Could not open model file");
       ol::utils::FdReadStream source(file.get());
+      if (password_) {
+        std::string bytes(source.size(), '\0');
+        source.read_bytes(bytes.size(), reinterpret_cast<uint8_t *>(bytes.data()));
+        ReadEncryptedModel(*model_->model, bytes, *password_);
+        return;
+      }
+      const auto path = ModelFilePath(path_);
+      model_->file_path = path_;
+      model_->source_size = std::filesystem::file_size(path);
+      model_->source_time = std::filesystem::last_write_time(path);
       ol::ParseOptions options;
       options.raw_data_threshold = previewPayloadThreshold;
       PayloadSkippingStream stream(source, static_cast<uint64_t>(options.raw_data_threshold));
       ReadModel(*model_->model, stream, options);
       ApplySkippedPayloads(*model_->model, stream.skipped());
+      model_->skipped = stream.skipped();
+      if (std::filesystem::file_size(path) != model_->source_size ||
+          std::filesystem::last_write_time(path) != model_->source_time)
+        throw std::runtime_error("The source model changed while loading. Reopen it.");
     } catch (const std::exception &error) {
       SetError(error.what());
     }
@@ -1429,11 +1577,12 @@ private:
   Napi::Promise::Deferred deferred_;
   std::string path_;
   std::shared_ptr<StoredModel> model_;
+  std::optional<std::string> password_;
 };
 
 Napi::Value LoadModelFile(const Napi::CallbackInfo &info) {
   const auto env = info.Env();
-  if (info.Length() != 2 || !info[0].IsString() || !info[1].IsString()) {
+  if ((info.Length() != 2 && info.Length() != 3) || !info[0].IsString() || !info[1].IsString()) {
     Napi::TypeError::New(env, "Expected a file path and a file name.").ThrowAsJavaScriptException();
     return env.Undefined();
   }
@@ -1441,8 +1590,8 @@ Napi::Value LoadModelFile(const Napi::CallbackInfo &info) {
     const auto path = info[0].As<Napi::String>().Utf8Value();
     if (path.find('\0') != std::string::npos)
       throw std::runtime_error("Invalid model file path.");
-    auto worker =
-        std::make_unique<LoadModelWorker>(env, path, info[1].As<Napi::String>().Utf8Value());
+    auto worker = std::make_unique<LoadModelWorker>(
+        env, path, info[1].As<Napi::String>().Utf8Value(), ReadPassword(info[2]));
     const auto promise = worker->Promise();
     worker->Queue();
     worker.release();
