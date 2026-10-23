@@ -25,6 +25,12 @@ list scrolls without limiting the number of connected parameters.
 **Doc** opens the selected operator's available onnx-light schema documentation,
 with its schema version, formal inputs/outputs, attributes and type constraints.
 It is disabled when no documentation is available. **Close** or Escape dismisses it.
+Inputs and outputs have separate sections, with spaced parameter headings and
+descriptions.
+Documentation is rendered as Markdown, including headings, lists, emphasis,
+inline and fenced code, tables and HTTP(S) links. Raw HTML remains visible as
+text, unsafe links are not activated, and images are shown as text labels
+without fetching external resources. The renderer is bundled for offline use.
 
 **Refresh shapes** explicitly runs native shape/type inference. It updates
 labels and the inspector without resetting selection, positions or the camera.

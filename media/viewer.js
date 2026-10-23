@@ -1,5 +1,9 @@
-/* global acquireVsCodeApi */
+/* global acquireVsCodeApi, markdownit */
 const vscode = acquireVsCodeApi();
+const documentationMarkdown = markdownit({ html: false });
+documentationMarkdown.validateLink = (url) => /^https?:\/\//i.test(url);
+documentationMarkdown.renderer.rules.image = (tokens, index) =>
+  documentationMarkdown.utils.escapeHtml(tokens[index].content);
 const svgNS = "http://www.w3.org/2000/svg";
 const byId = (id) => document.getElementById(id);
 const svg = byId("graph");
@@ -1620,7 +1624,7 @@ byId("show-doc").addEventListener("click", () => {
   byId("doc-title").textContent = `${opType} documentation`;
   byId("doc-version").textContent =
     `${domain} · model opset ${opset} · LightOpSchema since version ${schema.sinceVersion}`;
-  byId("doc-body").textContent = schema.doc;
+  byId("doc-body").innerHTML = documentationMarkdown.render(schema.doc);
   byId("operator-doc").showModal();
 });
 byId("close-doc").addEventListener("click", () => byId("operator-doc").close());

@@ -694,16 +694,15 @@ Napi::Value Schema(Napi::Env env, const std::string &op_type, const std::string 
   documentation << selected->doc();
   for (const auto &[heading, parameters] :
        {std::pair{"Inputs", &selected->inputs()}, std::pair{"Outputs", &selected->outputs()}}) {
-    documentation << "\n\n" << heading << "\n";
+    documentation << "\n\n## " << heading << "\n";
     for (const auto &parameter : *parameters) {
-      documentation << "\n"
-                    << parameter.name << " (" << parameter.type << ")\n"
+      documentation << "\n### " << parameter.name << " (" << parameter.type << ")\n\n"
                     << parameter.description << "\n";
     }
   }
   auto defaults = Napi::Array::New(env);
   uint32_t index = 0;
-  documentation << "\n\nAttributes\n";
+  documentation << "\n\n## Attributes\n";
   for (const auto &attribute : selected->attributes()) {
     const auto type = ol::core::schema::AttributeType_Name(attribute.type);
     documentation << "\n"
@@ -721,7 +720,7 @@ Napi::Value Schema(Napi::Env env, const std::string &op_type, const std::string 
       defaults.Set(index++, item);
     }
   }
-  documentation << "\n\nType constraints\n";
+  documentation << "\n\n## Type constraints\n";
   for (const auto &constraint : selected->type_constraints()) {
     documentation << "\n" << constraint.type_param_str << ": ";
     for (const auto type : constraint.allowed_type_strs) {

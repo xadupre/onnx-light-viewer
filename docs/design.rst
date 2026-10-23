@@ -148,8 +148,11 @@ local images/styles and authorizes the viewer script with a per-panel nonce.
 The host restricts local resource roots to ``media/``.
 
 Model-derived strings are not interpolated into this HTML. They arrive through
-messages and are inserted as DOM text by the viewer, including schema
-documentation and metadata values.
+messages and are inserted as DOM text by the viewer, including metadata values.
+Schema documentation uses the bundled markdown-it renderer with raw HTML
+disabled, HTTP(S)-only links and image labels rendered as escaped text.
+Only this renderer's output is inserted as HTML in the documentation dialog;
+no remote scripts or images are required.
 
 Native C++ source guide
 -----------------------
