@@ -234,8 +234,14 @@ test("previews replacements, highlights affected nodes and applies one or all co
   );
   assert.equal(button.disabled, true);
   load(native.graph());
+  document.querySelector("aside").scrollTop = 500;
   button.click();
+  assert.equal(document.querySelector("aside").scrollTop, 0);
   assert.equal(document.getElementById("fusion-panel").hidden, false);
+  assert.equal(
+    document.getElementById("fusion-panel").parentElement.tagName,
+    "ASIDE",
+  );
   send({
     type: "fusion-patterns",
     requestId: messages.at(-1).requestId,
@@ -270,16 +276,14 @@ test("previews replacements, highlights affected nodes and applies one or all co
   const first = matches.querySelector("input");
   first.checked = true;
   first.dispatchEvent(new window.Event("change"));
-  matches.children[0].querySelectorAll("button")[1].click();
+  matches.children[0].querySelector(".reject-fusion").click();
   assert.equal(first.checked, false);
   assert.equal(document.getElementById("apply-fusion").disabled, true);
   assert.equal(
     messages.some((message) => message.type === "apply-fusion"),
     false,
   );
-  first.checked = true;
-  first.dispatchEvent(new window.Event("change"));
-  document.getElementById("apply-fusion").click();
+  matches.children[0].querySelector(".approve-fusion").click();
   assert.deepEqual(Array.from(messages.at(-1).anchors), [0]);
   assert.equal(messages.at(-1).previewId, 42);
   send({
@@ -354,7 +358,7 @@ test("changing the pattern clears approvals and graph highlights and ignores old
   });
   assert.match(
     document.getElementById("fusion-feedback").textContent,
-    /0 approved \/ 0 matches/,
+    /0 selected \/ 0 matches/,
   );
   document.getElementById("close-fusion").click();
   assert.equal(

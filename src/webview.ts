@@ -46,23 +46,23 @@ export function webviewHtml(
         <nav id="graph-navigation" aria-label="Graph breadcrumbs" hidden></nav>
         <progress id="load-progress" aria-label="Loading ONNX model" hidden></progress>
       </header>
-      <section id="fusion-panel" aria-labelledby="fusion-title" hidden>
-        <h2 id="fusion-title">Fusion patterns</h2>
-        <p>Choose a pattern to highlight its first match in the main graph. Review each replacement, approve or reject matches, then fuse only those you approve. Close to leave the model unchanged; use Save after applying.</p>
-        <label for="fusion-pattern">Native pattern</label>
-        <select id="fusion-pattern" size="6" disabled aria-describedby="fusion-feedback"></select>
-        <button id="preview-fusion" disabled>Refresh preview</button>
-        <button id="close-fusion">Close</button>
-        <p id="fusion-feedback" role="status"></p>
-        <ul id="fusion-matches" aria-label="Fusion matches"></ul>
-        <footer><button id="select-fusions" disabled>Approve all compatible</button><button id="apply-fusion" class="primary" disabled>Fuse approved</button></footer>
-      </section>
       <div class="graph-body">
         <div class="canvas" id="canvas">
           <svg id="graph" role="group" aria-label="Interactive ONNX graph" tabindex="0"><defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs><g id="graph-overview" aria-hidden="true" display="none"><path id="overview-edges"/><path id="overview-nodes"/></g><path id="crossing-edges" class="crossing-edge"/><path id="released-crossing-edges" class="crossing-edge released"/><g id="edges"></g><g id="nodes"></g></svg>
           <div class="zoom-controls" aria-label="Graph zoom"><button id="zoom-out" title="Zoom out (-)" aria-label="Zoom out" aria-keyshortcuts="-">−</button><button id="zoom-fit" title="Fit graph (F)" aria-keyshortcuts="F">Fit</button><button id="zoom-readable" title="Zoom to readable size (100%), centered on the inspected node (R)" aria-label="Zoom to readable size" aria-keyshortcuts="R"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="m8 17 4-10 4 10M10 13h4M4 8V4h4M16 4h4v4M20 16v4h-4M8 20H4v-4"/></svg></button><button id="zoom-area" title="Drag a rectangle to zoom into an area; Alt+drag also works. Escape cancels." aria-pressed="false"><span class="toggle-indicator" aria-hidden="true">&#10003;</span> Zoom area</button><button id="zoom-in" title="Zoom in (+)" aria-label="Zoom in" aria-keyshortcuts="+">+</button></div>
         </div>
         <aside aria-label="Node inspector">
+          <section id="fusion-panel" aria-labelledby="fusion-title" hidden>
+            <h2 id="fusion-title">Fusion patterns</h2>
+            <p>Choose a pattern to highlight its matches in the main graph. Approve fuses a match immediately in memory; Reject leaves it unchanged. For a batch, select matches and click Fuse selected. Use Save to keep the result.</p>
+            <label for="fusion-pattern">Native pattern</label>
+            <select id="fusion-pattern" size="6" disabled aria-describedby="fusion-feedback"></select>
+            <button id="preview-fusion" disabled>Refresh preview</button>
+            <button id="close-fusion">Close</button>
+            <p id="fusion-feedback" role="status"></p>
+            <footer><button id="select-fusions" disabled>Select all compatible</button><button id="apply-fusion" class="primary" disabled>Fuse selected</button></footer>
+            <ul id="fusion-matches" aria-label="Fusion matches"></ul>
+          </section>
           <form id="find-node" role="search"><label for="node-search">Find node or operator</label><div class="node-search-controls"><input id="node-search" type="search" placeholder="Name or operator" aria-controls="node-search-suggestions" autocomplete="off"><button type="submit" title="Go to the next matching node" aria-label="Go to the next matching node">Go</button></div><span id="node-search-result" role="status"></span><ul id="node-search-suggestions" aria-label="Matching nodes" hidden></ul></form>
           <div class="eyebrow">INSPECTOR</div><div class="inspector-heading"><h2 id="node-title">No model loaded</h2><button id="show-doc" disabled aria-haspopup="dialog">Doc</button></div><p id="node-description">Open an ONNX model to explore its connections.</p>
           <button id="open-function" class="icon-button" hidden>Open function</button>

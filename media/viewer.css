@@ -81,7 +81,7 @@ p {
 }
 #model-view {
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
   min-height: 0;
 }
 #logs-view,
@@ -320,7 +320,6 @@ a:focus-visible {
   flex-wrap: wrap;
 }
 .graph-body {
-  grid-row: 3;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 245px;
   min-height: 0;
@@ -707,10 +706,7 @@ button:disabled {
   font-size: 9px;
 }
 #fusion-panel {
-  padding: 16px 24px;
-  max-height: 45vh;
-  overflow: auto;
-  flex-shrink: 0;
+  padding-bottom: 16px;
   border-bottom: 1px solid var(--vscode-panel-border, #d0d7de);
 }
 #fusion-panel[hidden] {
@@ -726,8 +722,8 @@ button:disabled {
   border: 1px solid var(--border);
 }
 #fusion-matches {
-  max-height: 300px;
-  overflow: auto;
+  padding: 0;
+  list-style: none;
 }
 .fusion-match {
   padding: 12px 0;
@@ -748,6 +744,7 @@ button:disabled {
 }
 #fusion-panel footer {
   display: flex;
+  flex-wrap: wrap;
   gap: 12px;
   margin-top: 12px;
 }
@@ -871,6 +868,11 @@ button:disabled {
 }
 #doc-body a {
   color: var(--mint);
+}
+@media (min-width: 761px) {
+  .graph-body:has(#fusion-panel:not([hidden])) {
+    grid-template-columns: minmax(0, 1fr) 360px;
+  }
 }
 @media (max-width: 760px) {
   .graph-body {

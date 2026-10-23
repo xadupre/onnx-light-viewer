@@ -1421,15 +1421,20 @@ test("displays the registered native pattern catalog through the real webview br
   assert.equal(list.disabled, false);
   assert.ok(list.size > 1);
   assert.equal(document.getElementById("fusion-panel").hidden, false);
+  assert.equal(
+    list.closest("aside"),
+    document.querySelector(".graph-body aside"),
+  );
   list.value = "TransposeTranspose";
   list.dispatchEvent(new window.Event("change"));
   await flush();
   assert.equal(document.querySelectorAll("#fusion-matches li").length, 2);
   assert.equal(document.querySelectorAll(".graph-node.selected").length, 2);
-  const approval = document.querySelector("#fusion-matches input");
-  approval.checked = true;
-  approval.dispatchEvent(new window.Event("change"));
-  document.getElementById("apply-fusion").click();
+  document.querySelector("#fusion-matches .approve-fusion").click();
+  assert.match(
+    document.getElementById("fusion-status").textContent,
+    /Applying 1 fusion/,
+  );
   await flush();
   assert.equal(document.querySelectorAll(".graph-node").length, 4);
   assert.match(

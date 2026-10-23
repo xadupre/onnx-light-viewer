@@ -220,7 +220,7 @@ function updateFusionSelection() {
   byId("apply-fusion").disabled = fusionBusy || !anchors.size || overlap;
   byId("fusion-feedback").textContent = overlap
     ? "Selected matches overlap. Select disjoint matches."
-    : `${anchors.size} approved / ${fusionPreview?.matches.length ?? 0} matches.`;
+    : `${anchors.size} selected / ${fusionPreview?.matches.length ?? 0} matches. Approve applies one match immediately; Fuse selected applies the batch.`;
 }
 
 function clearFusionPreview() {
@@ -240,6 +240,17 @@ function previewFusion() {
   requestAction("preview-fusion", "Preview fusion pattern", {
     requestId: ++fusionRequest,
     pattern: byId("fusion-pattern").value,
+  });
+}
+
+function applyFusion(anchors) {
+  const message = `Applying ${anchors.length} fusion match${anchors.length === 1 ? "" : "es"}…`;
+  fusionControls(true, message);
+  byId("fusion-status").textContent = message;
+  requestAction("apply-fusion", "Apply fusion pattern", {
+    requestId: ++fusionRequest,
+    previewId: fusionPreview.id,
+    anchors,
   });
 }
 
@@ -275,19 +286,25 @@ function showFusionMatches(data) {
     });
     label.append(
       checkbox,
-      document.createTextNode(`Approve fusion: ${names.join(" + ")}`),
+      document.createTextNode(`Select for batch: ${names.join(" + ")}`),
     );
     const highlight = document.createElement("button");
     highlight.textContent = "Show nodes";
     highlight.addEventListener("click", () => focusFusionMatch(match));
+    const approve = document.createElement("button");
+    approve.className = "primary approve-fusion";
+    approve.textContent = "Approve";
+    approve.title = "Apply this fusion immediately to the in-memory model";
+    approve.addEventListener("click", () => applyFusion([match.anchor]));
     const reject = document.createElement("button");
+    reject.className = "reject-fusion";
     reject.textContent = "Reject";
     reject.addEventListener("click", () => {
       checkbox.checked = false;
       focusFusionMatch(match);
       updateFusionSelection();
       byId("fusion-feedback").textContent +=
-        " This fusion is not approved; the model is unchanged.";
+        " This match was skipped; the model is unchanged.";
     });
     const replacement = document.createElement("pre");
     replacement.textContent = match.replacement.length
@@ -298,7 +315,7 @@ function showFusionMatches(data) {
           )
           .join("\n")
       : "Remove matched nodes (no replacement operators).";
-    item.append(label, highlight, reject, replacement);
+    item.append(label, highlight, approve, reject, replacement);
     byId("fusion-matches").append(item);
   }
   fusionControls(false);
@@ -1843,10 +1860,12 @@ byId("save-model").addEventListener("click", () => {
 });
 byId("fuse-pattern").addEventListener("click", () => {
   byId("fusion-panel").hidden = false;
+  byId("fusion-panel").parentElement.scrollTop = 0;
   byId("fuse-pattern").setAttribute("aria-expanded", "true");
   clearFusionPreview();
   byId("fusion-pattern").replaceChildren();
   fusionControls(true, "Listing applicable pattern anchors…");
+  fit();
   requestAction("fusion-patterns", "List fusion patterns", {
     requestId: ++fusionRequest,
   });
@@ -1856,6 +1875,7 @@ byId("close-fusion").addEventListener("click", () => {
   byId("fusion-panel").hidden = true;
   byId("fuse-pattern").setAttribute("aria-expanded", "false");
   clearFusionPreview();
+  fit();
   vscode.postMessage({ type: "cancel-fusion" });
 });
 byId("fusion-pattern").addEventListener("change", previewFusion);
@@ -1872,13 +1892,7 @@ byId("select-fusions").addEventListener("click", () => {
   updateFusionSelection();
 });
 byId("apply-fusion").addEventListener("click", () => {
-  const anchors = fusionSelection();
-  fusionControls(true, "Applying selected matches…");
-  requestAction("apply-fusion", "Apply fusion pattern", {
-    requestId: ++fusionRequest,
-    previewId: fusionPreview.id,
-    anchors,
-  });
+  applyFusion(fusionSelection());
 });
 byId("save-form").addEventListener("change", () => {
   const external = ["external-plain", "reuse-plain"].includes(

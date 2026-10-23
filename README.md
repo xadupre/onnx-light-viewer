@@ -47,8 +47,8 @@ development window and run `./start.sh` again.
 ## Documentation
 
 Use **Fuse**, beside **Save**, on the main graph. Choosing a pattern automatically
-previews and highlights its first match; approve or reject matches before
-choosing **Fuse approved**. **Save**
+previews and highlights its first match. Patterns appear in the sidebar;
+**Approve** immediately applies one fusion, or use **Fuse selected** for a batch. **Save**
 writes a separate copy with embedded weights, fresh external files, or reused
 unchanged external weights. See the [fusion walkthrough](docs/features/fusion_patterns.rst).
 

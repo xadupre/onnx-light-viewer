@@ -6,8 +6,8 @@ main graph.
 The list keeps patterns whose anchor operator occurs in that graph, plus patterns
 without an anchor restriction. Matching and rewriting do not execute the model.
 Return to the main graph's breadcrumb to enable this control.
-The available native patterns are displayed in a scrollable list; select a name
-to preview it.
+The available native patterns are displayed in the sidebar; select a name to
+preview it while keeping the main graph visible.
 
 .. code-block:: text
 
@@ -19,7 +19,7 @@ to preview it.
                          |                             |
                          +--------------+--------------+
                                         |
-                      Approve or reject -> Fuse approved
+                     Approve (apply now) / Reject (skip)
                                         |
                                    Save a copy
 
@@ -27,11 +27,15 @@ Each match lists the affected nodes and the replacement operators, tensor names
 and attributes. Choosing a pattern automatically previews its matches and
 highlights the first match in the main graph; nothing is approved automatically.
 **Show nodes** highlights another match for review.
-Check **Approve fusion** for a match or use **Reject** to exclude it.
-Choose **Approve all compatible** to approve a disjoint subset of matches.
-Overlapping matches cannot be applied together; the approval count is shown.
-**Fuse approved** applies only approved matches to the in-memory model.
-**Close** discards the preview and approvals without applying anything.
+Click **Approve** to immediately apply that match: the graph updates and the
+status confirms the fusion. No second confirmation is required. **Reject**
+leaves the model unchanged.
+
+For a batch, check **Select for batch** on individual matches or choose
+**Select all compatible**, then click **Fuse selected**. Overlapping matches
+cannot be applied together; the selection count and next step are shown.
+**Close** discards the preview and batch selection without applying anything.
+All fusions change only the in-memory model; use **Save** to keep the result.
 Graph replacement or navigation invalidates the preview.
 
 For example, two inverse transposes can be replaced with an identity:
