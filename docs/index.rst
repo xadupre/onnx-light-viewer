@@ -5,21 +5,17 @@ ONNX Light Viewer
    :target: https://codecov.io/gh/xadupre/onnx-light-viewer
    :alt: Code coverage
 
-ONNX Light Viewer is an interactive environment for exploring, optimizing and
-running ONNX models in VS Code, powered by native onnx-light. Open local models
-or download and cache them from Hugging Face; navigate graphs and subgraphs,
-inspect operators and parameters, and refresh shapes and metadata with visible
-update counts. Inspect tensor statistics, histograms and color maps, including
-quantized tensors and low-bit encoded values, with support for OpaqueProto,
-StructProto and EncodedValueProto.
+ONNX Light Viewer explores ONNX models in VS Code, powered by native onnx-light.
+Open local files, cached public Hugging Face models or bundled backend test
+graphs. Search and navigate nodes, nested subgraphs and model-local functions;
+inspect operators, small tensor values and Markdown schema documentation.
+Refresh inferred shapes/types and static metadata without changing the source.
+Logs and Status retain operation progress, timing and error details.
 
-Apply fusion patterns, including Layer patterns, quantize selected weights, and
-step through rewriting scenarios and pipelines. Save transformed models with
-embedded or separate weights, and encrypt saved protos or decrypt them on load.
-Run and benchmark whole models or selected subgraphs using onnx-light,
-onnx-light-cpu or ONNX Runtime on CPU or CUDA, compare execution engines, and
-export inputs and outputs with a Python script to reproduce runs locally.
-An action log records operations, timing, status and errors.
+The current viewer does not execute or optimize models. See :doc:`features` for
+the implemented feature checklist and a separate list of planned/in-progress
+capabilities, including model saving and encrypted I/O. Start with
+:doc:`getting_started` for a guided inspection and copyable shell/Python examples.
 
 .. figure:: _static/viewer-snapshot.png
    :alt: ONNX Light Viewer showing a graph with symbolic tensor shapes and the Reshape node's parameters.
