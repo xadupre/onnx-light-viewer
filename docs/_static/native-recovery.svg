@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 445" role="img" aria-labelledby="title description">
+  <title id="title">Native handle recovery and UI completion guards</title>
+  <desc id="description">For the current model, failed shape or metadata analysis invalidates the handle but retains the display; the next action reloads the source. Navigation and analysis results or errors are checked before updating the UI. Stale completions are ignored.</desc>
+  <style>
+    .background { fill: #f8fafc; }
+    .card { fill: #dbeafe; stroke: #2563eb; stroke-width: 2; }
+    .good { fill: #dcfce7; stroke: #15803d; }
+    .warning { fill: #fef3c7; stroke: #b45309; }
+    .text { fill: #0f172a; font-family: sans-serif; font-size: 18px; }
+    .heading { font-size: 21px; font-weight: bold; }
+    .note { font-size: 15px; }
+    .arrow { fill: none; stroke: #475569; stroke-width: 2; }
+    .arrow-head { fill: #475569; }
+    @media (prefers-color-scheme: dark) {
+      .background { fill: #0f172a; }
+      .card { fill: #172554; stroke: #60a5fa; }
+      .good { fill: #052e16; stroke: #4ade80; }
+      .warning { fill: #451a03; stroke: #fbbf24; }
+      .text { fill: #e2e8f0; }
+      .arrow { stroke: #94a3b8; }
+      .arrow-head { fill: #94a3b8; }
+    }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 Z" class="arrow-head"/>
+    </marker>
+  </defs>
+  <rect width="960" height="445" rx="16" class="background"/>
+  <g class="text" text-anchor="middle">
+    <text x="235" y="27" class="heading">Current-model lifecycle</text>
+    <text x="720" y="27" class="heading">UI completion guard</text>
+    <path d="M 475 20 V 425" class="arrow" stroke-dasharray="4 6"/>
+    <rect x="25" y="75" width="190" height="65" rx="10" class="card"/>
+    <text x="120" y="103" class="heading">Ready</text>
+    <text x="120" y="125" class="note">Retained C++ model</text>
+    <rect x="265" y="75" width="170" height="65" rx="10" class="card"/>
+    <text x="350" y="103" class="heading">Analyze</text>
+    <text x="350" y="125" class="note">Shapes / metadata</text>
+    <rect x="265" y="220" width="170" height="70" rx="10" class="card warning"/>
+    <text x="350" y="250" class="heading">Invalid</text>
+    <text x="350" y="275" class="note">Keep last display</text>
+    <rect x="25" y="340" width="190" height="70" rx="10" class="card"/>
+    <text x="120" y="372" class="heading">Reload source</text>
+    <text x="120" y="395" class="note">Path / bytes / case</text>
+    <rect x="610" y="75" width="240" height="65" rx="10" class="card"/>
+    <text x="730" y="103" class="heading">Result or error</text>
+    <text x="730" y="125" class="note">Navigation / analysis</text>
+    <path d="M 730 170 L 820 225 L 730 280 L 640 225 Z" class="card"/>
+    <text x="730" y="231" class="note">Still current?</text>
+    <rect x="500" y="340" width="190" height="70" rx="10" class="card good"/>
+    <text x="595" y="372" class="heading">Apply / report</text>
+    <text x="595" y="395" class="note">Current request only</text>
+    <rect x="750" y="340" width="190" height="70" rx="10" class="card warning"/>
+    <text x="845" y="372" class="heading">Ignore</text>
+    <text x="845" y="395" class="note">Stale result / error</text>
+    <g class="arrow" marker-end="url(#arrow)">
+      <path d="M 215 107 H 265"/>
+      <path d="M 350 75 V 55 H 120 V 75"/>
+      <path d="M 350 140 V 220"/>
+      <path d="M 265 255 H 190 V 340"/>
+      <path d="M 120 340 V 140"/>
+      <path d="M 215 375 H 350 V 290" stroke-dasharray="5 4"/>
+      <path d="M 730 140 V 170"/>
+      <path d="M 640 225 H 595 V 340"/>
+      <path d="M 820 225 H 845 V 340"/>
+    </g>
+    <text x="235" y="97" class="note">call</text>
+    <text x="235" y="48" class="note">success</text>
+    <text x="392" y="185" class="note">failure</text>
+    <text x="238" y="315" class="note">next action</text>
+    <text x="135" y="210" class="note" text-anchor="start">reload OK</text>
+    <text x="278" y="400" class="note">reload fails</text>
+    <text x="615" y="210" class="note">yes</text>
+    <text x="865" y="310" class="note">no</text>
+    <text x="720" y="435" class="note">Check panel, model and graph request.</text>
+  </g>
+</svg>
