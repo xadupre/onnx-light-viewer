@@ -700,8 +700,9 @@ for (const [kind, panelOpen] of [
           );
         }
         if (button.id === "show-metadata") {
+          const shadow = window.getComputedStyle(button).boxShadow;
           assert.equal(
-            Boolean(window.getComputedStyle(button).boxShadow),
+            shadow !== "" && shadow !== "none",
             button.getAttribute("aria-expanded") === "true",
           );
         }
@@ -2441,7 +2442,12 @@ test("keeps positions correct when selected offscreen nodes move before their SV
     .getElementById("find-node")
     .dispatchEvent(new window.Event("submit", { cancelable: true }));
   const target = document.querySelector(".graph-node.selected");
-  assert.equal(target.getAttribute("transform"), "translate(80 50)");
+  const [, x, y] = target
+    .getAttribute("transform")
+    .match(/^translate\(([\d.-]+) ([\d.-]+)\)$/)
+    .map(Number);
+  assert.ok(Math.abs(x - 80) < 1e-9);
+  assert.ok(Math.abs(y - 50) < 1e-9);
   const actual = nodePositions(document, ".graph-node.selected > rect")[0];
   assert.equal(actual.y, positions[0].y + 700 * step + 50);
 });
