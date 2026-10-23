@@ -9,12 +9,20 @@ The **Controls** tab groups keyboard shortcuts, mouse gestures and navigation
 buttons into two-column tables: **Control** and **Action**. It is available even
 before a model is loaded.
 
-* **+**, **-** or Ctrl+wheel zoom without rearranging nodes. **Fit** recenters
-  the view and includes nodes moved outside the original layout.
+* **+**, **-** or Ctrl+wheel zoom without rearranging nodes. Ctrl+wheel zooms
+  around the pointer, both in and out. **Fit** recenters the view and includes
+  nodes moved outside the original layout.
+* Click **Zoom area**, then drag a rectangle over any part of the graph to
+  magnify it. Alt+drag also works, including over nodes and subgraph links,
+  without opening the subgraph. The mode ends after one drag; Escape cancels
+  it. Selection and node positions are preserved. Area zoom uses the same
+  minimum zoom as the buttons, even when the drag ends outside the canvas.
 * The **Zoom to readable size** icon beside **Fit** jumps directly to 100%,
   centered on the inspected node, without repeated **+** clicks.
   Large graphs omit unreadable text in overview and only paint nodes and
   connections intersecting the viewport, with a small margin for panning.
+* With focus in the graph or its zoom controls, **F** fits the graph, **R**
+  jumps to readable size, and **+** / **-** zoom in / out.
 * Graphs with more than 1,000 nodes open at readable size. Only nearby SVG
   elements are created and attached; **Fit** uses two batched paths rather than
   thousands of interactive elements. Long connections crossing the viewport

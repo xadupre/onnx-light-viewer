@@ -20,6 +20,7 @@ let crossingConnections = new Set();
 let readablePending = false;
 let hasOperators = false;
 let gesture;
+let zoomAreaMode = false;
 let inspectedNode;
 let inspectedView;
 let tensorInformation = new Map();
@@ -892,6 +893,7 @@ function moveNodes(origins, dx, dy) {
 }
 
 function endGesture(cancel = false) {
+  setZoomAreaMode(false);
   if (!gesture) return;
   const previous = gesture;
   gesture = undefined;
@@ -900,7 +902,7 @@ function endGesture(cancel = false) {
   if (cancel) {
     if (previous.origins) {
       moveNodes(previous.origins, 0, 0);
-    } else {
+    } else if (!previous.zoomArea) {
       selected = previous.originalSelected;
       updateSelection();
     }
@@ -940,6 +942,7 @@ function moveGesture(event) {
     return;
   }
   gesture.moved = true;
+  gesture.end = point;
   const dx = point.x - gesture.start.x;
   const dy = point.y - gesture.start.y;
   if (gesture.origins) {
@@ -952,6 +955,7 @@ function moveGesture(event) {
     for (const [key, value] of Object.entries({ x, y, width, height })) {
       gesture.rectangle.setAttribute(key, value);
     }
+    if (gesture.zoomArea) return;
     selected = new Set(gesture.baseSelected);
     for (const [id, { position, halfWidth, halfHeight }] of nodeViews) {
       if (
@@ -1012,6 +1016,12 @@ function fit() {
   svg.setAttribute("viewBox", `${camera.x} ${camera.y} ${width} ${height}`);
 }
 
+function setZoomAreaMode(active) {
+  zoomAreaMode = active;
+  byId("zoom-area").setAttribute("aria-pressed", String(active));
+  svg.classList.toggle("zoom-area", active);
+}
+
 function connectionPath({ from, to, fromHeight, toHeight }) {
   const y1 = from.y + fromHeight;
   const y2 = to.y - toHeight;
@@ -1036,9 +1046,44 @@ function drawOverview() {
   overviewDirty = false;
 }
 
-function changeZoom(factor) {
+function resetZoom() {
   endGesture();
+  reframe();
+  zoom = 1;
+  pan = { x: 0, y: 0 };
+  fit();
+}
+
+function zoomToArea({ start, end, viewport, moved }) {
+  if (!moved || !end) return;
+  const width = Math.abs(end.x - start.x);
+  const height = Math.abs(end.y - start.y);
+  if (
+    (width * viewport.width) / camera.width < 3 ||
+    (height * viewport.height) / camera.height < 3
+  )
+    return;
+  zoom = Math.max(
+    0.25,
+    Math.max(bounds.width / viewport.width, bounds.height / viewport.height) /
+      Math.max(width / viewport.width, height / viewport.height),
+  );
+  pan = {
+    x: (start.x + end.x) / 2 - bounds.x - bounds.width / 2,
+    y: (start.y + end.y) / 2 - bounds.y - bounds.height / 2,
+  };
+  fit();
+}
+
+function changeZoom(factor, anchor) {
+  endGesture();
+  const previousZoom = zoom;
   zoom = Math.max(0.25, zoom * factor);
+  if (anchor && camera) {
+    const ratio = 1 - previousZoom / zoom;
+    pan.x += (anchor.x - camera.x - camera.width / 2) * ratio;
+    pan.y += (anchor.y - camera.y - camera.height / 2) * ratio;
+  }
   fit();
 }
 
@@ -1381,11 +1426,17 @@ function render(graph, metadata) {
           "subgraph-label",
           "end",
         );
-        link.addEventListener("pointerdown", (event) =>
-          event.stopPropagation(),
-        );
+        let suppressPointerClick = false;
+        link.addEventListener("pointerdown", (event) => {
+          suppressPointerClick = zoomAreaMode || event.altKey;
+          if (!suppressPointerClick) event.stopPropagation();
+        });
         link.addEventListener("click", (event) => {
           event.stopPropagation();
+          if (suppressPointerClick) {
+            suppressPointerClick = false;
+            if (event.detail > 0) return;
+          }
           if (svg.getAttribute("aria-busy") !== "true") navigate(graph.path);
         });
         link.addEventListener("keydown", (event) => {
@@ -1457,7 +1508,13 @@ svg.addEventListener("pointerdown", (event) => {
   const additive = event.ctrlKey || event.metaKey || event.shiftKey;
   const originalSelected = new Set(selected);
   event.preventDefault();
-  if (group) {
+  if (zoomAreaMode || event.altKey) {
+    const rectangle = element("rect", { class: "selection-rectangle" });
+    svg.append(rectangle);
+    gesture = { rectangle, zoomArea: true };
+    svg.classList.add("selecting");
+    svg.focus({ preventScroll: true });
+  } else if (group) {
     selectNode(group.dataset.id, additive);
     group.focus({ preventScroll: true });
     if (!selected.has(group.dataset.id)) return;
@@ -1493,7 +1550,9 @@ svg.addEventListener("pointermove", moveGesture);
 svg.addEventListener("pointerup", (event) => {
   if (gesture?.pointerId !== event.pointerId) return;
   moveGesture(event);
+  const previous = gesture;
   endGesture();
+  if (previous?.zoomArea) zoomToArea(previous);
 });
 svg.addEventListener("pointercancel", (event) => {
   if (gesture?.pointerId === event.pointerId) endGesture(true);
@@ -1504,7 +1563,7 @@ svg.addEventListener("lostpointercapture", (event) => {
 svg.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
     event.preventDefault();
-    if (gesture) {
+    if (gesture || zoomAreaMode) {
       endGesture(true);
     } else {
       selected.clear();
@@ -1519,6 +1578,35 @@ svg.addEventListener("keydown", (event) => {
     selected = new Set(nodeViews.keys());
     updateSelection();
   }
+});
+byId("canvas").addEventListener("keydown", (event) => {
+  if (
+    event.defaultPrevented ||
+    event.ctrlKey ||
+    event.metaKey ||
+    event.altKey ||
+    event.target.closest("#find-node") ||
+    !hasModel
+  )
+    return;
+  switch (event.key.toLowerCase()) {
+    case "f":
+      resetZoom();
+      break;
+    case "r":
+      readableZoom();
+      break;
+    case "+":
+    case "=":
+      changeZoom(1.25);
+      break;
+    case "-":
+      changeZoom(1 / 1.25);
+      break;
+    default:
+      return;
+  }
+  event.preventDefault();
 });
 window.addEventListener("blur", () => endGesture(true));
 byId("show-doc").addEventListener("click", () => {
@@ -1574,12 +1662,12 @@ byId("zoom-out").addEventListener("click", () => {
 });
 byId("zoom-readable").addEventListener("click", readableZoom);
 byId("find-node").addEventListener("submit", findNode);
-byId("zoom-fit").addEventListener("click", () => {
+byId("zoom-fit").addEventListener("click", resetZoom);
+byId("zoom-area").addEventListener("click", () => {
+  const active = !zoomAreaMode;
   endGesture();
-  reframe();
-  zoom = 1;
-  pan = { x: 0, y: 0 };
-  fit();
+  setZoomAreaMode(active);
+  svg.focus({ preventScroll: true });
 });
 svg.addEventListener(
   "wheel",
@@ -1587,7 +1675,10 @@ svg.addEventListener(
     if (event.ctrlKey) {
       if (event.deltaY === 0) return;
       event.preventDefault();
-      changeZoom(event.deltaY < 0 ? 1.25 : 1 / 1.25);
+      const anchor = svg.hasAttribute("viewBox")
+        ? graphPoint(event, byId("canvas").getBoundingClientRect())
+        : undefined;
+      changeZoom(event.deltaY < 0 ? 1.25 : 1 / 1.25, anchor);
       return;
     }
     if ((!event.deltaX && !event.deltaY) || !svg.hasAttribute("viewBox"))

@@ -287,6 +287,9 @@ for (const initialTab of ["model", "logs"]) {
     }
     for (const control of [
       "Ctrl + scroll",
+      "Alt + drag",
+      "Fit the graph",
+      "Jump to readable size",
       "Shift + scroll",
       "Ctrl/Cmd + A",
       "Enter or Space",
@@ -2134,7 +2137,15 @@ test("zooms in and out with buttons and Ctrl+wheel without rearranging the graph
   assert.equal(wheel(-100).defaultPrevented, true);
   assert.ok(viewWidth() < initialWidth);
   wheel(100);
-  assert.equal(graph.getAttribute("viewBox"), initialViewBox);
+  graph
+    .getAttribute("viewBox")
+    .split(" ")
+    .map(Number)
+    .forEach((value, index) =>
+      assert.ok(
+        Math.abs(value - Number(initialViewBox.split(" ")[index])) < 1e-9,
+      ),
+    );
   wheel(100);
   assert.ok(viewWidth() > initialWidth);
   const zoomedOut = graph.getAttribute("viewBox");
@@ -2143,6 +2154,292 @@ test("zooms in and out with buttons and Ctrl+wheel without rearranging the graph
   document.getElementById("zoom-fit").click();
   assert.equal(graph.getAttribute("viewBox"), initialViewBox);
   assert.deepEqual(nodePositions(document), positions);
+});
+
+test("magnifies a rectangle in either direction without moving or selecting nodes", (t) => {
+  const { document, load, pointer } = openViewer(t);
+  load(chainGraph());
+  const graph = document.getElementById("graph");
+  const button = document.getElementById("zoom-area");
+  const initial = graph.getAttribute("viewBox");
+  const positions = nodePositions(document);
+  const nodes = [...document.querySelectorAll(".graph-node")];
+  const selection = () =>
+    nodes.map((node) => node.classList.contains("selected"));
+  const selected = selection();
+  const inspector = document.querySelector("aside").textContent;
+  for (const reverse of [false, true]) {
+    const start = reverse ? { x: 300, y: 300 } : { x: 100, y: 150 };
+    const end = reverse ? { x: 100, y: 150 } : { x: 300, y: 300 };
+    if (!reverse) {
+      button.click();
+      assert.equal(button.getAttribute("aria-pressed"), "true");
+      assert.equal(document.activeElement, graph);
+    }
+    pointer(nodes[0], "pointerdown", start.x, start.y, { altKey: reverse });
+    pointer(graph, "pointermove", end.x, end.y);
+    assert.ok(document.querySelector(".selection-rectangle"));
+    assert.deepEqual(selection(), selected);
+    pointer(graph, "pointerup", end.x, end.y);
+    const [x, y, width, height] = graph
+      .getAttribute("viewBox")
+      .split(" ")
+      .map(Number);
+    assert.ok(Math.abs(x + width / 2 - 200) < 1e-9);
+    assert.ok(Math.abs(y + height / 2 - 225) < 1e-9);
+    assert.ok(Math.abs(height - 150) < 1e-9);
+    assert.ok(Math.abs(width / height - 1060 / 350) < 1e-9);
+    assert.equal(document.querySelector(".selection-rectangle"), null);
+    assert.equal(button.getAttribute("aria-pressed"), "false");
+    assert.equal(graph.hasPointerCapture(1), false);
+    assert.deepEqual(selection(), selected);
+    assert.deepEqual(nodePositions(document), positions);
+    assert.equal(document.querySelector("aside").textContent, inspector);
+    document.getElementById("zoom-out").click();
+    assert.ok(Number(graph.getAttribute("viewBox").split(" ")[3]) > height);
+    document.getElementById("zoom-fit").click();
+    assert.equal(graph.getAttribute("viewBox"), initial);
+  }
+});
+
+test("clamps area zoom outside the captured viewport so zooming out never zooms in", (t) => {
+  const { document, load, pointer } = openViewer(t);
+  load(chainGraph());
+  const graph = document.getElementById("graph");
+  const box = () => graph.getAttribute("viewBox").split(" ").map(Number);
+  for (let index = 0; index < 10; index++)
+    document.getElementById("zoom-out").click();
+  const [, , minimumWidth, minimumHeight] = box();
+  for (const altKey of [false, true]) {
+    const [x, y, width, height] = box();
+    if (!altKey) document.getElementById("zoom-area").click();
+    pointer(graph, "pointerdown", x + width * 0.05, y + height * 0.05, {
+      altKey,
+    });
+    assert.equal(graph.hasPointerCapture(1), true);
+    pointer(graph, "pointerup", x + width * 1.15, y + height * 1.15);
+    const area = box();
+    assert.ok(Math.abs(area[2] - minimumWidth) < 1e-8);
+    assert.ok(Math.abs(area[3] - minimumHeight) < 1e-8);
+    assert.ok(Math.abs(area[0] + area[2] / 2 - (x + width * 0.6)) < 1e-8);
+    assert.ok(Math.abs(area[1] + area[3] / 2 - (y + height * 0.6)) < 1e-8);
+    document.getElementById("zoom-out").click();
+    assert.deepEqual(box(), area);
+  }
+});
+
+test("cancels area zoom and ignores clicks and degenerate rectangles", (t) => {
+  const { document, window, load, pointer, resize } = openViewer(t);
+  load(chainGraph());
+  const graph = document.getElementById("graph");
+  const button = document.getElementById("zoom-area");
+  const initial = graph.getAttribute("viewBox");
+  const selected = document.querySelector(".graph-node.selected");
+  for (const cancel of [
+    () =>
+      graph.dispatchEvent(
+        new window.KeyboardEvent("keydown", { key: "Escape" }),
+      ),
+    () => pointer(graph, "pointercancel", 300, 300),
+    () => graph.releasePointerCapture(1),
+    () => window.dispatchEvent(new window.Event("blur")),
+    () => resize(1060, 350),
+    () => button.click(),
+  ]) {
+    button.click();
+    pointer(graph, "pointerdown", 100, 100);
+    pointer(graph, "pointermove", 300, 300);
+    cancel();
+    pointer(graph, "pointerup", 300, 300);
+    assert.equal(graph.getAttribute("viewBox"), initial);
+    assert.equal(button.getAttribute("aria-pressed"), "false");
+    assert.equal(document.querySelector(".selection-rectangle"), null);
+    assert.equal(document.querySelector(".graph-node.selected"), selected);
+  }
+  for (const [x, y] of [
+    [100, 100],
+    [100, 300],
+    [300, 100],
+    [100.1, 100.1],
+  ]) {
+    button.click();
+    pointer(graph, "pointerdown", 100, 100);
+    pointer(graph, "pointerup", x, y);
+    assert.equal(graph.getAttribute("viewBox"), initial);
+    assert.equal(button.getAttribute("aria-pressed"), "false");
+  }
+  button.click();
+  graph.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape" }));
+  assert.equal(button.getAttribute("aria-pressed"), "false");
+  assert.equal(document.querySelector(".graph-node.selected"), selected);
+  button.click();
+  pointer(graph, "pointerdown", 100, 100);
+  load(demoGraph);
+  assert.equal(button.getAttribute("aria-pressed"), "false");
+  assert.equal(graph.hasPointerCapture(1), false);
+  assert.equal(document.querySelector(".selection-rectangle"), null);
+});
+
+test("prioritizes area zoom on subgraph rows without breaking normal activation", (t) => {
+  const { document, window, load, pointer, messages } = openViewer(t);
+  const model = loadModel(
+    readFileSync(require.resolve("./models/subgraphs.onnx")),
+    "subgraphs.onnx",
+  );
+  const graph = document.getElementById("graph");
+  for (const altKey of [false, true]) {
+    for (const outcome of ["zoom", "cancel", "click"]) {
+      load(model.graph());
+      const link = document.querySelector(".subgraph-link");
+      const target = link.querySelector("text");
+      const row = link.querySelector("rect");
+      const x = Number(row.getAttribute("x")) + 10;
+      const y = Number(row.getAttribute("y")) + 10;
+      const initial = graph.getAttribute("viewBox");
+      const positions = nodePositions(document);
+      const selected = document.querySelector(".graph-node.selected");
+      const count = messages.length;
+      if (!altKey) document.getElementById("zoom-area").click();
+      pointer(target, "pointerdown", x, y, { altKey });
+      assert.equal(graph.hasPointerCapture(1), true);
+      assert.ok(document.querySelector(".selection-rectangle"));
+      if (outcome !== "click") {
+        pointer(graph, "pointermove", x + 40, y + 40);
+      }
+      if (outcome === "cancel") {
+        graph.dispatchEvent(
+          new window.KeyboardEvent("keydown", { key: "Escape" }),
+        );
+      }
+      pointer(
+        graph,
+        "pointerup",
+        x + (outcome === "click" ? 0 : 40),
+        y + (outcome === "click" ? 0 : 40),
+      );
+      target.dispatchEvent(
+        new window.MouseEvent("click", { bubbles: true, detail: 1 }),
+      );
+      assert.equal(messages.length, count);
+      assert.equal(graph.getAttribute("aria-busy"), "false");
+      assert.equal(document.querySelector(".selection-rectangle"), null);
+      assert.equal(graph.hasPointerCapture(1), false);
+      assert.equal(
+        document.getElementById("zoom-area").getAttribute("aria-pressed"),
+        "false",
+      );
+      assert.equal(document.querySelector(".graph-node.selected"), selected);
+      assert.deepEqual(nodePositions(document), positions);
+      if (outcome === "zoom") {
+        assert.ok(
+          Number(graph.getAttribute("viewBox").split(" ")[3]) <
+            Number(initial.split(" ")[3]),
+        );
+        pointer(target, "pointerdown", x, y);
+        pointer(graph, "pointerup", x, y);
+        target.dispatchEvent(
+          new window.MouseEvent("click", { bubbles: true, detail: 1 }),
+        );
+      } else {
+        assert.equal(graph.getAttribute("viewBox"), initial);
+        if (outcome === "cancel") {
+          link.dispatchEvent(
+            new window.KeyboardEvent("keydown", {
+              key: "Enter",
+              bubbles: true,
+            }),
+          );
+        } else {
+          target.dispatchEvent(
+            new window.MouseEvent("click", { bubbles: true }),
+          );
+        }
+      }
+      assert.equal(messages.length, count + 1);
+      assert.equal(messages.at(-1).type, "navigate");
+    }
+  }
+});
+
+test("keyboard zoom shortcuts match controls and stay scoped to the graph canvas", (t) => {
+  const { document, window, load } = openViewer(t);
+  const graph = document.getElementById("graph");
+  const key = (target, value, modifiers = {}) => {
+    const event = new window.KeyboardEvent("keydown", {
+      key: value,
+      bubbles: true,
+      cancelable: true,
+      ...modifiers,
+    });
+    target.dispatchEvent(event);
+    return event;
+  };
+  assert.equal(key(graph, "r").defaultPrevented, false);
+  load(chainGraph());
+  const initial = graph.getAttribute("viewBox");
+  const node = document.querySelector(".graph-node");
+  assert.equal(key(node, "+").defaultPrevented, true);
+  const zoomed = graph.getAttribute("viewBox");
+  assert.notEqual(zoomed, initial);
+  key(graph, "-");
+  assert.equal(graph.getAttribute("viewBox"), initial);
+  key(graph, "=");
+  assert.equal(graph.getAttribute("viewBox"), zoomed);
+  key(document.getElementById("zoom-fit"), "F");
+  assert.equal(graph.getAttribute("viewBox"), initial);
+  key(node, "R");
+  const readable = graph.getAttribute("viewBox");
+  assert.equal(Number(readable.split(" ")[2]), 1060);
+  document.getElementById("zoom-fit").click();
+  document.getElementById("zoom-readable").click();
+  assert.equal(graph.getAttribute("viewBox"), readable);
+  for (const target of [
+    document.getElementById("model-tab"),
+    document.querySelector("aside"),
+    document.getElementById("operator-doc"),
+    document.getElementById("node-search"),
+    document.querySelector("#find-node button"),
+  ]) {
+    for (const shortcut of ["f", "r", "+", "-"]) {
+      assert.equal(key(target, shortcut).defaultPrevented, false);
+      assert.equal(graph.getAttribute("viewBox"), readable);
+    }
+  }
+  for (const modifiers of [
+    { ctrlKey: true },
+    { metaKey: true },
+    { altKey: true },
+  ]) {
+    assert.equal(key(graph, "f", modifiers).defaultPrevented, false);
+    assert.equal(graph.getAttribute("viewBox"), readable);
+  }
+});
+
+test("Ctrl+wheel keeps the graph point under the pointer fixed while zooming in and out", (t) => {
+  const { document, window, load } = openViewer(t);
+  load(chainGraph());
+  const graph = document.getElementById("graph");
+  const view = () => graph.getAttribute("viewBox").split(" ").map(Number);
+  const point = () => {
+    const [x, y, width, height] = view();
+    return [x + width * 0.75, y + height * 0.25];
+  };
+  const initialWidth = view()[2];
+  const anchor = point();
+  for (const deltaY of [-100, 100, 100, -100]) {
+    graph.dispatchEvent(
+      new window.WheelEvent("wheel", {
+        ctrlKey: true,
+        deltaY,
+        clientX: 1060 * 0.75,
+        clientY: 350 * 0.25,
+      }),
+    );
+    point().forEach((value, index) =>
+      assert.ok(Math.abs(value - anchor[index]) < 1e-9),
+    );
+  }
+  assert.ok(Math.abs(view()[2] - initialWidth) < 1e-9);
 });
 
 test("zooms large graphs to a readable scale beyond four times Fit with buttons and Ctrl+wheel", (t) => {

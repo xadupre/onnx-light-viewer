@@ -47,7 +47,7 @@ export function webviewHtml(
         <div class="canvas" id="canvas">
           <form id="find-node" role="search"><input id="node-search" type="search" placeholder="Find node or operator" aria-label="Find a node by name or operator" autocomplete="off"><button type="submit" title="Go to the next matching node" aria-label="Go to the next matching node">Go</button><span id="node-search-result" role="status"></span></form>
           <svg id="graph" role="group" aria-label="Interactive ONNX graph" tabindex="0"><defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs><g id="graph-overview" aria-hidden="true" display="none"><path id="overview-edges"/><path id="overview-nodes"/></g><path id="crossing-edges" class="crossing-edge"/><path id="released-crossing-edges" class="crossing-edge released"/><g id="edges"></g><g id="nodes"></g></svg>
-          <div class="zoom-controls" aria-label="Graph zoom"><button id="zoom-out" aria-label="Zoom out">−</button><button id="zoom-fit" title="Fit graph">Fit</button><button id="zoom-readable" title="Zoom to readable size (100%), centered on the inspected node" aria-label="Zoom to readable size"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="m8 17 4-10 4 10M10 13h4M4 8V4h4M16 4h4v4M20 16v4h-4M8 20H4v-4"/></svg></button><button id="zoom-in" aria-label="Zoom in">+</button></div>
+          <div class="zoom-controls" aria-label="Graph zoom"><button id="zoom-out" title="Zoom out (-)" aria-label="Zoom out" aria-keyshortcuts="-">−</button><button id="zoom-fit" title="Fit graph (F)" aria-keyshortcuts="F">Fit</button><button id="zoom-readable" title="Zoom to readable size (100%), centered on the inspected node (R)" aria-label="Zoom to readable size" aria-keyshortcuts="R"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="m8 17 4-10 4 10M10 13h4M4 8V4h4M16 4h4v4M20 16v4h-4M8 20H4v-4"/></svg></button><button id="zoom-area" title="Drag a rectangle to zoom into an area; Alt+drag also works. Escape cancels." aria-pressed="false">Zoom area</button><button id="zoom-in" title="Zoom in (+)" aria-label="Zoom in" aria-keyshortcuts="+">+</button></div>
         </div>
         <aside aria-label="Node inspector">
           <div class="eyebrow">INSPECTOR</div><div class="inspector-heading"><h2 id="node-title">No model loaded</h2><button id="show-doc" disabled aria-haspopup="dialog">Doc</button></div><p id="node-description">Open an ONNX model to explore its connections.</p>
@@ -100,7 +100,7 @@ export function webviewHtml(
     </section>
     <section id="controls-view" role="tabpanel" aria-labelledby="controls-tab" tabindex="0" hidden>
       <h2>Keyboard and mouse controls</h2>
-      <p>Graph shortcuts apply when the graph or one of its nodes has focus. Use Cmd on macOS where Ctrl/Cmd is shown.</p>
+      <p>Graph shortcuts apply when the graph, one of its nodes or its zoom controls has focus. Use Cmd on macOS where Ctrl/Cmd is shown.</p>
       <h3 id="mouse-controls-heading">Mouse and trackpad</h3>
       <table class="controls-table" aria-labelledby="mouse-controls-heading">
         <thead><tr><th scope="col">Control</th><th scope="col">Action</th></tr></thead>
@@ -112,7 +112,9 @@ export function webviewHtml(
           <tr><th scope="row">Drag the background</th><td>Select nodes in a rectangle. Hold <kbd>Ctrl/Cmd</kbd> or <kbd>Shift</kbd> to add to the selection.</td></tr>
           <tr><th scope="row">Scroll</th><td>Pan vertically.</td></tr>
           <tr><th scope="row"><kbd>Shift</kbd> + scroll</th><td>Pan horizontally. Horizontal trackpad scrolling also pans horizontally.</td></tr>
-          <tr><th scope="row"><kbd>Ctrl</kbd> + scroll</th><td>Zoom in or out.</td></tr>
+          <tr><th scope="row"><kbd>Ctrl</kbd> + scroll</th><td>Zoom in or out around the pointer.</td></tr>
+          <tr><th scope="row">Zoom area, then drag</th><td>Magnify the rectangle without changing selection or node positions. The mode ends after one drag.</td></tr>
+          <tr><th scope="row"><kbd>Alt</kbd> + drag</th><td>Magnify a rectangle, including over nodes and subgraph links, without opening the subgraph.</td></tr>
         </tbody>
       </table>
       <h3 id="keyboard-controls-heading">Graph keyboard shortcuts</h3>
@@ -121,7 +123,10 @@ export function webviewHtml(
         <tbody>
           <tr><th scope="row"><kbd>Enter</kbd> or <kbd>Space</kbd></th><td>Select the focused node, input or output. Hold <kbd>Ctrl/Cmd</kbd> or <kbd>Shift</kbd> to toggle it in the selection.</td></tr>
           <tr><th scope="row"><kbd>Ctrl/Cmd + A</kbd></th><td>Select all nodes, inputs and outputs.</td></tr>
-          <tr><th scope="row"><kbd>Escape</kbd></th><td>Cancel the current drag or selection rectangle; otherwise clear selection.</td></tr>
+          <tr><th scope="row"><kbd>F</kbd></th><td>Fit the graph.</td></tr>
+          <tr><th scope="row"><kbd>R</kbd></th><td>Jump to readable size (100%), centered on the inspected node.</td></tr>
+          <tr><th scope="row"><kbd>+</kbd> / <kbd>−</kbd></th><td>Zoom in / out.</td></tr>
+          <tr><th scope="row"><kbd>Escape</kbd></th><td>Cancel the current drag, selection rectangle or Zoom area mode; otherwise clear selection.</td></tr>
         </tbody>
       </table>
       <h3 id="navigation-controls-heading">Navigation and buttons</h3>

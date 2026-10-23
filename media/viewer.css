@@ -304,7 +304,10 @@ a:focus-visible {
 #graph.dragging .port {
   cursor: grabbing;
 }
-#graph.selecting {
+#graph.selecting,
+#graph.zoom-area,
+#graph.zoom-area .graph-node,
+#graph.zoom-area .port {
   cursor: crosshair;
 }
 #graph.overview text {
