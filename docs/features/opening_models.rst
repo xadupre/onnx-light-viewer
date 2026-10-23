@@ -51,6 +51,12 @@ and any persisted shape inference. It does not change the displayed selection,
 layout or camera. A temporary file is written first and renamed only after the
 write succeeds; failures and cancellations appear in Logs.
 
+Models containing ``training_info`` can be inspected, but all export modes
+explicitly reject them: the pinned onnx-light 0.2.0 does not preserve training
+or initialization graphs. This avoids silently producing an incomplete copy.
+Local source aliases (including symlinked directories, hard links and case
+aliases on case-insensitive volumes) are rejected as save destinations.
+
 Saving resolves existing external weights relative to the local source model.
 Embedded output incorporates them into the saved proto, so encrypted output
 protects them too. External output copies and repartitions the weights, without
@@ -68,6 +74,8 @@ Weight files have unique names alongside the proto and are published first;
 the proto is replaced last, after every weight file succeeds. Failure removes
 new weight files and leaves an existing destination intact. Existing weight
 files are never replaced or deleted.
+Closing the panel or replacing its model during a temporary write cancels
+publication and removes new temporary and external files.
 
 Plain local files still load with bounded tensor payloads. Saving rereads any
 omitted inline data from their source, so the source must remain available and

@@ -11,6 +11,8 @@ const {
   rmSync,
   writeFileSync,
   renameSync,
+  symlinkSync,
+  linkSync,
 } = require("node:fs");
 const { tmpdir } = require("node:os");
 const path = require("node:path");
@@ -120,7 +122,10 @@ test("loads all three encrypted ModelProto formats from buffers and files", asyn
   );
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const password = "model round-trip passphrase";
-  const bytes = modelBytes("inference.onnx");
+  const bytes = Buffer.concat([
+    modelBytes("inference.onnx"),
+    bytesField(6, "model documentation ".repeat(110000)),
+  ]);
   const expected = loadModel(bytes, "inference.onnx").graph(true);
   for (const version of [1, 2, 3]) {
     const encrypted = encryptModelBytes(bytes, password, version);
@@ -144,6 +149,45 @@ test("loads all three encrypted ModelProto formats from buffers and files", asyn
       corrupted[corrupted.length - 1] ^= 1;
       assert.throws(() => loadModel(corrupted, "corrupted", password));
     }
+  }
+});
+
+test("inspects models with training_info but rejects every export before unsupported fields are lost", async (t) => {
+  const directory = mkdtempSync(
+    path.join(tmpdir(), "onnx-light-viewer-training-"),
+  );
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const training = bytesField(
+    20,
+    Buffer.concat([
+      bytesField(1, bytesField(2, "initialization graph")),
+      bytesField(2, bytesField(2, "training algorithm")),
+    ]),
+  );
+  const original = Buffer.concat([modelBytes("relu.onnx"), training]);
+  for (const version of [0, 1, 2, 3]) {
+    const password = version ? "training password" : undefined;
+    const bytes = version
+      ? encryptModelBytes(original, password, version)
+      : original;
+    const file = path.join(directory, `training-${version}.onnx`);
+    writeFileSync(file, bytes);
+    for (const model of [
+      loadModel(bytes, "training", password),
+      await loadModelFile(file, "training", password),
+    ]) {
+      assert.equal(model.graph().nodes[0].opType, "Relu");
+      await assert.rejects(model.serialize(), /training_info.*not supported/);
+      await assert.rejects(
+        model.serialize("export password"),
+        /training_info.*not supported/,
+      );
+      await assert.rejects(
+        model.serializeFiles(1024, "weights"),
+        /training_info.*not supported/,
+      );
+    }
+    assert.deepEqual(readFileSync(file), bytes);
   }
 });
 
@@ -212,13 +256,14 @@ test("saves complete streamed weights, inferred shapes and authenticated encrypt
 
 test("embeds external weights with offsets and repartitions plain external copies without modifying sources", async (t) => {
   const directory = mkdtempSync(
-    path.join(tmpdir(), "onnx-light-viewer-external-"),
+    path.join(tmpdir(), "onnx-light-viewer-external-模型-"),
   );
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const data = [Buffer.alloc(128, 37), Buffer.alloc(128, 53)];
+  const weightName = "poids-é-模型.data";
   const entry = (key, value) =>
     bytesField(13, Buffer.concat([bytesField(1, key), bytesField(2, value)]));
-  const modelBytes = (external) =>
+  const modelBytes = (external, location = weightName) =>
     Buffer.concat([
       varintField(1, 8),
       bytesField(8, varintField(2, 13)),
@@ -235,7 +280,7 @@ test("embeds external weights with offsets and repartitions plain external copie
                 bytesField(8, `weight${index}`),
                 ...(external
                   ? [
-                      entry("location", "source.data"),
+                      entry("location", location),
                       entry("offset", String(17 + index * bytes.length)),
                       entry("length", String(bytes.length)),
                       varintField(14, 1),
@@ -247,8 +292,8 @@ test("embeds external weights with offsets and repartitions plain external copie
         ]),
       ),
     ]);
-  const source = path.join(directory, "source.onnx");
-  const weights = path.join(directory, "source.data");
+  const source = path.join(directory, "модель.onnx");
+  const weights = path.join(directory, weightName);
   const originalWeights = Buffer.concat([Buffer.alloc(17), ...data]);
   writeFileSync(source, modelBytes(true));
   writeFileSync(weights, originalWeights);
@@ -283,6 +328,41 @@ test("embeds external weights with offsets and repartitions plain external copie
   );
   assert.deepEqual(readFileSync(source), modelBytes(true));
   assert.deepEqual(readFileSync(weights), originalWeights);
+  for (const location of [
+    "../outside.data",
+    "a/../outside.data",
+    path.resolve(directory, "outside.data"),
+  ])
+    await assert.rejects(
+      loadModel(modelBytes(true, location), "unsafe").serialize(
+        undefined,
+        source,
+      ),
+      /safe relative path/,
+    );
+  const outside = mkdtempSync(
+    path.join(tmpdir(), "onnx-light-viewer-outside-"),
+  );
+  t.after(() => rmSync(outside, { recursive: true, force: true }));
+  writeFileSync(path.join(outside, "weights.data"), originalWeights);
+  symlinkSync(outside, path.join(directory, "alias"), "junction");
+  await assert.rejects(
+    loadModel(modelBytes(true, "alias/weights.data"), "unsafe").serialize(
+      undefined,
+      source,
+    ),
+    /outside the model directory/,
+  );
+  const hardlink = path.join(directory, "hardlink.data");
+  linkSync(weights, hardlink);
+  await assert.rejects(
+    loadModel(modelBytes(true, "hardlink.data"), "unsafe").serialize(
+      undefined,
+      source,
+    ),
+    /multiple hard links/,
+  );
+  rmSync(hardlink);
   renameSync(weights, `${weights}.missing`);
   await assert.rejects(model.serialize());
 });

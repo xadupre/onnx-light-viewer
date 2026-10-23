@@ -25,6 +25,7 @@
 #include <array>
 #include <bit>
 #include <cerrno>
+#include <charconv>
 #include <cmath>
 #include <cstring>
 #include <filesystem>
@@ -46,6 +47,10 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+
+#ifdef ONNX_LIGHT_HAS_OPENSSL
+#include <openssl/evp.h>
+#endif
 
 #ifdef _WIN32
 #include <fcntl.h>
@@ -203,6 +208,8 @@ public:
     auto &frame = frames_.back();
     frame.field = static_cast<uint32_t>(field.field_number);
     frame.wire_type = static_cast<uint8_t>(field.wire_type);
+    if (frame.kind == ProtoKind::Model && frame.field == 20)
+      has_training_info_ = true;
     if (frame.kind == ProtoKind::Tensor && frame.skipped_fields.contains(frame.field)) {
       field.field_number = 0x1fffffff;
     }
@@ -274,6 +281,7 @@ public:
   }
 
   const std::vector<SkippedTensorPayload> &skipped() const { return skipped_; }
+  bool has_training_info() const { return has_training_info_; }
 
 private:
   void LimitTo(uint64_t) override {}
@@ -289,6 +297,7 @@ private:
   std::vector<ProtoFrame> frames_;
   std::vector<LimitScope> limit_scopes_;
   std::vector<SkippedTensorPayload> skipped_;
+  bool has_training_info_ = false;
 };
 
 ol::TensorProto *FindTensor(ol::ModelProto &model, const SkippedTensorPayload &payload) {
@@ -1436,20 +1445,177 @@ struct StoredModel {
   uintmax_t source_size = 0;
   std::filesystem::file_time_type source_time;
   std::vector<SkippedTensorPayload> skipped;
+  bool has_training_info = false;
 };
 
+bool HasTrainingInfo(const uint8_t *bytes, size_t length) {
+  ol::utils::StringStream stream(bytes, length);
+  std::vector<uint32_t> groups;
+  const auto skip = [&](uint64_t size) {
+    if (size > length - static_cast<size_t>(stream.tell()))
+      throw std::runtime_error("Truncated model field.");
+    stream.skip_bytes(static_cast<ol::utils::offset_t>(size));
+  };
+  while (stream.NotEnd()) {
+    const auto field = stream.next_field();
+    if (groups.empty() && field.field_number == 20)
+      return true;
+    switch (static_cast<uint8_t>(field.wire_type)) {
+    case 0:
+      stream.next_uint64();
+      break;
+    case 1:
+      skip(8);
+      break;
+    case 2: {
+      const auto size = stream.next_uint64();
+      skip(size);
+      break;
+    }
+    case 3:
+      if (groups.size() >= static_cast<size_t>(ol::ParseOptions{}.max_recursion_depth))
+        throw std::runtime_error("Protobuf group nesting exceeds the model parser limit.");
+      groups.push_back(field.field_number);
+      break;
+    case 4:
+      if (groups.empty() || groups.back() != field.field_number)
+        throw std::runtime_error("Invalid protobuf group in ONNX model.");
+      groups.pop_back();
+      break;
+    case 5:
+      skip(4);
+      break;
+    default:
+      throw std::runtime_error("Invalid protobuf wire type in ONNX model.");
+    }
+  }
+  if (!groups.empty())
+    throw std::runtime_error("Unterminated protobuf group in ONNX model.");
+  return false;
+}
+
 void ReadEncryptedModel(ol::ModelProto &model, const std::string &bytes,
-                        const std::string &password) {
+                        const std::string &password, bool &has_training_info) {
 #ifdef ONNX_LIGHT_HAS_OPENSSL
-  ol::LoadEncryptedModelFromString(model, bytes, password);
-  if (!model.has_graph() || !model.has_ir_version() || model.ir_version() <= 0)
-    throw std::runtime_error("This file does not contain an ONNX model graph.");
+  // The combined native decrypt/parse API discards training_info before it can be checked.
+  const std::string_view magic(bytes.data(), std::min<size_t>(8, bytes.size()));
+  const bool legacy = magic == "ONNXCRY1";
+  const EVP_CIPHER *cipher = legacy                ? EVP_aes_256_cbc()
+                             : magic == "ONNXCRY2" ? EVP_chacha20_poly1305()
+                             : magic == "ONNXCRY3" ? EVP_aes_256_gcm()
+                                                   : nullptr;
+  const size_t header_size = legacy ? 40 : 52;
+  if (!cipher || bytes.size() < header_size ||
+      password.size() > static_cast<size_t>(std::numeric_limits<int>::max()))
+    throw std::runtime_error("Invalid encrypted ONNX model envelope.");
+  const auto *input = reinterpret_cast<const uint8_t *>(bytes.data());
+  std::array<uint8_t, 32> key;
+  if (PKCS5_PBKDF2_HMAC(password.data(), static_cast<int>(password.size()), input + 8, 16, 100000,
+                        EVP_sha256(), static_cast<int>(key.size()), key.data()) != 1)
+    throw std::runtime_error("Could not derive the encrypted model key.");
+  const auto context = std::unique_ptr<EVP_CIPHER_CTX, decltype(&EVP_CIPHER_CTX_free)>(
+      EVP_CIPHER_CTX_new(), EVP_CIPHER_CTX_free);
+  if (!context || EVP_DecryptInit_ex(context.get(), cipher, nullptr, key.data(), input + 24) != 1)
+    throw std::runtime_error("Could not initialize encrypted model decryption.");
+  int written = 0;
+  if (magic == "ONNXCRY3" && EVP_DecryptUpdate(context.get(), nullptr, &written, input, 36) != 1)
+    throw std::runtime_error("Could not authenticate the encrypted model header.");
+  if (!legacy && EVP_CIPHER_CTX_ctrl(context.get(), EVP_CTRL_AEAD_SET_TAG, 16,
+                                     const_cast<uint8_t *>(input + 36)) != 1)
+    throw std::runtime_error("Could not set the encrypted model authentication tag.");
+  std::string plaintext(bytes.size() - header_size + EVP_MAX_BLOCK_LENGTH, '\0');
+  size_t output_size = 0;
+  for (size_t offset = header_size; offset < bytes.size();) {
+    const int size = static_cast<int>(std::min<size_t>(1024 * 1024, bytes.size() - offset));
+    if (EVP_DecryptUpdate(context.get(),
+                          reinterpret_cast<uint8_t *>(plaintext.data()) + output_size, &written,
+                          input + offset, size) != 1)
+      throw std::runtime_error("Could not decrypt the ONNX model.");
+    output_size += static_cast<size_t>(written);
+    offset += static_cast<size_t>(size);
+  }
+  if (EVP_DecryptFinal_ex(context.get(),
+                          reinterpret_cast<uint8_t *>(plaintext.data()) + output_size,
+                          &written) != 1)
+    throw std::runtime_error("Could not decrypt the ONNX model: wrong password or damaged file.");
+  output_size += static_cast<size_t>(written);
+  has_training_info =
+      HasTrainingInfo(reinterpret_cast<const uint8_t *>(plaintext.data()), output_size);
+  ol::utils::StringStream stream(plaintext.data(), output_size);
+  ReadModel(model, stream, ol::ParseOptions{});
 #else
   (void)model;
   (void)bytes;
   (void)password;
+  (void)has_training_info;
   throw std::runtime_error("This native build does not support encrypted ONNX models.");
 #endif
+}
+
+void LoadExternalTensor(ol::TensorProto &tensor, const std::filesystem::path &directory) {
+  std::string location;
+  int64_t offset = 0;
+  int64_t length = -1;
+  const auto number = [](std::string_view text) {
+    int64_t value;
+    const auto parsed = std::from_chars(text.data(), text.data() + text.size(), value);
+    if (parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size())
+      throw std::runtime_error("Invalid external weight offset or length.");
+    return value;
+  };
+  for (const auto &entry : tensor.external_data()) {
+    if (entry.key() == "location")
+      location = entry.value();
+    else if (entry.key() == "offset")
+      offset = number(std::string_view(entry.value()));
+    else if (entry.key() == "length" || entry.key() == "size")
+      length = number(std::string_view(entry.value()));
+  }
+  const auto relative = ModelFilePath(location);
+  const auto normalized = relative.lexically_normal();
+  size_t components = 0;
+  bool unsafe = location.empty() || location.find('\0') != std::string::npos ||
+                normalized.empty() || normalized.has_root_path() || normalized.filename().empty() ||
+                normalized == std::filesystem::path(".");
+  for (const auto &part : relative)
+    unsafe |= part == std::filesystem::path("..");
+  for (const auto &part : normalized)
+    if (part != std::filesystem::path("."))
+      unsafe |= ++components > 2;
+  if (unsafe)
+    throw std::runtime_error("External weight location must be a safe relative path.");
+  const auto base_directory = directory.empty() ? std::filesystem::current_path() : directory;
+  const auto path = base_directory / normalized;
+  if (std::filesystem::is_symlink(path))
+    throw std::runtime_error("External weight files must not be symbolic links.");
+  const auto base = std::filesystem::weakly_canonical(base_directory);
+  const auto target = std::filesystem::weakly_canonical(path);
+  auto prefix = base.native();
+  if (!prefix.empty() && prefix.back() != std::filesystem::path::preferred_separator)
+    prefix += std::filesystem::path::preferred_separator;
+  if (target != base && target.native().find(prefix) != 0)
+    throw std::runtime_error("External weight file resolves outside the model directory.");
+  if (std::filesystem::hard_link_count(path) > 1)
+    throw std::runtime_error("External weight files must not have multiple hard links.");
+  const auto utf8_path = path.u8string();
+  FileDescriptor file(OpenModelFile(std::string(utf8_path.begin(), utf8_path.end())));
+  if (file.get() < 0)
+    throw std::system_error(errno, std::generic_category(), "Could not open external weights");
+  ol::utils::FdReadStream stream(file.get());
+  offset = std::max<int64_t>(0, offset);
+  if (offset > stream.size())
+    throw std::runtime_error("External weight offset is past the end of the file.");
+  if (length < 0)
+    length = stream.size() - offset;
+  if (length > stream.size() - offset ||
+      static_cast<uint64_t>(length) > std::numeric_limits<size_t>::max())
+    throw std::runtime_error("External weight length exceeds the available data.");
+  stream.skip_bytes(offset);
+  tensor.ref_raw_data().resize(static_cast<size_t>(length));
+  if (length)
+    stream.read_bytes(length, tensor.ref_raw_data().data());
+  tensor.set_data_location(ol::TensorProto::DEFAULT);
+  tensor.clear_external_data();
 }
 
 std::optional<std::string> ReadPassword(const Napi::Value &value) {
@@ -1534,6 +1700,10 @@ public:
 
   void Execute() override {
     try {
+      if (source_->has_training_info)
+        throw std::runtime_error(
+            "Saving models containing training_info is not supported by onnx-light 0.2.0. "
+            "Export was cancelled to avoid losing training or initialization graphs.");
       if (!source_->skipped.empty()) {
         const auto path = ModelFilePath(file_path_);
         const auto check_source = [&] {
@@ -1566,10 +1736,7 @@ public:
           if (file_path_.empty())
             throw std::runtime_error(
                 "External weights require a local source model path when saving.");
-          const auto directory = ModelFilePath(file_path_).parent_path().u8string();
-          tensor->LoadExternalData(std::string(directory.begin(), directory.end()));
-          tensor->set_data_location(ol::TensorProto::DEFAULT);
-          tensor->clear_external_data();
+          LoadExternalTensor(*tensor, ModelFilePath(file_path_).parent_path());
         }
       if (max_external_file_size_) {
         const ol::SerializeOptions options;
@@ -1761,8 +1928,11 @@ Napi::Value LoadModel(const Napi::CallbackInfo &info) {
       const auto bytes = model->source.Value();
       ReadEncryptedModel(
           *model->model,
-          std::string(reinterpret_cast<const char *>(bytes.Data()), bytes.ByteLength()), *password);
+          std::string(reinterpret_cast<const char *>(bytes.Data()), bytes.ByteLength()), *password,
+          model->has_training_info);
     } else {
+      const auto bytes = model->source.Value();
+      model->has_training_info = HasTrainingInfo(bytes.Data(), bytes.ByteLength());
       ReadModel(*model->model, model->source.Value(), false);
     }
     return ModelHandle(env, model);
@@ -1795,7 +1965,7 @@ public:
       if (password_) {
         std::string bytes(source.size(), '\0');
         source.read_bytes(bytes.size(), reinterpret_cast<uint8_t *>(bytes.data()));
-        ReadEncryptedModel(*model_->model, bytes, *password_);
+        ReadEncryptedModel(*model_->model, bytes, *password_, model_->has_training_info);
         return;
       }
       const auto path = ModelFilePath(path_);
@@ -1807,6 +1977,7 @@ public:
       ReadModel(*model_->model, stream, options);
       ApplySkippedPayloads(*model_->model, stream.skipped());
       model_->skipped = stream.skipped();
+      model_->has_training_info = stream.has_training_info();
       if (std::filesystem::file_size(path) != model_->source_size ||
           std::filesystem::last_write_time(path) != model_->source_time)
         throw std::runtime_error("The source model changed while loading. Reopen it.");

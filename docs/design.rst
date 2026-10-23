@@ -152,6 +152,15 @@ Both methods resolve external weights relative to the local source model.
 and partitioned external payloads. The positive byte limit applies to each
 weight file; oversized tensors fail instead of silently exceeding the limit.
 An external source without a local path, or with missing weights, fails explicitly.
+External directory and location strings are converted from UTF-8 before filesystem
+operations, retaining relative-path, canonical-containment, symlink and hard-link
+checks on every platform.
+
+The native loader detects top-level ``training_info`` before parsing can discard
+it. Such models remain inspectable, but both serialization methods reject export
+explicitly. Encrypted envelopes are decrypted using OpenSSL before the same
+compatibility check; authenticated formats are verified before plaintext is parsed.
+Encryption still uses onnx-light's AES-256-GCM writer and existing ONNXCRY formats.
 
 The host writes the serialized bytes to a temporary sibling of the chosen
 destination, then renames it into place. Failure cleanup removes the temporary
@@ -160,6 +169,10 @@ For multiple files, fresh random weight filenames prevent collisions with source
 or previously saved weights. The host publishes weights without overwriting
 existing files, then atomically replaces the proto as the commit point. Failure
 or model replacement before that point cleans newly published weights.
+For local destinations, filesystem device/inode identity detects source aliases.
+The source check is repeated after writing the temporary proto. Immediately before
+each rename, a panel/model guard propagates cancellation without marking the save
+committed.
 The webview sends only the grid selection and maximum file size. Separately
 encrypted weights remain disabled pending
 `onnx-light#5533 <https://github.com/xadupre/onnx-light/issues/5533>`_.

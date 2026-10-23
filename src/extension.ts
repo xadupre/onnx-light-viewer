@@ -4,7 +4,7 @@
  */
 import * as vscode from "vscode";
 import { randomBytes } from "node:crypto";
-import { open } from "node:fs/promises";
+import { open, stat } from "node:fs/promises";
 import { join, posix } from "node:path";
 import {
   listBackendTests,
@@ -202,12 +202,53 @@ async function readGraph(
   });
 }
 
-/** Publishes a complete file only after the temporary write succeeds. */
+async function assertSaveDestination(
+  source: vscode.Uri | undefined,
+  destination: vscode.Uri,
+): Promise<void> {
+  if (!source || source.scheme !== destination.scheme) return;
+  const samePath =
+    process.platform === "win32"
+      ? source.path.toLowerCase() === destination.path.toLowerCase()
+      : source.path === destination.path;
+  let sameFile = false;
+  if (!samePath && source.scheme === "file") {
+    const existingFile = async (uri: vscode.Uri) => {
+      try {
+        return await stat(uri.fsPath, { bigint: true });
+      } catch (error) {
+        if (
+          error instanceof Error &&
+          "code" in error &&
+          error.code === "ENOENT"
+        )
+          return undefined;
+        throw error;
+      }
+    };
+    const [original, target] = await Promise.all([
+      existingFile(source),
+      existingFile(destination),
+    ]);
+    sameFile =
+      original !== undefined &&
+      target !== undefined &&
+      original.dev === target.dev &&
+      original.ino === target.ino;
+  }
+  if (samePath || sameFile)
+    throw new Error(
+      "Choose a different destination to preserve the source model.",
+    );
+}
+
+/** Publishes a complete file only while the originating model is still current. */
 async function writeModelFile(
   uri: vscode.Uri,
   bytes: Uint8Array,
-  overwrite = true,
-): Promise<void> {
+  overwrite: boolean,
+  canPublish: () => boolean | Promise<boolean>,
+): Promise<boolean> {
   const temporary = vscode.Uri.joinPath(
     uri,
     "..",
@@ -216,8 +257,10 @@ async function writeModelFile(
   let renamed = false;
   try {
     await vscode.workspace.fs.writeFile(temporary, bytes);
+    if (!(await canPublish())) return false;
     await vscode.workspace.fs.rename(temporary, uri, { overwrite });
     renamed = true;
+    return true;
   } finally {
     if (!renamed)
       try {
@@ -672,17 +715,8 @@ async function configurePanel(
               if (!destination || !active || model !== current)
                 return cancelled();
               const source = current.source?.uri;
-              const samePath = (left: string, right: string) =>
-                process.platform === "win32"
-                  ? left.toLowerCase() === right.toLowerCase()
-                  : left === right;
-              if (
-                source?.scheme === destination.scheme &&
-                samePath(source.path, destination.path)
-              )
-                throw new Error(
-                  "Choose a different destination to preserve the source model.",
-                );
+              await assertSaveDestination(source, destination);
+              const isCurrent = () => active && model === current;
               const native = await nativeModel(current, log, () => {
                 void sendStatus();
               });
@@ -706,11 +740,24 @@ async function configurePanel(
               try {
                 for (const file of serialized.weights) {
                   const uri = vscode.Uri.joinPath(destination, "..", file.name);
-                  await writeModelFile(uri, file.bytes, false);
+                  if (
+                    !(await writeModelFile(uri, file.bytes, false, isCurrent))
+                  )
+                    return cancelled();
                   writtenWeights.push(uri);
                   if (!active || model !== current) return cancelled();
                 }
-                await writeModelFile(destination, serialized.model);
+                const published = await writeModelFile(
+                  destination,
+                  serialized.model,
+                  true,
+                  async () => {
+                    if (!isCurrent()) return false;
+                    await assertSaveDestination(source, destination);
+                    return isCurrent();
+                  },
+                );
+                if (!published) return cancelled();
                 committed = true;
               } finally {
                 if (!committed)
