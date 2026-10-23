@@ -455,6 +455,72 @@ test("loads a real one-node ONNX model file matching the demo", () => {
   assert.deepEqual(decodeGraph(bytes, "relu.onnx"), demoGraph);
 });
 
+test("navigates local function definitions, overloads and their nested graphs without caller captures", async () => {
+  const bytes = modelBytes("functions.onnx");
+  for (const model of [
+    loadModel(bytes, "functions.onnx"),
+    await loadModelFile(
+      path.join(__dirname, "models", "functions.onnx"),
+      "functions.onnx",
+    ),
+  ]) {
+    const root = model.graph();
+    const call = root.nodes[0].function;
+    assert.deepEqual(call.path, [{ node: 0, function: 0 }]);
+    assert.equal(call.name, "example::Transform");
+    assert.equal(call.nodeCount, 3);
+    assert.equal(root.nodes[0].schema, null);
+    const body = model.graph(false, call.path);
+    assert.deepEqual(body.inputs, ["x", "cond"]);
+    assert.deepEqual(body.outputs, ["y"]);
+    assert.equal(body.initializerCount, 0);
+    assert.equal(body.tensors.find(({ name }) => name === "x").shape, null);
+    assert.equal(body.nodes[1].opset, "11");
+    assert.equal(
+      body.nodes[1].schema.defaults.find(({ name }) => name === "axis").value,
+      "1",
+    );
+    assert.equal(
+      model.metadata(call.path).values.find(({ name }) => name === "x")
+        .constant,
+      false,
+    );
+    const branch = body.nodes[0].attributes.find(
+      ({ name }) => name === "then_branch",
+    ).graphs[0];
+    const child = model.graph(false, branch.path);
+    assert.equal(child.nodes[0].opType, "Relu");
+    assert.equal(child.breadcrumbs.length, 3);
+    assert.deepEqual(child.inputs, ["x"]);
+    assert.equal(child.nodes[0].opset, "11");
+    const nested = model.graph(false, body.nodes[2].function.path);
+    assert.equal(nested.nodes[0].opType, "Sigmoid");
+    assert.equal(nested.name, "example::Identity [fast]");
+    assert.equal(nested.breadcrumbs.length, 3);
+    assert.equal(
+      model.graph(false, root.nodes[1].function.path).nodes[0].opType,
+      "Neg",
+    );
+    for (const invalid of [
+      [{ node: 0, function: 1 }],
+      [{ node: 99, function: 0 }],
+      [{ node: 0, function: 99 }],
+      [{ node: 0, function: -1 }],
+      [{ node: 0, function: 0.5 }],
+    ]) {
+      assert.throws(() => model.graph(false, invalid), /subgraph path/);
+      assert.throws(() => model.metadata(invalid), /subgraph path/);
+    }
+    assert.equal(model.graph(true, call.path).name, call.name);
+    assert.equal(model.metadata(branch.path).nodes.length, 1);
+    assert.deepEqual(
+      model.graph().nodes.map(({ function: link }) => link),
+      root.nodes.map(({ function: link }) => link),
+    );
+  }
+  assert.deepEqual(modelBytes("functions.onnx"), bytes);
+});
+
 test("opens nested GRAPH and GRAPHS attributes with scoped captures, parameters and schemas", () => {
   const bytes = modelBytes("subgraphs.onnx");
   const model = loadModel(bytes, "subgraphs.onnx");

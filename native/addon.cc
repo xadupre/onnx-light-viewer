@@ -38,6 +38,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <tuple>
 #include <type_traits>
 #include <unordered_set>
 #include <vector>
@@ -434,6 +435,7 @@ struct GraphStep {
   int node;
   int attribute;
   int graph;
+  int function = -1;
 };
 using GraphPath = std::vector<GraphStep>;
 
@@ -459,7 +461,10 @@ GraphPath ReadPath(const Napi::Value &value) {
         throw std::runtime_error("Invalid subgraph path index.");
       return static_cast<int>(number);
     };
-    path.push_back({read("node"), read("attribute"), read("graph")});
+    if (object.Has("function"))
+      path.push_back({read("node"), 0, 0, read("function")});
+    else
+      path.push_back({read("node"), read("attribute"), read("graph")});
   }
   return path;
 }
@@ -469,8 +474,12 @@ Napi::Array PathValue(Napi::Env env, const GraphPath &path) {
   for (uint32_t index = 0; index < path.size(); ++index) {
     auto step = Napi::Object::New(env);
     step.Set("node", path[index].node);
-    step.Set("attribute", path[index].attribute);
-    step.Set("graph", path[index].graph);
+    if (path[index].function >= 0)
+      step.Set("function", path[index].function);
+    else {
+      step.Set("attribute", path[index].attribute);
+      step.Set("graph", path[index].graph);
+    }
     result.Set(index, step);
   }
   return result;
@@ -487,13 +496,69 @@ const ol::GraphProto &ChildGraph(const ol::GraphProto &parent, const GraphStep &
   throw std::runtime_error("Unknown subgraph path.");
 }
 
-/** Returns borrowed graph pointers, ordered from the root to the selected scope. */
-std::vector<const ol::GraphProto *> GraphScopes(const ol::ModelProto &model,
-                                                const GraphPath &path) {
-  std::vector<const ol::GraphProto *> scopes{&model.graph()};
-  for (const auto &step : path)
-    scopes.push_back(&ChildGraph(*scopes.back(), step));
-  return scopes;
+std::string Domain(std::string_view domain);
+
+bool CallsFunction(const ol::NodeProto &node, const ol::FunctionProto &function) {
+  return Domain(node.domain()) == Domain(function.domain()) && node.op_type() == function.name() &&
+         node.overload() == function.overload();
+}
+
+std::string FunctionName(const ol::FunctionProto &function) {
+  return Domain(function.domain()) + "::" + std::string(function.name()) +
+         (function.overload().empty() ? "" : " [" + std::string(function.overload()) + "]");
+}
+
+ol::GraphProto FunctionGraph(const ol::FunctionProto &function) {
+  ol::GraphProto graph;
+  graph.set_name(FunctionName(function));
+  const auto copy_port = [&](ol::ValueInfoProto *port, std::string_view name) {
+    port->set_name(std::string(name));
+    for (const auto &info : function.value_info())
+      if (info.name() == name) {
+        *port = info.SharedCopy();
+        break;
+      }
+  };
+  for (const auto &name : function.input())
+    copy_port(graph.add_input(), name);
+  for (const auto &name : function.output())
+    copy_port(graph.add_output(), name);
+  for (const auto &info : function.value_info())
+    *graph.add_value_info() = info.SharedCopy();
+  for (const auto &node : function.node())
+    *graph.add_node() = node.SharedCopy();
+  for (const auto &entry : function.metadata_props())
+    *graph.add_metadata_props() = entry;
+  return graph;
+}
+
+struct GraphSelection {
+  std::vector<std::unique_ptr<ol::GraphProto>> functions;
+  std::vector<const ol::GraphProto *> scopes;
+  const ol::FunctionProto *function = nullptr;
+  size_t capture_start = 0;
+};
+
+/** Function bodies own their namespace; only graph attributes capture enclosing values. */
+GraphSelection GraphScopes(const ol::ModelProto &model, const GraphPath &path) {
+  GraphSelection selection;
+  selection.scopes.push_back(&model.graph());
+  for (const auto &step : path) {
+    const auto &parent = *selection.scopes.back();
+    if (step.function < 0) {
+      selection.scopes.push_back(&ChildGraph(parent, step));
+      continue;
+    }
+    if (step.node >= parent.node_size() || step.function >= model.functions_size() ||
+        !CallsFunction(parent.node(step.node), model.functions(step.function)))
+      throw std::runtime_error("Unknown function in subgraph path.");
+    selection.function = &model.functions(step.function);
+    selection.functions.push_back(
+        std::make_unique<ol::GraphProto>(FunctionGraph(*selection.function)));
+    selection.capture_start = selection.scopes.size();
+    selection.scopes.push_back(selection.functions.back().get());
+  }
+  return selection;
 }
 
 Napi::String Text(Napi::Env env, std::string_view value) {
@@ -962,11 +1027,12 @@ template <typename Proto> Napi::Array MetadataEntries(Napi::Env env, const Proto
 
 /** Seeds captured constants from enclosing scopes without modifying the model. */
 Napi::Object ModelMetadata(Napi::Env env, const ol::ModelProto &model, const GraphPath &path) {
-  const auto scopes = GraphScopes(model, path);
+  const auto selection = GraphScopes(model, path);
+  const auto &scopes = selection.scopes;
   RunAlgorithm("VerifyModel", [&] { ol::VerifyModel(model); });
   const auto &graph = *scopes.back();
   std::unordered_set<std::string> outer_constants;
-  for (size_t index = 0; index + 1 < scopes.size(); ++index)
+  for (size_t index = selection.capture_start; index + 1 < scopes.size(); ++index)
     outer_constants = RunAlgorithm("InferConstants (enclosing graph)", [&] {
                         return ol::core::compute::InferConstants(*scopes[index], outer_constants);
                       }).first;
@@ -1048,18 +1114,28 @@ Napi::Object ModelMetadata(Napi::Env env, const ol::ModelProto &model, const Gra
  */
 Napi::Object ModelGraph(Napi::Env env, const ol::ModelProto &model, const std::string &file_name,
                         const GraphPath &path = {}) {
-  const auto scopes = GraphScopes(model, path);
+  const auto selection = GraphScopes(model, path);
+  const auto &scopes = selection.scopes;
   const auto &graph = *scopes.back();
   std::map<std::string, Napi::Object> tensor_information;
   std::map<std::string, int64_t> opsets;
-  for (const auto &opset : model.opset_import()) {
+  for (const auto &opset :
+       selection.function ? selection.function->opset_import() : model.opset_import()) {
     opsets[Domain(opset.domain())] = opset.version();
   }
   std::map<std::pair<std::string, std::string>, Napi::Value> schemas;
+  std::map<std::tuple<std::string, std::string, std::string>, int> functions;
+  for (int index = 0; index < model.functions_size(); ++index) {
+    const auto &function = model.functions(index);
+    functions.emplace(std::tuple{Domain(function.domain()), std::string(function.name()),
+                                 std::string(function.overload())},
+                      index);
+  }
   std::unordered_set<std::string> initializers;
   std::map<std::string, Napi::Object> parameters;
   std::unordered_set<std::string> local_names;
-  for (const auto *scope : scopes) {
+  for (size_t scope_index = selection.capture_start; scope_index < scopes.size(); ++scope_index) {
+    const auto *scope = scopes[scope_index];
     local_names.clear();
     for (const auto &value : scope->input())
       local_names.emplace(value.name());
@@ -1154,7 +1230,19 @@ Napi::Object ModelGraph(Napi::Env env, const ol::ModelProto &model, const std::s
       schemas.emplace(key, opset == opsets.end() ? env.Null()
                                                  : Schema(env, key.second, domain, opset->second));
     }
-    result.Set("schema", schemas.at(key));
+    const auto function =
+        functions.find({domain, std::string(node.op_type()), std::string(node.overload())});
+    result.Set("schema", function == functions.end() ? schemas.at(key) : Napi::Value(env.Null()));
+    if (function != functions.end()) {
+      const auto &definition = model.functions(function->second);
+      auto link = Napi::Object::New(env);
+      auto function_path = path;
+      function_path.push_back({static_cast<int>(index), 0, 0, function->second});
+      link.Set("name", FunctionName(definition));
+      link.Set("path", PathValue(env, function_path));
+      link.Set("nodeCount", definition.node_size());
+      result.Set("function", link);
+    }
     auto attributes = Napi::Array::New(env);
     uint32_t attribute_index = 0;
     for (const auto &attribute : node.attribute()) {
