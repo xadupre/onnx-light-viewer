@@ -39,7 +39,7 @@ const statusLabels = {
   CANCELLED: "Cancelled",
   INVALIDATED: "Reload required",
 };
-const tabs = ["model", "logs", "status"];
+const tabs = ["model", "logs", "status", "controls"];
 
 function showTab(name, focus = false) {
   endGesture();

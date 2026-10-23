@@ -118,7 +118,9 @@ test("switches all tabs without logging clicks or changing graph, selection or c
     .dispatchEvent(
       new window.KeyboardEvent("keydown", { key: "End", bubbles: true }),
     );
-  assert.equal(document.activeElement.id, "status-tab");
+  assert.equal(document.activeElement.id, "controls-tab");
+  assert.equal(document.getElementById("controls-view").hidden, false);
+  assert.equal(document.getElementById("status-view").hidden, true);
   document.getElementById("logs-tab").click();
   document
     .getElementById("logs-tab")
@@ -137,6 +139,71 @@ test("switches all tabs without logging clicks or changing graph, selection or c
     camera,
   );
 });
+
+for (const initialTab of ["model", "logs"]) {
+  test(`opens Controls without a model from ${initialTab} and supports keyboard tab navigation`, (t) => {
+    const { document, window, messages } = openViewer(t, initialTab);
+    const tab = document.getElementById("controls-tab");
+    const panel = document.getElementById("controls-view");
+    assert.equal(panel.hidden, true);
+    assert.equal(tab.getAttribute("aria-selected"), "false");
+    assert.equal(tab.tabIndex, -1);
+    assert.equal(tab.getAttribute("role"), "tab");
+    assert.equal(tab.getAttribute("aria-controls"), panel.id);
+    assert.equal(panel.getAttribute("role"), "tabpanel");
+    assert.equal(panel.getAttribute("aria-labelledby"), tab.id);
+    assert.equal(panel.tabIndex, 0);
+    tab.click();
+    assert.equal(panel.hidden, false);
+    assert.equal(tab.getAttribute("aria-selected"), "true");
+    assert.equal(tab.tabIndex, 0);
+    for (const name of ["model", "logs", "status"]) {
+      assert.equal(document.getElementById(`${name}-view`).hidden, true);
+      assert.equal(
+        document.getElementById(`${name}-tab`).getAttribute("aria-selected"),
+        "false",
+      );
+      assert.equal(document.getElementById(`${name}-tab`).tabIndex, -1);
+    }
+    assert.deepEqual(
+      [...panel.querySelectorAll("h3")].map((heading) => heading.textContent),
+      [
+        "Mouse and trackpad",
+        "Graph keyboard shortcuts",
+        "Navigation and buttons",
+      ],
+    );
+    for (const control of [
+      "Ctrl + scroll",
+      "Shift + scroll",
+      "Ctrl/Cmd + A",
+      "Enter or Space",
+      "Escape",
+      "Drag the background",
+      "Home / End",
+    ])
+      assert.ok(panel.textContent.includes(control), control);
+    tab.focus();
+    for (const [key, expected] of [
+      ["ArrowRight", "model"],
+      ["ArrowLeft", "controls"],
+      ["ArrowLeft", "status"],
+      ["ArrowRight", "controls"],
+      ["Home", "model"],
+      ["End", "controls"],
+    ]) {
+      document.activeElement.dispatchEvent(
+        new window.KeyboardEvent("keydown", { key, bubbles: true }),
+      );
+      assert.equal(document.activeElement.id, `${expected}-tab`);
+      assert.equal(document.getElementById(`${expected}-view`).hidden, false);
+    }
+    assert.deepEqual(
+      messages.map(({ type }) => type),
+      ["ready"],
+    );
+  });
+}
 
 test("shows the compiled onnx-light release before loading a graph and after model replacement", (t) => {
   const { document, load } = openViewer(t);
