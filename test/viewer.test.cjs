@@ -109,6 +109,111 @@ function submitOpen(document, window) {
     .dispatchEvent(new window.Event("submit", { cancelable: true }));
 }
 
+test("resizes the sidebar with pointer and keyboard controls without rearranging nodes", (t) => {
+  const { document, window, load } = openViewer(t);
+  const sidebar = document.getElementById("graph-panels");
+  const resizer = document.getElementById("sidebar-resizer");
+  const body = sidebar.parentElement;
+  let bodyWidth = 1200;
+  const width = () =>
+    Math.min(
+      bodyWidth - 166,
+      parseFloat(body.style.getPropertyValue("--sidebar-width")) || 245,
+    );
+  body.getBoundingClientRect = () => new window.DOMRect(0, 0, bodyWidth, 600);
+  sidebar.getBoundingClientRect = () =>
+    new window.DOMRect(bodyWidth - width(), 0, width(), 600);
+  document.getElementById("canvas").getBoundingClientRect = () =>
+    new window.DOMRect(0, 0, bodyWidth - width() - 6, 600);
+  let captured;
+  resizer.setPointerCapture = (id) => (captured = id);
+  resizer.hasPointerCapture = (id) => captured === id;
+  resizer.releasePointerCapture = () => {
+    captured = undefined;
+    pointer("lostpointercapture", 0);
+  };
+  const pointer = (type, x, pointerId = 1, button = 0) => {
+    const event = new window.MouseEvent(type, {
+      clientX: x,
+      button,
+      bubbles: true,
+      cancelable: true,
+    });
+    Object.defineProperty(event, "pointerId", { value: pointerId });
+    resizer.dispatchEvent(event);
+  };
+  const key = (key) =>
+    resizer.dispatchEvent(
+      new window.KeyboardEvent("keydown", { key, cancelable: true }),
+    );
+  load(demoGraph);
+  const nodes = document.getElementById("nodes").innerHTML;
+  const graph = document.getElementById("graph");
+  const viewBox = graph.getAttribute("viewBox");
+  assert.equal(resizer.getAttribute("role"), "separator");
+  assert.equal(resizer.getAttribute("aria-orientation"), "vertical");
+  assert.equal(resizer.getAttribute("aria-controls"), sidebar.id);
+  pointer("pointerdown", 955, 1, 2);
+  pointer("pointermove", 800);
+  assert.equal(body.style.getPropertyValue("--sidebar-width"), "");
+  pointer("pointerdown", 955);
+  assert.equal(captured, 1);
+  assert.equal(document.activeElement, resizer);
+  assert.equal(document.body.classList.contains("resizing-sidebar"), true);
+  pointer("pointermove", 700, 2);
+  assert.equal(width(), 245);
+  pointer("pointermove", 700);
+  assert.equal(width(), 500);
+  assert.equal(resizer.getAttribute("aria-valuemin"), "200");
+  assert.equal(resizer.getAttribute("aria-valuemax"), "1034");
+  assert.equal(resizer.getAttribute("aria-valuenow"), "500");
+  assert.equal(resizer.getAttribute("aria-valuetext"), "500 pixels");
+  assert.notEqual(graph.getAttribute("viewBox"), viewBox);
+  pointer("pointerup", 700);
+  assert.equal(captured, undefined);
+  assert.equal(document.body.classList.contains("resizing-sidebar"), false);
+  pointer("pointermove", 600);
+  assert.equal(width(), 500);
+  key("ArrowLeft");
+  assert.equal(width(), 520);
+  key("ArrowRight");
+  assert.equal(width(), 500);
+  key("Home");
+  assert.equal(width(), 200);
+  key("ArrowRight");
+  assert.equal(width(), 200);
+  key("End");
+  assert.equal(width(), 1034);
+  key("ArrowLeft");
+  assert.equal(width(), 1034);
+  key("Home");
+  pointer("pointerdown", 1000);
+  pointer("pointermove", -1000);
+  assert.equal(width(), 1034);
+  pointer("pointermove", 2000);
+  assert.equal(width(), 200);
+  pointer("pointercancel", 2000);
+  assert.equal(captured, undefined);
+  assert.equal(document.body.classList.contains("resizing-sidebar"), false);
+  key("ArrowLeft");
+  document.getElementById("open-model").click();
+  assert.equal(width(), 220);
+  pointer("pointerdown", 980);
+  pointer("lostpointercapture", 980);
+  pointer("pointermove", 500);
+  assert.equal(width(), 220);
+  pointer("pointerdown", 980);
+  bodyWidth = 800;
+  window.dispatchEvent(new window.Event("resize"));
+  assert.equal(captured, undefined);
+  pointer("pointermove", 500);
+  assert.equal(width(), 220);
+  key("End");
+  assert.equal(width(), 634);
+  assert.equal(resizer.getAttribute("aria-valuemax"), "634");
+  assert.equal(document.getElementById("nodes").innerHTML, nodes);
+});
+
 test("saves without replacing the graph and reports success, cancellation and errors", (t) => {
   const { document, window, messages, load } = openViewer(t);
   const button = document.getElementById("save-model");

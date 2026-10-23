@@ -2152,9 +2152,81 @@ svg.addEventListener(
   },
   { passive: false },
 );
-window.addEventListener("resize", () => {
-  endGesture();
+const sidebar = byId("graph-panels");
+const sidebarResizer = byId("sidebar-resizer");
+const graphBody = sidebar.parentElement;
+let sidebarDrag;
+
+function maximumSidebarWidth() {
+  return Math.max(200, graphBody.getBoundingClientRect().width - 166);
+}
+
+function updateSidebarSize() {
+  const width = Math.round(sidebar.getBoundingClientRect().width);
+  sidebarResizer.setAttribute("aria-valuemin", "200");
+  sidebarResizer.setAttribute("aria-valuemax", String(maximumSidebarWidth()));
+  sidebarResizer.setAttribute("aria-valuenow", String(width));
+  sidebarResizer.setAttribute("aria-valuetext", `${width} pixels`);
   fit();
+}
+
+function resizeSidebar(width) {
+  graphBody.style.setProperty(
+    "--sidebar-width",
+    `${Math.round(Math.max(200, Math.min(maximumSidebarWidth(), width)))}px`,
+  );
+  updateSidebarSize();
+}
+
+function endSidebarDrag(event) {
+  if (sidebarDrag?.pointerId !== event.pointerId) return;
+  sidebarDrag = undefined;
+  document.body.classList.remove("resizing-sidebar");
+  if (sidebarResizer.hasPointerCapture(event.pointerId)) {
+    sidebarResizer.releasePointerCapture(event.pointerId);
+  }
+}
+
+sidebarResizer.addEventListener("pointerdown", (event) => {
+  if (event.button !== 0 || sidebarDrag) return;
+  event.preventDefault();
+  endGesture();
+  sidebarDrag = {
+    pointerId: event.pointerId,
+    x: event.clientX,
+    width: sidebar.getBoundingClientRect().width,
+  };
+  sidebarResizer.setPointerCapture(event.pointerId);
+  sidebarResizer.focus();
+  document.body.classList.add("resizing-sidebar");
+});
+sidebarResizer.addEventListener("pointermove", (event) => {
+  if (sidebarDrag?.pointerId !== event.pointerId) return;
+  resizeSidebar(sidebarDrag.width + sidebarDrag.x - event.clientX);
+});
+for (const type of ["pointerup", "pointercancel", "lostpointercapture"]) {
+  sidebarResizer.addEventListener(type, endSidebarDrag);
+}
+sidebarResizer.addEventListener("keydown", (event) => {
+  const width = sidebar.getBoundingClientRect().width;
+  const widths = {
+    ArrowLeft: width + 20,
+    ArrowRight: width - 20,
+    Home: 200,
+    End: graphBody.getBoundingClientRect().width,
+  };
+  if (!Object.hasOwn(widths, event.key)) return;
+  event.preventDefault();
+  endGesture();
+  resizeSidebar(widths[event.key]);
+});
+if (typeof ResizeObserver !== "undefined") {
+  new ResizeObserver(updateSidebarSize).observe(sidebar);
+}
+window.addEventListener("resize", () => {
+  if (sidebarDrag) endSidebarDrag(sidebarDrag);
+  endGesture();
+  updateSidebarSize();
 });
 window.addEventListener("message", (event) => {
   if (event.data?.type === "application-status") {
