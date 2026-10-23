@@ -7,6 +7,8 @@ Metadata and lifetimes
 
 **Metadata** switches the inspector to native constant, tag and lifetime
 analysis, alongside stored model, graph, node and connected-tensor metadata.
+While open, the button stays filled, outlined and checked, independently of
+its refresh-status color.
 **Refresh metadata** recomputes this analysis for the displayed graph,
 even with the metadata inspector closed, without changing the view.
 

@@ -258,8 +258,9 @@ async function openExtension(
       await receive({ type: "open" });
     },
     chooseBackend: async (name) => {
+      modelSource = "backend";
       backendSelection = name;
-      await receive({ type: "open-backend-test" });
+      await receive({ type: "open" });
     },
     openHuggingFace: async (input, cancel = false, repository) => {
       modelSource = "huggingface";
@@ -458,7 +459,7 @@ test("opens a cached Hugging Face model and preserves the display on invalid inp
   await extension.openHuggingFace(url.replace("/resolve/", "/blob/"));
   assert.deepEqual(
     extension.picks.at(-1).items.map(({ label }) => label),
-    ["Local file", "Hugging Face"],
+    ["Local file", "Hugging Face", "Backend test"],
   );
   const graph = extension.messages.at(-1).graph;
   const repository = {
@@ -858,13 +859,22 @@ test("refreshes the bundled demo and the currently opened model using its retain
   );
 });
 
-test("opens a searchable native backend selector, preserves the model on cancellation and supports shape refresh", async () => {
+test("opens backend tests from the model source picker, preserves cancellation and supports shape refresh", async () => {
   const extension = await openExtension();
   await extension.receive({ type: "ready" });
   const original = extension.messages.at(-1);
   await extension.chooseBackend();
   assert.equal(extension.messages.at(-1), original);
-  const { items, options } = extension.picks[0];
+  assert.deepEqual(
+    extension.picks[0].items.map(({ label }) => label),
+    ["Local file", "Hugging Face", "Backend test"],
+  );
+  assert.ok(
+    extension.logs.some((entry) =>
+      entry.includes("[CANCELLED] Open ONNX model"),
+    ),
+  );
+  const { items, options } = extension.picks[1];
   assert.match(options.placeHolder, /Search/);
   assert.equal(options.matchOnDescription, true);
   assert.equal(options.matchOnDetail, true);
@@ -930,7 +940,7 @@ test("reports a backend model loading failure without replacing the open graph",
   await extension.chooseBackend("not-a-backend-test");
   assert.match(
     extension.errors[0],
-    /Could not open onnx-light backend test:.*Invalid onnx-light backend test ID/,
+    /Could not open ONNX model:.*Invalid onnx-light backend test ID/,
   );
   await extension.receive({ type: "ready" });
   assert.deepEqual(extension.messages.at(-1).graph, before);

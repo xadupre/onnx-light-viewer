@@ -37,6 +37,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <type_traits>
 #include <unordered_set>
 #include <vector>
 
@@ -523,6 +524,20 @@ std::string PreviewCount(size_t count) {
   return count ? " ... (" + std::to_string(count) + " elements)" : "";
 }
 
+template <typename T, typename Values> std::string AttributeListPreview(const Values &values) {
+  std::vector<T> preview;
+  for (size_t index = 0; index < values.size() && index < 8; ++index) {
+    if constexpr (std::is_same_v<T, std::string>)
+      preview.emplace_back(values[index].substr(0, 512));
+    else
+      preview.push_back(values[index]);
+  }
+  auto result = ol::core::schema::AttributeDefaultRepr(preview);
+  if (result.size() > 512)
+    result = result.substr(0, 509) + "...";
+  return result + PreviewCount(values.size() > 8 ? values.size() : 0);
+}
+
 bool IsPayloadOmitted(const ol::TensorProto &tensor) {
   return std::any_of(tensor.external_data().begin(), tensor.external_data().end(),
                      [](const auto &entry) {
@@ -570,24 +585,23 @@ std::string SparsePreview(const ol::SparseTensorProto &tensor) {
 std::string AttributePreview(const ol::AttributeProto &attribute) {
   if (!attribute.ref_attr_name().empty())
     return Preview(attribute, 512);
-  ol::AttributeProto preview;
-  preview.set_name(attribute.name());
-  preview.set_type(attribute.type());
-  size_t count = 0;
   switch (attribute.type()) {
+  case ol::AttributeProto::FLOAT:
+    return ol::core::schema::AttributeDefaultRepr(static_cast<double>(attribute.f()));
+  case ol::AttributeProto::INT:
+    return std::to_string(attribute.i());
+  case ol::AttributeProto::STRING:
+    return std::string(attribute.s().substr(0, 512)) + (attribute.s().size() > 512 ? "..." : "");
   case ol::AttributeProto::GRAPH:
     return std::to_string(attribute.g().node_size()) + " nodes";
   case ol::AttributeProto::GRAPHS:
     return std::to_string(attribute.graphs_size()) + " subgraphs";
   case ol::AttributeProto::FLOATS:
-    count = PreviewValues(attribute.floats(), preview.ref_floats());
-    break;
+    return AttributeListPreview<double>(attribute.floats());
   case ol::AttributeProto::INTS:
-    count = PreviewValues(attribute.ints(), preview.ref_ints());
-    break;
+    return AttributeListPreview<int64_t>(attribute.ints());
   case ol::AttributeProto::STRINGS:
-    count = PreviewValues(attribute.strings(), preview.ref_strings());
-    break;
+    return AttributeListPreview<std::string>(attribute.strings());
   case ol::AttributeProto::TENSOR:
     return TensorPreview(attribute.t());
   case ol::AttributeProto::SPARSE_TENSOR:
@@ -602,7 +616,6 @@ std::string AttributePreview(const ol::AttributeProto &attribute) {
   default:
     return Preview(attribute, 512);
   }
-  return Preview(preview, 512) + PreviewCount(count);
 }
 
 Napi::Array Dimensions(Napi::Env env, const ol::TensorShapeProto &shape) {
