@@ -98,6 +98,92 @@ function openViewer(t, initialTab = "model") {
   };
 }
 
+test("shows loading progress until success, failure or cancellation, including initial loads", (t) => {
+  const { document, window, load, messages } = openViewer(t);
+  const progress = document.getElementById("load-progress");
+  const state = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  assert.equal(progress.hidden, false);
+  assert.equal(progress.hasAttribute("value"), false);
+  assert.equal(progress.getAttribute("aria-label"), "Loading ONNX model");
+  assert.equal(document.getElementById("open-model").disabled, true);
+  load(demoGraph);
+  assert.equal(progress.hidden, true);
+  for (const button of ["open-model", "open-backend-test"]) {
+    document.getElementById(button).click();
+    assert.equal(progress.hidden, false);
+    const request = messages.at(-1);
+    state({
+      type: "log-entry",
+      entry: {
+        id: request.actionId,
+        action: "Open model",
+        timestamp: new Date().toISOString(),
+        status: "CANCELLED",
+      },
+    });
+    assert.equal(progress.hidden, true);
+  }
+  state({ type: "load-state", pending: true });
+  assert.equal(progress.hidden, false);
+  assert.equal(
+    document.getElementById("model-view").getAttribute("aria-busy"),
+    "true",
+  );
+  state({ type: "load-error", error: "Invalid model" });
+  assert.equal(progress.hidden, true);
+  assert.match(
+    document.getElementById("load-status").textContent,
+    /Invalid model/,
+  );
+  assert.equal(document.getElementById("open-model").disabled, false);
+  state({ type: "load-state", pending: true });
+  load(demoGraph);
+  assert.equal(progress.hidden, true);
+  assert.equal(
+    document.getElementById("model-view").getAttribute("aria-busy"),
+    "false",
+  );
+});
+
+test("keeps replacement loading visible when an in-flight navigation renders", (t) => {
+  const { document, messages, load, window } = openViewer(t);
+  const model = loadModel(
+    readFileSync(require.resolve("./models/subgraphs.onnx")),
+    "subgraphs.onnx",
+  );
+  const root = model.graph();
+  const path = root.nodes[0].attributes.find(({ graphs }) => graphs?.length)
+    .graphs[0].path;
+  load(model.graph(false, path));
+  const state = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+
+  document.getElementById("open-model").click();
+  const replacement = messages.at(-1);
+  document.querySelector("#graph-navigation button").click();
+  assert.equal(messages.at(-1).type, "navigate");
+  load(root);
+  assert.equal(document.getElementById("load-progress").hidden, false);
+  assert.equal(
+    document.getElementById("model-view").getAttribute("aria-busy"),
+    "true",
+  );
+  assert.equal(document.getElementById("open-model").disabled, true);
+
+  state({
+    type: "log-entry",
+    entry: {
+      id: replacement.actionId,
+      action: "Open model",
+      timestamp: new Date().toISOString(),
+      status: "SUCCEEDED",
+    },
+  });
+  assert.equal(document.getElementById("load-progress").hidden, true);
+  assert.equal(document.getElementById("open-model").disabled, false);
+});
+
 test("switches all tabs without logging clicks or changing graph, selection or camera", async (t) => {
   const { document, load, window, events } = openViewer(t);
   load(demoGraph);
@@ -2105,6 +2191,198 @@ test("jumps to readable zoom and culls offscreen SVG content without rebuilding 
   assert.ok(nodes.every((node) => node.getAttribute("display") === "inline"));
   assert.deepEqual([...document.querySelectorAll(".graph-node")], nodes);
   assert.deepEqual(nodePositions(document), positions);
+});
+
+test("virtualizes thousands of nodes, finds distant operators and uses a batched overview", (t) => {
+  const { document, window, load } = openViewer(t);
+  const model = chainGraph(4000);
+  model.nodes[3998].parameters = [
+    { name: "weight", type: "FLOAT", shape: ["3", "4"] },
+  ];
+  model.nodes[3998].attributes = [
+    { name: "body", graphs: [{ name: "child", path: [], nodeCount: 0 }] },
+  ];
+  load(model);
+  const graph = document.getElementById("graph");
+  const mounted = () => document.querySelectorAll(".graph-node").length;
+  assert.ok(mounted() > 0 && mounted() < 20);
+  assert.equal(Number(graph.getAttribute("viewBox").split(" ")[3]), 350);
+  const first = document.querySelector(".graph-node");
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: {
+        type: "metadata-info",
+        metadata: {
+          model: [],
+          graph: [],
+          values: [],
+          nodes: [
+            {
+              id: "node-3998",
+              unusedOutputs: ["tensor_3998"],
+              releaseAfter: [],
+              lastUse: [],
+              entries: [],
+            },
+          ],
+        },
+      },
+    }),
+  );
+  const search = (value) => {
+    document.getElementById("node-search").value = value;
+    document
+      .getElementById("find-node")
+      .dispatchEvent(new window.Event("submit", { cancelable: true }));
+  };
+  search("activation_3998");
+  assert.equal(
+    document.getElementById("node-name").textContent,
+    "activation_3998",
+  );
+  assert.equal(
+    document.querySelector(".graph-node.selected").getAttribute("data-id"),
+    "node-3998",
+  );
+  assert.match(
+    document.querySelector(".graph-node.selected .unused-label").textContent,
+    /Unused: 1/,
+  );
+  const selected = document.querySelector(".graph-node.selected");
+  const initializer = selected.querySelector(".node-initializer");
+  assert.equal(initializer.getAttribute("aria-label"), "weight: FLOAT [3, 4]");
+  assert.ok(
+    Number(initializer.getAttribute("y")) <
+      Number(selected.querySelector(".subgraph-link rect").getAttribute("y")),
+  );
+  assert.equal(first.isConnected, false);
+  assert.ok(mounted() < 20);
+  search("RELU");
+  assert.equal(
+    document.getElementById("node-name").textContent,
+    "activation_3999",
+  );
+  const current = graph.getAttribute("viewBox");
+  search("does-not-exist");
+  assert.equal(
+    document.getElementById("node-search-result").textContent,
+    "No matching node",
+  );
+  assert.equal(graph.getAttribute("viewBox"), current);
+  document.getElementById("zoom-fit").click();
+  assert.equal(mounted(), 0);
+  assert.equal(document.querySelectorAll(".edge").length, 0);
+  assert.equal(
+    document.getElementById("graph-overview").getAttribute("display"),
+    "inline",
+  );
+  assert.equal(
+    document.getElementById("overview-nodes").getAttribute("d").match(/M/g)
+      .length,
+    4002,
+  );
+  document.getElementById("zoom-readable").click();
+  assert.equal(
+    document.getElementById("graph-overview").getAttribute("display"),
+    "none",
+  );
+  assert.ok(mounted() > 0 && mounted() < 20);
+  assert.equal(
+    document.querySelector(".graph-node.selected").getAttribute("data-id"),
+    "node-3999",
+  );
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: {
+        type: "shape-info",
+        tensors: [{ name: "tensor_3998", type: "float32", shape: ["42"] }],
+      },
+    }),
+  );
+  search("activation_3998");
+  assert.match(
+    document.querySelector(".graph-node.selected .node-tensor-info")
+      .textContent,
+    /float32 \[42\]/,
+  );
+  document.getElementById("zoom-fit").click();
+  load(chainGraph(1500));
+  assert.ok(mounted() < 20);
+  document.getElementById("zoom-fit").click();
+  assert.equal(
+    document.getElementById("overview-nodes").getAttribute("d").match(/M/g)
+      .length,
+    1502,
+  );
+});
+
+test("batches high-fanout connections without creating thousands of offscreen labels", (t) => {
+  const { document, window, load } = openViewer(t);
+  const model = chainGraph(2000);
+  for (const node of model.nodes.slice(1)) node.inputs.push("input");
+  load(model);
+  const crossing = document.getElementById("crossing-edges");
+  assert.ok(crossing.getAttribute("d").match(/M/g).length > 1900);
+  assert.ok(document.querySelectorAll(".edge").length < 30);
+  assert.ok(document.querySelectorAll(".tensor-info").length < 60);
+  document
+    .getElementById("graph")
+    .dispatchEvent(
+      new window.WheelEvent("wheel", { deltaY: 40000, cancelable: true }),
+    );
+  assert.ok(document.querySelectorAll(".edge").length < 40);
+  assert.ok(crossing.getAttribute("d").length > 0);
+  document.getElementById("zoom-fit").click();
+  assert.equal(crossing.getAttribute("d"), "");
+  document.getElementById("zoom-readable").click();
+  assert.ok(document.querySelectorAll(".graph-node").length < 20);
+});
+
+test("keeps positions correct when selected offscreen nodes move before their SVG is created", (t) => {
+  const { document, window, load, pointer } = openViewer(t);
+  load(chainGraph(2000));
+  const graph = document.getElementById("graph");
+  const positions = nodePositions(document);
+  const step = positions[1].y - positions[0].y;
+  graph.dispatchEvent(
+    new window.KeyboardEvent("keydown", {
+      key: "a",
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    }),
+  );
+  const first = document.querySelector(".graph-node");
+  pointer(first, "pointerdown", positions[0].x, positions[0].y);
+  pointer(graph, "pointermove", positions[0].x + 80, positions[0].y + 50);
+  pointer(graph, "pointerup", positions[0].x + 80, positions[0].y + 50);
+  document.getElementById("node-search").value = "activation_700";
+  document
+    .getElementById("find-node")
+    .dispatchEvent(new window.Event("submit", { cancelable: true }));
+  const target = document.querySelector(".graph-node.selected");
+  assert.equal(target.getAttribute("transform"), "translate(80 50)");
+  const actual = nodePositions(document, ".graph-node.selected > rect")[0];
+  assert.equal(actual.y, positions[0].y + 700 * step + 50);
+});
+
+test("defers readable framing until a large model loaded in a hidden tab has a viewport", (t) => {
+  const { document, load, resize } = openViewer(t);
+  resize(0, 0);
+  load(chainGraph(2000));
+  assert.equal(document.querySelectorAll(".graph-node").length, 0);
+  resize(1060, 350);
+  assert.equal(
+    Number(
+      document.getElementById("graph").getAttribute("viewBox").split(" ")[3],
+    ),
+    350,
+  );
+  assert.ok(document.querySelectorAll(".graph-node").length < 20);
+  assert.equal(
+    document.querySelector(".graph-node.selected").getAttribute("data-id"),
+    "node-0",
+  );
 });
 
 test("wheel scrolling pans vertically and Shift+wheel pans horizontally without zooming", (t) => {

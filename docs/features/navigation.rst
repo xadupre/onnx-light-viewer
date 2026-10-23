@@ -14,6 +14,12 @@ buttons in the app, even before a model is loaded.
   centered on the inspected node, without repeated **+** clicks.
   Large graphs omit unreadable text in overview and only paint nodes and
   connections intersecting the viewport, with a small margin for panning.
+* Graphs with more than 1,000 nodes open at readable size. Only nearby SVG
+  elements are created and attached; **Fit** uses two batched paths rather than
+  thousands of interactive elements. Long connections crossing the viewport
+  are batched when their labels are offscreen.
+* **Find node or operator** searches the whole graph, including offscreen nodes.
+  Press Enter or **Go** to select and center the next match at readable size.
 * Wheel scrolling moves the view vertically; Shift+wheel moves it horizontally.
   Horizontal trackpad scrolling is supported.
 * Drag an operator, input or output to move it. Connections and tensor labels

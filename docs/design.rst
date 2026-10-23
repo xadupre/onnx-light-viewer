@@ -12,7 +12,7 @@ Architecture
 .. code-block:: text
 
    Local ONNX file                 Released backend test catalog
-         | workspace.fs.readFile             |
+         | file path / workspace.fs.readFile  |
          v                                   v
    VS Code extension host: src/extension.ts
          |
@@ -29,7 +29,9 @@ Architecture
                                       +-- media/viewer.css: presentation
 
 File access and native calls happen in the extension host, not in the webview.
-Native methods are synchronous; there is no worker or model-execution service.
+Local model files are parsed on a native worker so the loading progress bar stays
+responsive. Graph projection and analysis methods are synchronous; there is no
+model-execution service.
 Only the selected graph is projected for display, rather than recursively
 serializing all its descendants.
 
@@ -42,17 +44,22 @@ TypeScript source guide
 :download:`Source: extension.ts <../src/extension.ts>`.
 
 ``activate`` registers the demo and symbolic-model commands, plus the custom
-editor for ``.onnx`` files. ``readGraph`` reads bytes with VS Code's filesystem
-API and creates a retained native model with its initial graph snapshot.
+editor for ``.onnx`` files. ``readGraph`` streams local files through the native
+loader; other URI schemes use VS Code's filesystem API. Both create a retained
+native model with its initial graph snapshot.
 
 ``configurePanel`` owns a panel-local ``LoadedModel``: its native handle,
 currently displayed ``Graph`` and optional cached ``GraphMetadata``. It
 configures media access, installs the message router and supplies the HTML.
 The message subscription is disposed with the panel. A reload factory retains
-the original model bytes or backend case ID independently of the native handle.
+the local file path, original virtual-file bytes or backend case ID independently
+of the native handle.
 
 Opening another model replaces that state only after successful loading.
 Navigation changes the current graph and clears its metadata snapshot.
+Asynchronous recovery results are ignored after panel disposal, model replacement
+or navigation to another graph. Shape and metadata refreshes of the same graph
+can share recovery without invalidating each other's results.
 A subsequent ``ready`` message resends the current graph and any cached
 metadata; it does not reload the source file or return to the root graph.
 
@@ -89,7 +96,8 @@ network request to list files; direct cached file URLs work offline.
 
 Cache storage is under ``context.globalStorageUri/huggingface`` in the extension
 host. The original remote basename is passed to the native loader, not the
-temporary cache name. Retained model bytes still provide native failure recovery
+temporary cache name. After publication, the recovery factory uses the final
+cache path, not the renamed temporary file. Recovery streams that local file
 without another download. Authentication, external weight downloads and model
 execution are outside this action's scope.
 
@@ -100,7 +108,7 @@ execution are outside this action's scope.
 
 This file defines the snapshot contracts and loads
 ``dist/native/onnx_light_viewer.node``. Its wrappers expose ``loadModel``,
-``decodeGraph``, ``listBackendTests`` and ``loadBackendTest``.
+``loadModelFile``, ``decodeGraph``, ``listBackendTests`` and ``loadBackendTest``.
 
 * ``Graph`` contains nodes, input/output names, tensor descriptions, an
   initializer count and breadcrumbs. ``GraphNode`` contains explicit inputs,
@@ -148,7 +156,7 @@ Native C++ source guide
 
 :download:`Source: native/addon.cc <../native/addon.cc>`.
 
-``Initialize`` exports ``loadModel``, ``decodeGraph``, ``getSchema``,
+``Initialize`` exports ``loadModel``, ``loadModelFile``, ``decodeGraph``, ``getSchema``,
 ``listBackendTests`` and ``loadBackendTest`` through Node-API. The addon
 validates JavaScript arguments and converts C++ exceptions to JavaScript errors
 at this boundary.
@@ -157,10 +165,22 @@ Parsing and ownership
 ~~~~~~~~~~~~~~~~~~~~~
 
 ``ReadModel`` parses bytes with onnx-light and checks that a model graph and
-valid IR version exist. The retained loading path uses borrowed fields rather
-than copying tensor payloads. ``StoredModel`` therefore holds a persistent
-reference to the source ``Uint8Array`` alongside the parsed model. Callers must
-not modify those bytes while the handle is in use.
+valid IR version exist. ``loadModelFile`` uses a buffered descriptor stream;
+Windows paths are converted from UTF-8 before opening. Large inline raw and typed
+tensor payloads are skipped, while small constants (smaller than onnx-light's
+64-byte threshold) remain available for shape inference. Omitted payloads are
+represented as external tensors in the retained model so structural validation
+can still verify graph connectivity without requiring the values. Their storage
+is shown as inline in the viewer, and external weight files are not opened. The
+worker returns an owned model without retaining the file contents. Shape
+inference that needs skipped weight values may fail and is reported through the
+existing error handling.
+
+Virtual-file reads still require a complete byte buffer because VS Code's
+filesystem API does not expose streaming reads. The byte-buffer loading path
+uses borrowed fields rather than copying tensor payloads. ``StoredModel``
+therefore holds a persistent reference to the source ``Uint8Array`` alongside the
+parsed model. Callers must not modify those bytes while the handle is in use.
 
 Backend models instead retain their owning native ``TestCase``. Expected-output
 generation is disabled; opening a case is not running a backend test.
@@ -168,8 +188,9 @@ generation is disabled; opening a case is not running a backend test.
 method closures, so keeping just one method alive still keeps its backing
 storage alive.
 
-The display filename is only a label. Neither native loading nor refreshing
-saves the model or opens external weight files. Initializer snapshots contain
+The display filename is only a label, separate from the local loader's file path.
+Neither loading nor refreshing saves the model or opens external weight files.
+Initializer snapshots contain
 type, dimensions and storage locations, not weight values. Attribute previews
 are bounded separately.
 
@@ -294,9 +315,10 @@ its Logs tab.
 
 A failed shape or metadata refresh invalidates the native handle, not the
 last displayed snapshots. Before the next native action, ``nativeModel``
-logs and recreates that handle from the original bytes or backend case.
-It does not reread or save the source file. This discards potentially partial
-native inference state; previously inferred information may need refreshing
+logs and recreates that handle by streaming the local file again, using retained
+virtual-file bytes, or rebuilding the backend case. Local files, including cache
+entries, must still exist; source files are never modified. This discards
+potentially partial native inference state; previously inferred information may need refreshing
 after recovery. Reload failures are logged and surfaced like other failures.
 
 ``application-status`` is sent on action updates, model replacement, native
@@ -328,6 +350,16 @@ rebuilding the graph on every pointer move. Selection rendering also tracks
 changed nodes. A gesture caches its viewport mapping; changes that resize the
 canvas invalidate that mapping. Zoom and pan change the SVG ``viewBox``, not
 model coordinates.
+
+Above 1,000 nodes, view records retain lightweight SVG factories instead of
+creating the full SVG tree. The initial camera uses readable size; camera
+updates attach only intersecting detail groups and detach offscreen groups.
+Tensor labels and metadata markers are initialized from current snapshots when
+a group is first created. **Fit** draws the whole graph as two batched paths;
+long edges whose labels are offscreen also use batched paths in detail view.
+Node search uses the complete view index, so it can select and center nodes
+which have never had a DOM element. These operations preserve model coordinates
+and the current inspection state.
 
 Build and verification boundaries
 ---------------------------------
