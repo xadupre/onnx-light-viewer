@@ -19,6 +19,8 @@ Run and benchmark whole models or selected subgraphs using onnx-light,
 onnx-light-cpu or ONNX Runtime on CPU or CUDA, compare execution engines, and
 export inputs and outputs with a Python script to reproduce runs locally.
 An action log records operations, timing, status and errors.
+The **Repositories** tab links to official ONNX projects and the onnx-light
+ecosystem, with an icon and a short summary for each project.
 
 <img src="docs/_static/viewer-snapshot.png" width="75%" alt="ONNX Light Viewer showing a graph with symbolic tensor shapes and the Reshape node's parameters">
 
