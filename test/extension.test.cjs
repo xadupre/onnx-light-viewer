@@ -258,8 +258,9 @@ async function openExtension(
       await receive({ type: "open" });
     },
     chooseBackend: async (name) => {
+      modelSource = "backend";
       backendSelection = name;
-      await receive({ type: "open-backend-test" });
+      await receive({ type: "open" });
     },
     openHuggingFace: async (input, cancel = false, repository) => {
       modelSource = "huggingface";
@@ -458,7 +459,7 @@ test("opens a cached Hugging Face model and preserves the display on invalid inp
   await extension.openHuggingFace(url.replace("/resolve/", "/blob/"));
   assert.deepEqual(
     extension.picks.at(-1).items.map(({ label }) => label),
-    ["Local file", "Hugging Face"],
+    ["Local file", "Hugging Face", "Backend test"],
   );
   const graph = extension.messages.at(-1).graph;
   const repository = {
@@ -570,9 +571,11 @@ test("keeps operation logs quiet and exposes real native exception recovery in S
   extension.connect((data) =>
     window.dispatchEvent(new window.MessageEvent("message", { data })),
   );
-  window.eval(
-    readFileSync(path.resolve(__dirname, "../media/viewer.js"), "utf8"),
-  );
+  for (const name of ["vendor/markdown-it.min.js", "viewer.js"]) {
+    window.eval(
+      readFileSync(path.resolve(__dirname, "../media", name), "utf8"),
+    );
+  }
   const flush = async () => {
     while (requests.length) await Promise.all(requests.splice(0));
   };
@@ -784,6 +787,30 @@ test("keeps timestamped action history, verifies invalid graphs and reloads befo
   assert.deepEqual(extension.logViews, [true, true]);
 });
 
+test("opens function call paths through the host and returns to the caller", async () => {
+  const extension = await openExtension("functions.onnx");
+  await extension.receive({ type: "ready" });
+  const root = extension.messages.at(-1).graph;
+  const path = root.nodes[0].function.path;
+  const reads = extension.reads.length;
+  await extension.receive({ type: "navigate", path });
+  assert.equal(extension.messages.at(-1).graph.name, "example::Transform");
+  await extension.receive({ type: "metadata" });
+  assert.equal(extension.messages.at(-1).metadata.nodes.length, 3);
+  await extension.receive({ type: "refresh-shapes" });
+  assert.equal(extension.messages.at(-1).type, "shape-info");
+  await extension.receive({
+    type: "navigate",
+    path: [{ node: 0, function: 1 }],
+  });
+  assert.equal(extension.messages.at(-1).type, "navigation-error");
+  await extension.receive({ type: "ready" });
+  assert.equal(extension.messages.at(-1).graph.name, "example::Transform");
+  await extension.receive({ type: "navigate", path: [] });
+  assert.equal(extension.messages.at(-1).graph.name, root.name);
+  assert.equal(extension.reads.length, reads);
+});
+
 test("navigates retained subgraphs, scopes refreshes and reports invalid paths without replacing the view", async () => {
   const extension = await openExtension("nested-if.onnx");
   await extension.receive({ type: "ready" });
@@ -858,13 +885,22 @@ test("refreshes the bundled demo and the currently opened model using its retain
   );
 });
 
-test("opens a searchable native backend selector, preserves the model on cancellation and supports shape refresh", async () => {
+test("opens backend tests from the model source picker, preserves cancellation and supports shape refresh", async () => {
   const extension = await openExtension();
   await extension.receive({ type: "ready" });
   const original = extension.messages.at(-1);
   await extension.chooseBackend();
   assert.equal(extension.messages.at(-1), original);
-  const { items, options } = extension.picks[0];
+  assert.deepEqual(
+    extension.picks[0].items.map(({ label }) => label),
+    ["Local file", "Hugging Face", "Backend test"],
+  );
+  assert.ok(
+    extension.logs.some((entry) =>
+      entry.includes("[CANCELLED] Open ONNX model"),
+    ),
+  );
+  const { items, options } = extension.picks[1];
   assert.match(options.placeHolder, /Search/);
   assert.equal(options.matchOnDescription, true);
   assert.equal(options.matchOnDetail, true);
@@ -930,7 +966,7 @@ test("reports a backend model loading failure without replacing the open graph",
   await extension.chooseBackend("not-a-backend-test");
   assert.match(
     extension.errors[0],
-    /Could not open onnx-light backend test:.*Invalid onnx-light backend test ID/,
+    /Could not open ONNX model:.*Invalid onnx-light backend test ID/,
   );
   await extension.receive({ type: "ready" });
   assert.deepEqual(extension.messages.at(-1).graph, before);

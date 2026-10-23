@@ -177,7 +177,10 @@ function isGraphPath(path: unknown): path is GraphPath {
       (step: unknown) =>
         typeof step === "object" &&
         step !== null &&
-        ["node", "attribute", "graph"].every((key) => {
+        (Reflect.has(step, "function")
+          ? ["node", "function"]
+          : ["node", "attribute", "graph"]
+        ).every((key) => {
           const index: unknown = Reflect.get(step, key);
           return (
             typeof index === "number" && Number.isInteger(index) && index >= 0
@@ -270,6 +273,37 @@ async function configurePanel(
       ...(current.metadata ? { metadata: current.metadata } : {}),
     });
   };
+  const chooseBackendTest = async (
+    id: string,
+    action = "Open backend test",
+  ) => {
+    const tests = await log.run("List backend tests", listBackendTests);
+    const selection = await vscode.window.showQuickPick(
+      tests.map((test) => ({
+        id: test.id,
+        label: test.name,
+        description: [test.kind, test.tag].filter(Boolean).join(" · "),
+        detail: test.modelName !== test.name ? test.modelName : undefined,
+      })),
+      {
+        title: "onnx-light backend tests",
+        placeHolder: "Search by test name, model or category",
+        matchOnDescription: true,
+        matchOnDetail: true,
+      },
+    );
+    if (!selection) {
+      log.record("CANCELLED", action, id);
+      return;
+    }
+    const name = selection.label;
+    const loadedModel = await log.run(`Load backend test: ${name}`, () => {
+      const reload = () => loadBackendTest(selection.id);
+      const native = reload();
+      return { graph: native.graph(), native, reload };
+    });
+    return { model: loadedModel, name };
+  };
   const messages = panel.webview.onDidReceiveMessage(
     async (
       message: {
@@ -311,6 +345,7 @@ async function configurePanel(
                 [
                   { id: "local", label: "Local file" },
                   { id: "huggingface", label: "Hugging Face" },
+                  { id: "backend", label: "Backend test" },
                 ],
                 {
                   title: "Open an ONNX model",
@@ -321,6 +356,8 @@ async function configurePanel(
                 log.record("CANCELLED", "Open ONNX model", id);
                 return;
               }
+              if (location.id === "backend")
+                return chooseBackendTest(id, "Open ONNX model");
               if (location.id === "local") {
                 const selection = await vscode.window.showOpenDialog({
                   canSelectMany: false,
@@ -454,43 +491,7 @@ async function configurePanel(
         try {
           loaded = await log.run(
             "Open backend test",
-            async (id) => {
-              const tests = await log.run(
-                "List backend tests",
-                listBackendTests,
-              );
-              const selection = await vscode.window.showQuickPick(
-                tests.map((test) => ({
-                  id: test.id,
-                  label: test.name,
-                  description: [test.kind, test.tag]
-                    .filter(Boolean)
-                    .join(" · "),
-                  detail:
-                    test.modelName !== test.name ? test.modelName : undefined,
-                })),
-                {
-                  title: "onnx-light backend tests",
-                  placeHolder: "Search by test name, model or category",
-                  matchOnDescription: true,
-                  matchOnDetail: true,
-                },
-              );
-              if (!selection) {
-                log.record("CANCELLED", "Open backend test", id);
-                return;
-              }
-              const name = selection.label;
-              const loadedModel = await log.run(
-                `Load backend test: ${name}`,
-                () => {
-                  const reload = () => loadBackendTest(selection.id);
-                  const native = reload();
-                  return { graph: native.graph(), native, reload };
-                },
-              );
-              return { model: loadedModel, name };
-            },
+            chooseBackendTest,
             message.actionId,
           );
         } catch (error) {

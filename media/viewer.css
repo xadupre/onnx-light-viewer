@@ -130,6 +130,12 @@ p {
   stroke-linecap: round;
   stroke-linejoin: round;
 }
+.repository-logo {
+  display: block;
+  max-width: 100%;
+  object-fit: contain;
+  object-position: left center;
+}
 #controls-view h3 {
   margin: 24px 0 8px;
 }
@@ -273,8 +279,20 @@ a:focus-visible {
 .icon-button[data-refresh-status="failed"] {
   color: #ff9e9e;
 }
+#zoom-area[aria-pressed="true"],
 #show-metadata[aria-expanded="true"] {
-  box-shadow: inset 0 -3px 0 var(--mint);
+  background: #204f48;
+  box-shadow: inset 0 0 0 2px var(--mint);
+  font-weight: 700;
+}
+.toggle-indicator {
+  display: inline-block;
+  width: 1em;
+  visibility: hidden;
+}
+#zoom-area[aria-pressed="true"] .toggle-indicator,
+#show-metadata[aria-expanded="true"] .toggle-indicator {
+  visibility: visible;
 }
 .icon-button svg {
   fill: none;
@@ -697,8 +715,58 @@ button:disabled {
 }
 #doc-body {
   margin-top: 16px;
-  white-space: pre-wrap;
+  font-size: 14px;
+  line-height: 1.5;
   overflow-wrap: anywhere;
+}
+#doc-body h2 {
+  margin: 28px 0 14px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+#doc-body h3 {
+  margin: 20px 0 8px;
+  font-size: 16px;
+}
+#doc-body p {
+  margin: 8px 0 16px;
+}
+#doc-body pre {
+  padding: 12px;
+  overflow-x: auto;
+  white-space: pre;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+#doc-body code {
+  font-family: var(--vscode-editor-font-family, monospace);
+}
+#doc-body :not(pre) > code {
+  padding: 1px 4px;
+  background: var(--bg);
+  border-radius: 3px;
+}
+#doc-body table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+}
+#doc-body th,
+#doc-body td {
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  text-align: left;
+}
+#doc-body blockquote {
+  margin-left: 0;
+  padding-left: 12px;
+  color: var(--muted);
+  border-left: 3px solid var(--border);
+}
+#doc-body a {
+  color: var(--mint);
 }
 @media (max-width: 760px) {
   .graph-body {

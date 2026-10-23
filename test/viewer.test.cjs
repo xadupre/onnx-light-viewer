@@ -79,7 +79,10 @@ function openViewer(t, initialTab = "model") {
     viewport = { width, height };
     dom.window.dispatchEvent(new dom.window.Event("resize"));
   };
-  dom.window.eval(readFileSync(require.resolve("../media/viewer.js"), "utf8"));
+  for (const script of dom.window.document.querySelectorAll("script[src]")) {
+    const name = new URL(script.src).pathname.slice(1);
+    dom.window.eval(readFileSync(require.resolve(`../media/${name}`), "utf8"));
+  }
   const load = (graph) => {
     dom.window.dispatchEvent(
       new dom.window.MessageEvent("message", {
@@ -109,21 +112,19 @@ test("shows loading progress until success, failure or cancellation, including i
   assert.equal(document.getElementById("open-model").disabled, true);
   load(demoGraph);
   assert.equal(progress.hidden, true);
-  for (const button of ["open-model", "open-backend-test"]) {
-    document.getElementById(button).click();
-    assert.equal(progress.hidden, false);
-    const request = messages.at(-1);
-    state({
-      type: "log-entry",
-      entry: {
-        id: request.actionId,
-        action: "Open model",
-        timestamp: new Date().toISOString(),
-        status: "CANCELLED",
-      },
-    });
-    assert.equal(progress.hidden, true);
-  }
+  document.getElementById("open-model").click();
+  assert.equal(progress.hidden, false);
+  const request = messages.at(-1);
+  state({
+    type: "log-entry",
+    entry: {
+      id: request.actionId,
+      action: "Open model",
+      timestamp: new Date().toISOString(),
+      status: "CANCELLED",
+    },
+  });
+  assert.equal(progress.hidden, true);
   state({ type: "load-state", pending: true });
   assert.equal(progress.hidden, false);
   assert.equal(
@@ -255,19 +256,35 @@ for (const initialTab of ["model", "logs"]) {
       assert.equal(document.getElementById(`${name}-tab`).tabIndex, -1);
     }
     const repositories = [
-      ["ONNX", "onnx/onnx"],
-      ["ONNX Runtime", "microsoft/onnxruntime"],
-      ["ONNX Runtime Extensions", "microsoft/onnxruntime-extensions"],
-      ["ONNX Runtime GenAI", "microsoft/onnxruntime-genai"],
-      ["onnx-light", "xadupre/onnx-light"],
-      ["onnx-light-cpu", "xadupre/onnx-light-cpu"],
-      ["onnx-light-ort", "xadupre/onnx-light-ort"],
-      ["onnx-light-viewer", "xadupre/onnx-light-viewer"],
+      ["ONNX", "onnx/onnx", "repositories/onnx.png"],
+      ["ONNX Runtime", "microsoft/onnxruntime", "repositories/onnxruntime.png"],
+      [
+        "ONNX Runtime Extensions",
+        "microsoft/onnxruntime-extensions",
+        "repositories/onnxruntime.png",
+      ],
+      [
+        "ONNX Runtime GenAI",
+        "microsoft/onnxruntime-genai",
+        "repositories/onnxruntime.png",
+      ],
+      ["onnx-light", "xadupre/onnx-light", "repositories/onnx-light.svg"],
+      [
+        "onnx-light-cpu",
+        "xadupre/onnx-light-cpu",
+        "repositories/onnx-light-cpu.svg",
+      ],
+      [
+        "onnx-light-ort",
+        "xadupre/onnx-light-ort",
+        "repositories/onnx-light-ort.svg",
+      ],
+      ["onnx-light-viewer", "xadupre/onnx-light-viewer", "logo.svg"],
     ];
     const cards = [...panel.querySelectorAll(".repository-list li")];
     assert.equal(cards.length, repositories.length);
     cards.forEach((card, index) => {
-      const [name, repository] = repositories[index];
+      const [name, repository, logo] = repositories[index];
       const link = card.querySelector("a");
       assert.equal(link.textContent, name);
       assert.equal(link.href, `https://github.com/${repository}`);
@@ -276,12 +293,36 @@ for (const initialTab of ["model", "logs"]) {
       assert.ok(icon);
       assert.equal(icon.getAttribute("width"), "28");
       assert.equal(icon.getAttribute("height"), "28");
-      if (icon.tagName === "svg") {
-        assert.equal(icon.getAttribute("aria-hidden"), "true");
-        assert.ok(icon.querySelector("path"));
-      } else {
+      if (repository === "xadupre/onnx-light-viewer") {
         assert.equal(icon.alt, "");
         assert.equal(icon.src, "https://viewer.invalid/logo.svg");
+      } else {
+        assert.equal(icon.localName, "svg");
+        assert.equal(icon.getAttribute("aria-hidden"), "true");
+        assert.ok(icon.querySelector("path"));
+      }
+      const image = card.querySelector(":scope > .repository-logo");
+      assert.ok(image);
+      assert.equal(image.alt, "");
+      assert.equal(image.src, `https://viewer.invalid/${logo}`);
+      assert.equal(image.getAttribute("width"), "96");
+      assert.equal(image.getAttribute("height"), "64");
+      const asset = readFileSync(require.resolve(`../media/${logo}`));
+      if (logo.endsWith(".svg")) {
+        const svg = new JSDOM(asset.toString(), {
+          contentType: "image/svg+xml",
+        });
+        assert.equal(svg.window.document.documentElement.localName, "svg");
+        assert.equal(
+          svg.window.document.querySelector("script, image, foreignObject"),
+          null,
+        );
+        svg.window.close();
+      } else {
+        assert.deepEqual(
+          [...asset.subarray(0, 8)],
+          [137, 80, 78, 71, 13, 10, 26, 10],
+        );
       }
     });
     tab.focus();
@@ -972,7 +1013,7 @@ test("counts metadata changes and replaces cached analysis and graph markers on 
   assert.deepEqual(errors, []);
 });
 
-test("keeps the metadata button highlighted until its panel is closed", (t) => {
+test("keeps Metadata filled and checked until its panel is closed without hiding refresh status", (t) => {
   const { document, window, load } = openViewer(t);
   const style = document.createElement("style");
   style.textContent = readFileSync(
@@ -986,12 +1027,26 @@ test("keeps the metadata button highlighted until its panel is closed", (t) => {
   );
   load(model.graph());
   const toggle = document.getElementById("show-metadata");
-  const highlight = () => window.getComputedStyle(toggle).boxShadow;
+  const highlight = () => {
+    const style = window.getComputedStyle(toggle);
+    return {
+      background: style.backgroundColor,
+      shadow: style.boxShadow,
+      weight: style.fontWeight,
+      indicator: window.getComputedStyle(
+        toggle.querySelector(".toggle-indicator"),
+      ).visibility,
+    };
+  };
   const inactive = highlight();
+  assert.equal(inactive.indicator, "hidden");
   assert.equal(toggle.getAttribute("aria-expanded"), "false");
   toggle.click();
   const active = highlight();
-  assert.notEqual(active, inactive);
+  assert.notEqual(active.background, inactive.background);
+  assert.notEqual(active.shadow, inactive.shadow);
+  assert.equal(active.weight, "700");
+  assert.equal(active.indicator, "visible");
   assert.equal(toggle.getAttribute("aria-expanded"), "true");
   assert.equal(document.getElementById("metadata-panel").hidden, false);
   window.dispatchEvent(
@@ -999,15 +1054,19 @@ test("keeps the metadata button highlighted until its panel is closed", (t) => {
       data: { type: "metadata-info", metadata: model.metadata() },
     }),
   );
-  assert.equal(highlight(), active);
+  assert.deepEqual(highlight(), active);
   load(model.graph());
-  assert.equal(highlight(), active);
+  assert.deepEqual(highlight(), active);
   toggle.click();
   assert.equal(toggle.getAttribute("aria-expanded"), "false");
   assert.equal(document.getElementById("metadata-panel").hidden, true);
-  assert.equal(highlight(), inactive);
+  const closed = highlight();
+  assert.notEqual(closed.background, active.background);
+  assert.equal(closed.shadow, inactive.shadow);
+  assert.equal(closed.weight, inactive.weight);
+  assert.equal(closed.indicator, "hidden");
   toggle.click();
-  assert.equal(highlight(), active);
+  assert.deepEqual(highlight(), active);
 });
 
 test("shows native metadata in the sidebar and marks released and never-used results without changing the layout", (t) => {
@@ -1218,6 +1277,58 @@ test("reports metadata errors, allows retry and clears stale metadata and releas
   );
 });
 
+test("opens local functions from the operator or inspector and returns using breadcrumbs", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const model = loadModel(
+    readFileSync(require.resolve("./models/functions.onnx")),
+    "functions.onnx",
+  );
+  const root = model.graph();
+  load(root);
+  const button = document.getElementById("open-function");
+  assert.equal(button.hidden, false);
+  assert.match(button.textContent, /example::Transform/);
+  const link = document.querySelector(".subgraph-link");
+  assert.match(
+    link.getAttribute("aria-label"),
+    /Open Function: example::Transform/,
+  );
+  link.dispatchEvent(
+    new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+  );
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(messages.at(-1).path)),
+    root.nodes[0].function.path,
+  );
+  load(model.graph(false, messages.at(-1).path));
+  assert.equal(button.hidden, true);
+  document
+    .querySelector('[data-id="node-2"]')
+    .dispatchEvent(
+      new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+    );
+  assert.equal(button.hidden, false);
+  assert.match(button.textContent, /example::Identity \[fast\]/);
+  button.click();
+  load(model.graph(false, messages.at(-1).path));
+  assert.equal(document.getElementById("node-title").textContent, "Sigmoid");
+  assert.equal(button.hidden, true);
+  const crumbs = document.querySelectorAll("#graph-navigation button");
+  assert.equal(crumbs.length, 3);
+  crumbs[1].click();
+  load(model.graph(false, messages.at(-1).path));
+  assert.equal(
+    document.querySelector('#graph-navigation [aria-current="page"]')
+      .textContent,
+    "example::Transform",
+  );
+  document.querySelector("#graph-navigation button").click();
+  load(model.graph(false, messages.at(-1).path));
+  assert.equal(button.hidden, false);
+  load(demoGraph);
+  assert.equal(button.hidden, true);
+});
+
 test("renders the demo, inspects its operator and requests a real file", (t) => {
   const { document, messages, load, window } = openViewer(t);
   assert.equal(messages[0].type, "ready");
@@ -1261,11 +1372,7 @@ test("renders the demo, inspects its operator and requests a real file", (t) => 
       },
     }),
   );
-  document.getElementById("open-backend-test").click();
-  assert.equal(
-    messages.filter((message) => message.type === "open-backend-test").length,
-    1,
-  );
+  assert.equal(document.getElementById("open-backend-test"), null);
   const graph = document.getElementById("graph");
   const initialViewBox = graph.getAttribute("viewBox");
   document.getElementById("zoom-in").click();
@@ -1285,6 +1392,13 @@ test("shows actual attributes, connected initializer parameters and versioned de
     document.getElementById("node-attributes").textContent,
     /strides \(INTS\)[\s\S]*\[2, 2\]/,
   );
+  const strides = Array.from(
+    document.querySelectorAll("#node-attributes li"),
+  ).find(
+    (item) => item.querySelector("strong").textContent === "strides (INTS)",
+  );
+  assert.equal(strides.querySelector("pre").textContent, "[2, 2]");
+  assert.equal(strides.textContent.match(/strides/g).length, 1);
   assert.match(
     document.getElementById("node-initializers").textContent,
     /kernel \(FLOAT\)[\s\S]*Shape: \[1, 1, 3, 3\][\s\S]*Storage: embedded/,
@@ -1491,10 +1605,8 @@ test("opens native LightOpSchema docs and clears stale docs and parameters on se
   assert.equal(docButton.disabled, false);
   docButton.click();
   assert.equal(dialog.open, true);
-  assert.equal(
-    document.getElementById("doc-body").textContent,
-    demoGraph.nodes[0].schema.doc,
-  );
+  assert.match(document.getElementById("doc-body").textContent, /Relu/);
+  assert.ok(document.querySelector("#doc-body p"));
   assert.match(
     document.getElementById("doc-version").textContent,
     /model opset 13/,
@@ -1535,7 +1647,108 @@ test("opens native LightOpSchema docs and clears stale docs and parameters on se
   assert.equal(document.getElementById("node-initializers").children.length, 0);
 });
 
-test("renders attribute names, values and schema documentation as text, not HTML", (t) => {
+test("separates native input and output entries from their descriptions", (t) => {
+  const { document, load } = openViewer(t);
+  load(
+    decodeGraph(
+      readFileSync(require.resolve("./models/custom.onnx")),
+      "custom.onnx",
+    ),
+  );
+  document.getElementById("show-doc").click();
+  const body = document.getElementById("doc-body");
+  assert.deepEqual(
+    [...body.querySelectorAll("h2")].map((heading) => heading.textContent),
+    ["Inputs", "Outputs", "Attributes", "Type constraints"],
+  );
+  const parameters = [...body.querySelectorAll("h3")];
+  assert.deepEqual(
+    parameters.map((heading) => heading.textContent),
+    ["A (T)", "B (T)", "C (T)"],
+  );
+  for (const parameter of parameters) {
+    assert.equal(parameter.nextElementSibling.tagName, "P");
+    assert.ok(parameter.nextElementSibling.textContent.trim());
+  }
+});
+
+test("renders Markdown documentation with headings, lists, code, tables and links", (t) => {
+  const { document, load } = openViewer(t);
+  const graph = structuredClone(demoGraph);
+  graph.nodes[0].schema.doc = [
+    "# Operator",
+    "",
+    "**Bold** and *italic* with `axis`.",
+    "",
+    "- input",
+    "- output",
+    "",
+    "1. First",
+    "2. Next",
+    "",
+    "```python",
+    "x = '<tag>'",
+    "```",
+    "",
+    "| Input | Type |",
+    "| --- | --- |",
+    "| x | FLOAT |",
+    "",
+    "> Note",
+    "",
+    "[ONNX](https://onnx.ai/)",
+  ].join("\n");
+  load(graph);
+  document.getElementById("show-doc").click();
+  const body = document.getElementById("doc-body");
+  assert.equal(body.querySelector("h1").textContent, "Operator");
+  assert.equal(body.querySelector("strong").textContent, "Bold");
+  assert.equal(body.querySelector("em").textContent, "italic");
+  assert.equal(body.querySelector("p code").textContent, "axis");
+  assert.equal(body.querySelectorAll("ul li").length, 2);
+  assert.equal(body.querySelectorAll("ol li").length, 2);
+  assert.equal(
+    body.querySelector("pre code.language-python").textContent,
+    "x = '<tag>'\n",
+  );
+  assert.equal(body.querySelector("tag"), null);
+  assert.deepEqual(
+    [...body.querySelectorAll("th")].map((cell) => cell.textContent),
+    ["Input", "Type"],
+  );
+  assert.equal(body.querySelector("blockquote").textContent.trim(), "Note");
+  assert.equal(body.querySelector("a").href, "https://onnx.ai/");
+});
+
+test("does not activate HTML, unsafe Markdown links or remote images in documentation", (t) => {
+  const { document, load, window } = openViewer(t);
+  const graph = structuredClone(demoGraph);
+  graph.nodes[0].schema.doc = [
+    "<script>window.docExecuted = true</script>",
+    '<img src=x onerror="window.docExecuted = true">',
+    "",
+    "[run](javascript:alert(1))",
+    "[encoded](jav&#x61;script:alert(1))",
+    "[mixed](JaVaScRiPt:alert(1))",
+    "[command](command:workbench.action.openSettings)",
+    "[file](file:///etc/passwd)",
+    "[data](data:text/html;base64,PHNjcmlwdD4=)",
+    "[relative](../model.onnx)",
+    "[scheme-relative](//tracking.invalid/pixel)",
+    "![image label](https://tracking.invalid/pixel)",
+    '![<img src=x onerror="alert(1)">](https://tracking.invalid/pixel)',
+  ].join("\n");
+  load(graph);
+  document.getElementById("show-doc").click();
+  const body = document.getElementById("doc-body");
+  assert.equal(body.querySelector("a, img, script"), null);
+  assert.match(body.textContent, /<script>window.docExecuted = true<\/script>/);
+  assert.match(body.textContent, /image label/);
+  assert.match(body.textContent, /<img src=x onerror="alert\(1\)">/);
+  assert.equal(window.docExecuted, undefined);
+});
+
+test("renders attribute names, values and raw HTML in schema documentation as text", (t) => {
   const { document, load } = openViewer(t);
   const text = '<img src=x onerror="alert(1)">';
   load({
@@ -1892,12 +2105,29 @@ function chainGraph(length = 6) {
   };
 }
 
+function translationOffsets(transform) {
+  return (
+    transform?.match(/-?\d+(?:\.\d+)?(?:e[+-]?\d+)?/gi).map(Number) ?? [0, 0]
+  );
+}
+
+test("extracts SVG translation offsets with decimal and scientific notation", () => {
+  for (const [transform, expected] of [
+    ["translate(80 50)", [80, 50]],
+    ["translate(-80.25 50.5)", [-80.25, 50.5]],
+    ["translate(8e+1 -5E-2)", [80, -0.05]],
+    ["translate(-8.25e-7, 5.5E+2)", [-8.25e-7, 550]],
+    [null, [0, 0]],
+  ]) {
+    assert.deepEqual(translationOffsets(transform), expected);
+  }
+});
+
 function nodePositions(document, selector = ".graph-node > rect") {
   return Array.from(document.querySelectorAll(selector), (rect) => {
-    const [dx, dy] = rect.parentElement
-      .getAttribute("transform")
-      ?.match(/-?\d+(?:\.\d+)?(?:e[+-]?\d+)?/gi)
-      .map(Number) ?? [0, 0];
+    const [dx, dy] = translationOffsets(
+      rect.parentElement.getAttribute("transform"),
+    );
     return {
       x:
         Number(rect.getAttribute("x")) +
@@ -2278,10 +2508,20 @@ test("zooms in and out with buttons and Ctrl+wheel without rearranging the graph
 });
 
 test("magnifies a rectangle in either direction without moving or selecting nodes", (t) => {
-  const { document, load, pointer } = openViewer(t);
+  const { document, window, load, pointer } = openViewer(t);
+  const style = document.createElement("style");
+  style.textContent = readFileSync(
+    require.resolve("../media/viewer.css"),
+    "utf8",
+  );
+  document.head.append(style);
   load(chainGraph());
   const graph = document.getElementById("graph");
   const button = document.getElementById("zoom-area");
+  const inactiveBackground = window.getComputedStyle(button).backgroundColor;
+  let activeBackground;
+  const indicator = button.querySelector(".toggle-indicator");
+  assert.equal(window.getComputedStyle(indicator).visibility, "hidden");
   const initial = graph.getAttribute("viewBox");
   const positions = nodePositions(document);
   const nodes = [...document.querySelectorAll(".graph-node")];
@@ -2296,6 +2536,10 @@ test("magnifies a rectangle in either direction without moving or selecting node
       button.click();
       assert.equal(button.getAttribute("aria-pressed"), "true");
       assert.equal(document.activeElement, graph);
+      activeBackground = window.getComputedStyle(button).backgroundColor;
+      assert.notEqual(activeBackground, inactiveBackground);
+      assert.equal(window.getComputedStyle(button).fontWeight, "700");
+      assert.equal(window.getComputedStyle(indicator).visibility, "visible");
     }
     pointer(nodes[0], "pointerdown", start.x, start.y, { altKey: reverse });
     pointer(graph, "pointermove", end.x, end.y);
@@ -2312,6 +2556,12 @@ test("magnifies a rectangle in either direction without moving or selecting node
     assert.ok(Math.abs(width / height - 1060 / 350) < 1e-9);
     assert.equal(document.querySelector(".selection-rectangle"), null);
     assert.equal(button.getAttribute("aria-pressed"), "false");
+    assert.notEqual(
+      window.getComputedStyle(button).backgroundColor,
+      activeBackground,
+    );
+    assert.equal(window.getComputedStyle(button).fontWeight, "400");
+    assert.equal(window.getComputedStyle(indicator).visibility, "hidden");
     assert.equal(graph.hasPointerCapture(1), false);
     assert.deepEqual(selection(), selected);
     assert.deepEqual(nodePositions(document), positions);
@@ -2921,10 +3171,7 @@ test("keeps positions correct when selected offscreen nodes move before their SV
     .getElementById("find-node")
     .dispatchEvent(new window.Event("submit", { cancelable: true }));
   const target = document.querySelector(".graph-node.selected");
-  const [, x, y] = target
-    .getAttribute("transform")
-    .match(/^translate\(([\d.-]+) ([\d.-]+)\)$/)
-    .map(Number);
+  const [x, y] = translationOffsets(target.getAttribute("transform"));
   assert.ok(Math.abs(x - 80) < 1e-9);
   assert.ok(Math.abs(y - 50) < 1e-9);
   const actual = nodePositions(document, ".graph-node.selected > rect")[0];
