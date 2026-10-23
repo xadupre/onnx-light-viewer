@@ -188,6 +188,12 @@ a:focus-visible {
   color: #102a28;
   border-color: var(--mint);
 }
+#show-metadata[aria-expanded="true"]:hover:not(:disabled),
+#show-metadata[aria-expanded="true"]:focus-visible {
+  background: var(--mint);
+  color: #102a28;
+  border-color: var(--mint);
+}
 .icon-button svg {
   fill: none;
   stroke: currentColor;
