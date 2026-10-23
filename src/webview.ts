@@ -38,9 +38,10 @@ export function webviewHtml(
     </nav>
     <section id="model-view" role="tabpanel" aria-labelledby="model-tab"${initialTab === "logs" ? " hidden" : ""}>
       <header class="graph-toolbar">
-        <div><a id="repository-link" href="https://github.com/xadupre/onnx-light-viewer" title="ONNX Light Viewer on GitHub" aria-label="Open the ONNX Light Viewer GitHub repository"><img src="${resource("logo.svg")}" alt="" width="24" height="24"></a><button id="open-model" class="primary">Open ONNX model</button><button id="refresh-shapes" class="icon-button" disabled title="Refresh shape and type information with onnx-light" aria-label="Refresh shape and type information" aria-describedby="shape-status"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2 6M20 4v7h-7"/></svg>Refresh shapes</button><button id="refresh-metadata" class="icon-button" disabled title="Recompute constants, tags and lifetimes for the displayed graph with onnx-light" aria-label="Refresh metadata for the displayed graph" aria-describedby="metadata-status"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2 6M20 4v7h-7"/></svg>Refresh metadata</button><button id="refresh-positions" class="icon-button" disabled title="Reset the portrait layout with new random horizontal positions" aria-label="Refresh node positions"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2 6M20 4v7h-7"/></svg>Refresh positions</button></div>
+        <div><a id="repository-link" href="https://github.com/xadupre/onnx-light-viewer" title="ONNX Light Viewer on GitHub" aria-label="Open the ONNX Light Viewer GitHub repository"><img src="${resource("logo.svg")}" alt="" width="24" height="24"></a><button id="open-model" class="primary" title="Open an ONNX model">Open</button><button id="save-model" class="primary" disabled title="Save a plain or encrypted copy of the whole ONNX model" aria-haspopup="dialog" aria-controls="save-options" aria-describedby="save-status">Save</button><button id="refresh-shapes" class="icon-button" disabled title="Refresh shape and type information with onnx-light" aria-label="Refresh shape and type information" aria-describedby="shape-status"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2 6M20 4v7h-7"/></svg>Refresh shapes</button><button id="refresh-metadata" class="icon-button" disabled title="Recompute constants, tags and lifetimes for the displayed graph with onnx-light" aria-label="Refresh metadata for the displayed graph" aria-describedby="metadata-status"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2 6M20 4v7h-7"/></svg>Refresh metadata</button><button id="refresh-positions" class="icon-button" disabled title="Reset the portrait layout with new random horizontal positions" aria-label="Refresh node positions"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2 6M20 4v7h-7"/></svg>Refresh positions</button></div>
         <div><button id="show-metadata" class="icon-button" aria-expanded="false" aria-controls="metadata-panel" title="Show native constants, tags, lifetimes and stored metadata" aria-describedby="metadata-status"><span class="toggle-indicator" aria-hidden="true">&#10003;</span>Metadata</button></div>
         <div class="graph-stats" aria-live="polite"><span id="graph-summary">No model loaded</span><span id="initializer-count">0 initializers</span><span id="onnx-light-version" title="onnx-light C++ release used by this viewer">onnx-light ${onnxLightVersion}</span><span id="shape-status" role="status"></span><span id="metadata-status" role="status"></span><span id="navigation-status" role="status"></span><span id="load-status" role="status"></span></div>
+        <span id="save-status" role="status"></span>
         <nav id="graph-navigation" aria-label="Graph breadcrumbs" hidden></nav>
         <progress id="load-progress" aria-label="Loading ONNX model" hidden></progress>
       </header>
@@ -136,6 +137,7 @@ export function webviewHtml(
         <thead><tr><th scope="col">Control</th><th scope="col">Action</th></tr></thead>
         <tbody>
           <tr><th scope="row"><kbd>Tab</kbd> / <kbd>Shift + Tab</kbd></th><td>Move focus between controls and graph nodes.</td></tr>
+          <tr><th scope="row">Save</th><td>Choose embedded or external weights and plain or encrypted output. Embedded encrypted output protects all weights. External plain output asks for the maximum weight file size; external encrypted output awaits native support.</td></tr>
           <tr><th scope="row"><kbd>Enter</kbd> or <kbd>Space</kbd></th><td>Activate a focused button or subgraph link.</td></tr>
           <tr><th scope="row"><kbd>Left</kbd> / <kbd>Right</kbd> arrow</th><td>Switch tabs when a tab header has focus.</td></tr>
           <tr><th scope="row"><kbd>Home</kbd> / <kbd>End</kbd></th><td>Select the first / last tab when a tab header has focus.</td></tr>
@@ -199,6 +201,26 @@ export function webviewHtml(
       </ul>
     </section>
   </main>
+  <dialog id="save-options" aria-labelledby="save-title">
+    <form id="save-form">
+      <h2 id="save-title">Save an ONNX model copy</h2>
+      <table class="save-grid">
+        <caption>Choose weight storage and encryption</caption>
+        <thead><tr><td></td><th scope="col">Plain ONNX</th><th scope="col">Encrypted (AES-256-GCM)</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">Embedded weights</th><td><label><input type="radio" name="save-format" value="embedded-plain" checked>Single .onnx file</label></td><td><label><input type="radio" name="save-format" value="embedded-encrypted">Single .onnx.enc file, including all weights</label></td></tr>
+          <tr><th scope="row">External weights</th><td><label><input type="radio" name="save-format" value="external-plain">.onnx model and separate weight files</label></td><td><label class="unavailable"><input type="radio" name="save-format" value="external-encrypted" disabled aria-describedby="external-encryption-note">Model and separate encrypted weight files</label><p id="external-encryption-note">Unavailable in onnx-light. <a href="https://github.com/xadupre/onnx-light/issues/5533">Track native support</a>.</p></td></tr>
+        </tbody>
+      </table>
+      <div id="external-size" hidden>
+        <label for="weight-file-size">Maximum weight file size (MiB)</label>
+        <input id="weight-file-size" type="number" min="1" max="8589934591" step="1" value="5120" required disabled aria-describedby="weight-size-note">
+        <p id="weight-size-note">1 MiB = 1,048,576 bytes. A tensor cannot span files; choose a size large enough for the largest tensor.</p>
+      </div>
+      <p id="save-options-error" role="alert"></p>
+      <footer><button id="cancel-save" type="button">Cancel</button><button class="primary" type="submit">Save copy</button></footer>
+    </form>
+  </dialog>
   <dialog id="operator-doc" aria-labelledby="doc-title">
     <header class="inspector-heading"><h2 id="doc-title"></h2><button id="close-doc" autofocus>Close</button></header>
     <p id="doc-version"></p><div id="doc-body"></div>

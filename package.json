@@ -45,6 +45,9 @@
         "selector": [
           {
             "filenamePattern": "*.onnx"
+          },
+          {
+            "filenamePattern": "*.onnx.enc"
           }
         ],
         "priority": "default"

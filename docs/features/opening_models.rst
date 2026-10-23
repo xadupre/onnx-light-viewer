@@ -2,10 +2,10 @@ Opening models
 ==============
 
 .. image:: ../_static/opening-models.png
-   :alt: Open ONNX model button in the viewer toolbar.
+   :alt: Model opening control in the viewer toolbar.
    :width: 200px
 
-* **Open ONNX model** offers **Local file**, **Hugging Face** or **Backend test**.
+* **Open** offers **Local file**, **Hugging Face** or **Backend test**.
   Opening an ``.onnx`` file in VS Code
   also uses the viewer; use **Reopen Editor With...** if another editor handles it.
 * **ONNX Light Viewer: Open Graph** opens the bundled Relu demo.
@@ -14,10 +14,85 @@ Opening models
 * The toolbar shows the native onnx-light C++ release, graph counts, refresh
   progress and errors. Its logo links to the GitHub repository.
 
+Plain and encrypted ModelProto files
+-------------------------------------
+
+The viewer detects onnx-light encrypted model envelopes by their header,
+independently of the filename. It reads **ONNXCRY1** (legacy AES-256-CBC),
+**ONNXCRY2** (ChaCha20-Poly1305) and **ONNXCRY3** (AES-256-GCM).
+Open them through **Local file**, or open an ``.onnx.enc`` file directly in
+VS Code. A masked VS Code input asks for the password. Cancelling keeps the
+previous model; a wrong password or damaged file produces a visible error.
+Passwords never enter the webview, settings or logs. They remain in the
+extension host's memory while the model is open so native recovery can reload it.
+
+**Open** and **Save** sit side by side with the same design. **Save** opens a
+storage/encryption choice grid:
+
+.. list-table::
+   :header-rows: 1
+
+   * - Weight storage
+     - Plain
+     - Encrypted
+   * - Embedded
+     - One self-contained ``.onnx`` file
+     - One self-contained ``.onnx.enc`` file, including all weights
+   * - External
+     - An ``.onnx`` file and separate weight files
+     - Shown but unavailable pending `onnx-light#5533
+       <https://github.com/xadupre/onnx-light/issues/5533>`_
+
+Encrypted output uses **AES-256-GCM / ONNXCRY3** and asks for password confirmation.
+The default filename ends in ``-copy.onnx`` or ``-copy.onnx.enc``; choose a
+different destination from the source model and its external weight files.
+Saving always includes the whole ModelProto, not just the selected graph,
+with stored metadata, all weights
+and any persisted shape inference. It does not change the displayed selection,
+layout or camera. A temporary file is written first and renamed only after the
+write succeeds; failures and cancellations appear in Logs.
+
+Models containing ``training_info`` can be inspected, but all export modes
+explicitly reject them: the pinned onnx-light 0.2.0 does not preserve training
+or initialization graphs. This avoids silently producing an incomplete copy.
+Local source aliases (including symlinked directories, hard links and case
+aliases on case-insensitive volumes) are rejected as save destinations.
+
+Saving resolves existing external weights relative to the local source model.
+Embedded output incorporates them into the saved proto, so encrypted output
+protects them too. External output copies and repartitions the weights, without
+modifying the originals. Missing weight files fail explicitly before writing.
+External weights from virtual sources require opening a local copy with its
+weight files available; Hugging Face weight files are not downloaded automatically.
+
+For external output, choose the **maximum weight file size in MiB**
+(1 MiB = 1,048,576 bytes). The default is 5120 MiB (5 GiB). This is a file-size limit,
+not an I/O buffer size. One tensor cannot span files, so the limit must fit the
+largest tensor; an insufficient limit is reported as an error.
+Small tensors, strings and sparse components may remain inline according to
+the native serializer.
+Weight files have unique names alongside the proto and are published first;
+the proto is replaced last, after every weight file succeeds. Failure removes
+new weight files and leaves an existing destination intact. Existing weight
+files are never replaced or deleted.
+Closing the panel or replacing its model during a temporary write cancels
+publication and removes new temporary and external files.
+
+Plain local files still load with bounded tensor payloads. Saving rereads any
+omitted inline data from their source, so the source must remain available and
+unchanged; detected changes require reopening it. Encrypted models are decrypted
+fully in native memory, and serialization also needs a complete in-memory
+payload. Local-file decryption and serialization run on native workers; virtual
+files use VS Code's filesystem and the synchronous byte-buffer loader.
+Decrypted data is written to disk only when explicitly saving
+a plain copy; downloaded encrypted files remain encrypted in the cache.
+Malformed decrypted models produce content-free errors, so parser diagnostics
+cannot expose decrypted bytes in Logs.
+
 Hugging Face models
 -------------------
 
-Choose **Open ONNX model**, then **Hugging Face**, and enter a public repository
+Choose **Open**, then **Hugging Face**, and enter a public repository
 ID such as ``onnx-community/Kokoro-82M-v1.0-ONNX``, its URL
 (``https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX``), or the URL of an
 ``.onnx`` file. For a repository, the extension lists its ONNX files and lets you

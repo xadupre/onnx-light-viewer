@@ -1,5 +1,6 @@
 const assert = require("node:assert/strict");
 const { execFileSync } = require("node:child_process");
+const { createCipheriv, createDecipheriv, pbkdf2Sync } = require("node:crypto");
 const {
   readFileSync,
   mkdtempSync,
@@ -9,6 +10,9 @@ const {
   closeSync,
   rmSync,
   writeFileSync,
+  renameSync,
+  symlinkSync,
+  linkSync,
 } = require("node:fs");
 const { tmpdir } = require("node:os");
 const path = require("node:path");
@@ -21,6 +25,7 @@ const {
   loadModelFile,
   listBackendTests,
   loadBackendTest,
+  isEncryptedModel,
 } = require("../dist/graph");
 
 function modelBytes(name) {
@@ -45,7 +50,7 @@ function bytesField(number, value) {
   return Buffer.concat([varint(number * 8 + 2), varint(bytes.length), bytes]);
 }
 
-function matmulWithWeight(dataField) {
+function matmulWithWeight(dataField, data = Buffer.alloc(256)) {
   const dimension = (size) =>
     bytesField(
       1,
@@ -70,7 +75,7 @@ function matmulWithWeight(dataField) {
     varintField(1, 8),
     varintField(2, 1),
     bytesField(8, "weight"),
-    bytesField(dataField, Buffer.alloc(256)),
+    bytesField(dataField, data),
   ]);
   const node = Buffer.concat([
     bytesField(1, "x"),
@@ -91,6 +96,486 @@ function matmulWithWeight(dataField) {
     bytesField(7, graph),
   ]);
 }
+
+function encryptModelBytes(bytes, password, version) {
+  const magic = Buffer.from(`ONNXCRY${version}`);
+  const salt = Buffer.alloc(16, 17);
+  const nonce = Buffer.alloc(version === 1 ? 16 : 12, 23);
+  const key = pbkdf2Sync(password, salt, 100000, 32, "sha256");
+  const algorithm = ["aes-256-cbc", "chacha20-poly1305", "aes-256-gcm"][
+    version - 1
+  ];
+  const cipher = createCipheriv(algorithm, key, nonce, { authTagLength: 16 });
+  const header = Buffer.concat([magic, salt, nonce]);
+  if (version === 3) cipher.setAAD(header);
+  const payload = Buffer.concat([cipher.update(bytes), cipher.final()]);
+  return Buffer.concat([
+    header,
+    ...(version === 1 ? [] : [cipher.getAuthTag()]),
+    payload,
+  ]);
+}
+
+test("loads all three encrypted ModelProto formats from buffers and files", async (t) => {
+  const directory = mkdtempSync(
+    path.join(tmpdir(), "onnx-light-viewer-crypt-"),
+  );
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const password = "model round-trip passphrase";
+  const bytes = Buffer.concat([
+    modelBytes("inference.onnx"),
+    bytesField(6, "model documentation ".repeat(110000)),
+  ]);
+  const expected = loadModel(bytes, "inference.onnx").graph(true);
+  for (const version of [1, 2, 3]) {
+    const encrypted = encryptModelBytes(bytes, password, version);
+    assert.equal(isEncryptedModel(encrypted), true);
+    const file = path.join(directory, `模型-${version}.onnx.enc`);
+    writeFileSync(file, encrypted);
+    for (const model of [
+      loadModel(encrypted, "inference.onnx", password),
+      await loadModelFile(file, "inference.onnx", password),
+    ]) {
+      assert.deepEqual(model.graph(true), expected);
+      assert.deepEqual(
+        loadModel(await model.serialize(), "inference.onnx").graph(),
+        expected,
+      );
+    }
+    assert.throws(() => loadModel(encrypted, "encrypted", "wrong password"));
+    await assert.rejects(loadModelFile(file, "encrypted", "wrong password"));
+    if (version !== 1) {
+      const corrupted = Buffer.from(encrypted);
+      corrupted[corrupted.length - 1] ^= 1;
+      assert.throws(() => loadModel(corrupted, "corrupted", password));
+    }
+  }
+});
+
+test("does not disclose decrypted bytes in inspection or parser diagnostics", async (t) => {
+  const directory = mkdtempSync(
+    path.join(tmpdir(), "onnx-light-viewer-private-errors-"),
+  );
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const marker = "LEAKME42";
+  const invalid = Buffer.concat([varint(807), Buffer.from(marker)]);
+  const password = "malformed input password";
+  for (const version of [1, 2, 3]) {
+    for (const malformed of [
+      Buffer.concat([varintField(1, 8), bytesField(7, invalid)]),
+      Buffer.concat([varintField(1, 8), invalid]),
+    ]) {
+      const encrypted = encryptModelBytes(malformed, password, version);
+      const file = path.join(directory, `invalid-${version}.onnx.enc`);
+      writeFileSync(file, encrypted);
+      const safeError = (error) => {
+        assert.equal(
+          error.message,
+          "Could not decode the decrypted ONNX model.",
+        );
+        assert.equal(error.stack.includes(marker), false);
+        return true;
+      };
+      assert.throws(() => loadModel(encrypted, "invalid", password), safeError);
+      await assert.rejects(loadModelFile(file, "invalid", password), safeError);
+    }
+  }
+});
+
+test("enumerates external sources in nested graphs, sparse tensors and function defaults without loading them", async (t) => {
+  const directory = mkdtempSync(
+    path.join(tmpdir(), "onnx-light-viewer-external-sources-"),
+  );
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const tensor = (location, type = 1) =>
+    Buffer.concat([
+      varintField(1, 1),
+      varintField(2, type),
+      bytesField(8, location),
+      ...["ignored.bin", location].map((value) =>
+        bytesField(
+          13,
+          Buffer.concat([bytesField(1, "location"), bytesField(2, value)]),
+        ),
+      ),
+      varintField(14, 1),
+    ]);
+  const graph = Buffer.concat([
+    bytesField(5, tensor("dense.bin")),
+    bytesField(
+      15,
+      Buffer.concat([
+        bytesField(1, tensor("values.bin")),
+        bytesField(2, tensor("indices.bin", 7)),
+        varintField(3, 1),
+      ]),
+    ),
+    bytesField(
+      1,
+      Buffer.concat([
+        bytesField(4, "Inspect"),
+        bytesField(
+          5,
+          Buffer.concat([
+            bytesField(1, "body"),
+            bytesField(6, bytesField(5, tensor("nested.bin"))),
+            varintField(20, 5),
+          ]),
+        ),
+      ]),
+    ),
+  ]);
+  const bytes = Buffer.concat([
+    varintField(1, 8),
+    bytesField(7, graph),
+    bytesField(
+      25,
+      Buffer.concat([
+        bytesField(1, "FunctionWithDefault"),
+        bytesField(10, "example"),
+        bytesField(
+          11,
+          Buffer.concat([
+            bytesField(1, "weight"),
+            bytesField(5, tensor("function.bin")),
+            varintField(20, 4),
+          ]),
+        ),
+      ]),
+    ),
+  ]);
+  const file = path.join(directory, "source.onnx");
+  writeFileSync(file, bytes);
+  for (const model of [
+    loadModel(bytes, "source"),
+    await loadModelFile(file, "source"),
+  ])
+    assert.deepEqual(model.externalDataLocations(), [
+      "dense.bin",
+      "function.bin",
+      "indices.bin",
+      "nested.bin",
+      "values.bin",
+    ]);
+});
+
+test("inspects models with training_info but rejects every export before unsupported fields are lost", async (t) => {
+  const directory = mkdtempSync(
+    path.join(tmpdir(), "onnx-light-viewer-training-"),
+  );
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const training = bytesField(
+    20,
+    Buffer.concat([
+      bytesField(1, bytesField(2, "initialization graph")),
+      bytesField(2, bytesField(2, "training algorithm")),
+    ]),
+  );
+  const original = Buffer.concat([modelBytes("relu.onnx"), training]);
+  for (const version of [0, 1, 2, 3]) {
+    const password = version ? "training password" : undefined;
+    const bytes = version
+      ? encryptModelBytes(original, password, version)
+      : original;
+    const file = path.join(directory, `training-${version}.onnx`);
+    writeFileSync(file, bytes);
+    for (const model of [
+      loadModel(bytes, "training", password),
+      await loadModelFile(file, "training", password),
+    ]) {
+      assert.equal(model.graph().nodes[0].opType, "Relu");
+      await assert.rejects(model.serialize(), /training_info.*not supported/);
+      await assert.rejects(
+        model.serialize("export password"),
+        /training_info.*not supported/,
+      );
+      await assert.rejects(
+        model.serializeFiles(1024, "weights"),
+        /training_info.*not supported/,
+      );
+    }
+    assert.deepEqual(readFileSync(file), bytes);
+  }
+});
+
+test("saves complete streamed weights, inferred shapes and authenticated encrypted copies", async (t) => {
+  const directory = mkdtempSync(path.join(tmpdir(), "onnx-light-viewer-save-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  for (const field of [4, 9]) {
+    const data = Buffer.alloc(256, 63);
+    const bytes = matmulWithWeight(field, data);
+    const file = path.join(directory, `weights-${field}.onnx`);
+    writeFileSync(file, bytes);
+    const streamed = await loadModelFile(file, "weights.onnx");
+    const complete = loadModel(bytes, "weights.onnx");
+    streamed.graph(true);
+    complete.graph(true);
+    const expected = Buffer.from(await complete.serialize());
+    assert.equal(expected.includes(data), true);
+    assert.deepEqual(Buffer.from(await streamed.serialize()), expected);
+    const password = "export passphrase";
+    const encrypted = Buffer.from(await streamed.serialize(password));
+    assert.equal(encrypted.subarray(0, 8).toString(), "ONNXCRY3");
+    const decipher = createDecipheriv(
+      "aes-256-gcm",
+      pbkdf2Sync(password, encrypted.subarray(8, 24), 100000, 32, "sha256"),
+      encrypted.subarray(24, 36),
+    );
+    decipher.setAAD(encrypted.subarray(0, 36));
+    decipher.setAuthTag(encrypted.subarray(36, 52));
+    assert.deepEqual(
+      Buffer.concat([
+        decipher.update(encrypted.subarray(52)),
+        decipher.final(),
+      ]),
+      expected,
+    );
+    assert.deepEqual(
+      loadModel(encrypted, "weights.onnx", password).graph(),
+      complete.graph(),
+    );
+    assert.notDeepEqual(
+      Buffer.from(await streamed.serialize(password)),
+      encrypted,
+    );
+    assert.deepEqual(readFileSync(file), bytes);
+    const moved = path.join(directory, `moved-${field}.onnx`);
+    renameSync(file, moved);
+    assert.deepEqual(
+      Buffer.from(await streamed.serialize(undefined, moved)),
+      expected,
+    );
+    writeFileSync(moved, Buffer.concat([bytes, Buffer.from([0])]));
+    await assert.rejects(
+      streamed.serialize(undefined, moved),
+      /source model changed/,
+    );
+  }
+  const external = loadModel(
+    modelBytes("initializers.onnx"),
+    "initializers.onnx",
+  );
+  await assert.rejects(
+    external.serialize(),
+    /External weights require a local source model path/,
+  );
+});
+
+test("embeds external weights with offsets and repartitions plain external copies without modifying sources", async (t) => {
+  const directory = mkdtempSync(
+    path.join(tmpdir(), "onnx-light-viewer-external-模型-"),
+  );
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const data = [Buffer.alloc(128, 37), Buffer.alloc(128, 53)];
+  const weightName = "poids-é-模型.data";
+  const entry = (key, value) =>
+    bytesField(13, Buffer.concat([bytesField(1, key), bytesField(2, value)]));
+  const modelBytes = (external, location = weightName) =>
+    Buffer.concat([
+      varintField(1, 8),
+      bytesField(8, varintField(2, 13)),
+      bytesField(
+        7,
+        Buffer.concat([
+          bytesField(2, "external weights"),
+          ...data.map((bytes, index) =>
+            bytesField(
+              5,
+              Buffer.concat([
+                varintField(1, 32),
+                varintField(2, 1),
+                bytesField(8, `weight${index}`),
+                ...(external
+                  ? [
+                      entry("location", location),
+                      entry("offset", String(17 + index * bytes.length)),
+                      entry("length", String(bytes.length)),
+                      varintField(14, 1),
+                    ]
+                  : [bytesField(9, bytes)]),
+              ]),
+            ),
+          ),
+        ]),
+      ),
+    ]);
+  const source = path.join(directory, "модель.onnx");
+  const weights = path.join(directory, weightName);
+  const originalWeights = Buffer.concat([Buffer.alloc(17), ...data]);
+  writeFileSync(source, modelBytes(true));
+  writeFileSync(weights, originalWeights);
+  const model = await loadModelFile(source, "external");
+  const expected = Buffer.from(
+    await loadModel(modelBytes(false), "external").serialize(),
+  );
+  assert.deepEqual(Buffer.from(await model.serialize()), expected);
+  const encrypted = await model.serialize("external passphrase");
+  assert.deepEqual(
+    Buffer.from(
+      await loadModel(encrypted, "external", "external passphrase").serialize(),
+    ),
+    expected,
+  );
+  const files = await model.serializeFiles(128, "copy.data");
+  assert.equal(files.weights.length, 2);
+  for (const { name, bytes } of files.weights) {
+    assert.equal(name.startsWith("copy.data"), true);
+    assert.ok(bytes.byteLength <= 128);
+    writeFileSync(path.join(directory, name), bytes);
+  }
+  const copy = path.join(directory, "copy.onnx");
+  writeFileSync(copy, files.model);
+  assert.deepEqual(
+    Buffer.from(await (await loadModelFile(copy, "external")).serialize()),
+    expected,
+  );
+  await assert.rejects(
+    model.serializeFiles(127, "too-small.data"),
+    /size|tensor|external/i,
+  );
+  assert.deepEqual(readFileSync(source), modelBytes(true));
+  assert.deepEqual(readFileSync(weights), originalWeights);
+  for (const location of [
+    "../outside.data",
+    "a/../outside.data",
+    path.resolve(directory, "outside.data"),
+  ])
+    await assert.rejects(
+      loadModel(modelBytes(true, location), "unsafe").serialize(
+        undefined,
+        source,
+      ),
+      /safe relative path/,
+    );
+  const outside = mkdtempSync(
+    path.join(tmpdir(), "onnx-light-viewer-outside-"),
+  );
+  t.after(() => rmSync(outside, { recursive: true, force: true }));
+  writeFileSync(path.join(outside, "weights.data"), originalWeights);
+  symlinkSync(outside, path.join(directory, "alias"), "junction");
+  await assert.rejects(
+    loadModel(modelBytes(true, "alias/weights.data"), "unsafe").serialize(
+      undefined,
+      source,
+    ),
+    /outside the model directory/,
+  );
+  const hardlink = path.join(directory, "hardlink.data");
+  linkSync(weights, hardlink);
+  await assert.rejects(
+    loadModel(modelBytes(true, "hardlink.data"), "unsafe").serialize(
+      undefined,
+      source,
+    ),
+    /multiple hard links/,
+  );
+  rmSync(hardlink);
+  renameSync(weights, `${weights}.missing`);
+  await assert.rejects(model.serialize());
+});
+
+test("external export validates chunk sizes and filenames and preserves the retained inline model", async () => {
+  for (const field of [4, 9]) {
+    const model = loadModel(
+      matmulWithWeight(field, Buffer.alloc(256, 37)),
+      "weights",
+    );
+    const expected = Buffer.from(await model.serialize());
+    const files = await model.serializeFiles(256, "weights.data");
+    assert.equal(files.weights.length, 1);
+    assert.equal(files.weights[0].bytes.byteLength, 256);
+    assert.deepEqual(
+      Buffer.from(files.weights[0].bytes),
+      Buffer.alloc(256, 37),
+    );
+    assert.deepEqual(Buffer.from(await model.serialize()), expected);
+    for (const size of [0, -1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1])
+      assert.throws(
+        () => model.serializeFiles(size, "weights"),
+        /integer|size/,
+      );
+    for (const prefix of [
+      "",
+      ".",
+      "..",
+      "../weights",
+      "dir\\weights",
+      "weights\0",
+    ])
+      assert.throws(() => model.serializeFiles(256, prefix), /prefix/);
+  }
+});
+
+test("embeds external sparse values and indices before encrypting the whole model", async (t) => {
+  const directory = mkdtempSync(
+    path.join(tmpdir(), "onnx-light-viewer-sparse-save-"),
+  );
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const values = Buffer.alloc(64, 37);
+  const indices = Buffer.alloc(128);
+  for (let index = 0; index < 16; index++)
+    indices.writeBigInt64LE(BigInt(index), index * 8);
+  const tensor = (name, type, bytes, offset, external) =>
+    Buffer.concat([
+      varintField(1, 16),
+      varintField(2, type),
+      bytesField(8, name),
+      ...(external
+        ? [
+            ...Object.entries({
+              location: "sparse.data",
+              offset: String(offset),
+              length: String(bytes.length),
+            }).map(([key, value]) =>
+              bytesField(
+                13,
+                Buffer.concat([bytesField(1, key), bytesField(2, value)]),
+              ),
+            ),
+            varintField(14, 1),
+          ]
+        : [bytesField(9, bytes)]),
+    ]);
+  const modelBytes = (external) =>
+    Buffer.concat([
+      varintField(1, 8),
+      bytesField(
+        7,
+        Buffer.concat([
+          bytesField(2, "sparse weights"),
+          bytesField(
+            15,
+            Buffer.concat([
+              bytesField(1, tensor("sparse", 1, values, 0, external)),
+              bytesField(
+                2,
+                tensor("indices", 7, indices, values.length, external),
+              ),
+              varintField(3, 128),
+            ]),
+          ),
+        ]),
+      ),
+    ]);
+  const source = path.join(directory, "sparse.onnx");
+  writeFileSync(source, modelBytes(true));
+  writeFileSync(
+    path.join(directory, "sparse.data"),
+    Buffer.concat([values, indices]),
+  );
+  const model = await loadModelFile(source, "sparse");
+  const expected = Buffer.from(
+    await loadModel(modelBytes(false), "sparse").serialize(),
+  );
+  assert.deepEqual(Buffer.from(await model.serialize()), expected);
+  const encrypted = await model.serialize("sparse password");
+  assert.deepEqual(
+    Buffer.from(
+      await loadModel(encrypted, "sparse", "sparse password").serialize(),
+    ),
+    expected,
+  );
+});
 
 test("streams local models, retains small shape constants and never opens external weights", async (t) => {
   for (const name of [

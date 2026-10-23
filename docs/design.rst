@@ -129,12 +129,58 @@ The retained model interface is:
    interface NativeModel {
      graph(inferShapes?: boolean, path?: GraphPath): Graph;
      metadata(path?: GraphPath): GraphMetadata;
+     serialize(password?: string, sourceFilePath?: string): Promise<Uint8Array>;
+     serializeFiles(maxFileSize: number, prefix: string, sourceFilePath?: string):
+       Promise<{ model: Uint8Array; weights: { name: string; bytes: Uint8Array }[] }>;
    }
 
 An omitted path selects the root graph. ``graph()`` does not infer shapes;
 ``graph(true, path)`` first infers the enclosing model and then returns the
 selected graph. ``decodeGraph`` instead produces a one-shot snapshot, skipping
 raw tensor bytes by default, without retaining a model for future refreshes.
+``loadModel`` and ``loadModelFile`` accept an optional decryption password.
+``isEncryptedModel`` recognizes the eight-byte ONNXCRY1/2/3 header. Only the host
+prompts for passwords; reload closures retain them in panel-local memory.
+``serialize`` snapshots the whole model and runs on a native worker. Omitted
+inline tensors are restored from the original file after checking its size,
+modification time and tensor identity. ``sourceFilePath`` supplies the current
+location after the Hugging Face cache's atomic rename. Ordinary serialization
+returns plain ONNX bytes; a password selects authenticated AES-256-GCM.
+Both methods resolve external weights relative to the local source model.
+``serialize`` embeds them before plain serialization or encryption.
+``serializeFiles`` uses the native multi-file serializer to return a plain proto
+and partitioned external payloads. The positive byte limit applies to each
+weight file; oversized tensors fail instead of silently exceeding the limit.
+An external source without a local path, or with missing weights, fails explicitly.
+External directory and location strings are converted from UTF-8 before filesystem
+operations, retaining relative-path, canonical-containment, symlink and hard-link
+checks on every platform.
+
+The native loader detects top-level ``training_info`` before parsing can discard
+it. Such models remain inspectable, but both serialization methods reject export
+explicitly. Encrypted envelopes are decrypted using OpenSSL before the same
+compatibility check; authenticated formats are verified before plaintext is parsed.
+Decrypted inspection and parser failures are replaced with content-free errors
+before reaching the host or webview logs.
+Encryption still uses onnx-light's AES-256-GCM writer and existing ONNXCRY formats.
+
+The host writes the serialized bytes to a temporary sibling of the chosen
+destination, then renames it into place. Failure cleanup removes the temporary
+file. Passwords and model bytes are never included in webview messages.
+For multiple files, fresh random weight filenames prevent collisions with source
+or previously saved weights. The host publishes weights without overwriting
+existing files, then atomically replaces the proto as the commit point. Failure
+or model replacement before that point cleans newly published weights.
+``externalDataLocations`` traverses the whole model, including nested graphs,
+sparse tensors and functions, excluding omitted inline payload placeholders.
+The host protects both the source proto and every external source file.
+For local destinations, filesystem device/inode identity detects source aliases.
+The source check is repeated after writing the temporary proto. Immediately before
+each rename, a panel/model guard propagates cancellation without marking the save
+committed.
+The webview sends only the grid selection and maximum file size. Separately
+encrypted weights remain disabled pending
+`onnx-light#5533 <https://github.com/xadupre/onnx-light/issues/5533>`_.
 
 ``src/webview.ts``
 ~~~~~~~~~~~~~~~~~~

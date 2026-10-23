@@ -1,7 +1,19 @@
 const assert = require("node:assert/strict");
 const { readFileSync } = require("node:fs");
-const { copyFile, mkdir, mkdtemp, readFile, rm } = require("node:fs/promises");
-const { createHash } = require("node:crypto");
+const {
+  copyFile,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile,
+  rename,
+  readdir,
+  stat,
+  symlink,
+  link,
+} = require("node:fs/promises");
+const { createCipheriv, createHash, pbkdf2Sync } = require("node:crypto");
 const { createServer } = require("node:http");
 const { tmpdir } = require("node:os");
 const { createRequire } = require("node:module");
@@ -9,6 +21,13 @@ const path = require("node:path");
 const vm = require("node:vm");
 const { test } = require("node:test");
 const { JSDOM } = require("jsdom");
+
+class FileSystemError extends Error {
+  constructor(code) {
+    super(code);
+    this.code = code;
+  }
+}
 
 async function openExtension(
   customModel,
@@ -24,6 +43,9 @@ async function openExtension(
   const logs = [];
   const logViews = [];
   const events = [];
+  const passwordPrompts = [];
+  const saveDialogs = [];
+  const writes = [];
   const nativeModels = [];
   const commands = new Map();
   const receivers = new Set();
@@ -41,6 +63,12 @@ async function openExtension(
   let modelSource = "local";
   let repositoryFiles;
   let repositoryFileSelection;
+  let passwordValues = [];
+  let saveDestination;
+  let failSaveWrite = false;
+  let failSaveRename = 0;
+  let saveDialogGate;
+  let saveWriteGate;
   const listedRepositories = [];
   const disposable = () => ({ dispose() {} });
   const root = path.resolve(__dirname, "..");
@@ -83,6 +111,7 @@ async function openExtension(
     reveal() {},
   };
   const vscode = {
+    FileSystemError,
     Uri: {
       file: (filePath) => ({
         path: filePath,
@@ -109,6 +138,38 @@ async function openExtension(
           pendingReads.delete(key);
           return readFile(uri.path);
         },
+        writeFile: async (uri, bytes) => {
+          writes.push(uri.path);
+          await writeFile(
+            uri.path,
+            failSaveWrite ? bytes.subarray(0, 8) : bytes,
+          );
+          if (failSaveWrite) {
+            failSaveWrite = false;
+            throw new Error("Test filesystem refused the complete write.");
+          }
+          if (saveWriteGate && --saveWriteGate.after === 0) {
+            const gate = saveWriteGate;
+            saveWriteGate = undefined;
+            gate.arrived();
+            await gate.wait;
+          }
+        },
+        rename: async (source, destination) => {
+          if (failSaveRename > 0 && --failSaveRename === 0) {
+            throw new Error("Test filesystem refused the rename.");
+          }
+          await rename(source.path, destination.path);
+        },
+        delete: async (uri) => {
+          try {
+            await rm(uri.path);
+          } catch (error) {
+            if (error.code === "ENOENT")
+              throw new FileSystemError("FileNotFound");
+            throw error;
+          }
+        },
       },
     },
     window: {
@@ -118,7 +179,21 @@ async function openExtension(
         return disposable();
       },
       showOpenDialog: async () => selection,
-      showInputBox: async () => huggingFaceInput,
+      showInputBox: async (options) => {
+        if (!options.password) return huggingFaceInput;
+        passwordPrompts.push(options);
+        return passwordValues.shift();
+      },
+      showSaveDialog: async (options) => {
+        saveDialogs.push(options);
+        const gate = saveDialogGate;
+        saveDialogGate = undefined;
+        if (gate) {
+          gate.arrived();
+          await gate.wait;
+        }
+        return saveDestination;
+      },
       withProgress: async (_options, work) =>
         work(
           { report() {} },
@@ -215,6 +290,9 @@ async function openExtension(
     logs,
     logViews,
     events,
+    passwordPrompts,
+    saveDialogs,
+    writes,
     webview,
     resolveCustomEditor: (name) =>
       editor.resolveCustomEditor(
@@ -252,6 +330,54 @@ async function openExtension(
     listedRepositories,
     showLogs: () => commands.get("onnxLightViewer.showLogs")(),
     receive: (message) => receive(message),
+    setPasswords: (...values) => {
+      passwordValues = values;
+    },
+    openFile: async (filePath) => {
+      modelSource = "local";
+      selection = [uri(filePath)];
+      await receive({ type: "open" });
+    },
+    save: async (filePath, encrypted = false, passwords = [], externalSize) => {
+      saveDestination = filePath ? vscode.Uri.file(filePath) : undefined;
+      passwordValues = passwords;
+      await receive({
+        type: "save",
+        encrypted,
+        storage: externalSize === undefined ? "embedded" : "external",
+        ...(externalSize === undefined
+          ? {}
+          : { maxExternalFileSize: externalSize }),
+      });
+    },
+    failNextSaveWrite: () => {
+      failSaveWrite = true;
+    },
+    failNextSaveRename: (after = 1) => {
+      failSaveRename = after;
+    },
+    pauseNextSaveDialog: () => {
+      let release, arrived;
+      const wait = new Promise((resolve) => {
+        release = resolve;
+      });
+      const opened = new Promise((resolve) => {
+        arrived = resolve;
+      });
+      saveDialogGate = { wait, arrived };
+      return { opened, release };
+    },
+    pauseNextSaveWrite: (after = 1) => {
+      let release, arrived;
+      const wait = new Promise((resolve) => {
+        release = resolve;
+      });
+      const written = new Promise((resolve) => {
+        arrived = resolve;
+      });
+      saveWriteGate = { after, wait, arrived };
+      return { written, release };
+    },
     open: async (name) => {
       modelSource = "local";
       selection = [uri(path.join(__dirname, "models", name))];
@@ -276,6 +402,455 @@ async function openExtension(
     },
   };
 }
+
+test("saves inferred ModelProto copies as plain or encrypted files and opens encrypted copies", async (t) => {
+  const directory = await mkdtemp(
+    path.join(tmpdir(), "onnx-light-viewer-save-"),
+  );
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const { loadModel } = require("../dist/graph");
+  for (const localFiles of [false, true]) {
+    const extension = await openExtension(
+      "inference.onnx",
+      undefined,
+      localFiles,
+    );
+    await extension.receive({ type: "ready" });
+    await extension.receive({ type: "refresh-shapes" });
+    const expected = extension.nativeModels.at(-1).graph();
+    const plain = path.join(directory, `plain-${localFiles}.onnx`);
+    const encrypted = `${plain}.enc`;
+    const password = "private export passphrase";
+    await extension.save(plain);
+    assert.equal(extension.messages.at(-1).type, "save-info");
+    assert.deepEqual(
+      loadModel(await readFile(plain), expected.name).graph(),
+      expected,
+    );
+    await extension.save(encrypted, true, [password, password]);
+    assert.equal(
+      (await readFile(encrypted)).subarray(0, 8).toString(),
+      "ONNXCRY3",
+    );
+    extension.setPasswords(password);
+    await extension.openFile(encrypted);
+    assert.equal(extension.messages.at(-1).type, "graph");
+    await extension.save(plain);
+    assert.deepEqual(
+      loadModel(await readFile(plain), expected.name).graph(),
+      expected,
+    );
+    assert.equal(extension.passwordPrompts.length, 3);
+    assert.equal(
+      extension.passwordPrompts.every(({ password }) => password === true),
+      true,
+    );
+    assert.equal(JSON.stringify(extension.events).includes(password), false);
+    assert.equal(extension.logs.join("\n").includes(password), false);
+    assert.deepEqual(extension.errors, []);
+  }
+  assert.equal(
+    (await readdir(directory)).some((name) => name.endsWith(".tmp")),
+    false,
+  );
+});
+
+test("keeps malformed decrypted plaintext out of errors and webview logs", async (t) => {
+  const directory = await mkdtemp(
+    path.join(tmpdir(), "onnx-light-viewer-private-logs-"),
+  );
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const marker = "LEAKME42";
+  const graph = Buffer.concat([Buffer.from([0xa7, 0x06]), Buffer.from(marker)]);
+  const plaintext = Buffer.concat([
+    Buffer.from([0x08, 0x08, 0x3a, graph.length]),
+    graph,
+  ]);
+  const password = "malformed input password";
+  const salt = Buffer.alloc(16, 17);
+  const nonce = Buffer.alloc(12, 23);
+  const header = Buffer.concat([Buffer.from("ONNXCRY3"), salt, nonce]);
+  const cipher = createCipheriv(
+    "aes-256-gcm",
+    pbkdf2Sync(password, salt, 100000, 32, "sha256"),
+    nonce,
+  );
+  cipher.setAAD(header);
+  const payload = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+  const source = path.join(directory, "invalid.onnx.enc");
+  await writeFile(
+    source,
+    Buffer.concat([header, cipher.getAuthTag(), payload]),
+  );
+  for (const local of [false, true]) {
+    const extension = await openExtension("relu.onnx", undefined, local);
+    extension.setPasswords(password);
+    await extension.openFile(source);
+    assert.equal(extension.messages.at(-1).type, "load-error");
+    assert.match(extension.errors.at(-1), /decode the decrypted ONNX model/);
+    for (const output of [
+      extension.errors,
+      extension.logs,
+      extension.messages,
+      extension.events,
+    ])
+      assert.equal(JSON.stringify(output).includes(marker), false);
+  }
+});
+
+test("cancels password and save dialogs and keeps existing files intact after failed writes", async (t) => {
+  const directory = await mkdtemp(
+    path.join(tmpdir(), "onnx-light-viewer-save-errors-"),
+  );
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const extension = await openExtension("relu.onnx", undefined, true);
+  const destination = path.join(directory, "existing.onnx");
+  const original = Buffer.from("existing destination");
+  await writeFile(destination, original);
+  await extension.save(undefined);
+  await extension.save(destination, true);
+  await extension.save(destination, true, ["password", "different"]);
+  assert.equal(extension.writes.length, 0);
+  for (const fail of [
+    extension.failNextSaveWrite,
+    extension.failNextSaveRename,
+  ]) {
+    fail();
+    await extension.save(destination);
+    assert.equal(extension.messages.at(-1).type, "save-error");
+    assert.deepEqual(await readFile(destination), original);
+    assert.deepEqual(await readdir(directory), ["existing.onnx"]);
+  }
+  const source = path.join(directory, "source.onnx");
+  await copyFile(require.resolve("./models/relu.onnx"), source);
+  await extension.openFile(source);
+  const writes = extension.writes.length;
+  await extension.save(source);
+  assert.equal(extension.writes.length, writes);
+  assert.match(extension.errors.at(-1), /different destination/);
+  const encrypted = path.join(directory, "encrypted.onnx.enc");
+  const { loadModel } = require("../dist/graph");
+  await writeFile(
+    encrypted,
+    await loadModel(
+      readFileSync(require.resolve("./models/relu.onnx")),
+      "relu",
+    ).serialize("password"),
+  );
+  const errors = extension.errors.length;
+  extension.setPasswords(undefined);
+  await extension.openFile(encrypted);
+  assert.equal(extension.errors.length, errors);
+  assert.match(extension.logs.join("\n"), /\[CANCELLED\] Open ONNX model/);
+  extension.setPasswords("wrong");
+  await extension.openFile(encrypted);
+  assert.equal(extension.messages.at(-1).type, "load-error");
+  await extension.receive({ type: "ready" });
+  assert.equal(extension.messages.at(-1).graph.nodes[0].opType, "Relu");
+});
+
+test("saves real external weights, embeds them into encrypted copies and rolls back failed multi-file exports", async (t) => {
+  const directory = await mkdtemp(
+    path.join(tmpdir(), "onnx-light-viewer-external-save-"),
+  );
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const { loadModel, loadModelFile } = require("../dist/graph");
+  const source = path.join(directory, "source.onnx");
+  await copyFile(require.resolve("../media/tiny-llm.onnx"), source);
+  const original = await readFile(source);
+  const extension = await openExtension(
+    undefined,
+    "onnxLightViewer.open",
+    true,
+  );
+  await extension.openFile(source);
+  const expectedGraph = extension.nativeModels.at(-1).graph();
+  const copy = path.join(directory, "copy.onnx");
+  await extension.save(copy, false, [], 1024 * 1024);
+  assert.equal(extension.messages.at(-1).type, "save-info");
+  const weights = (await readdir(directory)).filter((name) =>
+    name.startsWith("copy.onnx."),
+  );
+  assert.ok(weights.length > 0);
+  for (const name of weights)
+    assert.ok(
+      (await readFile(path.join(directory, name))).byteLength <= 1024 * 1024,
+    );
+  const expected = await (await loadModelFile(copy, "copy")).serialize();
+  assert.deepEqual(loadModel(expected, "copy").graph(), expectedGraph);
+  await extension.openFile(copy);
+  const encrypted = path.join(directory, "embedded.onnx.enc");
+  await extension.save(encrypted, true, [
+    "external password",
+    "external password",
+  ]);
+  assert.equal(extension.messages.at(-1).type, "save-info");
+  assert.deepEqual(
+    await (
+      await loadModelFile(encrypted, "copy", "external password")
+    ).serialize(),
+    expected,
+  );
+  const existing = Buffer.from("preserve existing destination");
+  const failed = path.join(directory, "failed.onnx");
+  await writeFile(failed, existing);
+  const before = (await readdir(directory)).sort();
+  for (const fail of [
+    extension.failNextSaveWrite,
+    () => extension.failNextSaveRename(),
+    () => extension.failNextSaveRename(weights.length + 1),
+  ]) {
+    fail();
+    await extension.save(failed, false, [], 1024 * 1024);
+    assert.equal(extension.messages.at(-1).type, "save-error");
+    assert.deepEqual(await readFile(failed), existing);
+    assert.deepEqual((await readdir(directory)).sort(), before);
+  }
+  const lateAlias = path.join(directory, "late.onnx");
+  const originalWeight = await readFile(path.join(directory, weights[0]));
+  const gate = extension.pauseNextSaveWrite(weights.length + 1);
+  const saving = extension.save(lateAlias, false, [], 1024 * 1024);
+  await gate.written;
+  await link(path.join(directory, weights[0]), lateAlias);
+  gate.release();
+  await saving;
+  assert.equal(extension.messages.at(-1).type, "save-error");
+  assert.match(extension.errors.at(-1), /different destination/);
+  assert.deepEqual(await readFile(lateAlias), originalWeight);
+  assert.deepEqual(
+    await readFile(path.join(directory, weights[0])),
+    originalWeight,
+  );
+  await rm(lateAlias);
+  assert.deepEqual((await readdir(directory)).sort(), before);
+  assert.deepEqual(await readFile(source), original);
+  for (const name of weights) await rm(path.join(directory, name));
+  const writeCount = extension.writes.length;
+  await extension.save(path.join(directory, "missing-weights.onnx"));
+  assert.equal(extension.messages.at(-1).type, "save-error");
+  assert.equal(extension.writes.length, writeCount);
+});
+
+test("preserves dense and sparse external sources when selected as save destinations", async (t) => {
+  const directory = await mkdtemp(
+    path.join(tmpdir(), "onnx-light-viewer-protect-weights-"),
+  );
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const source = path.join(directory, "source.onnx");
+  await copyFile(require.resolve("./models/initializers.onnx"), source);
+  const weightsDirectory = path.join(directory, "weights");
+  await mkdir(weightsDirectory);
+  const files = [
+    [source, await readFile(source)],
+    [path.join(weightsDirectory, "decoder.bin"), Buffer.from([0, 0, 128, 63])],
+    [path.join(weightsDirectory, "values.bin"), Buffer.from([0, 0, 0, 64])],
+    [path.join(weightsDirectory, "indices.bin"), Buffer.alloc(8)],
+  ];
+  for (const [file, bytes] of files.slice(1)) await writeFile(file, bytes);
+  const extension = await openExtension(undefined, undefined, true);
+  await extension.openFile(source);
+  assert.equal(extension.messages.at(-1).type, "graph");
+  const alias = path.join(directory, "alias");
+  await symlink(weightsDirectory, alias, "junction");
+  for (const destination of [
+    ...files.slice(1).map(([file]) => file),
+    path.join(alias, "decoder.bin"),
+  ]) {
+    for (const mode of ["plain", "encrypted", "external"]) {
+      await extension.save(
+        destination,
+        mode === "encrypted",
+        ["password", "password"],
+        mode === "external" ? 1024 * 1024 : undefined,
+      );
+      assert.equal(extension.messages.at(-1).type, "save-error");
+      assert.match(extension.errors.at(-1), /different destination/);
+      assert.deepEqual(extension.writes, []);
+      for (const [file, bytes] of files)
+        assert.deepEqual(await readFile(file), bytes);
+    }
+  }
+});
+
+test("rejects invalid external file sizes and the unavailable encrypted external mode before writing", async () => {
+  const extension = await openExtension();
+  for (const size of [
+    0,
+    -1,
+    1.5,
+    Infinity,
+    Number.MAX_SAFE_INTEGER + 1,
+    "1024",
+  ]) {
+    await extension.receive({
+      type: "save",
+      storage: "external",
+      encrypted: false,
+      maxExternalFileSize: size,
+    });
+    assert.equal(extension.messages.at(-1).type, "save-error");
+    assert.match(extension.errors.at(-1), /positive.*integer/);
+  }
+  await extension.receive({
+    type: "save",
+    storage: "external",
+    encrypted: true,
+    maxExternalFileSize: 1024,
+  });
+  assert.match(extension.errors.at(-1), /onnx-light\/issues\/5533/);
+  assert.deepEqual(extension.writes, []);
+  assert.deepEqual(extension.passwordPrompts, []);
+});
+
+test("preserves source files reached through filesystem aliases and rechecks before publication", async (t) => {
+  const directory = await mkdtemp(
+    path.join(tmpdir(), "onnx-light-viewer-save-alias-"),
+  );
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const sourceDirectory = path.join(directory, "models");
+  await mkdir(sourceDirectory);
+  const source = path.join(sourceDirectory, "Model.onnx");
+  await copyFile(require.resolve("./models/relu.onnx"), source);
+  const original = await readFile(source);
+  const extension = await openExtension(
+    undefined,
+    "onnxLightViewer.open",
+    true,
+  );
+  await extension.openFile(source);
+  const alias = path.join(directory, "alias");
+  await symlink(sourceDirectory, alias, "junction");
+  const hardlink = path.join(directory, "hardlink.onnx");
+  await link(source, hardlink);
+  for (const destination of [path.join(alias, "Model.onnx"), hardlink]) {
+    await extension.save(destination);
+    assert.match(extension.errors.at(-1), /different destination/);
+    assert.deepEqual(await readFile(source), original);
+    assert.equal(extension.writes.length, 0);
+  }
+  const caseAlias = path.join(sourceDirectory, "model.onnx");
+  let caseInsensitive = true;
+  try {
+    await stat(caseAlias);
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+    caseInsensitive = false;
+  }
+  await extension.save(caseAlias);
+  if (caseInsensitive) {
+    assert.match(extension.errors.at(-1), /different destination/);
+    assert.equal(extension.writes.length, 0);
+  } else {
+    assert.equal(extension.messages.at(-1).type, "save-info");
+  }
+  assert.deepEqual(await readFile(source), original);
+  const lateAlias = path.join(directory, "late.onnx");
+  const gate = extension.pauseNextSaveWrite();
+  const saving = extension.save(lateAlias);
+  await gate.written;
+  await link(source, lateAlias);
+  gate.release();
+  await saving;
+  assert.equal(extension.messages.at(-1).type, "save-error");
+  assert.match(extension.errors.at(-1), /different destination/);
+  assert.deepEqual(await readFile(lateAlias), original);
+  assert.deepEqual(await readFile(source), original);
+  assert.equal(
+    (await readdir(directory)).some((name) => name.endsWith(".tmp")),
+    false,
+  );
+});
+
+test("cancels pending proto writes and rolls back external weights on replacement or disposal", async (t) => {
+  const directory = await mkdtemp(
+    path.join(tmpdir(), "onnx-light-viewer-save-write-"),
+  );
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  for (const external of [false, true]) {
+    for (const dispose of [false, true]) {
+      const destinationDirectory = path.join(
+        directory,
+        `${external}-${dispose}`,
+      );
+      await mkdir(destinationDirectory);
+      const destination = path.join(destinationDirectory, "copy.onnx");
+      const original = Buffer.from("existing destination");
+      await writeFile(destination, original);
+      const extension = await openExtension(
+        undefined,
+        "onnxLightViewer.openSymbolicExample",
+        true,
+      );
+      const maxFileSize = 1024 * 1024;
+      const weightCount = external
+        ? (
+            await extension.nativeModels
+              .at(-1)
+              .serializeFiles(maxFileSize, "count")
+          ).weights.length
+        : 0;
+      if (external) assert.ok(weightCount > 0);
+      const gate = extension.pauseNextSaveWrite(weightCount + 1);
+      const saving = extension.save(
+        destination,
+        false,
+        [],
+        external ? maxFileSize : undefined,
+      );
+      await gate.written;
+      if (dispose) extension.dispose();
+      else await extension.open("relu.onnx");
+      gate.release();
+      await saving;
+      assert.deepEqual(await readFile(destination), original);
+      assert.deepEqual(await readdir(destinationDirectory), ["copy.onnx"]);
+      assert.equal(
+        extension.messages.some(({ type }) => type === "save-info"),
+        false,
+      );
+      assert.deepEqual(extension.errors, []);
+    }
+  }
+});
+
+test("reuses a decrypted model's host-only password after native recovery", async (t) => {
+  const directory = await mkdtemp(
+    path.join(tmpdir(), "onnx-light-viewer-save-recovery-"),
+  );
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const extension = await openExtension("invalid-graph.onnx", undefined, true);
+  const encrypted = path.join(directory, "invalid.onnx.enc");
+  const password = "recovery passphrase";
+  await extension.save(encrypted, true, [password, password]);
+  extension.setPasswords(password);
+  await extension.openFile(encrypted);
+  await extension.receive({ type: "metadata" });
+  assert.equal(extension.messages.at(-1).type, "metadata-error");
+  const prompts = extension.passwordPrompts.length;
+  await extension.save(path.join(directory, "recovered.onnx"));
+  assert.equal(extension.messages.at(-1).type, "save-info");
+  assert.equal(extension.passwordPrompts.length, prompts);
+  assert.equal(JSON.stringify(extension.events).includes(password), false);
+});
+
+test("does not write a model after replacement or panel disposal during the save dialog", async (t) => {
+  const directory = await mkdtemp(
+    path.join(tmpdir(), "onnx-light-viewer-stale-save-"),
+  );
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  for (const dispose of [false, true]) {
+    const extension = await openExtension("inference.onnx", undefined, true);
+    const gate = extension.pauseNextSaveDialog();
+    const save = extension.save(path.join(directory, "copy.onnx"));
+    await gate.opened;
+    if (dispose) extension.dispose();
+    else await extension.open("relu.onnx");
+    gate.release();
+    await save;
+    assert.deepEqual(extension.writes, []);
+    assert.deepEqual(await readdir(directory), []);
+  }
+});
 
 test("streams local custom-editor files and replacements without reading whole files into the host", async () => {
   const extension = await openExtension("inference.onnx", undefined, true);
