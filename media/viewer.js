@@ -1,5 +1,9 @@
-/* global acquireVsCodeApi */
+/* global acquireVsCodeApi, markdownit */
 const vscode = acquireVsCodeApi();
+const documentationMarkdown = markdownit({ html: false });
+documentationMarkdown.validateLink = (url) => /^https?:\/\//i.test(url);
+documentationMarkdown.renderer.rules.image = (tokens, index) =>
+  documentationMarkdown.utils.escapeHtml(tokens[index].content);
 const svgNS = "http://www.w3.org/2000/svg";
 const byId = (id) => document.getElementById(id);
 const svg = byId("graph");
@@ -278,6 +282,14 @@ function operatorSizes(nodes) {
           };
         }),
       );
+      if (node.function) {
+        const text = "Function";
+        subgraphs.push({
+          ...node.function,
+          label: text,
+          textWidth: context.measureText(text).width,
+        });
+      }
       const width = Math.min(
         280,
         Math.max(
@@ -424,12 +436,16 @@ function inspect(view) {
         ? "No selection"
         : "No operator");
   byId("node-description").textContent = node
-    ? `${node.opType} operator`
+    ? `${node.opType} ${node.function ? "local function" : "operator"}`
     : port
       ? `Graph ${port.output ? "output" : "input"} tensor.`
       : hasOperators
         ? "Select a node to inspect its inputs and outputs."
         : "This graph contains no operator nodes.";
+  byId("open-function").hidden = !node?.function;
+  byId("open-function").textContent = node?.function
+    ? `Open function: ${node.function.name}`
+    : "Open function";
   byId("node-name").textContent = node?.name ?? port?.name ?? "—";
   byId("node-domain").textContent = node?.domain ?? "—";
   byId("node-opset").textContent = node?.opset ?? "—";
@@ -1630,10 +1646,13 @@ byId("show-doc").addEventListener("click", () => {
   byId("doc-title").textContent = `${opType} documentation`;
   byId("doc-version").textContent =
     `${domain} · model opset ${opset} · LightOpSchema since version ${schema.sinceVersion}`;
-  byId("doc-body").textContent = schema.doc;
+  byId("doc-body").innerHTML = documentationMarkdown.render(schema.doc);
   byId("operator-doc").showModal();
 });
 byId("close-doc").addEventListener("click", () => byId("operator-doc").close());
+byId("open-function").addEventListener("click", () => {
+  if (inspectedNode?.function) navigate(inspectedNode.function.path);
+});
 byId("open-model").addEventListener("click", () =>
   requestAction("open", "Open ONNX model"),
 );

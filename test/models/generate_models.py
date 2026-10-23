@@ -49,6 +49,79 @@ custom = helper.make_model(
 checker.check_model(custom)
 save_model(custom, Path(__file__).with_name("custom.onnx"))
 
+function_branches = [
+    helper.make_graph(
+        [helper.make_node(op_type, ["x"], ["branch_value"])],
+        f"{op_type} branch",
+        [],
+        [helper.make_tensor_value_info("branch_value", TensorProto.FLOAT, None)],
+    )
+    for op_type in ["Relu", "Identity"]
+]
+local_functions = [
+    helper.make_function(
+        "example",
+        "Transform",
+        ["x", "cond"],
+        ["y"],
+        [
+            helper.make_node(
+                "If",
+                ["cond"],
+                ["hidden"],
+                then_branch=function_branches[0],
+                else_branch=function_branches[1],
+            ),
+            helper.make_node("Softmax", ["hidden"], ["normalized"]),
+            helper.make_node(
+                "Identity", ["normalized"], ["y"], domain="example", overload="fast"
+            ),
+        ],
+        [helper.make_opsetid("", 11), helper.make_opsetid("example", 1)],
+        value_info=[
+            helper.make_tensor_value_info("x", TensorProto.FLOAT, None),
+            helper.make_tensor_value_info("cond", TensorProto.BOOL, []),
+        ],
+    ),
+    helper.make_function(
+        "example",
+        "Identity",
+        ["x"],
+        ["y"],
+        [helper.make_node("Neg", ["x"], ["y"])],
+        [helper.make_opsetid("", 11)],
+    ),
+    helper.make_function(
+        "example",
+        "Identity",
+        ["x"],
+        ["y"],
+        [helper.make_node("Sigmoid", ["x"], ["y"])],
+        [helper.make_opsetid("", 11)],
+        overload="fast",
+    ),
+]
+function_model = helper.make_model(
+    helper.make_graph(
+        [
+            helper.make_node("Transform", ["x", "cond"], ["first"], domain="example"),
+            helper.make_node("Identity", ["first"], ["y"], domain="example"),
+        ],
+        "Local functions",
+        [
+            helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 3]),
+            helper.make_tensor_value_info("cond", TensorProto.BOOL, []),
+        ],
+        [helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 3])],
+        initializer=[helper.make_tensor("x", TensorProto.FLOAT, [1, 3], [1, 2, 3])],
+    ),
+    functions=local_functions,
+    ir_version=10,
+    opset_imports=[helper.make_opsetid("example", 1)],
+)
+checker.check_model(function_model)
+save_model(function_model, Path(__file__).with_name("functions.onnx"))
+
 passthrough = helper.make_model(
     helper.make_graph([], "Passthrough", [value_info("x")], [value_info("x")]),
     ir_version=9,

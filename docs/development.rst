@@ -16,7 +16,8 @@ Open the repository in VS Code and press **F5** to launch the Extension
 Development Host. Run **ONNX Light Viewer: Open Graph** in that window's
 Command Palette to open the one-node demo.
 
-``npm run compile`` builds the native binding and TypeScript.
+``npm run compile`` bundles the Markdown renderer and its licenses into
+``media/vendor/``, then builds the native binding and TypeScript.
 TypeScript 7 uses the Node.js ambient types explicitly enabled in ``tsconfig.json``.
 ``npm run watch`` watches TypeScript only; compile the native binding first,
 and rebuild it with ``npm run build:native`` after editing C++.

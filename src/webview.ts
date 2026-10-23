@@ -6,7 +6,7 @@
  * @param resource Resolves bundled filenames (viewer.css, viewer.js, logo.svg)
  * to webview URI strings within the panel's allowed media resource root.
  * @param cspSource The panel webview's cspSource, allowing local images/styles.
- * @param nonce Fresh per-panel nonce authorizing only the bundled viewer script.
+ * @param nonce Fresh per-panel nonce authorizing only the bundled scripts.
  * @param onnxLightVersion C++ release embedded in the compiled native addon.
  * @param initialTab Initially selected viewer tab.
  * @returns Complete HTML document; graph and log data require the ready handshake.
@@ -53,6 +53,7 @@ export function webviewHtml(
         </div>
         <aside aria-label="Node inspector">
           <div class="eyebrow">INSPECTOR</div><div class="inspector-heading"><h2 id="node-title">No model loaded</h2><button id="show-doc" disabled aria-haspopup="dialog">Doc</button></div><p id="node-description">Open an ONNX model to explore its connections.</p>
+          <button id="open-function" class="icon-button" hidden>Open function</button>
           <div id="node-details"><dl><dt>NODE NAME</dt><dd id="node-name">—</dd><dt>DOMAIN</dt><dd id="node-domain">—</dd><dt>OPSET</dt><dd id="node-opset">—</dd></dl>
           <h3>Inputs <span id="input-count">0</span></h3><ul id="node-inputs"></ul>
           <h3>Outputs <span id="output-count">0</span></h3><ul id="node-outputs"></ul>
@@ -204,6 +205,7 @@ export function webviewHtml(
     <header class="inspector-heading"><h2 id="doc-title"></h2><button id="close-doc" autofocus>Close</button></header>
     <p id="doc-version"></p><div id="doc-body"></div>
   </dialog>
+  <script nonce="${nonce}" src="${resource("vendor/markdown-it.min.js")}"></script>
   <script nonce="${nonce}" src="${resource("viewer.js")}"></script>
 </body>
 </html>`;

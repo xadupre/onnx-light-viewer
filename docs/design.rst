@@ -162,8 +162,11 @@ local images/styles and authorizes the viewer script with a per-panel nonce.
 The host restricts local resource roots to ``media/``.
 
 Model-derived strings are not interpolated into this HTML. They arrive through
-messages and are inserted as DOM text by the viewer, including schema
-documentation and metadata values.
+messages and are inserted as DOM text by the viewer, including metadata values.
+Schema documentation uses the bundled markdown-it renderer with raw HTML
+disabled, HTTP(S)-only links and image labels rendered as escaped text.
+Only this renderer's output is inserted as HTML in the documentation dialog;
+no remote scripts or images are required.
 
 Native C++ source guide
 -----------------------
@@ -219,7 +222,17 @@ Graph projection and nested scopes
 ``ReadPath``, ``ChildGraph`` and ``GraphScopes`` resolve an absolute
 ``GraphPath`` from the root. Each step contains a node index, attribute index
 and graph index: zero for a ``GRAPH`` attribute, or an item index for ``GRAPHS``.
-Paths use indices, not potentially duplicate graph or node names.
+Alternatively, a function step contains a call-site node index and a model-local
+function index. Resolution verifies that domain, operator name and overload match
+the called definition. Paths use indices, not potentially duplicate graph or
+node names.
+
+``GraphSelection`` retains borrowed graph scopes and owns temporary graph views
+of the selected function bodies. Only navigated definitions are materialized,
+with shallow copies of their nodes and declared types. Entering a function resets
+the capture boundary: caller tensors, initializers and constants do not leak into
+its formal namespace. Nested graph attributes still inherit from that function.
+Full enclosing scopes remain available for breadcrumbs.
 
 ``ModelGraph`` walks enclosing scopes to inherit tensor descriptions and
 initializer metadata. Local inputs, weights and node outputs shadow enclosing
@@ -227,11 +240,13 @@ names. ``CollectNodeInputs`` identifies implicit dependencies, including
 captures in nested attributes. Captured values appear as input ports, whereas
 captured initializers remain parameters.
 
-Graph-valued attributes expose lightweight ``SubgraphLink`` objects containing
-a name, path and node count. Breadcrumbs carry paths back to ancestors.
+Graph-valued attributes and local function calls expose lightweight
+``SubgraphLink`` objects containing a name, path and node count. Breadcrumbs carry
+paths back to ancestors.
 ``Schema`` selects the newest matching onnx-light ``LightOpSchema`` not newer
-than the model's imported opset, supplying documentation and attribute defaults.
-Defaults do not overwrite explicit attribute values.
+than the model's or selected function's imported opset, supplying documentation
+and attribute defaults. Local function calls do not use registered operator
+schemas. Defaults do not overwrite explicit attribute values.
 
 Shape inference versus metadata analysis
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

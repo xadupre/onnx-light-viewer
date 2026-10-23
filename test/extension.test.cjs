@@ -816,9 +816,11 @@ test("keeps operation logs quiet and exposes real native exception recovery in S
   extension.connect((data) =>
     window.dispatchEvent(new window.MessageEvent("message", { data })),
   );
-  window.eval(
-    readFileSync(path.resolve(__dirname, "../media/viewer.js"), "utf8"),
-  );
+  for (const name of ["vendor/markdown-it.min.js", "viewer.js"]) {
+    window.eval(
+      readFileSync(path.resolve(__dirname, "../media", name), "utf8"),
+    );
+  }
   const flush = async () => {
     while (requests.length) await Promise.all(requests.splice(0));
   };
@@ -1028,6 +1030,30 @@ test("keeps timestamped action history, verifies invalid graphs and reloads befo
   extension.showLogs();
   await extension.receive({ type: "show-logs" });
   assert.deepEqual(extension.logViews, [true, true]);
+});
+
+test("opens function call paths through the host and returns to the caller", async () => {
+  const extension = await openExtension("functions.onnx");
+  await extension.receive({ type: "ready" });
+  const root = extension.messages.at(-1).graph;
+  const path = root.nodes[0].function.path;
+  const reads = extension.reads.length;
+  await extension.receive({ type: "navigate", path });
+  assert.equal(extension.messages.at(-1).graph.name, "example::Transform");
+  await extension.receive({ type: "metadata" });
+  assert.equal(extension.messages.at(-1).metadata.nodes.length, 3);
+  await extension.receive({ type: "refresh-shapes" });
+  assert.equal(extension.messages.at(-1).type, "shape-info");
+  await extension.receive({
+    type: "navigate",
+    path: [{ node: 0, function: 1 }],
+  });
+  assert.equal(extension.messages.at(-1).type, "navigation-error");
+  await extension.receive({ type: "ready" });
+  assert.equal(extension.messages.at(-1).graph.name, "example::Transform");
+  await extension.receive({ type: "navigate", path: [] });
+  assert.equal(extension.messages.at(-1).graph.name, root.name);
+  assert.equal(extension.reads.length, reads);
 });
 
 test("navigates retained subgraphs, scopes refreshes and reports invalid paths without replacing the view", async () => {
