@@ -506,10 +506,12 @@ for (const kind of ["shapes", "metadata"]) {
           String(expected === "pending"),
         );
         assert.equal(button.title, status.textContent || titles[index]);
-        assert.equal(
-          window.getComputedStyle(button).color,
-          window.getComputedStyle(refresh).color,
-        );
+        if (button.getAttribute("aria-expanded") !== "true") {
+          assert.equal(
+            window.getComputedStyle(button).color,
+            window.getComputedStyle(refresh).color,
+          );
+        }
       }
       assert.equal(refresh.disabled, expected === "pending");
       if (expected === "idle") {
@@ -692,6 +694,43 @@ test("counts metadata changes and replaces cached analysis and graph markers on 
     `Metadata refreshed: ${metadata.model.length + metadata.graph.length + metadata.nodes.length + metadata.values.length} updates`,
   );
   assert.deepEqual(errors, []);
+});
+
+test("keeps the metadata button highlighted until its panel is closed", (t) => {
+  const { document, window, load } = openViewer(t);
+  const style = document.createElement("style");
+  style.textContent = readFileSync(
+    require.resolve("../media/viewer.css"),
+    "utf8",
+  );
+  document.head.append(style);
+  const model = loadModel(
+    readFileSync(require.resolve("./models/analysis.onnx")),
+    "analysis.onnx",
+  );
+  load(model.graph());
+  const toggle = document.getElementById("show-metadata");
+  const color = () => window.getComputedStyle(toggle).color;
+  const inactive = color();
+  assert.equal(toggle.getAttribute("aria-expanded"), "false");
+  toggle.click();
+  const active = color();
+  assert.notEqual(active, inactive);
+  assert.equal(toggle.getAttribute("aria-expanded"), "true");
+  assert.equal(document.getElementById("metadata-panel").hidden, false);
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: { type: "metadata-info", metadata: model.metadata() },
+    }),
+  );
+  assert.equal(color(), active);
+  load(model.graph());
+  assert.equal(color(), active);
+  toggle.click();
+  assert.equal(toggle.getAttribute("aria-expanded"), "false");
+  assert.equal(document.getElementById("metadata-panel").hidden, true);
+  toggle.click();
+  assert.equal(color(), active);
 });
 
 test("shows native metadata in the sidebar and marks released and never-used results without changing the layout", (t) => {
