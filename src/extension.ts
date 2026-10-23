@@ -206,24 +206,29 @@ async function readGraph(
 async function writeModelFile(
   uri: vscode.Uri,
   bytes: Uint8Array,
+  overwrite = true,
 ): Promise<void> {
   const temporary = vscode.Uri.joinPath(
     uri,
     "..",
     `.${posix.basename(uri.path)}.${randomBytes(12).toString("hex")}.tmp`,
   );
+  let renamed = false;
   try {
     await vscode.workspace.fs.writeFile(temporary, bytes);
-    await vscode.workspace.fs.rename(temporary, uri, { overwrite: true });
+    await vscode.workspace.fs.rename(temporary, uri, { overwrite });
+    renamed = true;
   } finally {
-    try {
-      await vscode.workspace.fs.delete(temporary);
-    } catch (error) {
-      if (!(
-        error instanceof vscode.FileSystemError && error.code === "FileNotFound"
-      ))
-        throw error;
-    }
+    if (!renamed)
+      try {
+        await vscode.workspace.fs.delete(temporary);
+      } catch (error) {
+        if (!(
+          error instanceof vscode.FileSystemError &&
+          error.code === "FileNotFound"
+        ))
+          throw error;
+      }
   }
 }
 /** Checks message structure; the native layer also checks graph index bounds. */
@@ -368,6 +373,9 @@ async function configurePanel(
         path?: unknown;
         actionId?: string;
         entry?: unknown;
+        storage?: unknown;
+        encrypted?: unknown;
+        maxExternalFileSize?: unknown;
       } | null,
     ) => {
       if (!active) return;
@@ -593,26 +601,34 @@ async function configurePanel(
             "Save ONNX model",
             async (id) => {
               const current = requireModel();
-              const format = await vscode.window.showQuickPick(
-                [
-                  {
-                    label: "Plain ONNX ModelProto",
-                    encrypted: false,
-                    detail: "External weight files are not copied.",
-                  },
-                  {
-                    label: "Encrypted ModelProto (AES-256-GCM)",
-                    encrypted: true,
-                    detail:
-                      "Encrypt the proto and embedded weights; external weight files are not copied or encrypted.",
-                  },
-                ],
-                { title: "Save an ONNX model copy" },
-              );
+              if (
+                (message.storage !== undefined &&
+                  message.storage !== "embedded" &&
+                  message.storage !== "external") ||
+                (message.encrypted !== undefined &&
+                  typeof message.encrypted !== "boolean")
+              )
+                throw new Error("Invalid model save format.");
+              const format = {
+                external: message.storage === "external",
+                encrypted: message.encrypted === true,
+              };
+              if (format.external && format.encrypted)
+                throw new Error(
+                  "Encrypted external weights await onnx-light support: https://github.com/xadupre/onnx-light/issues/5533",
+                );
+              const maxExternalFileSize = message.maxExternalFileSize ?? 0;
+              if (
+                typeof maxExternalFileSize !== "number" ||
+                !Number.isSafeInteger(maxExternalFileSize) ||
+                (format.external && maxExternalFileSize <= 0)
+              )
+                throw new Error(
+                  "Choose a positive, safe integer maximum external weight file size.",
+                );
               const cancelled = () => {
                 log.record("CANCELLED", "Save ONNX model", id);
               };
-              if (!format) return cancelled();
               let password: string | undefined;
               if (format.encrypted) {
                 password = await vscode.window.showInputBox({
@@ -670,14 +686,37 @@ async function configurePanel(
               const native = await nativeModel(current, log, () => {
                 void sendStatus();
               });
-              const bytes = await native.serialize(
-                password,
+              const sourcePath =
                 current.source?.uri.scheme === "file"
                   ? current.source.uri.fsPath
-                  : undefined,
-              );
+                  : undefined;
+              const serialized = format.external
+                ? await native.serializeFiles(
+                    maxExternalFileSize,
+                    `${posix.basename(destination.path)}.${randomBytes(12).toString("hex")}.data`,
+                    sourcePath,
+                  )
+                : {
+                    model: await native.serialize(password, sourcePath),
+                    weights: [],
+                  };
               if (!active || model !== current) return cancelled();
-              await writeModelFile(destination, bytes);
+              const writtenWeights: vscode.Uri[] = [];
+              let committed = false;
+              try {
+                for (const file of serialized.weights) {
+                  const uri = vscode.Uri.joinPath(destination, "..", file.name);
+                  await writeModelFile(uri, file.bytes, false);
+                  writtenWeights.push(uri);
+                  if (!active || model !== current) return cancelled();
+                }
+                await writeModelFile(destination, serialized.model);
+                committed = true;
+              } finally {
+                if (!committed)
+                  for (const uri of writtenWeights)
+                    await vscode.workspace.fs.delete(uri);
+              }
               await postMessage({
                 type: "save-info",
                 name: posix.basename(destination.path),

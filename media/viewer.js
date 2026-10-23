@@ -417,6 +417,7 @@ function refreshStatus(
 
 function resetDocumentation() {
   if (byId("operator-doc").open) byId("operator-doc").close();
+  if (byId("save-options").open) byId("save-options").close();
   byId("doc-title").textContent = "";
   byId("doc-version").textContent = "";
   byId("doc-body").textContent = "";
@@ -1656,9 +1657,52 @@ byId("open-function").addEventListener("click", () => {
 byId("open-model").addEventListener("click", () =>
   requestAction("open", "Open ONNX model"),
 );
-byId("save-model").addEventListener("click", () =>
-  requestAction("save", "Save ONNX model"),
+byId("save-model").addEventListener("click", () => {
+  byId("save-form").reset();
+  byId("external-size").hidden = true;
+  byId("weight-file-size").disabled = true;
+  byId("save-options-error").textContent = "";
+  byId("save-options").showModal();
+});
+byId("save-form").addEventListener("change", () => {
+  const external =
+    document.querySelector('input[name="save-format"]:checked').value ===
+    "external-plain";
+  byId("external-size").hidden = !external;
+  byId("weight-file-size").disabled = !external;
+  byId("save-options-error").textContent = "";
+});
+byId("cancel-save").addEventListener("click", () =>
+  byId("save-options").close(),
 );
+byId("save-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  const format = document.querySelector(
+    'input[name="save-format"]:checked',
+  ).value;
+  const external = format === "external-plain";
+  const maxExternalFileSize =
+    Number(byId("weight-file-size").value) * 1024 * 1024;
+  if (
+    !["embedded-plain", "embedded-encrypted", "external-plain"].includes(
+      format,
+    ) ||
+    (external &&
+      (!Number.isSafeInteger(maxExternalFileSize) ||
+        maxExternalFileSize < 1024 * 1024 ||
+        !byId("weight-file-size").checkValidity()))
+  ) {
+    byId("save-options-error").textContent =
+      "Choose a supported format and a positive whole-number file size in MiB.";
+    return;
+  }
+  byId("save-options").close();
+  requestAction("save", "Save ONNX model", {
+    storage: external ? "external" : "embedded",
+    encrypted: format === "embedded-encrypted",
+    ...(external ? { maxExternalFileSize } : {}),
+  });
+});
 byId("show-metadata").addEventListener("click", () => {
   metadataVisible = !metadataVisible;
   byId("show-metadata").setAttribute("aria-expanded", String(metadataVisible));

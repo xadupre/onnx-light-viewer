@@ -2,10 +2,10 @@ Opening models
 ==============
 
 .. image:: ../_static/opening-models.png
-   :alt: Open ONNX model button in the viewer toolbar.
+   :alt: Model opening control in the viewer toolbar.
    :width: 200px
 
-* **Open ONNX model** offers **Local file**, **Hugging Face** or **Backend test**.
+* **Open** offers **Local file**, **Hugging Face** or **Backend test**.
   Opening an ``.onnx`` file in VS Code
   also uses the viewer; use **Reopen Editor With...** if another editor handles it.
 * **ONNX Light Viewer: Open Graph** opens the bundled Relu demo.
@@ -26,21 +26,48 @@ previous model; a wrong password or damaged file produces a visible error.
 Passwords never enter the webview, settings or logs. They remain in the
 extension host's memory while the model is open so native recovery can reload it.
 
-**Save model** offers a plain ONNX copy or a password-protected
-**AES-256-GCM / ONNXCRY3** copy. Encryption asks for password confirmation.
+**Open** and **Save** sit side by side with the same design. **Save** opens a
+storage/encryption choice grid:
+
+.. list-table::
+   :header-rows: 1
+
+   * - Weight storage
+     - Plain
+     - Encrypted
+   * - Embedded
+     - One self-contained ``.onnx`` file
+     - One self-contained ``.onnx.enc`` file, including all weights
+   * - External
+     - An ``.onnx`` file and separate weight files
+     - Shown but unavailable pending `onnx-light#5533
+       <https://github.com/xadupre/onnx-light/issues/5533>`_
+
+Encrypted output uses **AES-256-GCM / ONNXCRY3** and asks for password confirmation.
 The default filename ends in ``-copy.onnx`` or ``-copy.onnx.enc``; choose a
 different destination from the source model. Saving always includes the whole
-ModelProto, not just the selected graph, with stored metadata, embedded weights
+ModelProto, not just the selected graph, with stored metadata, all weights
 and any persisted shape inference. It does not change the displayed selection,
 layout or camera. A temporary file is written first and renamed only after the
 write succeeds; failures and cancellations appear in Logs.
 
-.. important::
+Saving resolves existing external weights relative to the local source model.
+Embedded output incorporates them into the saved proto, so encrypted output
+protects them too. External output copies and repartitions the weights, without
+modifying the originals. Missing weight files fail explicitly before writing.
+External weights from virtual sources require opening a local copy with its
+weight files available; Hugging Face weight files are not downloaded automatically.
 
-   External weight references are preserved, but external weight files are
-   **not copied, embedded or encrypted**. Keep their relative locations valid
-   beside the saved proto. Encryption protects the ModelProto and its embedded
-   data, not separately stored weights.
+For external output, choose the **maximum weight file size in MiB**
+(1 MiB = 1,048,576 bytes). The default is 1024 MiB. This is a file-size limit,
+not an I/O buffer size. One tensor cannot span files, so the limit must fit the
+largest tensor; an insufficient limit is reported as an error.
+Small tensors, strings and sparse components may remain inline according to
+the native serializer.
+Weight files have unique names alongside the proto and are published first;
+the proto is replaced last, after every weight file succeeds. Failure removes
+new weight files and leaves an existing destination intact. Existing weight
+files are never replaced or deleted.
 
 Plain local files still load with bounded tensor payloads. Saving rereads any
 omitted inline data from their source, so the source must remain available and
@@ -54,7 +81,7 @@ a plain copy; downloaded encrypted files remain encrypted in the cache.
 Hugging Face models
 -------------------
 
-Choose **Open ONNX model**, then **Hugging Face**, and enter a public repository
+Choose **Open**, then **Hugging Face**, and enter a public repository
 ID such as ``onnx-community/Kokoro-82M-v1.0-ONNX``, its URL
 (``https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX``), or the URL of an
 ``.onnx`` file. For a repository, the extension lists its ONNX files and lets you

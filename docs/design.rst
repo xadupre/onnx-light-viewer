@@ -130,6 +130,8 @@ The retained model interface is:
      graph(inferShapes?: boolean, path?: GraphPath): Graph;
      metadata(path?: GraphPath): GraphMetadata;
      serialize(password?: string, sourceFilePath?: string): Promise<Uint8Array>;
+     serializeFiles(maxFileSize: number, prefix: string, sourceFilePath?: string):
+       Promise<{ model: Uint8Array; weights: { name: string; bytes: Uint8Array }[] }>;
    }
 
 An omitted path selects the root graph. ``graph()`` does not infer shapes;
@@ -144,11 +146,23 @@ inline tensors are restored from the original file after checking its size,
 modification time and tensor identity. ``sourceFilePath`` supplies the current
 location after the Hugging Face cache's atomic rename. Ordinary serialization
 returns plain ONNX bytes; a password selects authenticated AES-256-GCM.
-External weight references remain references.
+Both methods resolve external weights relative to the local source model.
+``serialize`` embeds them before plain serialization or encryption.
+``serializeFiles`` uses the native multi-file serializer to return a plain proto
+and partitioned external payloads. The positive byte limit applies to each
+weight file; oversized tensors fail instead of silently exceeding the limit.
+An external source without a local path, or with missing weights, fails explicitly.
 
 The host writes the serialized bytes to a temporary sibling of the chosen
 destination, then renames it into place. Failure cleanup removes the temporary
 file. Passwords and model bytes are never included in webview messages.
+For multiple files, fresh random weight filenames prevent collisions with source
+or previously saved weights. The host publishes weights without overwriting
+existing files, then atomically replaces the proto as the commit point. Failure
+or model replacement before that point cleans newly published weights.
+The webview sends only the grid selection and maximum file size. Separately
+encrypted weights remain disabled pending
+`onnx-light#5533 <https://github.com/xadupre/onnx-light/issues/5533>`_.
 
 ``src/webview.ts``
 ~~~~~~~~~~~~~~~~~~

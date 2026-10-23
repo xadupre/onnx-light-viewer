@@ -54,7 +54,7 @@ export interface SubgraphLink extends GraphBreadcrumb {
   nodeCount: number;
 }
 
-/** Storage description only; the viewer does not open external weight files. */
+/** Storage description; inspection does not open external weight files. */
 export interface InitializerStorage {
   external: boolean;
   /** External-data location when present, otherwise null. */
@@ -131,10 +131,19 @@ export interface NativeModel {
   /**
    * Serializes the whole model, including inferred information and inline weights.
    * A password produces authenticated ONNXCRY3 (AES-256-GCM), otherwise plain ONNX.
-   * External weight references are preserved; their files are not copied or encrypted.
+   * External weights are read relative to the source model and embedded before saving.
    * sourceFilePath supplies the new location after a source file is moved into a cache.
    */
   serialize(password?: string, sourceFilePath?: string): Promise<Uint8Array>;
+  /** Serializes a plain proto and newly partitioned external weight files. */
+  serializeFiles(
+    maxFileSize: number,
+    prefix: string,
+    sourceFilePath?: string,
+  ): Promise<{
+    model: Uint8Array;
+    weights: { name: string; bytes: Uint8Array }[];
+  }>;
   /**
    * Projects one graph. When requested, inference first updates the entire
    * retained model in memory, including nested graph value_info.

@@ -51,13 +51,14 @@ function openViewer(t, initialTab = "model") {
     Object.defineProperty(event, "pointerId", { value: id });
     graph.dispatchEvent(event);
   };
-  const dialog = dom.window.document.getElementById("operator-doc");
-  dialog.showModal = () => {
-    dialog.open = true;
-  };
-  dialog.close = () => {
-    dialog.open = false;
-  };
+  for (const dialog of dom.window.document.querySelectorAll("dialog")) {
+    dialog.showModal = () => {
+      dialog.open = true;
+    };
+    dialog.close = () => {
+      dialog.open = false;
+    };
+  }
   const pointer = (target, type, x, y, modifiers = {}) => {
     const [left, top, width, height] = graph
       .getAttribute("viewBox")
@@ -113,6 +114,9 @@ test("saves without replacing the graph and reports success, cancellation and er
   assert.equal(button.disabled, false);
   for (const result of ["SUCCEEDED", "CANCELLED", "FAILED"]) {
     button.click();
+    document
+      .getElementById("save-form")
+      .dispatchEvent(new window.Event("submit", { cancelable: true }));
     const request = messages.at(-1);
     assert.equal(request.type, "save");
     assert.equal(button.disabled, true);
@@ -144,6 +148,69 @@ test("saves without replacing the graph and reports success, cancellation and er
     );
     assert.equal(document.getElementById("nodes").innerHTML, graph);
   }
+});
+
+test("shows matching adjacent Open/Save buttons and an explicit storage/encryption grid", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  load(demoGraph);
+  const open = document.getElementById("open-model");
+  const save = document.getElementById("save-model");
+  assert.equal(open.textContent, "Open");
+  assert.equal(save.textContent, "Save");
+  assert.equal(open.nextElementSibling, save);
+  assert.equal(open.className, save.className);
+  const dialog = document.getElementById("save-options");
+  const form = document.getElementById("save-form");
+  const size = document.getElementById("weight-file-size");
+  const select = (value) => {
+    const input = document.querySelector(`input[value="${value}"]`);
+    input.checked = true;
+    input.dispatchEvent(new window.Event("change", { bubbles: true }));
+  };
+  const submit = () =>
+    form.dispatchEvent(new window.Event("submit", { cancelable: true }));
+  save.click();
+  assert.equal(dialog.open, true);
+  assert.equal(form.querySelectorAll('input[type="radio"]').length, 4);
+  assert.equal(
+    form.querySelector('input[value="external-encrypted"]').disabled,
+    true,
+  );
+  assert.equal(
+    form.querySelector("a").href,
+    "https://github.com/xadupre/onnx-light/issues/5533",
+  );
+  const before = messages.length;
+  document.getElementById("cancel-save").click();
+  assert.equal(dialog.open, false);
+  assert.equal(messages.length, before);
+  save.click();
+  select("external-plain");
+  assert.equal(size.disabled, false);
+  assert.equal(document.getElementById("external-size").hidden, false);
+  for (const value of ["", "0", "-1", "0.5", "8589934592"]) {
+    size.value = value;
+    submit();
+    assert.equal(dialog.open, true);
+    assert.equal(messages.length, before);
+    assert.match(
+      document.getElementById("save-options-error").textContent,
+      /positive/,
+    );
+  }
+  size.value = "2";
+  submit();
+  assert.equal(dialog.open, false);
+  assert.deepEqual(
+    { ...messages.at(-1), actionId: undefined },
+    {
+      type: "save",
+      storage: "external",
+      encrypted: false,
+      maxExternalFileSize: 2 * 1024 * 1024,
+      actionId: undefined,
+    },
+  );
 });
 
 test("shows loading progress until success, failure or cancellation, including initial loads", (t) => {

@@ -18,6 +18,7 @@
 #include <onnx_op/operator_sets.h>
 #include <onnx_proto/onnx.h>
 #include <onnx_proto/onnx_crypt.h>
+#include <onnx_proto/onnx_helper.h>
 #include <onnx_proto/onnx_verify.h>
 
 #include <algorithm>
@@ -27,6 +28,7 @@
 #include <cmath>
 #include <cstring>
 #include <filesystem>
+#include <functional>
 #include <iomanip>
 #include <limits>
 #include <locale>
@@ -41,6 +43,7 @@
 #include <system_error>
 #include <tuple>
 #include <type_traits>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -1457,14 +1460,75 @@ std::optional<std::string> ReadPassword(const Napi::Value &value) {
   return value.As<Napi::String>().Utf8Value();
 }
 
+/** Includes sparse components, which the native generic tensor iterator omits. */
+std::vector<ol::TensorProto *> ModelSaveTensors(ol::ModelProto &model) {
+  std::vector<ol::TensorProto *> tensors;
+  const auto sparse = [&](ol::SparseTensorProto &value) {
+    if (value.has_values())
+      tensors.push_back(&value.ref_values());
+    if (value.has_indices())
+      tensors.push_back(&value.ref_indices());
+  };
+  std::function<void(ol::AttributeProto &)> attribute;
+  const auto nodes = [&](auto &values) {
+    for (auto &node : values)
+      for (auto &value : node.ref_attribute())
+        attribute(value);
+  };
+  const auto graph = [&](auto &value) {
+    for (auto &tensor : value.ref_initializer())
+      tensors.push_back(&tensor);
+    for (auto &tensor : value.ref_sparse_initializer())
+      sparse(tensor);
+    nodes(value.ref_node());
+  };
+  attribute = [&](ol::AttributeProto &value) {
+    if (value.has_t())
+      tensors.push_back(&value.ref_t());
+    for (auto &tensor : value.ref_tensors())
+      tensors.push_back(&tensor);
+    if (value.has_sparse_tensor())
+      sparse(value.ref_sparse_tensor());
+    for (auto &tensor : value.ref_sparse_tensors())
+      sparse(tensor);
+    if (value.has_g())
+      graph(value.ref_g());
+    for (auto &child : value.ref_graphs())
+      graph(child);
+  };
+  const auto functions = [&](auto &values) {
+    for (auto &function : values) {
+      nodes(function.ref_node());
+      for (auto &value : function.ref_attribute_proto())
+        attribute(value);
+    }
+  };
+  if (model.has_graph())
+    graph(model.ref_graph());
+  functions(model.ref_functions());
+  for (auto &[name, plan] : model.ref_rewritings()) {
+    functions(plan.ref_added_functions());
+    for (auto &edit : plan.ref_rewrites()) {
+      nodes(edit.ref_added_nodes());
+      nodes(edit.ref_initializer_calls());
+      for (auto &tensor : edit.ref_added_initializers())
+        tensors.push_back(&tensor);
+    }
+  }
+  return tensors;
+}
+
 /** Serializes an independent snapshot; omitted inline payloads must first be restored. */
 class SerializeModelWorker : public Napi::AsyncWorker {
 public:
   SerializeModelWorker(Napi::Env env, std::shared_ptr<StoredModel> source,
-                       std::optional<std::string> password, std::string file_path)
+                       std::optional<std::string> password, std::string file_path,
+                       size_t max_external_file_size = 0, std::string external_file_prefix = "")
       : Napi::AsyncWorker(env), deferred_(Napi::Promise::Deferred::New(env)),
         source_(std::move(source)), snapshot_(source_->model->SharedCopy()),
-        password_(std::move(password)), file_path_(std::move(file_path)) {}
+        password_(std::move(password)), file_path_(std::move(file_path)),
+        max_external_file_size_(max_external_file_size),
+        external_file_prefix_(std::move(external_file_prefix)) {}
 
   Napi::Promise Promise() const { return deferred_.Promise(); }
 
@@ -1496,7 +1560,44 @@ public:
           *target = tensor->SharedCopy();
         }
       }
-      if (password_) {
+      const auto tensors = ModelSaveTensors(snapshot_);
+      for (auto *tensor : tensors)
+        if (tensor->data_location() == ol::TensorProto::EXTERNAL) {
+          if (file_path_.empty())
+            throw std::runtime_error(
+                "External weights require a local source model path when saving.");
+          const auto directory = ModelFilePath(file_path_).parent_path().u8string();
+          tensor->LoadExternalData(std::string(directory.begin(), directory.end()));
+          tensor->set_data_location(ol::TensorProto::DEFAULT);
+          tensor->clear_external_data();
+        }
+      if (max_external_file_size_) {
+        const ol::SerializeOptions options;
+        for (auto *value : tensors) {
+          auto &tensor = *value;
+          if (tensor.has_raw_data() || tensor.data_type() == ol::TensorProto::STRING ||
+              (tensor.float_data().empty() && tensor.double_data().empty() &&
+               tensor.int32_data().empty() && tensor.int64_data().empty() &&
+               tensor.uint64_data().empty()))
+            continue;
+          const auto data = ol::core::runtime::TensorFromProto(tensor);
+          if (data.size_bytes() < static_cast<size_t>(options.raw_data_threshold))
+            continue;
+          tensor.set_raw_data(data.bytes(), data.size_bytes());
+          tensor.clear_float_data();
+          tensor.clear_double_data();
+          tensor.clear_int32_data();
+          tensor.clear_int64_data();
+          tensor.clear_uint64_data();
+        }
+        if (!snapshot_.SerializeToString(bytes_, external_files_, max_external_file_size_,
+                                         external_file_prefix_, options))
+          throw std::runtime_error("Could not serialize the ONNX model with external weights.");
+        for (const auto &[name, bytes] : external_files_)
+          if (bytes.size() > max_external_file_size_)
+            throw std::runtime_error(
+                "A tensor exceeds the maximum external weight file size. Choose a larger size.");
+      } else if (password_) {
 #ifdef ONNX_LIGHT_HAS_OPENSSL
         bytes_ = ol::SaveEncryptedModelToString(snapshot_, *password_, "AES-256-GCM");
 #else
@@ -1511,8 +1612,25 @@ public:
   }
 
   void OnOK() override {
-    deferred_.Resolve(Napi::Buffer<uint8_t>::Copy(
-        Env(), reinterpret_cast<const uint8_t *>(bytes_.data()), bytes_.size()));
+    const auto bytes = Napi::Buffer<uint8_t>::Copy(
+        Env(), reinterpret_cast<const uint8_t *>(bytes_.data()), bytes_.size());
+    if (!max_external_file_size_) {
+      deferred_.Resolve(bytes);
+      return;
+    }
+    auto result = Napi::Object::New(Env());
+    result.Set("model", bytes);
+    auto weights = Napi::Array::New(Env(), external_files_.size());
+    uint32_t index = 0;
+    for (const auto &[name, data] : external_files_) {
+      auto file = Napi::Object::New(Env());
+      file.Set("name", name);
+      file.Set("bytes", Napi::Buffer<uint8_t>::Copy(
+                            Env(), reinterpret_cast<const uint8_t *>(data.data()), data.size()));
+      weights.Set(index++, file);
+    }
+    result.Set("weights", weights);
+    deferred_.Resolve(result);
   }
   void OnError(const Napi::Error &error) override { deferred_.Reject(error.Value()); }
 
@@ -1523,11 +1641,47 @@ private:
   std::optional<std::string> password_;
   std::string file_path_;
   std::string bytes_;
+  size_t max_external_file_size_;
+  std::string external_file_prefix_;
+  std::unordered_map<std::string, std::string> external_files_;
 };
 
 /** Method closures share ownership, even if JavaScript retains only one method. */
 Napi::Object ModelHandle(Napi::Env env, std::shared_ptr<StoredModel> model) {
   auto result = Napi::Object::New(env);
+  result.Set(
+      "serializeFiles",
+      Napi::Function::New(env, [model](const Napi::CallbackInfo &call) -> Napi::Value {
+        try {
+          if (call.Length() < 2 || call.Length() > 3 || !call[0].IsNumber() ||
+              !call[1].IsString() || (!call[2].IsUndefined() && !call[2].IsString()))
+            throw std::runtime_error(
+                "Expected a maximum external file size, a prefix and an optional source path.");
+          const double maximum = call[0].As<Napi::Number>().DoubleValue();
+          if (!std::isfinite(maximum) || maximum <= 0 || std::floor(maximum) != maximum ||
+              maximum > 9007199254740991.0 ||
+              maximum >= static_cast<double>(std::numeric_limits<size_t>::max()))
+            throw std::runtime_error("Expected a positive, safe integer external file size.");
+          const auto prefix = call[1].As<Napi::String>().Utf8Value();
+          if (prefix.empty() || prefix == "." || prefix == ".." ||
+              prefix.find_first_of("/\\") != std::string::npos ||
+              prefix.find('\0') != std::string::npos)
+            throw std::runtime_error("Expected an external file prefix without directories.");
+          const auto file_path =
+              call[2].IsString() ? call[2].As<Napi::String>().Utf8Value() : model->file_path;
+          if (file_path.find('\0') != std::string::npos)
+            throw std::runtime_error("Invalid source model file path.");
+          auto worker = std::make_unique<SerializeModelWorker>(
+              call.Env(), model, std::nullopt, file_path, static_cast<size_t>(maximum), prefix);
+          const auto promise = worker->Promise();
+          worker->Queue();
+          worker.release();
+          return promise;
+        } catch (const std::exception &error) {
+          Napi::Error::New(call.Env(), error.what()).ThrowAsJavaScriptException();
+          return call.Env().Undefined();
+        }
+      }));
   result.Set("serialize",
              Napi::Function::New(env, [model](const Napi::CallbackInfo &call) -> Napi::Value {
                try {
@@ -1626,6 +1780,7 @@ public:
         path_(std::move(path)), model_(std::make_shared<StoredModel>()),
         password_(std::move(password)) {
     model_->file_name = std::move(file_name);
+    model_->file_path = path_;
     model_->model = std::make_shared<ol::ModelProto>();
   }
 
@@ -1644,7 +1799,6 @@ public:
         return;
       }
       const auto path = ModelFilePath(path_);
-      model_->file_path = path_;
       model_->source_size = std::filesystem::file_size(path);
       model_->source_time = std::filesystem::last_write_time(path);
       ol::ParseOptions options;
