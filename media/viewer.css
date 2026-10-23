@@ -587,9 +587,14 @@ aside {
   border-radius: 6px;
   background: var(--bg);
 }
-aside .eyebrow {
-  color: var(--muted);
+.inspector-panel > .panel-title {
+  margin: -12px -12px 12px;
+  padding: 6px 12px;
+  border-radius: 5px 5px 0 0;
+  color: var(--bg);
+  background: var(--text);
   font-size: 9px;
+  text-transform: uppercase;
 }
 h2 {
   font-size: 26px;

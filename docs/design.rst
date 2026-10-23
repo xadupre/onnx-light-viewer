@@ -109,6 +109,9 @@ Contracts worth keeping
 * Fusion materializes weights in an independent native snapshot. Selected
   patterns apply together against original node indices; overlapping candidates
   are rejected. Graph replacement or cancellation invalidates previews.
+  Replacement previews share one trial builder per pattern without rewriting
+  the matched graph. External-weight reuse indexes candidates by name, element
+  type and dimensions before comparing their payloads and checking backing files.
 * ``GraphPath`` uses validated indices, not potentially duplicate names.
   Functions use their own imports and formal names, not the caller's weights;
   nested graph attributes can capture enclosing values.

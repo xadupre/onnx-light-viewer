@@ -369,6 +369,39 @@ test("browses folders inline, selects files without opening and ignores stale li
   );
 });
 
+test("preserves save destination separators while browsing directories inline", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  load(demoGraph);
+  document.getElementById("save-model").click();
+  const requestId = messages.at(-1).requestId;
+  for (const [location, expected] of [
+    ["/models", "/models/copy.onnx"],
+    ["/", "/copy.onnx"],
+    ["/models/with\\backslash", "/models/with\\backslash/copy.onnx"],
+    ["C:\\models", "C:\\models\\copy.onnx"],
+    ["C:\\", "C:\\copy.onnx"],
+    ["C:\\models\\", "C:\\models\\copy.onnx"],
+    ["C:/models", "C:/models/copy.onnx"],
+    ["\\\\server\\share\\models", "\\\\server\\share\\models\\copy.onnx"],
+    ["\\\\server\\share\\", "\\\\server\\share\\copy.onnx"],
+    ["vscode-remote://host/models", "vscode-remote://host/models/copy.onnx"],
+  ]) {
+    document.getElementById("save-file").value = "copy.onnx";
+    window.dispatchEvent(
+      new window.MessageEvent("message", {
+        data: {
+          type: "file-list",
+          target: "save",
+          requestId,
+          location,
+          entries: [],
+        },
+      }),
+    );
+    assert.equal(document.getElementById("save-file").value, expected);
+  }
+});
+
 test("toggles separated, stacked sidebar panels independently from Op Data Find Fuse controls", (t) => {
   const { document, window, load } = openViewer(t);
   const style = document.createElement("style");
@@ -413,6 +446,28 @@ test("toggles separated, stacked sidebar panels independently from Op Data Find 
     (rule) => rule.selectorText === ".inspector-panel",
   ).style;
   assert.match(panelStyle.border, /solid/);
+  const inspectorTitle = document.getElementById("operator-title");
+  const inspectorFont = window.getComputedStyle(inspectorTitle);
+  for (const panel of sidebar.querySelectorAll(":scope > .inspector-panel")) {
+    const title = panel.firstElementChild;
+    assert.equal(title.tagName, "H2");
+    assert.equal(title.id, panel.getAttribute("aria-labelledby"));
+    assert.ok(title.classList.contains("panel-title"));
+    const titleStyle = window.getComputedStyle(title);
+    for (const property of [
+      "fontFamily",
+      "fontSize",
+      "fontWeight",
+      "letterSpacing",
+    ])
+      assert.equal(titleStyle[property], inspectorFont[property]);
+    assert.equal(titleStyle.textTransform, "uppercase");
+  }
+  const titleStyle = [...style.sheet.cssRules].find(
+    (rule) => rule.selectorText === ".inspector-panel > .panel-title",
+  ).style;
+  assert.equal(titleStyle.color, "var(--bg)");
+  assert.equal(titleStyle.background, "var(--text)");
   const verify = () => {
     for (const [index, panel] of panels.entries()) {
       assert.equal(

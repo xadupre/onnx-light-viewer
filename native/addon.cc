@@ -1783,14 +1783,26 @@ public:
         }
       std::set<const ol::TensorProto *> reused;
       if (reuse_weights_) {
-        for (auto *tensor : tensors)
-          for (const auto &weight : external_weights)
-            if (SameWeight(*tensor, weight.value)) {
-              auto fresh = weight.reference.SharedCopy();
+        using WeightKey = std::tuple<std::string, int32_t, std::vector<int64_t>>;
+        const auto weight_key = [](const ol::TensorProto &tensor) -> WeightKey {
+          return {tensor.name().value(),
+                  tensor.data_type(),
+                  {tensor.dims().begin(), tensor.dims().end()}};
+        };
+        std::map<WeightKey, std::vector<const StoredModel::ExternalWeight *>> weights_by_key;
+        for (const auto &weight : external_weights)
+          weights_by_key[weight_key(weight.value)].push_back(&weight);
+        for (auto *tensor : tensors) {
+          const auto candidates = weights_by_key.find(weight_key(*tensor));
+          if (candidates == weights_by_key.end())
+            continue;
+          for (const auto *weight : candidates->second)
+            if (SameWeight(*tensor, weight->value)) {
+              auto fresh = weight->reference.SharedCopy();
               LoadExternalTensor(fresh, ModelFilePath(file_path_).parent_path());
-              if (!SameWeight(fresh, weight.value))
+              if (!SameWeight(fresh, weight->value))
                 throw std::runtime_error("External weights changed on disk. Reopen the model.");
-              tensor->ref_external_data() = weight.reference.external_data();
+              tensor->ref_external_data() = weight->reference.external_data();
               tensor->set_data_location(ol::TensorProto::EXTERNAL);
               tensor->clear_raw_data();
               tensor->clear_float_data();
@@ -1802,6 +1814,7 @@ public:
               reused.insert(tensor);
               break;
             }
+        }
       }
       if (max_external_file_size_) {
         const ol::SerializeOptions options;
@@ -1985,6 +1998,8 @@ public:
       }
       for (const auto &[name, pattern] : patterns) {
         const auto fast = pattern->FastOpType();
+        std::optional<builder::GraphBuilder> trial;
+        std::optional<builder::GraphGraph> trial_index;
         for (size_t i = 0; i < graph.Nodes().size(); ++i) {
           if ((anchors_ && !requested.contains({name, i})) ||
               (!fast.empty() && !fast.contains(graph.Nodes()[i].op_type().value())))
@@ -2007,14 +2022,16 @@ public:
                 throw std::runtime_error("Selected matches overlap. Select disjoint matches.");
             accepted.emplace_back(pattern.get(), std::move(match));
           } else {
-            builder::GraphBuilder trial(snapshot_);
-            builder::GraphGraph trial_index(
-                trial, std::vector<std::unique_ptr<builder::PatternOptimization>>{});
-            const auto trial_match = pattern->Match(trial_index, trial.Nodes()[i]);
+            if (!trial) {
+              trial.emplace(snapshot_);
+              trial_index.emplace(*trial,
+                                  std::vector<std::unique_ptr<builder::PatternOptimization>>{});
+            }
+            const auto trial_match = pattern->Match(*trial_index, trial->Nodes()[i]);
             if (!trial_match.pattern)
               throw std::runtime_error("The fusion match could not be reproduced.");
             matches_.push_back(
-                {i, std::move(nodes), pattern->Apply(trial_index, trial_match.nodes)});
+                {i, std::move(nodes), pattern->Apply(*trial_index, trial_match.nodes)});
           }
         }
       }

@@ -2207,8 +2207,9 @@ window.addEventListener("message", (event) => {
     if (target === "save" && data.location) {
       const name =
         byId("save-file").value.split(/[\\/]/).pop() || "model-copy.onnx";
+      const separator = /^(?:[a-z]:\\|\\\\)/i.test(data.location) ? "\\" : "/";
       byId("save-file").value =
-        `${data.location.replace(/[\\/]$/, "")}/${name}`;
+        `${data.location.replace(/[\\/]$/, "")}${separator}${name}`;
     }
     list.replaceChildren(
       ...data.entries.map((entry) => {

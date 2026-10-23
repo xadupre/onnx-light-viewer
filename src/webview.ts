@@ -60,11 +60,12 @@ export function webviewHtml(
             <button id="show-metadata" class="icon-button" aria-expanded="false" aria-controls="metadata-panel" title="Show or hide native constants, tags, lifetimes and stored metadata">Data</button>
           </nav>
           <section id="find-panel" class="inspector-panel" aria-labelledby="find-title">
-            <h2 id="find-title">Find</h2>
+            <h2 id="find-title" class="eyebrow panel-title">Find</h2>
             <form id="find-node" role="search"><label for="node-search">Find node or operator</label><div class="node-search-controls"><input id="node-search" type="search" placeholder="Name or operator" aria-controls="node-search-suggestions" autocomplete="off"><button type="submit" title="Go to the next matching node" aria-label="Go to the next matching node">Go</button></div><span id="node-search-result" role="status"></span><ul id="node-search-suggestions" aria-label="Matching nodes" hidden></ul></form>
           </section>
-          <section id="operator-panel" class="inspector-panel" aria-labelledby="node-title">
-            <div class="eyebrow">INSPECTOR</div><div class="inspector-heading"><h2 id="node-title">No model loaded</h2><button id="show-doc" disabled aria-haspopup="dialog">Doc</button></div><p id="node-description">Open an ONNX model to explore its connections.</p>
+          <section id="operator-panel" class="inspector-panel" aria-labelledby="operator-title">
+            <h2 id="operator-title" class="eyebrow panel-title">INSPECTOR</h2>
+            <div class="inspector-heading"><h2 id="node-title">No model loaded</h2><button id="show-doc" disabled aria-haspopup="dialog">Doc</button></div><p id="node-description">Open an ONNX model to explore its connections.</p>
             <button id="open-function" class="icon-button" hidden>Open function</button>
             <div id="node-details"><dl><dt>NODE NAME</dt><dd id="node-name">—</dd><dt>DOMAIN</dt><dd id="node-domain">—</dd><dt>OPSET</dt><dd id="node-opset">—</dd></dl>
             <h3>Inputs <span id="input-count">0</span></h3><ul id="node-inputs"></ul>
@@ -76,7 +77,7 @@ export function webviewHtml(
             </section></div>
           </section>
           <section id="metadata-panel" class="inspector-panel" aria-labelledby="metadata-title" hidden>
-            <h2 id="metadata-title">Data</h2>
+            <h2 id="metadata-title" class="eyebrow panel-title">Data</h2>
             <div id="metadata-content" hidden>
               <dl id="metadata-analysis"></dl>
               <section id="metadata-releases-section" hidden><h3>Releasable after this node</h3><ul id="metadata-releases"></ul></section>
@@ -89,7 +90,7 @@ export function webviewHtml(
             </div>
           </section>
           <section id="fusion-panel" class="inspector-panel" aria-labelledby="fusion-title" hidden>
-            <h2 id="fusion-title">Fusion patterns</h2>
+            <h2 id="fusion-title" class="eyebrow panel-title">Fusion patterns</h2>
             <p>Select one or more patterns, then click Run Matching. Check the candidates to fuse; clicking a candidate highlights its nodes in the graph. Click Fuse selected to apply them, then Save to keep the result.</p>
             <details class="fusion-picker" open>
               <summary>Native patterns</summary>
@@ -107,7 +108,7 @@ export function webviewHtml(
             <footer><button id="apply-fusion" class="primary" disabled>Fuse selected</button></footer>
           </section>
           <section id="open-panel" class="inspector-panel file-panel" aria-labelledby="open-title" hidden>
-            <h2 id="open-title">Open model</h2>
+            <h2 id="open-title" class="eyebrow panel-title">Open model</h2>
             <label for="open-source">Source</label>
             <select id="open-source"><option value="local">Local file</option><option value="huggingface">Hugging Face</option><option value="backend">Backend test</option></select>
             <form id="open-browse" class="file-browse">
@@ -128,7 +129,7 @@ export function webviewHtml(
             </form>
           </section>
           <section id="save-options" class="inspector-panel file-panel" aria-labelledby="save-title" hidden>
-            <h2 id="save-title">Save model copy</h2>
+            <h2 id="save-title" class="eyebrow panel-title">Save model copy</h2>
             <form id="save-browse" class="file-browse">
               <label for="save-location">Destination directory</label>
               <input id="save-location" type="text" autocomplete="off">

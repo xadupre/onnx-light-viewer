@@ -10,6 +10,8 @@ The sidebar controls form two rows of three matching buttons:
 **Open**, **Save**, **Find**, then **Fuse**, **Op**, **Data**.
 **Open** and **Save** toggle their own sidebar panels for file selection and
 save options; opening either hides the other. Neither opens a popup file picker.
+All sidebar panels have an inverted-color title bar using the compact uppercase
+**INSPECTOR** typography.
 
 .. image:: ../_static/inspection.png
    :alt: Reshape inspector showing input and output tensor dimensions and an initializer.

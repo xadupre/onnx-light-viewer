@@ -545,6 +545,103 @@ test("rejects overlapping native matches without modifying the source", async ()
   assert.deepEqual(Buffer.from(await model.serialize()), original);
 });
 
+test("previews multiple constant-folding matches without leaking trial weights into the model", async () => {
+  const branches = [2, 3, 4];
+  const node = (opType, inputs, output) =>
+    bytesField(
+      1,
+      Buffer.concat([
+        ...inputs.map((input) => bytesField(1, input)),
+        bytesField(2, output),
+        bytesField(4, opType),
+      ]),
+    );
+  const valueInfo = (name) =>
+    Buffer.concat([
+      bytesField(1, name),
+      bytesField(
+        2,
+        bytesField(
+          1,
+          Buffer.concat([
+            varintField(1, 1),
+            bytesField(
+              2,
+              Buffer.concat(
+                [8, 8].map((dim) => bytesField(1, varintField(1, dim))),
+              ),
+            ),
+          ]),
+        ),
+      ),
+    ]);
+  const tensor = (name, dims, values) => {
+    const data = Buffer.alloc(values.length * 4);
+    values.forEach((value, i) => data.writeFloatLE(value, i * 4));
+    return bytesField(
+      5,
+      Buffer.concat([
+        ...dims.map((dim) => varintField(1, dim)),
+        varintField(2, 1),
+        bytesField(8, name),
+        bytesField(9, data),
+      ]),
+    );
+  };
+  const model = loadModel(
+    Buffer.concat([
+      varintField(1, 9),
+      bytesField(8, varintField(2, 13)),
+      bytesField(
+        7,
+        Buffer.concat([
+          bytesField(2, "shared folding weights"),
+          ...branches.flatMap((scale, i) => [
+            node("MatMul", ["x", "weight"], `matrix${i}`),
+            node("Mul", [`matrix${i}`, `scale${i}`], `y${i}`),
+            tensor(`scale${i}`, [], [scale]),
+            bytesField(12, valueInfo(`y${i}`)),
+          ]),
+          tensor(
+            "weight",
+            [8, 8],
+            Array.from({ length: 64 }, (_, i) => i + 1),
+          ),
+          bytesField(11, valueInfo("x")),
+        ]),
+      ),
+    ]),
+    "shared folding weights",
+  );
+  const original = Buffer.from(await model.serialize());
+  const preview = await model.previewFusion("MatMulScaleFusion");
+  assert.deepEqual(
+    preview.matches.map(({ anchor, nodes }) => ({ anchor, nodes })),
+    branches.map((_, i) => ({ anchor: i * 2, nodes: [i * 2, i * 2 + 1] })),
+  );
+  for (const [i, match] of preview.matches.entries()) {
+    assert.equal(match.replacement.length, 1);
+    assert.equal(match.replacement[0].opType, "MatMul");
+    assert.deepEqual(match.replacement[0].outputs, [`y${i}`]);
+    const fused = await preview.model.applyFusion("MatMulScaleFusion", [
+      match.anchor,
+    ]);
+    const files = await fused.serializeFiles(256, "folded.data");
+    const expected = Buffer.alloc(256);
+    for (let j = 0; j < 64; j++)
+      expected.writeFloatLE((j + 1) * branches[i], j * 4);
+    assert.ok(
+      files.weights.some(({ bytes }) => Buffer.from(bytes).equals(expected)),
+    );
+  }
+  assert.deepEqual(
+    (await model.previewFusion("MatMulScaleFusion")).matches,
+    preview.matches,
+  );
+  assert.deepEqual(Buffer.from(await preview.model.serialize()), original);
+  assert.deepEqual(Buffer.from(await model.serialize()), original);
+});
+
 test("writes newly folded weights while reusing unchanged external payloads", async (t) => {
   const directory = mkdtempSync(path.join(tmpdir(), "onnx-light-fusion-fold-"));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
@@ -623,6 +720,70 @@ test("fused models reuse original external weights and detect changed backing da
     /changed on disk/,
   );
   assert.deepEqual(readFileSync(source), Buffer.from(files.model));
+});
+
+test("reuses external tensors with identical names without confusing payloads, types or dimensions", async (t) => {
+  const directory = mkdtempSync(path.join(tmpdir(), "onnx-light-reuse-index-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const tensors = [
+    { type: 1, dims: [64], data: Buffer.alloc(256, 1) },
+    { type: 1, dims: [64], data: Buffer.alloc(256, 2) },
+    { type: 1, dims: [8, 8], data: Buffer.alloc(256, 1) },
+    { type: 11, dims: [32], data: Buffer.alloc(256, 1) },
+  ];
+  const model = loadModel(
+    Buffer.concat([
+      varintField(1, 9),
+      bytesField(8, varintField(2, 13)),
+      bytesField(
+        7,
+        Buffer.concat([
+          bytesField(2, "colliding tensor names"),
+          ...tensors.map(({ type, dims, data }, i) =>
+            bytesField(
+              1,
+              Buffer.concat([
+                bytesField(2, `constant${i}`),
+                bytesField(4, "Constant"),
+                bytesField(
+                  5,
+                  Buffer.concat([
+                    bytesField(1, "value"),
+                    varintField(20, 4),
+                    bytesField(
+                      5,
+                      Buffer.concat([
+                        ...dims.map((dim) => varintField(1, dim)),
+                        varintField(2, type),
+                        bytesField(8, "weight"),
+                        bytesField(9, data),
+                      ]),
+                    ),
+                  ]),
+                ),
+              ]),
+            ),
+          ),
+        ]),
+      ),
+    ]),
+    "colliding tensor names",
+  );
+  const expected = Buffer.from(await model.serialize());
+  const files = await model.serializeFiles(1024, "original.data");
+  const source = path.join(directory, "source.onnx");
+  writeFileSync(source, files.model);
+  for (const file of files.weights)
+    writeFileSync(path.join(directory, file.name), file.bytes);
+  const external = await loadModelFile(source, "colliding tensor names");
+  const reused = await external.serializeFiles(1024, "new.data", source, true);
+  assert.equal(reused.weights.length, 0);
+  assert.deepEqual(
+    Buffer.from(
+      await loadModel(reused.model, "reused").serialize(undefined, source),
+    ),
+    expected,
+  );
 });
 
 test("embeds external weights with offsets and repartitions plain external copies without modifying sources", async (t) => {
