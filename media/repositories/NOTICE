@@ -1,0 +1,50 @@
+Repository logos
+===============
+
+These upstream images identify the linked projects. All trademarks
+belong to their respective owners; their use does not imply endorsement.
+
+onnx.png
+  Source: https://github.com/onnx/onnx/blob/main/docs/onnx-horizontal-color.png
+  License: Apache-2.0 (see the root LICENSE).
+
+onnx-light.svg
+  Source: https://github.com/xadupre/onnx-light/blob/main/docs/_static/logo.svg
+  onnx-light — Copyright 2026 ONNX Contributors
+  License: Apache-2.0 (see the root LICENSE).
+  Changes: trailing blank lines removed; artwork unchanged.
+
+onnx-light-cpu.svg
+  Source: https://github.com/xadupre/onnx-light-cpu/blob/main/docs/_static/logo.svg
+  License: Apache-2.0 (see the root LICENSE).
+
+onnx-light-ort.svg
+  Source: https://github.com/xadupre/onnx-light-ort/blob/main/docs/_static/onnx-light-ort.svg
+  License: Apache-2.0 (see the root LICENSE).
+
+onnxruntime.png
+  Source: https://github.com/microsoft/onnxruntime-extensions/blob/main/docs/python/ONNX_Runtime_icon.png
+  Shared ONNX Runtime branding for Runtime, Extensions and GenAI.
+  License: MIT, reproduced below.
+
+MIT License
+
+Copyright (c) Microsoft Corporation
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

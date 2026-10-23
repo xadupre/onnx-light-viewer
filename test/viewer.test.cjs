@@ -253,19 +253,35 @@ for (const initialTab of ["model", "logs"]) {
       assert.equal(document.getElementById(`${name}-tab`).tabIndex, -1);
     }
     const repositories = [
-      ["ONNX", "onnx/onnx"],
-      ["ONNX Runtime", "microsoft/onnxruntime"],
-      ["ONNX Runtime Extensions", "microsoft/onnxruntime-extensions"],
-      ["ONNX Runtime GenAI", "microsoft/onnxruntime-genai"],
-      ["onnx-light", "xadupre/onnx-light"],
-      ["onnx-light-cpu", "xadupre/onnx-light-cpu"],
-      ["onnx-light-ort", "xadupre/onnx-light-ort"],
-      ["onnx-light-viewer", "xadupre/onnx-light-viewer"],
+      ["ONNX", "onnx/onnx", "repositories/onnx.png"],
+      ["ONNX Runtime", "microsoft/onnxruntime", "repositories/onnxruntime.png"],
+      [
+        "ONNX Runtime Extensions",
+        "microsoft/onnxruntime-extensions",
+        "repositories/onnxruntime.png",
+      ],
+      [
+        "ONNX Runtime GenAI",
+        "microsoft/onnxruntime-genai",
+        "repositories/onnxruntime.png",
+      ],
+      ["onnx-light", "xadupre/onnx-light", "repositories/onnx-light.svg"],
+      [
+        "onnx-light-cpu",
+        "xadupre/onnx-light-cpu",
+        "repositories/onnx-light-cpu.svg",
+      ],
+      [
+        "onnx-light-ort",
+        "xadupre/onnx-light-ort",
+        "repositories/onnx-light-ort.svg",
+      ],
+      ["onnx-light-viewer", "xadupre/onnx-light-viewer", "logo.svg"],
     ];
     const cards = [...panel.querySelectorAll(".repository-list li")];
     assert.equal(cards.length, repositories.length);
     cards.forEach((card, index) => {
-      const [name, repository] = repositories[index];
+      const [name, repository, logo] = repositories[index];
       const link = card.querySelector("a");
       assert.equal(link.textContent, name);
       assert.equal(link.href, `https://github.com/${repository}`);
@@ -274,12 +290,36 @@ for (const initialTab of ["model", "logs"]) {
       assert.ok(icon);
       assert.equal(icon.getAttribute("width"), "28");
       assert.equal(icon.getAttribute("height"), "28");
-      if (icon.tagName === "svg") {
-        assert.equal(icon.getAttribute("aria-hidden"), "true");
-        assert.ok(icon.querySelector("path"));
-      } else {
+      if (repository === "xadupre/onnx-light-viewer") {
         assert.equal(icon.alt, "");
         assert.equal(icon.src, "https://viewer.invalid/logo.svg");
+      } else {
+        assert.equal(icon.localName, "svg");
+        assert.equal(icon.getAttribute("aria-hidden"), "true");
+        assert.ok(icon.querySelector("path"));
+      }
+      const image = card.querySelector(":scope > .repository-logo");
+      assert.ok(image);
+      assert.equal(image.alt, "");
+      assert.equal(image.src, `https://viewer.invalid/${logo}`);
+      assert.equal(image.getAttribute("width"), "96");
+      assert.equal(image.getAttribute("height"), "64");
+      const asset = readFileSync(require.resolve(`../media/${logo}`));
+      if (logo.endsWith(".svg")) {
+        const svg = new JSDOM(asset.toString(), {
+          contentType: "image/svg+xml",
+        });
+        assert.equal(svg.window.document.documentElement.localName, "svg");
+        assert.equal(
+          svg.window.document.querySelector("script, image, foreignObject"),
+          null,
+        );
+        svg.window.close();
+      } else {
+        assert.deepEqual(
+          [...asset.subarray(0, 8)],
+          [137, 80, 78, 71, 13, 10, 26, 10],
+        );
       }
     });
     tab.focus();

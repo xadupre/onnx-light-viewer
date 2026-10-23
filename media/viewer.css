@@ -130,6 +130,12 @@ p {
   stroke-linecap: round;
   stroke-linejoin: round;
 }
+.repository-logo {
+  display: block;
+  max-width: 100%;
+  object-fit: contain;
+  object-position: left center;
+}
 #controls-view h3 {
   margin: 24px 0 8px;
 }
