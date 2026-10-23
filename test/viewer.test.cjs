@@ -2217,12 +2217,29 @@ function chainGraph(length = 6) {
   };
 }
 
+function translationOffsets(transform) {
+  return (
+    transform?.match(/-?\d+(?:\.\d+)?(?:e[+-]?\d+)?/gi).map(Number) ?? [0, 0]
+  );
+}
+
+test("extracts SVG translation offsets with decimal and scientific notation", () => {
+  for (const [transform, expected] of [
+    ["translate(80 50)", [80, 50]],
+    ["translate(-80.25 50.5)", [-80.25, 50.5]],
+    ["translate(8e+1 -5E-2)", [80, -0.05]],
+    ["translate(-8.25e-7, 5.5E+2)", [-8.25e-7, 550]],
+    [null, [0, 0]],
+  ]) {
+    assert.deepEqual(translationOffsets(transform), expected);
+  }
+});
+
 function nodePositions(document, selector = ".graph-node > rect") {
   return Array.from(document.querySelectorAll(selector), (rect) => {
-    const [dx, dy] = rect.parentElement
-      .getAttribute("transform")
-      ?.match(/-?\d+(?:\.\d+)?(?:e[+-]?\d+)?/gi)
-      .map(Number) ?? [0, 0];
+    const [dx, dy] = translationOffsets(
+      rect.parentElement.getAttribute("transform"),
+    );
     return {
       x:
         Number(rect.getAttribute("x")) +
@@ -3164,10 +3181,7 @@ test("keeps positions correct when selected offscreen nodes move before their SV
     .getElementById("find-node")
     .dispatchEvent(new window.Event("submit", { cancelable: true }));
   const target = document.querySelector(".graph-node.selected");
-  const [, x, y] = target
-    .getAttribute("transform")
-    .match(/^translate\(([\d.-]+) ([\d.-]+)\)$/)
-    .map(Number);
+  const [x, y] = translationOffsets(target.getAttribute("transform"));
   assert.ok(Math.abs(x - 80) < 1e-9);
   assert.ok(Math.abs(y - 50) < 1e-9);
   const actual = nodePositions(document, ".graph-node.selected > rect")[0];
