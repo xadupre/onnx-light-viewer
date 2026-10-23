@@ -225,6 +225,7 @@ async function configurePanel(
   panel.iconPath = vscode.Uri.joinPath(mediaRoot, "logo.svg");
   let model: LoadedModel | undefined;
   let graphRevision = 0;
+  let navigationRequest = 0;
   let ready = false;
   let showLogsRequested = false;
   let initialLoading = !!uri;
@@ -511,7 +512,7 @@ async function configurePanel(
         await sendGraph();
       } else if (message?.type === "navigate") {
         const requestedModel = model;
-        const requestedGraphRevision = ++graphRevision;
+        const requestedNavigation = ++navigationRequest;
         let graph: Graph;
         try {
           graph = await log.run(
@@ -531,7 +532,7 @@ async function configurePanel(
           if (
             !active ||
             model !== requestedModel ||
-            graphRevision !== requestedGraphRevision
+            navigationRequest !== requestedNavigation
           )
             return;
           const detail = error instanceof Error ? error.message : String(error);
@@ -547,7 +548,7 @@ async function configurePanel(
         if (
           !active ||
           model !== requestedModel ||
-          graphRevision !== requestedGraphRevision
+          navigationRequest !== requestedNavigation
         )
           return;
         requireModel().graph = graph;
