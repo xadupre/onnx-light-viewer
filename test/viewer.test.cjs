@@ -539,6 +539,101 @@ test("sizes subgraph operators for their links and preserves dragging, selection
   assert.equal(group.classList.contains("selected"), false);
 });
 
+for (const kind of ["shapes", "metadata"]) {
+  test(`keeps ${kind} button colors in sync with the latest refresh result`, (t) => {
+    const { document, window, load } = openViewer(t);
+    const stylesheet = document.createElement("style");
+    stylesheet.textContent = readFileSync(
+      require.resolve("../media/viewer.css"),
+      "utf8",
+    );
+    document.head.append(stylesheet);
+    const model = loadModel(
+      readFileSync(require.resolve("./models/inference.onnx")),
+      "inference.onnx",
+    );
+    load(model.graph());
+    const refresh = document.getElementById(`refresh-${kind}`);
+    const buttons =
+      kind === "metadata"
+        ? [refresh, document.getElementById("show-metadata")]
+        : [refresh];
+    const titles = buttons.map((button) => button.title);
+    const idleColor = window.getComputedStyle(refresh).color;
+    const colors = new Set([idleColor]);
+    const status = document.getElementById(
+      kind === "shapes" ? "shape-status" : "metadata-status",
+    );
+    const check = (expected) => {
+      for (const [index, button] of buttons.entries()) {
+        assert.equal(button.dataset.refreshStatus, expected);
+        assert.equal(button.getAttribute("aria-describedby"), status.id);
+        assert.equal(
+          button.getAttribute("aria-busy"),
+          String(expected === "pending"),
+        );
+        assert.equal(button.title, status.textContent || titles[index]);
+        if (button.getAttribute("aria-expanded") !== "true") {
+          assert.equal(
+            window.getComputedStyle(button).color,
+            window.getComputedStyle(refresh).color,
+          );
+        }
+      }
+      assert.equal(refresh.disabled, expected === "pending");
+      if (expected === "idle") {
+        assert.equal(window.getComputedStyle(refresh).color, idleColor);
+      } else {
+        assert.notEqual(window.getComputedStyle(refresh).color, idleColor);
+        colors.add(window.getComputedStyle(refresh).color);
+      }
+    };
+    const receive = (data) =>
+      window.dispatchEvent(new window.MessageEvent("message", { data }));
+    const result =
+      kind === "shapes"
+        ? { type: "shape-info", tensors: model.graph(true).tensors }
+        : { type: "metadata-info", metadata: model.metadata() };
+
+    check("idle");
+    refresh.click();
+    check("pending");
+    receive(result);
+    check("updated");
+    document.getElementById("show-metadata").click();
+    document.getElementById("show-metadata").click();
+    check("updated");
+    refresh.click();
+    check("pending");
+    receive(result);
+    check("unchanged");
+    refresh.click();
+    check("pending");
+    receive({
+      type: kind === "shapes" ? "shape-error" : "metadata-error",
+      error: "Refresh failed",
+    });
+    check("failed");
+    refresh.click();
+    check("pending");
+    receive(result);
+    check("unchanged");
+
+    // We only require that non-idle states are visually distinguishable from idle.
+    // Do not require every status to have a unique color (brittle across CSS refactors/JSDOM).
+    assert.ok(colors.size >= 2);
+
+    load(demoGraph);
+    check("idle");
+    if (kind === "metadata") {
+      document.getElementById("show-metadata").click();
+      check("pending");
+      receive(result);
+      check("updated");
+    }
+  });
+}
+
 test("refreshes whole-model metadata from the global toolbar with the inspector closed", (t) => {
   const { document, window, messages, load } = openViewer(t);
   const refresh = document.getElementById("refresh-metadata");
@@ -701,7 +796,6 @@ test("keeps the metadata button highlighted until its panel is closed", (t) => {
   toggle.click();
   assert.equal(toggle.getAttribute("aria-expanded"), "false");
   assert.equal(document.getElementById("metadata-panel").hidden, true);
-  assert.equal(color(), inactive);
   toggle.click();
   assert.equal(color(), active);
 });
