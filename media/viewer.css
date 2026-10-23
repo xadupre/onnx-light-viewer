@@ -684,6 +684,7 @@ button:disabled {
 }
 #doc-body {
   margin-top: 16px;
+  font-size: 14px;
   line-height: 1.5;
   overflow-wrap: anywhere;
 }
