@@ -9,6 +9,7 @@ import {
   listBackendTests,
   loadBackendTest,
   loadModel,
+  loadModelFile,
   onnxLightVersion,
   Graph,
   NativeModel,
@@ -28,13 +29,14 @@ const panelSessions = new WeakMap<vscode.WebviewPanel, () => void>();
 
 /**
  * Panel-local display state, independent of the recoverable native handle.
- * Reload uses original bytes or a backend case ID, not the current disk contents.
+ * Reload uses a local path, original virtual-file bytes or a backend case ID.
  */
 interface LoadedModel {
   graph: Graph;
   /** Absent after a failed shape/metadata refresh until the next native action. */
   native?: NativeModel;
-  reload: () => NativeModel;
+  nativeReload?: Promise<NativeModel>;
+  reload: () => NativeModel | Promise<NativeModel>;
   /** Cached for the current graph; cleared on navigation, not shape refresh. */
   metadata?: GraphMetadata;
 }
@@ -49,11 +51,24 @@ async function nativeModel(
   changed: () => void,
 ): Promise<NativeModel> {
   if (!model.native) {
-    model.native = await log.run(
-      `Reload native model: ${model.graph.name}`,
-      model.reload,
-    );
-    changed();
+    const reload =
+      model.nativeReload ??
+      (model.nativeReload = log.run(
+        `Reload native model: ${model.graph.name}`,
+        model.reload,
+      ));
+    try {
+      const native = await reload;
+      if (model.nativeReload === reload) {
+        model.native = native;
+        model.nativeReload = undefined;
+        changed();
+      }
+      return native;
+    } catch (error) {
+      if (model.nativeReload === reload) model.nativeReload = undefined;
+      throw error;
+    }
   }
   return model.native;
 }
@@ -131,8 +146,8 @@ export function activate(context: vscode.ExtensionContext): void {
 }
 
 /**
- * Reads a model through VS Code's filesystem and logs its initial projection.
- * The reload closure retains these bytes for recovery without rereading the URI.
+ * Streams local files or reads virtual files through VS Code's filesystem.
+ * The reload closure retains a local path or virtual-file bytes for recovery.
  * @param fileName Original basename when the URI points to a temporary/cache file.
  * @returns Root snapshot, retained handle and its recovery factory.
  */
@@ -142,9 +157,14 @@ async function readGraph(
   fileName = posix.basename(uri.path),
 ): Promise<LoadedModel> {
   return log.run(`Load model: ${uri.path}`, async () => {
-    const bytes = await vscode.workspace.fs.readFile(uri);
-    const reload = () => loadModel(bytes, fileName);
-    const native = reload();
+    let reload: LoadedModel["reload"];
+    if (uri.scheme === "file") {
+      reload = () => loadModelFile(uri.fsPath, fileName);
+    } else {
+      const bytes = await vscode.workspace.fs.readFile(uri);
+      reload = () => loadModel(bytes, fileName);
+    }
+    const native = await reload();
     return { graph: native.graph(), native, reload };
   });
 }
@@ -201,6 +221,7 @@ async function configurePanel(
   };
   panel.iconPath = vscode.Uri.joinPath(mediaRoot, "logo.svg");
   let model: LoadedModel | undefined;
+  let graphRevision = 0;
   let ready = false;
   let showLogsRequested = false;
   let initialLoading = !!uri;
@@ -386,6 +407,8 @@ async function configurePanel(
                         readGraph(vscode.Uri.file(path), log, source.fileName),
                       controller.signal,
                     );
+                    result.value.reload = () =>
+                      loadModelFile(result.filePath, source.fileName);
                     log.record(
                       "SUCCEEDED",
                       `${result.cached ? "Cache hit" : "Downloaded and cached"}: ${source.url}`,
@@ -486,6 +509,8 @@ async function configurePanel(
         panel.title = `ONNX: ${loaded.name}`;
         await sendGraph();
       } else if (message?.type === "navigate") {
+        const requestedModel = model;
+        const requestedGraphRevision = ++graphRevision;
         let graph: Graph;
         try {
           graph = await log.run(
@@ -502,7 +527,12 @@ async function configurePanel(
             message.actionId,
           );
         } catch (error) {
-          if (!active) return;
+          if (
+            !active ||
+            model !== requestedModel ||
+            graphRevision !== requestedGraphRevision
+          )
+            return;
           const detail = error instanceof Error ? error.message : String(error);
           await postMessage({
             type: "navigation-error",
@@ -513,11 +543,19 @@ async function configurePanel(
           );
           return;
         }
-        if (!active) return;
+        if (
+          !active ||
+          model !== requestedModel ||
+          graphRevision !== requestedGraphRevision
+        )
+          return;
         requireModel().graph = graph;
         requireModel().metadata = undefined;
+        graphRevision++;
         await sendGraph();
       } else if (message?.type === "metadata") {
+        const requestedModel = model;
+        const requestedGraphRevision = graphRevision;
         let metadata: GraphMetadata;
         try {
           metadata = await log.run(
@@ -532,7 +570,12 @@ async function configurePanel(
             message.actionId,
           );
         } catch (error) {
-          if (!active) return;
+          if (
+            !active ||
+            model !== requestedModel ||
+            graphRevision !== requestedGraphRevision
+          )
+            return;
           if (model) invalidateModel(model, log);
           const detail = error instanceof Error ? error.message : String(error);
           await postMessage({
@@ -544,10 +587,17 @@ async function configurePanel(
           );
           return;
         }
-        if (!active) return;
+        if (
+          !active ||
+          model !== requestedModel ||
+          graphRevision !== requestedGraphRevision
+        )
+          return;
         requireModel().metadata = metadata;
         await postMessage({ type: "metadata-info", metadata });
       } else if (message?.type === "refresh-shapes") {
+        const requestedModel = model;
+        const requestedGraphRevision = graphRevision;
         let refreshed: Graph;
         try {
           refreshed = await log.run(
@@ -562,7 +612,12 @@ async function configurePanel(
             message.actionId,
           );
         } catch (error) {
-          if (!active) return;
+          if (
+            !active ||
+            model !== requestedModel ||
+            graphRevision !== requestedGraphRevision
+          )
+            return;
           if (model) invalidateModel(model, log);
           const detail = error instanceof Error ? error.message : String(error);
           await postMessage({
@@ -574,7 +629,12 @@ async function configurePanel(
           );
           return;
         }
-        if (!active) return;
+        if (
+          !active ||
+          model !== requestedModel ||
+          graphRevision !== requestedGraphRevision
+        )
+          return;
         requireModel().graph = refreshed;
         await postMessage({
           type: "shape-info",

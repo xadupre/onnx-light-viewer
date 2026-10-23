@@ -130,6 +130,39 @@ p {
   stroke-linecap: round;
   stroke-linejoin: round;
 }
+#controls-view h3 {
+  margin: 24px 0 8px;
+}
+.controls-table {
+  width: 100%;
+  max-width: 960px;
+  table-layout: fixed;
+  border-collapse: collapse;
+}
+.controls-table th,
+.controls-table td {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+.controls-table th:first-child {
+  width: 34%;
+}
+.controls-table thead {
+  background: var(--border);
+}
+.controls-table tbody th {
+  font-weight: 500;
+}
+.controls-table tbody tr:nth-child(even) {
+  background: var(--bg);
+}
+.controls-table kbd {
+  font-family: var(--vscode-editor-font-family, monospace);
+  color: var(--mint);
+}
 #log-entries {
   list-style: none;
   padding: 0;
@@ -190,6 +223,11 @@ p {
   justify-content: space-between;
   gap: 6px 16px;
   border-bottom: 1px solid var(--border);
+}
+#load-progress {
+  width: 100%;
+  height: 4px;
+  accent-color: var(--mint);
 }
 .graph-toolbar > div {
   min-width: 0;
@@ -323,11 +361,22 @@ a:focus-visible {
   vector-effect: non-scaling-stroke;
   pointer-events: none;
 }
-.edge {
+.edge,
+.crossing-edge {
   fill: none;
   stroke: #536e83;
   stroke-width: 1.5;
   marker-end: url(#arrow);
+}
+#overview-edges {
+  fill: none;
+  stroke: #536e83;
+  stroke-width: 1.5;
+}
+#overview-nodes {
+  fill: #16212e;
+  stroke: #536e83;
+  stroke-width: 1;
 }
 #arrow path {
   fill: #536e83;
@@ -415,6 +464,32 @@ li > .tensor-info {
   border: 1px solid #354757;
   border-radius: 6px;
   overflow: hidden;
+}
+#find-node {
+  position: absolute;
+  z-index: 1;
+  top: 12px;
+  left: 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: calc(100% - 24px);
+  padding: 5px;
+  border: 1px solid #354757;
+  border-radius: 6px;
+  background: #16212e;
+}
+#node-search {
+  min-width: 0;
+  width: 20ch;
+  color: var(--text);
+  background: #0f1822;
+  border: 1px solid #354757;
+  padding: 4px;
+}
+#node-search-result {
+  color: var(--muted);
+  font-size: 11px;
 }
 .zoom-controls button {
   color: #c2d1df;
@@ -572,7 +647,8 @@ button:disabled {
   font-size: 10px;
   color: var(--muted);
 }
-.edge.released {
+.edge.released,
+.crossing-edge.released {
   stroke: #e2b77a;
   stroke-dasharray: 5 4;
 }
