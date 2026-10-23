@@ -12,6 +12,8 @@ let layoutBounds = bounds;
 let zoom = 1;
 let pan = { x: 0, y: 0 };
 let nodeViews = new Map();
+let searchQuery;
+let searchMatches = [];
 let selected = new Set();
 let renderedSelection = new Set();
 let connectionsByPosition = new Map();
@@ -743,6 +745,9 @@ function updateNodeSelection({ group, node, subgraphs }, isSelected) {
 function registerNode(id, view) {
   view.id = id;
   view.initial = { ...view.position };
+  view.searchTerms = view.node
+    ? [view.node.name.toLowerCase(), view.node.opType.toLowerCase()]
+    : [];
   nodeViews.set(id, view);
   if (!virtualized) mountNode(view);
 }
@@ -1134,14 +1139,15 @@ function readableZoom() {
 
 function matchingNodes() {
   const query = byId("node-search").value.trim().toLowerCase();
-  return query
-    ? [...nodeViews.values()].filter(
-        ({ node }) =>
-          node &&
-          (node.name.toLowerCase().includes(query) ||
-            node.opType.toLowerCase().includes(query)),
-      )
-    : [];
+  if (query !== searchQuery) {
+    searchQuery = query;
+    searchMatches = query
+      ? [...nodeViews.values()].filter(({ searchTerms }) =>
+          searchTerms.some((term) => term.includes(query)),
+        )
+      : [];
+  }
+  return searchMatches;
 }
 
 function selectSearchMatch(view, index, count) {
@@ -1197,6 +1203,8 @@ function navigate(path) {
 
 function render(graph, metadata) {
   hasModel = true;
+  searchQuery = undefined;
+  searchMatches = [];
   byId("node-search-result").textContent = "";
   byId("node-search-suggestions").replaceChildren();
   byId("node-search-suggestions").hidden = true;

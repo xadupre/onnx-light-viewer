@@ -2965,6 +2965,38 @@ test("suggests matching nodes in the sidebar and selects individual results", (t
   assert.equal(status.textContent, "Enter a name or operator");
 });
 
+test("rebuilds cached search labels and matches when the graph changes", (t) => {
+  const { document, window, load } = openViewer(t);
+  const input = document.getElementById("node-search");
+  const suggestions = document.getElementById("node-search-suggestions");
+  const search = () => {
+    input.value = "ALPHA";
+    input.dispatchEvent(new window.Event("input", { bubbles: true }));
+  };
+  const initial = chainGraph(2);
+  initial.nodes[0].name = "Alpha original";
+  load(initial);
+  search();
+  assert.equal(suggestions.children.length, 1);
+  assert.equal(suggestions.textContent, "Alpha original — Relu");
+  suggestions.querySelector("button").click();
+  assert.equal(
+    document.querySelector(".graph-node.selected").dataset.id,
+    "node-0",
+  );
+  const replacement = chainGraph(2);
+  replacement.nodes[1].name = "alpha replacement";
+  load(replacement);
+  search();
+  assert.equal(suggestions.children.length, 1);
+  assert.equal(suggestions.textContent, "alpha replacement — Relu");
+  suggestions.querySelector("button").click();
+  assert.equal(
+    document.querySelector(".graph-node.selected").dataset.id,
+    "node-1",
+  );
+});
+
 test("bounds node suggestions, finds offscreen matches and clears stale results on graph replacement", (t) => {
   const { document, window, load } = openViewer(t);
   const input = document.getElementById("node-search");
