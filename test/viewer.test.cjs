@@ -539,8 +539,12 @@ test("sizes subgraph operators for their links and preserves dragging, selection
   assert.equal(group.classList.contains("selected"), false);
 });
 
-for (const kind of ["shapes", "metadata"]) {
-  test(`keeps ${kind} button colors in sync with the latest refresh result`, (t) => {
+for (const [kind, panelOpen] of [
+  ["shapes", false],
+  ["metadata", false],
+  ["metadata", true],
+]) {
+  test(`keeps ${kind} button colors in sync with the latest refresh result with the panel ${panelOpen ? "open" : "closed"}`, (t) => {
     const { document, window, load } = openViewer(t);
     const stylesheet = document.createElement("style");
     stylesheet.textContent = readFileSync(
@@ -573,10 +577,20 @@ for (const kind of ["shapes", "metadata"]) {
           String(expected === "pending"),
         );
         assert.equal(button.title, status.textContent || titles[index]);
-        if (button.getAttribute("aria-expanded") !== "true") {
+        assert.equal(
+          window.getComputedStyle(button).color,
+          window.getComputedStyle(refresh).color,
+        );
+        if (expected !== "idle") {
           assert.equal(
-            window.getComputedStyle(button).color,
-            window.getComputedStyle(refresh).color,
+            window.getComputedStyle(button).borderColor,
+            window.getComputedStyle(refresh).borderColor,
+          );
+        }
+        if (button.id === "show-metadata") {
+          assert.equal(
+            Boolean(window.getComputedStyle(button).boxShadow),
+            button.getAttribute("aria-expanded") === "true",
           );
         }
       }
@@ -596,6 +610,7 @@ for (const kind of ["shapes", "metadata"]) {
         : { type: "metadata-info", metadata: model.metadata() };
 
     check("idle");
+    if (panelOpen) document.getElementById("show-metadata").click();
     refresh.click();
     check("pending");
     receive(result);
@@ -619,14 +634,12 @@ for (const kind of ["shapes", "metadata"]) {
     receive(result);
     check("unchanged");
 
-    // We only require that non-idle states are visually distinguishable from idle.
-    // Do not require every status to have a unique color (brittle across CSS refactors/JSDOM).
-    assert.ok(colors.size >= 2);
+    assert.equal(colors.size, 5);
 
     load(demoGraph);
-    check("idle");
+    check(panelOpen ? "pending" : "idle");
     if (kind === "metadata") {
-      document.getElementById("show-metadata").click();
+      if (!panelOpen) document.getElementById("show-metadata").click();
       check("pending");
       receive(result);
       check("updated");
@@ -777,11 +790,11 @@ test("keeps the metadata button highlighted until its panel is closed", (t) => {
   );
   load(model.graph());
   const toggle = document.getElementById("show-metadata");
-  const color = () => window.getComputedStyle(toggle).color;
-  const inactive = color();
+  const highlight = () => window.getComputedStyle(toggle).boxShadow;
+  const inactive = highlight();
   assert.equal(toggle.getAttribute("aria-expanded"), "false");
   toggle.click();
-  const active = color();
+  const active = highlight();
   assert.notEqual(active, inactive);
   assert.equal(toggle.getAttribute("aria-expanded"), "true");
   assert.equal(document.getElementById("metadata-panel").hidden, false);
@@ -790,14 +803,15 @@ test("keeps the metadata button highlighted until its panel is closed", (t) => {
       data: { type: "metadata-info", metadata: model.metadata() },
     }),
   );
-  assert.equal(color(), active);
+  assert.equal(highlight(), active);
   load(model.graph());
-  assert.equal(color(), active);
+  assert.equal(highlight(), active);
   toggle.click();
   assert.equal(toggle.getAttribute("aria-expanded"), "false");
   assert.equal(document.getElementById("metadata-panel").hidden, true);
+  assert.equal(highlight(), inactive);
   toggle.click();
-  assert.equal(color(), active);
+  assert.equal(highlight(), active);
 });
 
 test("shows native metadata in the sidebar and marks released and never-used results without changing the layout", (t) => {
