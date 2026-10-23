@@ -31,7 +31,7 @@ jobs:
           - os: windows-11-arm
             target: win32-arm64
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.release.tag_name || github.ref }}
           persist-credentials: false
