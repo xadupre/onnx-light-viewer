@@ -47,7 +47,7 @@ namespace {
 
 constexpr std::string_view skippedPayloadLocation = "onnx-light-viewer:payload-omitted";
 
-enum class ProtoKind { Model, Graph, Node, Attribute, SparseTensor, Function, Tensor };
+enum class ProtoKind { Model, Graph, Node, Attribute, SparseTensor, Function, Tensor, Opaque };
 
 struct ProtoPathStep {
   uint32_t field;
@@ -125,6 +125,7 @@ std::optional<ChildProto> ChildMessage(ProtoKind parent, uint32_t field) {
       return ChildProto{ProtoKind::Attribute, true};
     break;
   case ProtoKind::Tensor:
+  case ProtoKind::Opaque:
     break;
   }
   return std::nullopt;
@@ -229,6 +230,11 @@ public:
       limit_scopes_.back().child = true;
     } else if (frame.kind == ProtoKind::Tensor && frame.packed_values) {
       limit_scopes_.back().packed = true;
+    } else if (frame.wire_type == 2) {
+      ProtoFrame opaque_frame;
+      opaque_frame.kind = ProtoKind::Opaque;
+      frames_.push_back(std::move(opaque_frame));
+      limit_scopes_.back().child = true;
     }
   }
 
@@ -317,6 +323,8 @@ ol::TensorProto *FindTensor(ol::ModelProto &model, const SkippedTensorPayload &p
       break;
     case ProtoKind::Tensor:
       break;
+    case ProtoKind::Opaque:
+      return nullptr;
     }
     const auto child = ChildMessage(kind, step.field);
     if (!child)

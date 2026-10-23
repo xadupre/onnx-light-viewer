@@ -226,6 +226,74 @@ test("skips a large packed float initializer without allocating its payload", as
   assert.ok(process.memoryUsage().rss - rss < 64 * 1024 * 1024);
 });
 
+test("isolates untracked messages before a Constant with an omitted tensor payload", async (t) => {
+  const directory = mkdtempSync(path.join(tmpdir(), "onnx-light-viewer-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const file = path.join(directory, "constant.onnx");
+  const size = 256 * 1024 * 1024;
+  const valueInfo = (name) =>
+    Buffer.concat([
+      bytesField(1, name),
+      bytesField(
+        2,
+        bytesField(
+          1,
+          Buffer.concat([
+            varintField(1, 1),
+            bytesField(2, bytesField(1, varintField(1, 1))),
+          ]),
+        ),
+      ),
+    ]);
+  const tensorHeader = Buffer.concat([
+    varintField(1, size / 4),
+    varintField(2, 1),
+    bytesField(8, "constant"),
+    varint(9 * 8 + 2),
+    varint(size),
+  ]);
+  const attributeHeader = Buffer.concat([
+    bytesField(1, "value"),
+    varintField(20, 4),
+    varint(5 * 8 + 2),
+    varint(tensorHeader.length + size),
+    tensorHeader,
+  ]);
+  const nodeHeader = Buffer.concat([
+    bytesField(2, "constant"),
+    bytesField(4, "Constant"),
+    varint(5 * 8 + 2),
+    varint(attributeHeader.length + size),
+    attributeHeader,
+  ]);
+  const graphHeader = Buffer.concat([
+    bytesField(11, valueInfo("input")),
+    bytesField(2, "input before node"),
+    bytesField(12, valueInfo("constant")),
+    varint(1 * 8 + 2),
+    varint(nodeHeader.length + size),
+    nodeHeader,
+  ]);
+  const header = Buffer.concat([
+    varintField(1, 8),
+    bytesField(8, varintField(2, 13)),
+    varint(7 * 8 + 2),
+    varint(graphHeader.length + size),
+    graphHeader,
+  ]);
+  const fd = openSync(file, "w");
+  try {
+    writeSync(fd, header);
+    ftruncateSync(fd, header.length + size);
+  } finally {
+    closeSync(fd);
+  }
+
+  const graph = (await loadModelFile(file, "constant.onnx")).graph();
+  assert.equal(graph.nodes.length, 1);
+  assert.equal(graph.nodes[0].opType, "Constant");
+});
+
 test("allows shape and metadata analysis after omitting raw or typed initializers", async (t) => {
   const directory = mkdtempSync(path.join(tmpdir(), "onnx-light-viewer-"));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
