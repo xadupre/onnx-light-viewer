@@ -1,40 +1,46 @@
 Fusion patterns
 ===============
 
-**Fuse**, next to **Save**, runs the native onnx-light pattern matcher on the
-main graph.
+**Fuse**, at the top of the right sidebar, opens the native onnx-light pattern
+matcher on the main graph.
 The list keeps patterns whose anchor operator occurs in that graph, plus patterns
 without an anchor restriction. Matching and rewriting do not execute the model.
 Return to the main graph's breadcrumb to enable this control.
-The available native patterns are displayed in the sidebar; select a name to
-preview it while keeping the main graph visible.
+The available native patterns are displayed in the sidebar; select one or more
+names with normal clicks, then click **Run Matching** while keeping
+the main graph visible. Every click reruns matching from scratch for the selected
+patterns and clears the previous candidates and selection.
+Click a pattern again to uncheck it. **Select all** checks every pattern;
+**Clear selection** unchecks them all. No modifier key is needed.
 
 .. code-block:: text
 
-   Fuse -> Choose pattern -> Automatic preview
+   Fuse -> Choose patterns -> Run Matching
                                         |
                          +--------------+--------------+
                          |                             |
-                    Show nodes                Inspect replacements
+                  Click candidate             Inspect replacements
                          |                             |
                          +--------------+--------------+
                                         |
-                     Approve (apply now) / Reject (skip)
+                     Check candidates -> Fuse selected
                                         |
                                    Save a copy
 
-Each match lists the affected nodes and the replacement operators, tensor names
-and attributes. Choosing a pattern automatically previews its matches and
-highlights the first match in the main graph; nothing is approved automatically.
-**Show nodes** highlights another match for review.
-Click **Approve** to immediately apply that match: the graph updates and the
-status confirms the fusion. No second confirmation is required. **Reject**
-leaves the model unchanged.
+Each candidate lists its pattern, affected nodes and replacement operators,
+tensor names and attributes. Clicking a candidate selects its
+nodes in the main graph for inspection. Check or uncheck candidates to choose
+which ones to fuse; inspecting or checking a candidate does not change the model.
+Both patterns and candidates use collapsible, scrollable lists with checkboxes.
 
-For a batch, check **Select for batch** on individual matches or choose
-**Select all compatible**, then click **Fuse selected**. Overlapping matches
+Check individual candidates or choose **Select all compatible**, then click
+**Fuse selected**. Candidates from different patterns can be fused together.
+**Clear selection** in the candidate list unchecks all candidates without
+changing the model.
+Overlapping matches
 cannot be applied together; the selection count and next step are shown.
-**Close** discards the preview and batch selection without applying anything.
+Clicking **Fuse** again or **Close** hides the panel and discards the preview
+and selection without applying anything, including while matching is running.
 All fusions change only the in-memory model; use **Save** to keep the result.
 Graph replacement or navigation invalidates the preview.
 

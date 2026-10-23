@@ -147,7 +147,11 @@ export interface NativeModel {
     pattern: string,
     sourceFilePath?: string,
   ): Promise<{ model: NativeModel; matches: FusionMatch[] }>;
-  applyFusion(pattern: string, anchors: number[]): Promise<NativeModel>;
+  /** A pattern array assigns one pattern to each corresponding anchor. */
+  applyFusion(
+    pattern: string | string[],
+    anchors: number[],
+  ): Promise<NativeModel>;
   /** Whole-model external-data references, excluding omitted inline payload placeholders. */
   externalDataLocations(): string[];
   /**

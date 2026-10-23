@@ -1934,11 +1934,12 @@ Napi::Object FusionNode(Napi::Env env, const ol::NodeProto &node) {
 
 class FusionWorker : public Napi::AsyncWorker {
 public:
-  FusionWorker(Napi::Env env, std::shared_ptr<StoredModel> source, std::string pattern,
-               std::optional<std::vector<size_t>> anchors, std::string path)
+  FusionWorker(Napi::Env env, std::shared_ptr<StoredModel> source,
+               std::vector<std::string> patterns, std::optional<std::vector<size_t>> anchors,
+               std::string path)
       : Napi::AsyncWorker(env), deferred_(Napi::Promise::Deferred::New(env)),
         source_(std::move(source)), snapshot_(source_->model->SharedCopy()),
-        pattern_(std::move(pattern)), anchors_(std::move(anchors)), path_(std::move(path)),
+        patterns_(std::move(patterns)), anchors_(std::move(anchors)), path_(std::move(path)),
         weights_(source_->external_weights) {}
   Napi::Promise Promise() const { return deferred_.Promise(); }
   void Execute() override {
@@ -1954,7 +1955,10 @@ public:
         }
       ol::VerifyModel(snapshot_);
       namespace builder = ol::core::builder;
-      auto pattern = builder::CreateRegisteredPattern(pattern_);
+      std::map<std::string, std::unique_ptr<builder::PatternOptimization>> patterns;
+      for (const auto &name : patterns_)
+        if (!patterns.contains(name))
+          patterns.emplace(name, builder::CreateRegisteredPattern(name));
       builder::GraphBuilder graph(snapshot_);
       if (graph.Nodes().size() != snapshot_.graph().node().size())
         throw std::runtime_error("The native builder changed node indices before fusion.");
@@ -1970,44 +1974,48 @@ public:
       }
       builder::GraphGraph index(graph,
                                 std::vector<std::unique_ptr<builder::PatternOptimization>>{});
-      const auto fast = pattern->FastOpType();
-      std::vector<builder::MatchResult> accepted;
+      std::vector<std::pair<builder::PatternOptimization *, builder::MatchResult>> accepted;
       std::set<size_t> removed;
-      std::set<size_t> requested;
+      std::set<std::pair<std::string, size_t>> requested;
       if (anchors_) {
-        requested.insert(anchors_->begin(), anchors_->end());
+        for (size_t i = 0; i < anchors_->size(); ++i)
+          requested.emplace(patterns_.size() == 1 ? patterns_[0] : patterns_[i], (*anchors_)[i]);
         if (requested.empty() || requested.size() != anchors_->size())
           throw std::runtime_error("Select distinct fusion matches.");
       }
-      for (size_t i = 0; i < graph.Nodes().size(); ++i) {
-        if ((anchors_ && !requested.contains(i)) ||
-            (!fast.empty() && !fast.contains(graph.Nodes()[i].op_type().value())))
-          continue;
-        auto match = pattern->Match(index, graph.Nodes()[i]);
-        if (!match.pattern)
-          continue;
-        std::vector<size_t> nodes;
-        for (const auto *node : match.nodes)
-          if (node) {
-            const auto position = index.Position(*node);
-            if (std::find(nodes.begin(), nodes.end(), position) == nodes.end())
-              nodes.push_back(position);
+      for (const auto &[name, pattern] : patterns) {
+        const auto fast = pattern->FastOpType();
+        for (size_t i = 0; i < graph.Nodes().size(); ++i) {
+          if ((anchors_ && !requested.contains({name, i})) ||
+              (!fast.empty() && !fast.contains(graph.Nodes()[i].op_type().value())))
+            continue;
+          auto match = pattern->Match(index, graph.Nodes()[i]);
+          if (!match.pattern)
+            continue;
+          std::vector<size_t> nodes;
+          for (const auto *node : match.nodes)
+            if (node) {
+              const auto position = index.Position(*node);
+              if (std::find(nodes.begin(), nodes.end(), position) == nodes.end())
+                nodes.push_back(position);
+            }
+          if (nodes.empty())
+            throw std::runtime_error("The pattern returned an empty fusion match.");
+          if (anchors_) {
+            for (const auto position : nodes)
+              if (!removed.insert(position).second)
+                throw std::runtime_error("Selected matches overlap. Select disjoint matches.");
+            accepted.emplace_back(pattern.get(), std::move(match));
+          } else {
+            builder::GraphBuilder trial(snapshot_);
+            builder::GraphGraph trial_index(
+                trial, std::vector<std::unique_ptr<builder::PatternOptimization>>{});
+            const auto trial_match = pattern->Match(trial_index, trial.Nodes()[i]);
+            if (!trial_match.pattern)
+              throw std::runtime_error("The fusion match could not be reproduced.");
+            matches_.push_back(
+                {i, std::move(nodes), pattern->Apply(trial_index, trial_match.nodes)});
           }
-        if (nodes.empty())
-          throw std::runtime_error("The pattern returned an empty fusion match.");
-        if (anchors_) {
-          for (const auto position : nodes)
-            if (!removed.insert(position).second)
-              throw std::runtime_error("Selected matches overlap. Select disjoint matches.");
-          accepted.push_back(std::move(match));
-        } else {
-          builder::GraphBuilder trial(snapshot_);
-          builder::GraphGraph trial_index(
-              trial, std::vector<std::unique_ptr<builder::PatternOptimization>>{});
-          const auto trial_match = pattern->Match(trial_index, trial.Nodes()[i]);
-          if (!trial_match.pattern)
-            throw std::runtime_error("The fusion match could not be reproduced.");
-          matches_.push_back({i, std::move(nodes), pattern->Apply(trial_index, trial_match.nodes)});
         }
       }
       if (!anchors_)
@@ -2016,12 +2024,12 @@ public:
         throw std::runtime_error("The selected fusion preview is no longer applicable.");
       ol::RewritingProto plan;
       auto *edit = plan.add_rewrites();
-      edit->set_pattern_name(pattern_);
+      edit->set_pattern_name(patterns_.size() == 1 ? patterns_[0] : "Selected fusion patterns");
       for (const auto position : removed)
         edit->add_matched_nodes(position);
       const auto initializer_count = graph.Initializers().size();
       std::map<size_t, std::vector<ol::NodeProto>> insertions;
-      for (const auto &match : accepted) {
+      for (const auto &[pattern, match] : accepted) {
         size_t position = graph.Nodes().size();
         if (match.insert_at)
           position = index.Position(*match.insert_at);
@@ -2098,7 +2106,7 @@ private:
   Napi::Promise::Deferred deferred_;
   std::shared_ptr<StoredModel> source_;
   ol::ModelProto snapshot_;
-  std::string pattern_;
+  std::vector<std::string> patterns_;
   std::optional<std::vector<size_t>> anchors_;
   std::string path_;
   std::vector<StoredModel::ExternalWeight> weights_;
@@ -2154,12 +2162,26 @@ Napi::Object ModelHandle(Napi::Env env, std::shared_ptr<StoredModel> model) {
         apply ? "applyFusion" : "previewFusion",
         Napi::Function::New(env, [model, apply](const Napi::CallbackInfo &call) -> Napi::Value {
           try {
-            if (!call[0].IsString() || (apply && !call[1].IsArray()) ||
+            if ((!call[0].IsString() && !(apply && call[0].IsArray())) ||
+                (apply && !call[1].IsArray()) ||
                 (!apply && !call[1].IsUndefined() && !call[1].IsString()))
               throw std::runtime_error(
                   "Expected a fusion pattern and selected match indices or source path.");
             ol::onnx_patterns::RegisterPatterns();
             ol::onnx_shapes::RegisterShapeFunctions();
+            std::vector<std::string> patterns;
+            if (call[0].IsString())
+              patterns.push_back(call[0].As<Napi::String>().Utf8Value());
+            else {
+              const auto values = call[0].As<Napi::Array>();
+              if (!values.Length() || values.Length() != call[1].As<Napi::Array>().Length())
+                throw std::runtime_error("Expected one fusion pattern per selected match.");
+              for (uint32_t i = 0; i < values.Length(); ++i) {
+                if (!values.Get(i).IsString())
+                  throw std::runtime_error("Invalid fusion pattern.");
+                patterns.push_back(values.Get(i).As<Napi::String>().Utf8Value());
+              }
+            }
             std::optional<std::vector<size_t>> anchors;
             if (apply) {
               anchors.emplace();
@@ -2179,8 +2201,7 @@ Napi::Object ModelHandle(Napi::Env env, std::shared_ptr<StoredModel> model) {
                                                            : model->file_path;
             if (path.find('\0') != std::string::npos)
               throw std::runtime_error("Invalid source model file path.");
-            auto worker = std::make_unique<FusionWorker>(call.Env(), model,
-                                                         call[0].As<Napi::String>().Utf8Value(),
+            auto worker = std::make_unique<FusionWorker>(call.Env(), model, std::move(patterns),
                                                          std::move(anchors), path);
             const auto promise = worker->Promise();
             worker->Queue();

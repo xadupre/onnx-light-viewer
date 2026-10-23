@@ -139,8 +139,10 @@ An omitted path selects the root graph. ``graph()`` does not infer shapes;
 selected graph. ``decodeGraph`` instead produces a one-shot snapshot, skipping
 raw tensor bytes by default, without retaining a model for future refreshes.
 ``loadModel`` and ``loadModelFile`` accept an optional decryption password.
-``isEncryptedModel`` recognizes the eight-byte ONNXCRY1/2/3 header. Only the host
-prompts for passwords; reload closures retain them in panel-local memory.
+``isEncryptedModel`` recognizes the eight-byte ONNXCRY1/2/3 header. The sidebar
+submits masked password fields for inline Open/Save; direct editor opening uses
+a host prompt. Reload closures retain decryption passwords in panel-local memory.
+Password fields are cleared after submission and are never logged.
 ``serialize`` snapshots the whole model and runs on a native worker. Omitted
 inline tensors are restored from the original file after checking its size,
 modification time and tensor identity. ``sourceFilePath`` supplies the current

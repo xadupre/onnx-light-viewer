@@ -5,7 +5,8 @@
 import * as vscode from "vscode";
 import { randomBytes } from "node:crypto";
 import { open, stat } from "node:fs/promises";
-import { dirname, join, posix } from "node:path";
+import { dirname, isAbsolute, join, posix } from "node:path";
+import { homedir } from "node:os";
 import {
   listBackendTests,
   loadBackendTest,
@@ -17,6 +18,7 @@ import {
   NativeModel,
   GraphMetadata,
   GraphPath,
+  FusionMatch,
 } from "./graph";
 import { webviewHtml } from "./webview";
 import { ActionLog, LogEntry } from "./log";
@@ -159,6 +161,7 @@ async function readGraph(
   uri: vscode.Uri,
   log: ActionLog,
   fileName = posix.basename(uri.path),
+  suppliedPassword?: string,
 ): Promise<LoadedModel | undefined> {
   return log.run(`Load model: ${uri.path}`, async (id) => {
     const source = { uri };
@@ -179,7 +182,8 @@ async function readGraph(
     }
     const encrypted = isEncryptedModel(header);
     const password = encrypted
-      ? await vscode.window.showInputBox({
+      ? (suppliedPassword ??
+        (await vscode.window.showInputBox({
           title: `Decrypt ONNX model: ${fileName}`,
           prompt:
             "Enter the model password. It stays in the extension host's memory for recovery.",
@@ -187,7 +191,7 @@ async function readGraph(
           ignoreFocusOut: true,
           validateInput: (value) =>
             value.length ? undefined : "A password is required.",
-        })
+        })))
       : undefined;
     if (encrypted && password === undefined) {
       log.record("CANCELLED", `Load model: ${uri.path}`, id);
@@ -338,6 +342,7 @@ async function configurePanel(
         revision: number;
         pattern: string;
         anchors: Set<number>;
+        matches: (FusionMatch & { pattern: string })[];
       }
     | undefined;
   let ready = false;
@@ -379,6 +384,22 @@ async function configurePanel(
     if (!model) throw new Error("No ONNX model is loaded.");
     return model;
   };
+  const directoryUri = () =>
+    model?.source
+      ? vscode.Uri.joinPath(model.source.uri, "..")
+      : (vscode.workspace.workspaceFolders?.[0]?.uri ??
+        vscode.Uri.file(homedir()));
+  const locationText = (uri: vscode.Uri) =>
+    uri.scheme === "file" ? uri.fsPath : uri.toString();
+  const locationUri = (value: unknown) => {
+    if (typeof value !== "string" || !value.trim() || value.includes("\0"))
+      throw new Error("Enter a file or directory path.");
+    return /^[a-z][a-z\d+.-]*:\/\//i.test(value)
+      ? vscode.Uri.parse(value)
+      : isAbsolute(value) || /^[a-z]:[\\/]/i.test(value)
+        ? vscode.Uri.file(value)
+        : vscode.Uri.joinPath(directoryUri(), value);
+  };
   const sendGraph = () => {
     fusionPreview = undefined;
     fusionRequest++;
@@ -387,6 +408,15 @@ async function configurePanel(
     return postMessage({
       type: "graph",
       graph: current.graph,
+      file: {
+        directory: locationText(directoryUri()),
+        savePath: locationText(
+          vscode.Uri.joinPath(
+            directoryUri(),
+            `${(current.fileName ?? "model.onnx").replace(/\.onnx(?:\.enc)?$/i, "")}-copy.onnx`,
+          ),
+        ),
+      },
       ...(current.metadata ? { metadata: current.metadata } : {}),
     });
   };
@@ -434,7 +464,15 @@ async function configurePanel(
         requestId?: unknown;
         previewId?: unknown;
         pattern?: unknown;
+        patterns?: unknown;
         anchors?: unknown;
+        candidates?: unknown;
+        location?: unknown;
+        source?: unknown;
+        target?: unknown;
+        password?: unknown;
+        confirmation?: unknown;
+        overwrite?: unknown;
       } | null,
     ) => {
       if (!active) return;
@@ -460,39 +498,143 @@ async function configurePanel(
           await postMessage({ type: "show-logs" });
           showLogsRequested = false;
         }
+      } else if (message?.type === "browse-files") {
+        const target = message.target;
+        try {
+          if (target !== "open" && target !== "save")
+            throw new Error("Invalid file selector.");
+          const source = target === "save" ? "local" : message.source;
+          let location = "";
+          let parent: string | undefined;
+          let entries: {
+            name: string;
+            path: string;
+            directory: boolean;
+            description?: string;
+          }[];
+          if (source === "backend") {
+            entries = listBackendTests().map((test) => ({
+              name: test.name,
+              path: String(test.id),
+              directory: false,
+              description: [test.modelName, test.kind, test.tag]
+                .filter(Boolean)
+                .join(" "),
+            }));
+          } else if (source === "huggingface") {
+            if (typeof message.location !== "string")
+              throw new Error("Enter a Hugging Face repository or model URL.");
+            const parsed = parseHuggingFaceInput(message.location);
+            const files =
+              "fileName" in parsed
+                ? [parsed]
+                : await listHuggingFaceModels(parsed);
+            location = message.location;
+            entries = files.map((file) => ({
+              name: "path" in file ? String(file.path) : file.fileName,
+              path: file.url,
+              directory: false,
+            }));
+          } else if (source === "local") {
+            const uri = message.location
+              ? locationUri(message.location)
+              : directoryUri();
+            location = locationText(uri);
+            parent = locationText(vscode.Uri.joinPath(uri, ".."));
+            entries = (await vscode.workspace.fs.readDirectory(uri))
+              .filter(
+                ([name, type]) =>
+                  type & vscode.FileType.Directory ||
+                  /\.(?:onnx|enc)$/i.test(name),
+              )
+              .map(([name, type]) => ({
+                name,
+                path: locationText(vscode.Uri.joinPath(uri, name)),
+                directory: !!(type & vscode.FileType.Directory),
+              }));
+          } else throw new Error("Choose a model source.");
+          entries.sort(
+            (a, b) =>
+              Number(b.directory) - Number(a.directory) ||
+              a.name.localeCompare(b.name),
+          );
+          await postMessage({
+            type: "file-list",
+            target,
+            requestId: message.requestId,
+            location,
+            parent,
+            entries,
+          });
+        } catch (error) {
+          await postMessage({
+            type: "file-list-error",
+            target,
+            requestId: message.requestId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
       } else if (message?.type === "open") {
         try {
           const loaded = await log.run(
             "Open ONNX model",
             async (id) => {
-              const location = await vscode.window.showQuickPick(
-                [
-                  { id: "local", label: "Local file" },
-                  { id: "huggingface", label: "Hugging Face" },
-                  { id: "backend", label: "Backend test" },
-                ],
-                {
-                  title: "Open an ONNX model",
-                  placeHolder: "Choose where to open the model from",
-                },
-              );
+              const inline = message.source !== undefined;
+              if (
+                inline &&
+                (typeof message.password !== "string" ||
+                  typeof message.source !== "string" ||
+                  !["local", "huggingface", "backend"].includes(message.source))
+              )
+                throw new Error("Invalid inline model selection.");
+              const location = inline
+                ? { id: String(message.source) }
+                : await vscode.window.showQuickPick(
+                    [
+                      { id: "local", label: "Local file" },
+                      { id: "huggingface", label: "Hugging Face" },
+                      { id: "backend", label: "Backend test" },
+                    ],
+                    {
+                      title: "Open an ONNX model",
+                      placeHolder: "Choose where to open the model from",
+                    },
+                  );
               if (!location) {
                 log.record("CANCELLED", "Open ONNX model", id);
                 return;
               }
-              if (location.id === "backend")
-                return chooseBackendTest(id, "Open ONNX model");
+              if (location.id === "backend") {
+                if (!inline) return chooseBackendTest(id, "Open ONNX model");
+                const test = listBackendTests().find(
+                  (test) => String(test.id) === message.location,
+                );
+                if (!test) throw new Error("Choose a backend test.");
+                const reload = () => loadBackendTest(test.id);
+                const native = reload();
+                return {
+                  model: { graph: native.graph(), native, reload },
+                  name: test.name,
+                };
+              }
               if (location.id === "local") {
-                const selection = await vscode.window.showOpenDialog({
-                  canSelectMany: false,
-                  filters: { "ONNX models": ["onnx", "enc"] },
-                  openLabel: "Open ONNX graph",
-                });
+                const selection = inline
+                  ? [locationUri(message.location)]
+                  : await vscode.window.showOpenDialog({
+                      canSelectMany: false,
+                      filters: { "ONNX models": ["onnx", "enc"] },
+                      openLabel: "Open ONNX graph",
+                    });
                 if (!selection?.[0]) {
                   log.record("CANCELLED", "Open ONNX model", id);
                   return;
                 }
-                const loadedModel = await readGraph(selection[0], log);
+                const loadedModel = await readGraph(
+                  selection[0],
+                  log,
+                  undefined,
+                  inline ? String(message.password) : undefined,
+                );
                 if (!loadedModel) {
                   log.record("CANCELLED", "Open ONNX model", id);
                   return;
@@ -502,28 +644,36 @@ async function configurePanel(
                   name: posix.basename(selection[0].path),
                 };
               }
-              const input = await vscode.window.showInputBox({
-                title: "Open a Hugging Face ONNX model",
-                prompt:
-                  "Enter a public repository ID, repository URL or ONNX file URL. External weight files are not downloaded.",
-                placeHolder: "onnx-community/Kokoro-82M-v1.0-ONNX",
-                ignoreFocusOut: true,
-                validateInput: (value) => {
-                  try {
-                    parseHuggingFaceInput(value);
-                    return undefined;
-                  } catch (error) {
-                    return error instanceof Error
-                      ? error.message
-                      : String(error);
-                  }
-                },
-              });
+              const input = inline
+                ? message.location
+                : await vscode.window.showInputBox({
+                    title: "Open a Hugging Face ONNX model",
+                    prompt:
+                      "Enter a public repository ID, repository URL or ONNX file URL. External weight files are not downloaded.",
+                    placeHolder: "onnx-community/Kokoro-82M-v1.0-ONNX",
+                    ignoreFocusOut: true,
+                    validateInput: (value) => {
+                      try {
+                        parseHuggingFaceInput(value);
+                        return undefined;
+                      } catch (error) {
+                        return error instanceof Error
+                          ? error.message
+                          : String(error);
+                      }
+                    },
+                  });
               if (input === undefined) {
                 log.record("CANCELLED", "Open ONNX model", id);
                 return;
               }
+              if (typeof input !== "string")
+                throw new Error("Choose a Hugging Face model.");
               const target = parseHuggingFaceInput(input);
+              if (inline && !("fileName" in target))
+                throw new Error(
+                  "Select a model file from the repository first.",
+                );
               return vscode.window.withProgress(
                 {
                   location: vscode.ProgressLocation.Notification,
@@ -574,6 +724,7 @@ async function configurePanel(
                           vscode.Uri.file(path),
                           log,
                           source.fileName,
+                          inline ? String(message.password) : undefined,
                         );
                         if (!loaded) {
                           controller.abort();
@@ -684,15 +835,34 @@ async function configurePanel(
                 fusionRequest === generation;
               if (message.type === "apply-fusion") {
                 const preview = fusionPreview;
+                const candidates: unknown = message.candidates;
+                const selectedMatches =
+                  preview &&
+                  Array.isArray(candidates) &&
+                  candidates.length &&
+                  new Set(candidates).size === candidates.length &&
+                  candidates.every(
+                    (id: unknown) =>
+                      typeof id === "number" &&
+                      Number.isSafeInteger(id) &&
+                      id >= 0 &&
+                      id < preview.matches.length,
+                  )
+                    ? candidates.map((id: number) => preview.matches[id])
+                    : undefined;
+                const anchors = selectedMatches
+                  ? selectedMatches.map((match) => match.anchor)
+                  : message.anchors;
                 if (
                   !preview ||
                   preview.owner !== current ||
                   preview.native !== current.native ||
                   preview.revision !== revision ||
                   preview.id !== message.previewId ||
-                  !Array.isArray(message.anchors) ||
-                  !message.anchors.length ||
-                  !message.anchors.every(
+                  (candidates !== undefined && !selectedMatches) ||
+                  !Array.isArray(anchors) ||
+                  !anchors.length ||
+                  !anchors.every(
                     (anchor: unknown) =>
                       typeof anchor === "number" &&
                       Number.isSafeInteger(anchor) &&
@@ -703,8 +873,10 @@ async function configurePanel(
                     "The fusion preview is stale or invalid. Preview again.",
                   );
                 const edited = await preview.snapshot.applyFusion(
-                  preview.pattern,
-                  message.anchors,
+                  selectedMatches
+                    ? selectedMatches.map((match) => match.pattern)
+                    : preview.pattern,
+                  anchors,
                 );
                 if (!isCurrent()) return;
                 const retained = edited.clone();
@@ -726,7 +898,7 @@ async function configurePanel(
                 if (!active || model !== replacement) return;
                 await postMessage({
                   type: "fusion-info",
-                  count: message.anchors.length,
+                  count: anchors.length,
                 });
                 return;
               }
@@ -746,32 +918,48 @@ async function configurePanel(
                 });
                 return;
               }
+              const chosen: unknown = message.patterns ?? [message.pattern];
               if (
-                typeof message.pattern !== "string" ||
-                !patterns.includes(message.pattern)
+                !Array.isArray(chosen) ||
+                !chosen.length ||
+                !chosen.every(
+                  (pattern: unknown) =>
+                    typeof pattern === "string" && patterns.includes(pattern),
+                ) ||
+                new Set(chosen).size !== chosen.length
               )
-                throw new Error("Choose an applicable fusion pattern.");
-              const preview = await native.previewFusion(
-                message.pattern,
-                current.source?.uri.scheme === "file"
-                  ? current.source.uri.fsPath
-                  : undefined,
-              );
-              if (!isCurrent()) return;
+                throw new Error("Choose applicable fusion patterns.");
+              const matches: (FusionMatch & { pattern: string })[] = [];
+              let snapshot: NativeModel | undefined;
+              for (const pattern of chosen) {
+                const preview = await native.previewFusion(
+                  pattern,
+                  current.source?.uri.scheme === "file"
+                    ? current.source.uri.fsPath
+                    : undefined,
+                );
+                if (!isCurrent()) return;
+                snapshot ??= preview.model;
+                matches.push(
+                  ...preview.matches.map((match) => ({ ...match, pattern })),
+                );
+              }
+              if (!snapshot) throw new Error("No fusion snapshot was created.");
               fusionPreview = {
                 id: generation,
                 owner: current,
                 native,
-                snapshot: preview.model,
+                snapshot,
                 revision,
-                pattern: message.pattern,
-                anchors: new Set(preview.matches.map((match) => match.anchor)),
+                pattern: chosen[0],
+                anchors: new Set(matches.map((match) => match.anchor)),
+                matches,
               };
               await postMessage({
                 type: "fusion-preview",
                 requestId: message.requestId,
                 previewId: generation,
-                matches: preview.matches,
+                matches,
               });
             },
             message.actionId,
@@ -833,45 +1021,65 @@ async function configurePanel(
                 log.record("CANCELLED", "Save ONNX model", id);
               };
               let password: string | undefined;
+              const inline = message.location !== undefined;
               if (format.encrypted) {
-                password = await vscode.window.showInputBox({
-                  title: "Encrypt ONNX model",
-                  prompt: "Choose a password for the saved copy.",
-                  password: true,
-                  ignoreFocusOut: true,
-                  validateInput: (value) =>
-                    value.length ? undefined : "A password is required.",
-                });
+                if (
+                  inline &&
+                  (typeof message.password !== "string" ||
+                    !message.password.length ||
+                    message.confirmation !== message.password)
+                )
+                  throw new Error(
+                    "Enter and confirm the same non-empty password.",
+                  );
+                password = inline
+                  ? String(message.password)
+                  : await vscode.window.showInputBox({
+                      title: "Encrypt ONNX model",
+                      prompt: "Choose a password for the saved copy.",
+                      password: true,
+                      ignoreFocusOut: true,
+                      validateInput: (value) =>
+                        value.length ? undefined : "A password is required.",
+                    });
                 if (password === undefined) return cancelled();
-                const confirmation = await vscode.window.showInputBox({
-                  title: "Confirm ONNX model password",
-                  prompt: "Enter the same password again.",
-                  password: true,
-                  ignoreFocusOut: true,
-                  validateInput: (value) =>
-                    value === password ? undefined : "Passwords do not match.",
-                });
+                const confirmation = inline
+                  ? message.confirmation
+                  : await vscode.window.showInputBox({
+                      title: "Confirm ONNX model password",
+                      prompt: "Enter the same password again.",
+                      password: true,
+                      ignoreFocusOut: true,
+                      validateInput: (value) =>
+                        value === password
+                          ? undefined
+                          : "Passwords do not match.",
+                    });
                 if (confirmation === undefined) return cancelled();
                 if (confirmation !== password)
                   throw new Error("Passwords do not match.");
               }
               const fileName = `${(current.fileName ?? "model.onnx").replace(/\.onnx(?:\.enc)?$/i, "")}-copy.onnx${format.encrypted ? ".enc" : ""}`;
-              const destination = await vscode.window.showSaveDialog({
-                title: "Save ONNX model copy",
-                saveLabel: "Save model copy",
-                filters: format.encrypted
-                  ? { "Encrypted ONNX models": ["enc"] }
-                  : { "ONNX models": ["onnx"] },
-                ...(current.source
-                  ? {
-                      defaultUri: vscode.Uri.joinPath(
-                        current.source.uri,
-                        "..",
-                        fileName,
-                      ),
-                    }
-                  : {}),
-              });
+              if (inline && typeof message.overwrite !== "boolean")
+                throw new Error("Invalid overwrite choice.");
+              const destination = inline
+                ? locationUri(message.location)
+                : await vscode.window.showSaveDialog({
+                    title: "Save ONNX model copy",
+                    saveLabel: "Save model copy",
+                    filters: format.encrypted
+                      ? { "Encrypted ONNX models": ["enc"] }
+                      : { "ONNX models": ["onnx"] },
+                    ...(current.source
+                      ? {
+                          defaultUri: vscode.Uri.joinPath(
+                            current.source.uri,
+                            "..",
+                            fileName,
+                          ),
+                        }
+                      : {}),
+                  });
               if (!destination || !active || model !== current)
                 return cancelled();
               const source = current.source?.uri;
@@ -941,7 +1149,7 @@ async function configurePanel(
                 const published = await writeModelFile(
                   destination,
                   serialized.model,
-                  true,
+                  inline ? message.overwrite === true : true,
                   async () => {
                     if (!isCurrent()) return false;
                     await assertSaveDestination(sources, destination);

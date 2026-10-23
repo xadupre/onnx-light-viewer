@@ -432,6 +432,45 @@ test("previews native fusion matches and applies only selected disjoint matches 
   assert.deepEqual(Buffer.from(await preview.model.serialize()), original);
 });
 
+test("applies disjoint candidates from different patterns atomically on original node indices", async () => {
+  const model = loadModel(modelBytes("fusion-scaled.onnx"), "fusion");
+  const original = Buffer.from(await model.serialize());
+  const preview = await model.previewFusion("TransposeTranspose");
+  const fused = await preview.model.applyFusion(
+    ["TransposeTranspose", "MatMulScaleFusion"],
+    [0, 4],
+  );
+  assert.deepEqual(
+    fused.graph().nodes.map((node) => node.opType),
+    ["Identity", "Transpose", "Transpose", "MatMul"],
+  );
+  const reversed = await preview.model.applyFusion(
+    ["MatMulScaleFusion", "TransposeTranspose"],
+    [4, 0],
+  );
+  assert.deepEqual(reversed.graph(), fused.graph());
+  await assert.rejects(
+    preview.model.applyFusion(
+      ["TransposeTranspose", "SameChildrenFromInput"],
+      [0, 0],
+    ),
+    /overlap/,
+  );
+  await assert.rejects(
+    preview.model.applyFusion(
+      ["TransposeTranspose", "TransposeTranspose"],
+      [0, 0],
+    ),
+    /distinct/,
+  );
+  assert.throws(
+    () => preview.model.applyFusion(["TransposeTranspose"], [0, 4]),
+    /one fusion pattern/,
+  );
+  assert.deepEqual(Buffer.from(await model.serialize()), original);
+  assert.deepEqual(Buffer.from(await preview.model.serialize()), original);
+});
+
 test("rejects overlapping native matches without modifying the source", async () => {
   const node = (input, output) =>
     bytesField(
