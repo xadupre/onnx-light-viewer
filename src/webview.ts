@@ -50,7 +50,7 @@ export function webviewHtml(
         <h2 id="fusion-title">Fusion patterns</h2>
         <p>Choose a pattern to highlight its first match in the main graph. Review each replacement, approve or reject matches, then fuse only those you approve. Close to leave the model unchanged; use Save after applying.</p>
         <label for="fusion-pattern">Native pattern</label>
-        <select id="fusion-pattern" disabled></select>
+        <select id="fusion-pattern" size="6" disabled aria-describedby="fusion-feedback"></select>
         <button id="preview-fusion" disabled>Refresh preview</button>
         <button id="close-fusion">Close</button>
         <p id="fusion-feedback" role="status"></p>

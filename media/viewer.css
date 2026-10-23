@@ -81,7 +81,7 @@ p {
 }
 #model-view {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr);
   min-height: 0;
 }
 #logs-view,
@@ -320,6 +320,7 @@ a:focus-visible {
   flex-wrap: wrap;
 }
 .graph-body {
+  grid-row: 3;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 245px;
   min-height: 0;
@@ -714,6 +715,15 @@ button:disabled {
 }
 #fusion-panel[hidden] {
   display: none;
+}
+#fusion-pattern {
+  display: block;
+  width: min(100%, 36rem);
+  margin: 8px 0;
+  font: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
 }
 #fusion-matches {
   max-height: 300px;

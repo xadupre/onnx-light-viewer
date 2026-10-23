@@ -2061,7 +2061,9 @@ window.addEventListener("message", (event) => {
     }
     fusionControls(
       false,
-      `${event.data.patterns.length} patterns with compatible anchors.`,
+      event.data.patterns.length
+        ? `${event.data.patterns.length} native patterns available. Select one from the list.`
+        : "No native patterns have compatible anchors in this graph.",
     );
   } else if (event.data?.type === "fusion-preview") {
     if (event.data.requestId === fusionRequest) showFusionMatches(event.data);

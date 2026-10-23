@@ -1381,6 +1381,64 @@ test("recovers a downloaded model from its published cache path after the tempor
   assert.deepEqual(extension.reads, []);
 });
 
+test("displays the registered native pattern catalog through the real webview bridge", async (t) => {
+  const extension = await openExtension("fusion.onnx");
+  const dom = new JSDOM(extension.webview.html, { runScripts: "outside-only" });
+  t.after(() => dom.window.close());
+  const { window } = dom;
+  const { document } = window;
+  const requests = [];
+  window.HTMLCanvasElement.prototype.getContext = () => ({
+    font: "",
+    measureText: (text) => ({ width: text.length * 8 }),
+  });
+  document.getElementById("canvas").getBoundingClientRect = () =>
+    new window.DOMRect(0, 0, 1060, 350);
+  window.acquireVsCodeApi = () => ({
+    postMessage: (message) => requests.push(extension.receive(message)),
+  });
+  extension.connect((data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data })),
+  );
+  for (const name of ["vendor/markdown-it.min.js", "viewer.js"])
+    window.eval(
+      readFileSync(path.resolve(__dirname, "../media", name), "utf8"),
+    );
+  const flush = async () => {
+    while (requests.length) await Promise.all(requests.splice(0));
+  };
+  await flush();
+  document.getElementById("fuse-pattern").click();
+  await flush();
+  const list = document.getElementById("fusion-pattern");
+  const actual = [...list.options]
+    .filter((option) => !option.disabled)
+    .map((option) => option.value);
+  const expected = extension.nativeModels.at(-1).fusionPatterns().sort();
+  assert.ok(actual.length > 0);
+  assert.deepEqual(actual, expected);
+  assert.ok(actual.includes("TransposeTranspose"));
+  assert.equal(list.disabled, false);
+  assert.ok(list.size > 1);
+  assert.equal(document.getElementById("fusion-panel").hidden, false);
+  list.value = "TransposeTranspose";
+  list.dispatchEvent(new window.Event("change"));
+  await flush();
+  assert.equal(document.querySelectorAll("#fusion-matches li").length, 2);
+  assert.equal(document.querySelectorAll(".graph-node.selected").length, 2);
+  const approval = document.querySelector("#fusion-matches input");
+  approval.checked = true;
+  approval.dispatchEvent(new window.Event("change"));
+  document.getElementById("apply-fusion").click();
+  await flush();
+  assert.equal(document.querySelectorAll(".graph-node").length, 4);
+  assert.match(
+    document.getElementById("fusion-status").textContent,
+    /Applied 1 fusion/,
+  );
+  assert.deepEqual(extension.errors, []);
+});
+
 test("keeps operation logs quiet and exposes real native exception recovery in Status", async (t) => {
   const extension = await openExtension();
   const dom = new JSDOM(extension.webview.html, { runScripts: "outside-only" });

@@ -6,6 +6,8 @@ main graph.
 The list keeps patterns whose anchor operator occurs in that graph, plus patterns
 without an anchor restriction. Matching and rewriting do not execute the model.
 Return to the main graph's breadcrumb to enable this control.
+The available native patterns are displayed in a scrollable list; select a name
+to preview it.
 
 .. code-block:: text
 
