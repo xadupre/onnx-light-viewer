@@ -1218,6 +1218,58 @@ test("reports metadata errors, allows retry and clears stale metadata and releas
   );
 });
 
+test("opens local functions from the operator or inspector and returns using breadcrumbs", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const model = loadModel(
+    readFileSync(require.resolve("./models/functions.onnx")),
+    "functions.onnx",
+  );
+  const root = model.graph();
+  load(root);
+  const button = document.getElementById("open-function");
+  assert.equal(button.hidden, false);
+  assert.match(button.textContent, /example::Transform/);
+  const link = document.querySelector(".subgraph-link");
+  assert.match(
+    link.getAttribute("aria-label"),
+    /Open Function: example::Transform/,
+  );
+  link.dispatchEvent(
+    new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+  );
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(messages.at(-1).path)),
+    root.nodes[0].function.path,
+  );
+  load(model.graph(false, messages.at(-1).path));
+  assert.equal(button.hidden, true);
+  document
+    .querySelector('[data-id="node-2"]')
+    .dispatchEvent(
+      new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+    );
+  assert.equal(button.hidden, false);
+  assert.match(button.textContent, /example::Identity \[fast\]/);
+  button.click();
+  load(model.graph(false, messages.at(-1).path));
+  assert.equal(document.getElementById("node-title").textContent, "Sigmoid");
+  assert.equal(button.hidden, true);
+  const crumbs = document.querySelectorAll("#graph-navigation button");
+  assert.equal(crumbs.length, 3);
+  crumbs[1].click();
+  load(model.graph(false, messages.at(-1).path));
+  assert.equal(
+    document.querySelector('#graph-navigation [aria-current="page"]')
+      .textContent,
+    "example::Transform",
+  );
+  document.querySelector("#graph-navigation button").click();
+  load(model.graph(false, messages.at(-1).path));
+  assert.equal(button.hidden, false);
+  load(demoGraph);
+  assert.equal(button.hidden, true);
+});
+
 test("renders the demo, inspects its operator and requests a real file", (t) => {
   const { document, messages, load, window } = openViewer(t);
   assert.equal(messages[0].type, "ready");

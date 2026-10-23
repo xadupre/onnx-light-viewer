@@ -177,7 +177,10 @@ function isGraphPath(path: unknown): path is GraphPath {
       (step: unknown) =>
         typeof step === "object" &&
         step !== null &&
-        ["node", "attribute", "graph"].every((key) => {
+        (Reflect.has(step, "function")
+          ? ["node", "function"]
+          : ["node", "attribute", "graph"]
+        ).every((key) => {
           const index: unknown = Reflect.get(step, key);
           return (
             typeof index === "number" && Number.isInteger(index) && index >= 0

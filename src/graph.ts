@@ -22,14 +22,23 @@ export interface GraphAttribute extends GraphParameter {
  * Zero-based native node/attribute indices within the current graph scope.
  * graph is zero for a GRAPH attribute or the item index in a GRAPHS attribute.
  */
-export interface GraphStep {
+export interface SubgraphStep {
   node: number;
   attribute: number;
   graph: number;
 }
 
+/** Call-site node index and the index of its model-local function definition. */
+export interface FunctionStep {
+  node: number;
+  function: number;
+}
+
+export type GraphStep = SubgraphStep | FunctionStep;
+
 /**
  * Absolute path from the model's root graph; an empty path selects the root.
+ * Steps enter graph attributes or the local function called by a node.
  * Indices, rather than names, distinguish potentially duplicate nodes/graphs.
  */
 export type GraphPath = GraphStep[];
@@ -86,8 +95,10 @@ export interface GraphNode {
   opset: string | null;
   attributes: GraphAttribute[];
   parameters: GraphInitializer[];
-  /** Null when no matching native operator schema is available. */
+  /** Null for local function calls or when no native operator schema is available. */
   schema: OperatorSchema | null;
+  /** Local function called by this node, matched by domain, name and overload. */
+  function?: SubgraphLink;
 }
 
 /** Tensor labels for ports and intermediate values, without tensor data. */
