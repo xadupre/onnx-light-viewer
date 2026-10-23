@@ -153,34 +153,34 @@ export function webviewHtml(
       <h3>Official projects</h3>
       <ul class="repository-list">
         <li>
-          <a href="https://github.com/onnx/onnx"><svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true"><circle cx="5" cy="12" r="3"/><circle cx="18" cy="5" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8 11 7-5M8 13l7 5"/></svg>ONNX</a>
+          <a href="https://github.com/onnx/onnx"><img src="${resource("repositories/onnx.png")}" alt="" width="28" height="28">ONNX</a>
           <p>An open standard for representing machine learning models, with a common model format and operator definitions.</p>
         </li>
         <li>
-          <a href="https://github.com/microsoft/onnxruntime"><svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m10 7 7 5-7 5Z"/></svg>ONNX Runtime</a>
+          <a href="https://github.com/microsoft/onnxruntime"><img src="${resource("repositories/onnxruntime.png")}" alt="" width="28" height="28">ONNX Runtime</a>
           <p>A cross-platform engine for accelerating machine learning inference and training across hardware backends.</p>
         </li>
         <li>
-          <a href="https://github.com/microsoft/onnxruntime-extensions"><svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true"><path d="M8 4H4v16h16v-7h-4a3 3 0 1 1 0-6h4V4h-7V3a3 3 0 0 0-6 0v1"/></svg>ONNX Runtime Extensions</a>
+          <a href="https://github.com/microsoft/onnxruntime-extensions"><img src="${resource("repositories/onnxruntime.png")}" alt="" width="28" height="28">ONNX Runtime Extensions</a>
           <p>Custom operators and tools for adding preprocessing and postprocessing to ONNX models.</p>
         </li>
         <li>
-          <a href="https://github.com/microsoft/onnxruntime-genai"><svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true"><path d="m12 3 3 6 6 3-6 3-3 6-3-6-6-3 6-3ZM19 2v4M17 4h4"/></svg>ONNX Runtime GenAI</a>
+          <a href="https://github.com/microsoft/onnxruntime-genai"><img src="${resource("repositories/onnxruntime.png")}" alt="" width="28" height="28">ONNX Runtime GenAI</a>
           <p>Generative AI APIs for ONNX Runtime, including tokenization, generation loops, sampling and beam search.</p>
         </li>
       </ul>
       <h3>onnx-light ecosystem</h3>
       <ul class="repository-list">
         <li>
-          <a href="https://github.com/xadupre/onnx-light"><svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true"><path d="m14 2-9 12h6l-1 8 9-13h-6Z"/></svg>onnx-light</a>
+          <a href="https://github.com/xadupre/onnx-light"><img src="${resource("repositories/onnx-light.svg")}" alt="" width="28" height="28">onnx-light</a>
           <p>A lightweight C++ library with Python bindings for manipulating ONNX models, shape inference and graph optimization.</p>
         </li>
         <li>
-          <a href="https://github.com/xadupre/onnx-light-cpu"><svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4m6-4v4M9 18v4m6-4v4M2 9h4m-4 6h4m12-6h4m-4 6h4M10 10h4v4h-4Z"/></svg>onnx-light-cpu</a>
+          <a href="https://github.com/xadupre/onnx-light-cpu"><img src="${resource("repositories/onnx-light-cpu.svg")}" alt="" width="28" height="28">onnx-light-cpu</a>
           <p>CPU execution kernels for running ONNX models with onnx-light.</p>
         </li>
         <li>
-          <a href="https://github.com/xadupre/onnx-light-ort"><svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true"><path d="M8 4v5m8-5v5M5 9h14v3a7 7 0 0 1-14 0ZM12 19v3"/></svg>onnx-light-ort</a>
+          <a href="https://github.com/xadupre/onnx-light-ort"><img src="${resource("repositories/onnx-light-ort.svg")}" alt="" width="28" height="28">onnx-light-ort</a>
           <p>Custom-operator interoperability between onnx-light and ONNX Runtime, in both directions.</p>
         </li>
         <li>

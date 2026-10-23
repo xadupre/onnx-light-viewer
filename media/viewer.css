@@ -119,16 +119,9 @@ p {
   font-weight: 600;
   overflow-wrap: anywhere;
 }
-.repository-list svg,
 .repository-list img {
   flex-shrink: 0;
-}
-.repository-list svg {
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.6;
-  stroke-linecap: round;
-  stroke-linejoin: round;
+  object-fit: contain;
 }
 #controls-view h3 {
   margin: 24px 0 8px;
