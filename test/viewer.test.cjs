@@ -783,8 +783,9 @@ for (const [kind, panelOpen] of [
           );
         }
         if (button.id === "show-metadata") {
+          const shadow = window.getComputedStyle(button).boxShadow;
           assert.equal(
-            Boolean(window.getComputedStyle(button).boxShadow),
+            shadow !== "" && shadow !== "none",
             button.getAttribute("aria-expanded") === "true",
           );
         }
