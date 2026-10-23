@@ -13,6 +13,11 @@ let renderedSelection = new Set();
 let connectionsByPosition = new Map();
 let connections = [];
 let camera;
+let virtualized = false;
+let overviewVisible = false;
+let overviewDirty = true;
+let crossingConnections = new Set();
+let readablePending = false;
 let hasOperators = false;
 let gesture;
 let zoomAreaMode = false;
@@ -29,6 +34,7 @@ let connectionsByName = new Map();
 let releasedValues = new Set();
 let unusedLabels = [];
 let hasModel = false;
+let replacementPending = false;
 let nextAction = 0;
 const logSession = crypto.randomUUID();
 const logRows = new Map();
@@ -40,6 +46,13 @@ const statusLabels = {
   CANCELLED: "Cancelled",
   INVALIDATED: "Reload required",
 };
+const RefreshStatus = Object.freeze({
+  IDLE: "idle",
+  PENDING: "pending",
+  UPDATED: "updated",
+  UNCHANGED: "unchanged",
+  FAILED: "failed",
+});
 const tabs = ["model", "logs", "status", "controls"];
 
 function showTab(name, focus = false) {
@@ -93,7 +106,12 @@ function displayLog(entry) {
   if (entry.status !== "RUNNING" && pendingActions.has(entry.id)) {
     const type = pendingActions.get(entry.id);
     pendingActions.delete(entry.id);
-    if (["open", "open-backend-test"].includes(type)) setLoading(false);
+    if (type === "open" || type === "open-backend-test") {
+      replacementPending = [...pendingActions.values()].some(
+        (pending) => pending === "open" || pending === "open-backend-test",
+      );
+      setLoading(replacementPending);
+    }
   }
 }
 
@@ -112,11 +130,16 @@ function newAction(action) {
 function requestAction(type, action, parameters = {}) {
   const entry = newAction(action);
   pendingActions.set(entry.id, type);
-  if (["open", "open-backend-test"].includes(type)) setLoading(true);
+  if (type === "open" || type === "open-backend-test") {
+    replacementPending = true;
+    setLoading(true);
+  }
   vscode.postMessage({ type, ...parameters, actionId: entry.id });
 }
 
 function setLoading(pending, message = "") {
+  byId("load-progress").hidden = !pending;
+  byId("model-view").setAttribute("aria-busy", String(pending));
   for (const id of ["open-model", "open-backend-test"])
     byId(id).disabled = pending;
   for (const id of [
@@ -289,14 +312,25 @@ function tensorLabel(parent, x, y, name, length, anchor = "middle") {
   const title = element("title", {});
   const value = element("tspan", {});
   text.append(title, value);
-  tensorLabels.push({
+  const entry = {
     names: Array.isArray(name) ? name : [name],
     text,
     title,
     value,
     length,
-  });
+  };
+  tensorLabels.push(entry);
+  updateTensorLabel(entry);
   return text;
+}
+
+function updateTensorLabel({ names, text, title, value, length }) {
+  const description = names.map(tensorDescription).join(" | ");
+  title.textContent = names
+    .map((name) => `${name}: ${tensorDescription(name)}`)
+    .join("\n");
+  text.setAttribute("aria-label", description);
+  value.textContent = shortName(description, length);
 }
 
 function countUpdates(previous, current, key) {
@@ -318,14 +352,7 @@ function updateTensorInformation(tensors) {
     "name",
   );
   tensorInformation = new Map(tensors.map((tensor) => [tensor.name, tensor]));
-  for (const { names, text, title, value, length } of tensorLabels) {
-    const description = names.map(tensorDescription).join(" | ");
-    title.textContent = names
-      .map((name) => `${name}: ${tensorDescription(name)}`)
-      .join("\n");
-    text.setAttribute("aria-label", description);
-    value.textContent = shortName(description, length);
-  }
+  for (const entry of tensorLabels) updateTensorLabel(entry);
   return updates;
 }
 
@@ -345,9 +372,21 @@ function refreshPositions() {
   fit();
 }
 
-function refreshStatus(pending, message = "") {
+function refreshButtonStatus(id, status, message) {
+  const button = byId(id);
+  button.dataset.defaultTitle ??= button.title;
+  button.dataset.refreshStatus = status;
+  button.title = message || button.dataset.defaultTitle;
+}
+
+function refreshStatus(
+  pending,
+  message = "",
+  status = pending ? RefreshStatus.PENDING : RefreshStatus.IDLE,
+) {
   byId("refresh-shapes").disabled = pending;
   byId("refresh-shapes").setAttribute("aria-busy", String(pending));
+  refreshButtonStatus("refresh-shapes", status, message);
   byId("shape-status").textContent = message;
   byId("shape-status").title = message;
   // Status changes can wrap the toolbar and resize the canvas.
@@ -468,18 +507,21 @@ function updateReleases() {
   for (const name of new Set([...releasedValues, ...next])) {
     const released = next.has(name);
     if (released === releasedValues.has(name)) continue;
-    for (const { path, text } of connectionsByName.get(name) ?? []) {
-      path.classList.toggle("released", released);
-      text.classList.toggle("released", released);
-      path.setAttribute(
-        "aria-label",
-        released
-          ? `${name}: releasable after ${inspectedView.node.name}`
-          : name,
-      );
-    }
+    for (const connection of connectionsByName.get(name) ?? [])
+      markReleased(connection, released);
   }
   releasedValues = next;
+  if (virtualized) drawCrossingConnections();
+}
+
+function markReleased({ path, text, name }, released) {
+  if (!path) return;
+  path.classList.toggle("released", released);
+  text.classList.toggle("released", released);
+  path.setAttribute(
+    "aria-label",
+    released ? `${name}: releasable after ${inspectedView.node.name}` : name,
+  );
 }
 
 function inspectMetadata() {
@@ -542,11 +584,17 @@ function inspectMetadata() {
   );
 }
 
-function metadataStatus(pending, message = "") {
+function metadataStatus(
+  pending,
+  message = "",
+  status = pending ? RefreshStatus.PENDING : RefreshStatus.IDLE,
+) {
   metadataPending = pending;
   byId("show-metadata").setAttribute("aria-busy", String(pending));
   byId("refresh-metadata").disabled = pending;
   byId("refresh-metadata").setAttribute("aria-busy", String(pending));
+  refreshButtonStatus("show-metadata", status, message);
+  refreshButtonStatus("refresh-metadata", status, message);
   byId("metadata-status").textContent = message;
   byId("metadata-status").title = message;
   if (gesture) gesture.viewport = undefined;
@@ -565,6 +613,7 @@ function acceptMetadata(metadata) {
   metadataStatus(
     false,
     `Metadata refreshed: ${updates} update${updates === 1 ? "" : "s"}`,
+    updates ? RefreshStatus.UPDATED : RefreshStatus.UNCHANGED,
   );
   byId("metadata-content").hidden = false;
   metadataEntries(byId("metadata-model"), metadata.model);
@@ -572,22 +621,25 @@ function acceptMetadata(metadata) {
   for (const label of unusedLabels) label.remove();
   unusedLabels = [];
   for (const { id, unusedOutputs } of metadata.nodes) {
-    if (!unusedOutputs.length) continue;
-    const view = nodeViews.get(id);
-    const text = label(
-      view.group,
-      view.initial.x,
-      view.initial.y - view.halfHeight + 17,
-      `Unused: ${unusedOutputs.length}`,
-      "unused-label",
-    );
-    text.append(
-      element("title", {}, `Unused outputs: ${unusedOutputs.join(", ")}`),
-    );
-    text.setAttribute("visibility", metadataVisible ? "visible" : "hidden");
-    unusedLabels.push(text);
+    addUnusedLabel(nodeViews.get(id), unusedOutputs);
   }
   inspectMetadata();
+}
+
+function addUnusedLabel(view, unusedOutputs = []) {
+  if (!view?.group || !unusedOutputs.length) return;
+  const text = label(
+    view.group,
+    view.initial.x,
+    view.initial.y - view.halfHeight + 17,
+    `Unused: ${unusedOutputs.length}`,
+    "unused-label",
+  );
+  text.append(
+    element("title", {}, `Unused outputs: ${unusedOutputs.join(", ")}`),
+  );
+  text.setAttribute("visibility", metadataVisible ? "visible" : "hidden");
+  unusedLabels.push(text);
 }
 
 function requestMetadata() {
@@ -649,30 +701,44 @@ function updateSelection(activeId, forceInspect = false) {
   for (const id of new Set([...renderedSelection, ...selected])) {
     const isSelected = selected.has(id);
     if (isSelected === renderedSelection.has(id)) continue;
-    const { group, node, subgraphs } = nodeViews.get(id);
-    group.classList.toggle("selected", isSelected);
-    if (subgraphs?.length) {
-      group.setAttribute(
-        "aria-label",
-        `${isSelected ? "Selected " : ""}${node.opType}: ${node.name}`,
-      );
-    } else {
-      group.setAttribute("aria-pressed", String(isSelected));
-    }
+    updateNodeSelection(nodeViews.get(id), isSelected);
   }
   renderedSelection = new Set(selected);
   const view = nodeViews.get(activeId ?? [...selected].at(-1));
   if (forceInspect || view !== inspectedView) inspect(view);
 }
 
+function updateNodeSelection({ group, node, subgraphs }, isSelected) {
+  if (!group) return;
+  group.classList.toggle("selected", isSelected);
+  if (subgraphs?.length)
+    group.setAttribute(
+      "aria-label",
+      `${isSelected ? "Selected " : ""}${node.opType}: ${node.name}`,
+    );
+  else group.setAttribute("aria-pressed", String(isSelected));
+}
+
 function registerNode(id, view) {
+  view.id = id;
   view.initial = { ...view.position };
   nodeViews.set(id, view);
+  if (!virtualized) mountNode(view);
+}
+
+function mountNode(view) {
+  const { id } = view;
+  view.group = view.create(view.initial);
   const { group } = view;
   group.setAttribute("tabindex", "0");
   group.setAttribute("role", view.subgraphs?.length ? "group" : "button");
   if (!view.subgraphs?.length) group.setAttribute("aria-pressed", "false");
   group.setAttribute("data-id", id);
+  updateNodeSelection(view, selected.has(id));
+  group.setAttribute(
+    "transform",
+    `translate(${view.position.x - view.initial.x} ${view.position.y - view.initial.y})`,
+  );
   group.addEventListener("click", (event) => {
     if (event.detail === 0) {
       selectNode(id, event.ctrlKey || event.metaKey || event.shiftKey);
@@ -684,6 +750,7 @@ function registerNode(id, view) {
       selectNode(id, event.ctrlKey || event.metaKey || event.shiftKey);
     }
   });
+  addUnusedLabel(view, nodeMetadata.get(id)?.unusedOutputs);
 }
 
 function selectNode(id, additive) {
@@ -698,15 +765,13 @@ function selectNode(id, additive) {
 }
 
 function updateConnection(connection) {
+  if (!connection.group) return;
   const { from, to, fromHeight, toHeight, path, text, information } =
     connection;
   const y1 = from.y + fromHeight;
   const y2 = to.y - toHeight;
   const middle = (y1 + y2) / 2;
-  path.setAttribute(
-    "d",
-    `M${from.x},${y1} C${from.x},${middle} ${to.x},${middle} ${to.x},${y2}`,
-  );
+  path.setAttribute("d", connectionPath(connection));
   text.setAttribute("x", (from.x + to.x) / 2 + 10);
   text.setAttribute("y", middle);
   information.setAttribute("x", (from.x + to.x) / 2 + 10);
@@ -714,6 +779,21 @@ function updateConnection(connection) {
 }
 
 function setVisible(view, group, visible) {
+  if (virtualized) {
+    visible &&= !overviewVisible;
+    if (visible) {
+      if (!view.group) {
+        if (view.node || view.port) mountNode(view);
+        else view.create();
+      }
+      if (!view.group.parentNode)
+        byId(view.node || view.port ? "nodes" : "edges").append(view.group);
+    } else {
+      view.group?.remove();
+    }
+    view.visible = visible;
+    return;
+  }
   if (view.visible === visible) return;
   view.visible = visible;
   group.setAttribute("display", visible ? "inline" : "none");
@@ -745,16 +825,42 @@ function updateNodeVisibility(view) {
 
 function updateConnectionVisibility(connection) {
   const { from, to, fromHeight, toHeight } = connection;
-  setVisible(
-    connection,
-    connection.group,
-    intersectsCamera(
-      Math.min(from.x, to.x),
-      Math.min(from.y + fromHeight, to.y - toHeight),
-      Math.max(from.x, to.x) + 240,
-      Math.max(from.y + fromHeight, to.y - toHeight) + 28,
-    ),
+  const visible = intersectsCamera(
+    Math.min(from.x, to.x),
+    Math.min(from.y + fromHeight, to.y - toHeight),
+    Math.max(from.x, to.x) + 240,
+    Math.max(from.y + fromHeight, to.y - toHeight) + 28,
   );
+  const middle = (from.y + fromHeight + to.y - toHeight) / 2;
+  const labelsVisible =
+    !virtualized ||
+    intersectsCamera(
+      (from.x + to.x) / 2,
+      middle,
+      (from.x + to.x) / 2 + 240,
+      middle + 28,
+    );
+  if (virtualized && !overviewVisible && visible && !labelsVisible)
+    crossingConnections.add(connection);
+  else crossingConnections.delete(connection);
+  setVisible(connection, connection.group, visible && labelsVisible);
+}
+
+function drawCrossingConnections() {
+  const normal = [];
+  const released = [];
+  for (const connection of crossingConnections)
+    (releasedValues.has(connection.name) ? released : normal).push(
+      connectionPath(connection),
+    );
+  for (const [id, segments] of [
+    ["crossing-edges", normal],
+    ["released-crossing-edges", released],
+  ]) {
+    const path = byId(id);
+    const data = segments.join(" ");
+    if (path.getAttribute("d") !== data) path.setAttribute("d", data);
+  }
 }
 
 function moveNodes(origins, dx, dy) {
@@ -769,7 +875,7 @@ function moveNodes(origins, dx, dy) {
     }
     view.position.x = origin.x + dx;
     view.position.y = origin.y + dy;
-    view.group.setAttribute(
+    view.group?.setAttribute(
       "transform",
       `translate(${view.position.x - view.initial.x} ${view.position.y - view.initial.y})`,
     );
@@ -782,6 +888,8 @@ function moveNodes(origins, dx, dy) {
     updateConnection(connection);
     updateConnectionVisibility(connection);
   }
+  if (origins.size) overviewDirty = true;
+  if (virtualized) drawCrossingConnections();
 }
 
 function endGesture(cancel = false) {
@@ -880,6 +988,10 @@ function reframe() {
 function fit() {
   const viewport = byId("canvas").getBoundingClientRect();
   if (viewport.width === 0 || viewport.height === 0) return;
+  if (readablePending) {
+    readableZoom();
+    return;
+  }
   const scale =
     Math.max(bounds.width / viewport.width, bounds.height / viewport.height) /
     zoom;
@@ -892,8 +1004,15 @@ function fit() {
     height,
   };
   svg.classList.toggle("overview", scale > 2);
+  overviewVisible = virtualized && scale > 2;
+  byId("graph-overview").setAttribute(
+    "display",
+    overviewVisible ? "inline" : "none",
+  );
+  if (overviewVisible && overviewDirty) drawOverview();
   for (const view of nodeViews.values()) updateNodeVisibility(view);
   for (const connection of connections) updateConnectionVisibility(connection);
+  drawCrossingConnections();
   svg.setAttribute("viewBox", `${camera.x} ${camera.y} ${width} ${height}`);
 }
 
@@ -901,6 +1020,30 @@ function setZoomAreaMode(active) {
   zoomAreaMode = active;
   byId("zoom-area").setAttribute("aria-pressed", String(active));
   svg.classList.toggle("zoom-area", active);
+}
+
+function connectionPath({ from, to, fromHeight, toHeight }) {
+  const y1 = from.y + fromHeight;
+  const y2 = to.y - toHeight;
+  const middle = (y1 + y2) / 2;
+  return `M${from.x},${y1} C${from.x},${middle} ${to.x},${middle} ${to.x},${y2}`;
+}
+
+function drawOverview() {
+  byId("overview-edges").setAttribute(
+    "d",
+    connections.map(connectionPath).join(" "),
+  );
+  byId("overview-nodes").setAttribute(
+    "d",
+    [...nodeViews.values()]
+      .map(
+        ({ position, halfWidth, halfHeight }) =>
+          `M${position.x - halfWidth},${position.y - halfHeight}h${halfWidth * 2}v${halfHeight * 2}h${-halfWidth * 2}Z`,
+      )
+      .join(" "),
+  );
+  overviewDirty = false;
 }
 
 function resetZoom() {
@@ -920,9 +1063,11 @@ function zoomToArea({ start, end, viewport, moved }) {
     (height * viewport.height) / camera.height < 3
   )
     return;
-  zoom =
+  zoom = Math.max(
+    0.25,
     Math.max(bounds.width / viewport.width, bounds.height / viewport.height) /
-    Math.max(width / viewport.width, height / viewport.height);
+      Math.max(width / viewport.width, height / viewport.height),
+  );
   pan = {
     x: (start.x + end.x) / 2 - bounds.x - bounds.width / 2,
     y: (start.y + end.y) / 2 - bounds.y - bounds.height / 2,
@@ -945,7 +1090,11 @@ function changeZoom(factor, anchor) {
 function readableZoom() {
   if (!hasModel) return;
   const viewport = byId("canvas").getBoundingClientRect();
-  if (!viewport.width || !viewport.height) return;
+  if (!viewport.width || !viewport.height) {
+    readablePending = true;
+    return;
+  }
+  readablePending = false;
   endGesture();
   zoom = Math.max(
     bounds.width / viewport.width,
@@ -962,6 +1111,31 @@ function readableZoom() {
   fit();
 }
 
+function findNode(event) {
+  event.preventDefault();
+  const query = byId("node-search").value.trim().toLowerCase();
+  const matches = query
+    ? [...nodeViews.values()].filter(
+        ({ node }) =>
+          node &&
+          (node.name.toLowerCase().includes(query) ||
+            node.opType.toLowerCase().includes(query)),
+      )
+    : [];
+  if (!matches.length) {
+    byId("node-search-result").textContent = query
+      ? "No matching node"
+      : "Enter a name or operator";
+    return;
+  }
+  const index = (matches.indexOf(inspectedView) + 1) % matches.length;
+  const view = matches[index];
+  selected = new Set([view.id]);
+  updateSelection(view.id);
+  readableZoom();
+  byId("node-search-result").textContent = `${index + 1} / ${matches.length}`;
+}
+
 function navigate(path) {
   endGesture();
   byId("navigation-status").textContent = "Opening graph…";
@@ -972,7 +1146,8 @@ function navigate(path) {
 
 function render(graph, metadata) {
   hasModel = true;
-  setLoading(false);
+  byId("node-search-result").textContent = "";
+  if (!replacementPending) setLoading(false);
   endGesture();
   refreshStatus(false);
   svg.setAttribute("aria-busy", "false");
@@ -1003,6 +1178,15 @@ function render(graph, metadata) {
   connectionsByPosition = new Map();
   connections = [];
   camera = undefined;
+  virtualized =
+    graph.nodes.length + graph.inputs.length + graph.outputs.length > 1000;
+  overviewVisible = false;
+  overviewDirty = true;
+  crossingConnections = new Set();
+  readablePending = false;
+  byId("graph-overview").setAttribute("display", "none");
+  byId("overview-edges").removeAttribute("d");
+  byId("overview-nodes").removeAttribute("d");
   hasOperators = graph.nodes.length > 0;
   graphMetadata = undefined;
   nodeMetadata = new Map();
@@ -1061,30 +1245,40 @@ function render(graph, metadata) {
       x: ((index + 1) * bounds.width) / (count + 1),
       y: output ? bounds.height - 60 : 60,
     };
-    const group = element("g", {
-      class: `port${output ? " output" : ""}`,
-      "aria-label": `${output ? "Output" : "Input"}: ${name}`,
-    });
-    group.append(
-      element("title", {}, name),
-      element("rect", {
-        x: position.x - 60,
-        y: position.y - 26,
-        width: 120,
-        height: 52,
-        rx: 9,
-      }),
-    );
-    label(group, position.x, position.y - 3, shortName(name, 16), "port-name");
-    tensorLabel(group, position.x, position.y + 15, name, 18);
-    registerNode(`${output ? "output" : "input"}-${index}`, {
+    const create = (position) => {
+      const group = element("g", {
+        class: `port${output ? " output" : ""}`,
+        "aria-label": `${output ? "Output" : "Input"}: ${name}`,
+      });
+      group.append(
+        element("title", {}, name),
+        element("rect", {
+          x: position.x - 60,
+          y: position.y - 26,
+          width: 120,
+          height: 52,
+          rx: 9,
+        }),
+      );
+      label(
+        group,
+        position.x,
+        position.y - 3,
+        shortName(name, 16),
+        "port-name",
+      );
+      tensorLabel(group, position.x, position.y + 15, name, 18);
+      return group;
+    };
+    const id = `${output ? "output" : "input"}-${index}`;
+    registerNode(id, {
       port: { name, output },
-      group,
+      create,
       position,
       halfWidth: 60,
       halfHeight: 26,
     });
-    nodes.append(group);
+    if (!virtualized) nodes.append(nodeViews.get(id).group);
     return position;
   };
   const inputPositions = new Map(
@@ -1092,29 +1286,43 @@ function render(graph, metadata) {
   );
   const connect = (from, to, name, fromHeight, toHeight) => {
     if (!from || !to) return;
-    const group = element("g", {});
-    edges.append(group);
-    const path = element("path", { class: "edge" });
-    group.append(path);
-    const text = label(
-      group,
-      0,
-      0,
-      shortName(name, 15),
-      "tensor-label",
-      "start",
-    );
-    const information = tensorLabel(group, 0, 0, name, 34, "start");
     const connection = {
-      group,
       from,
       to,
+      name,
       fromHeight,
       toHeight,
-      path,
-      text,
-      information,
+      create() {
+        const group = element("g", {});
+        const path = element("path", { class: "edge" });
+        group.append(path);
+        const text = label(
+          group,
+          0,
+          0,
+          shortName(name, 15),
+          "tensor-label",
+          "start",
+        );
+        const information = tensorLabel(group, 0, 0, name, 34, "start");
+        Object.assign(connection, {
+          group,
+          from,
+          to,
+          fromHeight,
+          toHeight,
+          path,
+          text,
+          information,
+        });
+        updateConnection(connection);
+        markReleased(connection, releasedValues.has(name));
+      },
     };
+    if (!virtualized) {
+      connection.create();
+      edges.append(connection.group);
+    }
     connections.push(connection);
     if (!connectionsByName.has(name)) connectionsByName.set(name, []);
     connectionsByName.get(name).push(connection);
@@ -1124,131 +1332,133 @@ function render(graph, metadata) {
       }
       connectionsByPosition.get(position).add(connection);
     }
-    updateConnection(connection);
   };
   for (const node of graph.nodes) {
     const position = positions.get(node.id);
     const size = sizes.get(node.id);
-    const top = position.y - size.height / 2;
-    const group = element("g", {
-      class: "graph-node",
-      "aria-label": `${node.opType}: ${node.name}`,
-    });
-    group.append(
-      element("title", {}, `${node.name} (${node.opType})`),
-      element("rect", {
-        x: position.x - size.width / 2,
-        y: top,
-        width: size.width,
-        height: size.height,
-        rx: 12,
-      }),
-    );
-    const typeLabel = label(
-      group,
-      position.x,
-      top + 41,
-      node.opType,
-      "operator-label",
-    );
-    typeLabel.style.fontSize = `${size.typeFontSize}px`;
-    const nameLabel = label(
-      group,
-      position.x,
-      top + 61,
-      node.name,
-      "operator-name",
-    );
-    nameLabel.style.fontSize = `${size.nameFontSize}px`;
-    if (node.outputs.length) {
-      const information = tensorLabel(
-        group,
-        position.x,
-        top + 81,
-        node.outputs,
-        26,
-      );
-      information.classList.add("node-tensor-info");
-    }
-    size.initializers.forEach((parameter, index) => {
-      const text = label(
-        group,
-        position.x - size.width / 2 + 12,
-        top + 99 + index * 18,
-        parameter.text,
-        "tensor-info node-initializer",
-        "start",
-      );
-      text.style.fontSize = `${Math.min(9, (10 * (size.width - 24)) / (parameter.textWidth || 1))}px`;
-      text.setAttribute("aria-label", parameter.description);
-      text.append(element("title", {}, parameter.description));
-    });
-    size.subgraphs.forEach((graph, index) => {
-      const y = top + 94 + size.initializers.length * 18 + index * 22;
-      const link = element("g", {
-        class: "subgraph-link",
-        role: "button",
-        tabindex: "0",
-        "aria-label": `Open ${graph.label}: ${graph.name}`,
+    const create = (position) => {
+      const top = position.y - size.height / 2;
+      const group = element("g", {
+        class: "graph-node",
+        "aria-label": `${node.opType}: ${node.name}`,
       });
-      link.append(
-        element("title", {}, `${graph.name} (${graph.nodeCount} nodes)`),
+      group.append(
+        element("title", {}, `${node.name} (${node.opType})`),
         element("rect", {
-          x: position.x - size.width / 2 + 3,
-          y,
-          width: size.width - 6,
-          height: 21,
-          rx: 4,
+          x: position.x - size.width / 2,
+          y: top,
+          width: size.width,
+          height: size.height,
+          rx: 12,
         }),
       );
-      const text = label(
-        link,
-        position.x - size.width / 2 + 12,
-        y + 15,
-        graph.label,
-        "subgraph-label",
-        "start",
+      const typeLabel = label(
+        group,
+        position.x,
+        top + 41,
+        node.opType,
+        "operator-label",
       );
-      text.style.fontSize = `${Math.min(10, (10 * (size.width - 48)) / (graph.textWidth || 1))}px`;
-      label(
-        link,
-        position.x + size.width / 2 - 12,
-        y + 15,
-        ">",
-        "subgraph-label",
-        "end",
+      typeLabel.style.fontSize = `${size.typeFontSize}px`;
+      const nameLabel = label(
+        group,
+        position.x,
+        top + 61,
+        node.name,
+        "operator-name",
       );
-      let suppressPointerClick = false;
-      link.addEventListener("pointerdown", (event) => {
-        suppressPointerClick = zoomAreaMode || event.altKey;
-        if (!suppressPointerClick) event.stopPropagation();
+      nameLabel.style.fontSize = `${size.nameFontSize}px`;
+      if (node.outputs.length) {
+        const information = tensorLabel(
+          group,
+          position.x,
+          top + 81,
+          node.outputs,
+          26,
+        );
+        information.classList.add("node-tensor-info");
+      }
+      size.initializers.forEach((parameter, index) => {
+        const text = label(
+          group,
+          position.x - size.width / 2 + 12,
+          top + 99 + index * 18,
+          parameter.text,
+          "tensor-info node-initializer",
+          "start",
+        );
+        text.style.fontSize = `${Math.min(9, (10 * (size.width - 24)) / (parameter.textWidth || 1))}px`;
+        text.setAttribute("aria-label", parameter.description);
+        text.append(element("title", {}, parameter.description));
       });
-      link.addEventListener("click", (event) => {
-        event.stopPropagation();
-        if (suppressPointerClick) {
-          suppressPointerClick = false;
-          if (event.detail > 0) return;
-        }
-        if (svg.getAttribute("aria-busy") !== "true") navigate(graph.path);
-      });
-      link.addEventListener("keydown", (event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
+      size.subgraphs.forEach((graph, index) => {
+        const y = top + 94 + size.initializers.length * 18 + index * 22;
+        const link = element("g", {
+          class: "subgraph-link",
+          role: "button",
+          tabindex: "0",
+          "aria-label": `Open ${graph.label}: ${graph.name}`,
+        });
+        link.append(
+          element("title", {}, `${graph.name} (${graph.nodeCount} nodes)`),
+          element("rect", {
+            x: position.x - size.width / 2 + 3,
+            y,
+            width: size.width - 6,
+            height: 21,
+            rx: 4,
+          }),
+        );
+        const text = label(
+          link,
+          position.x - size.width / 2 + 12,
+          y + 15,
+          graph.label,
+          "subgraph-label",
+          "start",
+        );
+        text.style.fontSize = `${Math.min(10, (10 * (size.width - 48)) / (graph.textWidth || 1))}px`;
+        label(
+          link,
+          position.x + size.width / 2 - 12,
+          y + 15,
+          ">",
+          "subgraph-label",
+          "end",
+        );
+        let suppressPointerClick = false;
+        link.addEventListener("pointerdown", (event) => {
+          suppressPointerClick = zoomAreaMode || event.altKey;
+          if (!suppressPointerClick) event.stopPropagation();
+        });
+        link.addEventListener("click", (event) => {
           event.stopPropagation();
+          if (suppressPointerClick) {
+            suppressPointerClick = false;
+            if (event.detail > 0) return;
+          }
           if (svg.getAttribute("aria-busy") !== "true") navigate(graph.path);
-        }
+        });
+        link.addEventListener("keydown", (event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            event.stopPropagation();
+            if (svg.getAttribute("aria-busy") !== "true") navigate(graph.path);
+          }
+        });
+        group.append(link);
       });
-      group.append(link);
-    });
+      return group;
+    };
     registerNode(node.id, {
       node,
-      group,
+      create,
       position,
       halfWidth: size.width / 2,
       halfHeight: size.height / 2,
       subgraphs: size.subgraphs,
     });
-    nodes.append(group);
+    if (!virtualized) nodes.append(nodeViews.get(node.id).group);
     for (const input of [...node.inputs, ...(node.captures ?? [])]) {
       const producer = producers.get(input);
       connect(
@@ -1270,12 +1480,14 @@ function render(graph, metadata) {
       26,
     );
   });
+  overviewDirty = true;
   zoom = 1;
   pan = { x: 0, y: 0 };
-  fit();
   if (graph.nodes.length) selected.add(graph.nodes[0].id);
   updateTensorInformation(graph.tensors ?? []);
   updateSelection(undefined, true);
+  if (virtualized) readableZoom();
+  else fit();
   byId("refresh-positions").disabled = false;
   if (metadata) acceptMetadata(metadata);
   else if (metadataVisible) requestMetadata();
@@ -1373,6 +1585,7 @@ byId("canvas").addEventListener("keydown", (event) => {
     event.ctrlKey ||
     event.metaKey ||
     event.altKey ||
+    event.target.closest("#find-node") ||
     !hasModel
   )
     return;
@@ -1448,6 +1661,7 @@ byId("zoom-out").addEventListener("click", () => {
   changeZoom(1 / 1.25);
 });
 byId("zoom-readable").addEventListener("click", readableZoom);
+byId("find-node").addEventListener("submit", findNode);
 byId("zoom-fit").addEventListener("click", resetZoom);
 byId("zoom-area").addEventListener("click", () => {
   const active = !zoomAreaMode;
@@ -1514,6 +1728,11 @@ window.addEventListener("message", (event) => {
       event.data.error ? `Could not open model: ${event.data.error}` : "",
     );
   } else if (event.data?.type === "load-error") {
+    replacementPending = false;
+    for (const [id, type] of pendingActions) {
+      if (type === "open" || type === "open-backend-test")
+        pendingActions.delete(id);
+    }
     setLoading(false, `Could not open model: ${event.data.error}`);
   } else if (event.data?.type === "graph") {
     render(event.data.graph, event.data.metadata);
@@ -1525,16 +1744,25 @@ window.addEventListener("message", (event) => {
   } else if (event.data?.type === "metadata-info") {
     acceptMetadata(event.data.metadata);
   } else if (event.data?.type === "metadata-error") {
-    metadataStatus(false, `Metadata analysis failed: ${event.data.error}`);
+    metadataStatus(
+      false,
+      `Metadata analysis failed: ${event.data.error}`,
+      RefreshStatus.FAILED,
+    );
   } else if (event.data?.type === "shape-info") {
     const updates = updateTensorInformation(event.data.tensors);
     inspect(inspectedView);
     refreshStatus(
       false,
       `Shapes/types refreshed: ${updates} tensor${updates === 1 ? "" : "s"} updated`,
+      updates ? RefreshStatus.UPDATED : RefreshStatus.UNCHANGED,
     );
   } else if (event.data?.type === "shape-error") {
-    refreshStatus(false, `Shape/type inference failed: ${event.data.error}`);
+    refreshStatus(
+      false,
+      `Shape/type inference failed: ${event.data.error}`,
+      RefreshStatus.FAILED,
+    );
   }
 });
 setLoading(true);

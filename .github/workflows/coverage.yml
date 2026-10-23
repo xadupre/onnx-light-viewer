@@ -1,0 +1,82 @@
+name: Nightly coverage
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  coverage:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: docs/requirements.txt
+      - run: npm ci
+      - name: Install coverage and Python dependencies
+        run: |
+          python -m pip install coverage==7.17.0 gcovr==8.7 -r docs/requirements.txt \
+            "https://github.com/xadupre/onnx-light/releases/download/0.2.0/onnx_light-0.2.0-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl#sha256=3fe8ed7d34589cd9305894bc2081c9753227fd7d0cf0dd21de7b49a1fa5226df"
+      - name: Collect Python coverage
+        env:
+          COVERAGE_FILE: build/coverage/.coverage
+        run: |
+          mkdir -p build/coverage
+          python -m coverage run --branch --source=examples,test/models,docs test/models/generate_models.py
+          python -m coverage run --append --branch --source=examples,test/models,docs examples/generate_tiny_llm.py
+          python -m coverage run --append --branch --source=examples,test/models,docs -m sphinx -n -W --keep-going -b html docs build/docs/html
+          python -m coverage xml -o build/coverage/python.xml
+      - name: Build with native coverage instrumentation
+        env:
+          CC: gcc
+          CXX: g++
+        run: |
+          npm exec -- cmake-js rebuild --out build/native --parallel "$(nproc)" \
+            --CDCMAKE_CXX_FLAGS_RELEASE="--coverage -O0 -g -DNDEBUG" \
+            --CDCMAKE_SHARED_LINKER_FLAGS=--coverage
+          npm exec -- tsc -p .
+      - name: Run tests with TypeScript coverage
+        run: |
+          npm exec --yes --package=c8@12.0.0 -- c8 --all --src dist \
+            --exclude 'test/**' --exclude 'media/**' --exclude 'scripts/**' \
+            --reporter=lcov --reporter=text --reports-dir=build/coverage/typescript \
+            node --test test/*.test.cjs
+      - name: Generate C++ coverage report
+        run: python -m gcovr --root . --filter 'native/' --cobertura build/coverage/cpp.xml build/native
+      - name: Upload TypeScript coverage
+        uses: codecov/codecov-action@v5.5.3
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: build/coverage/typescript/lcov.info
+          flags: typescript
+          disable_search: true
+          fail_ci_if_error: true
+      - name: Upload C++ coverage
+        uses: codecov/codecov-action@v5.5.3
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: build/coverage/cpp.xml
+          flags: cpp
+          disable_search: true
+          fail_ci_if_error: true
+      - name: Upload Python coverage
+        uses: codecov/codecov-action@v5.5.3
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: build/coverage/python.xml
+          flags: python
+          disable_search: true
+          fail_ci_if_error: true
