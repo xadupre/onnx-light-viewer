@@ -192,11 +192,12 @@ storage alive.
 The display filename is only a label, separate from the local loader's file path.
 Neither loading nor refreshing saves the model or opens external weight files.
 Initializer snapshots contain type, dimensions and storage locations, plus
-formatted values for available embedded tensors with fewer than 16 elements.
-Raw and typed payloads are decoded without converting 64-bit integers to
-JavaScript numbers. Sparse previews contain stored values and indices when
-both components also fit the limit. String previews retain at most 128 bytes
-per element. Attribute previews are bounded separately.
+formatted values for available dense embedded tensors with fewer than 16
+elements. Raw and typed payloads are decoded without converting 64-bit integers
+to JavaScript numbers. Floating-point previews use float or double precision as
+appropriate. Sparse previews contain stored values and indices when both components fit the
+limit, independently of the logical dense shape. String previews retain at most
+128 bytes per element. Attribute previews are bounded separately.
 
 Graph projection and nested scopes
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

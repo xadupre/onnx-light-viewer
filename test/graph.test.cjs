@@ -786,6 +786,10 @@ test("previews fewer than 16 initializer elements with raw decoding and exact in
   );
   const expected = {
     typed_floats: "[0.5, -2, 3]",
+    precision_float: "[0.100000001]",
+    precision_double: "[0.10000000000000001]",
+    precision_complex64: "[(0.100000001, -0.200000003)]",
+    precision_complex128: "[(0.10000000000000001, -0.20000000000000001)]",
     raw_fifteen: `[${Array.from({ length: 15 }, (_, index) => index).join(", ")}]`,
     raw_int64: "[1152921504606846977, -1152921504606846979]",
     int64_fifteen: `[${Array.from({ length: 15 }, (_, index) => index).join(", ")}]`,
@@ -805,6 +809,7 @@ test("previews fewer than 16 initializer elements with raw decoding and exact in
     float6: "[1, 2, 3]",
     complex_fifteen: `[${Array(15).fill("(0.5, -1)").join(", ")}]`,
     tiny_sparse: "values: [0.5, 2]; indices: [0, 3]",
+    large_sparse: "values: [0.5, 2]; indices: [0, 999999]",
   };
   const streamed = await loadModelFile(
     path.join(__dirname, "models", "tiny-initializers.onnx"),
@@ -822,8 +827,33 @@ test("previews fewer than 16 initializer elements with raw decoding and exact in
       assert.equal(values[name], value, name);
     assert.equal(values.sixteen, undefined);
     assert.equal(values.external, undefined);
+    assert.equal(values.wide_sparse_indices, undefined);
+    assert.equal(values.sparse_sixteen, undefined);
   }
+  assert.deepEqual(parameters.large_sparse.shape, ["1000000"]);
   assert.equal(parameters.long_string.value, `["${"x".repeat(128)}"...]`);
+});
+
+test("identifies malformed string initializer counts in native preview errors", () => {
+  const tensor = Buffer.concat([
+    varintField(1, 2),
+    varintField(2, 8),
+    bytesField(8, "broken_labels"),
+    bytesField(6, "only one value"),
+  ]);
+  const bytes = Buffer.concat([
+    varintField(1, 9),
+    bytesField(7, bytesField(5, tensor)),
+  ]);
+  for (const graph of [
+    () => decodeGraph(bytes, "malformed-strings.onnx"),
+    () => loadModel(bytes, "malformed-strings.onnx").graph(),
+  ]) {
+    assert.throws(
+      graph,
+      /Initializer 'broken_labels'.*expected 2 elements, got 1/,
+    );
+  }
 });
 
 test("the bundled tiny language model preserves symbolic batch/sequence dimensions through attention inference", () => {

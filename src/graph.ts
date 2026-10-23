@@ -60,7 +60,7 @@ export interface GraphInitializer {
   storage: InitializerStorage;
   /** Present for sparse initializers, describing their indices tensor. */
   indicesStorage?: InitializerStorage;
-  /** Values for inline tensors with fewer than 16 elements; preserves integer precision. */
+  /** Inline values (<16 elements per dense tensor or sparse component), with exact integers. */
   value?: string;
 }
 

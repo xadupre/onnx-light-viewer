@@ -239,6 +239,10 @@ def raw_initializer(name, dtype, shape, data):
 
 tiny_initializers = [
     helper.make_tensor("typed_floats", TensorProto.FLOAT, [3], [0.5, -2.0, 3.0]),
+    helper.make_tensor("precision_float", TensorProto.FLOAT, [1], [0.1]),
+    helper.make_tensor("precision_double", TensorProto.DOUBLE, [1], [0.1]),
+    raw_initializer("precision_complex64", TensorProto.COMPLEX64, [1], pack("<ff", 0.1, -0.2)),
+    raw_initializer("precision_complex128", TensorProto.COMPLEX128, [1], pack("<dd", 0.1, -0.2)),
     raw_initializer("raw_fifteen", TensorProto.FLOAT, [3, 5], pack("<15f", *range(15))),
     raw_initializer("sixteen", TensorProto.FLOAT, [16], pack("<16f", *range(16))),
     raw_initializer("raw_int64", TensorProto.INT64, [2], pack("<qq", 2**60 + 1, -(2**60) - 3)),
@@ -272,7 +276,8 @@ tiny_model = helper.make_model(
         [
             helper.make_node(
                 "Inspect",
-                [tensor.name for tensor in tiny_initializers] + ["tiny_sparse"],
+                [tensor.name for tensor in tiny_initializers]
+                + ["tiny_sparse", "large_sparse", "wide_sparse_indices", "sparse_sixteen"],
                 ["y"],
                 domain="example",
             )
@@ -286,7 +291,22 @@ tiny_model = helper.make_model(
                 helper.make_tensor("tiny_sparse", TensorProto.FLOAT, [2], [0.5, 2.0]),
                 helper.make_tensor("indices", TensorProto.INT64, [2], [0, 3]),
                 [4],
-            )
+            ),
+            helper.make_sparse_tensor(
+                helper.make_tensor("large_sparse", TensorProto.FLOAT, [2], [0.5, 2.0]),
+                helper.make_tensor("indices", TensorProto.INT64, [2], [0, 999999]),
+                [1000000],
+            ),
+            helper.make_sparse_tensor(
+                helper.make_tensor("wide_sparse_indices", TensorProto.FLOAT, [1], [1.0]),
+                helper.make_tensor("indices", TensorProto.INT64, [1, 16], [0] * 16),
+                [1] * 16,
+            ),
+            helper.make_sparse_tensor(
+                helper.make_tensor("sparse_sixteen", TensorProto.FLOAT, [16], [1.0] * 16),
+                helper.make_tensor("indices", TensorProto.INT64, [16], list(range(16))),
+                [1000000],
+            ),
         ],
     ),
     ir_version=9,

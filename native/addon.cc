@@ -814,10 +814,17 @@ std::optional<std::string> TinyTensorValues(const ol::TensorProto &tensor) {
       tensor.string_data().empty())
     return std::nullopt;
   std::stringstream values;
-  values << std::setprecision(std::numeric_limits<double>::max_digits10) << "[";
+  values << std::setprecision(tensor.data_type() == ol::TensorProto::DOUBLE ||
+                                      tensor.data_type() == ol::TensorProto::COMPLEX128
+                                  ? std::numeric_limits<double>::max_digits10
+                                  : std::numeric_limits<float>::max_digits10)
+         << "[";
   if (tensor.data_type() == ol::TensorProto::STRING) {
     if (tensor.string_data().size() != *count)
-      throw std::runtime_error("Initializer string values do not match its shape.");
+      throw std::runtime_error("Initializer '" + std::string(tensor.name()) +
+                               "' string values do not match its shape: expected " +
+                               std::to_string(*count) + " elements, got " +
+                               std::to_string(tensor.string_data().size()) + ".");
     for (size_t index = 0; index < *count; ++index) {
       const auto &text = tensor.string_data(index);
       values << (index ? ", " : "") << std::quoted(std::string(text.substr(0, 128)));
@@ -1083,12 +1090,10 @@ Napi::Object ModelGraph(Napi::Env env, const ol::ModelProto &model, const std::s
             InitializerInformation(env, name, tensor.values().data_type(), tensor.dims(), true);
         parameter.Set("storage", StorageInformation(env, tensor.values()));
         parameter.Set("indicesStorage", StorageInformation(env, tensor.indices()));
-        if (TinyElementCount(tensor.dims())) {
-          const auto values = TinyTensorValues(tensor.values());
-          const auto indices = TinyTensorValues(tensor.indices());
-          if (values && indices)
-            parameter.Set("value", "values: " + *values + "; indices: " + *indices);
-        }
+        const auto values = TinyTensorValues(tensor.values());
+        const auto indices = TinyTensorValues(tensor.indices());
+        if (values && indices)
+          parameter.Set("value", "values: " + *values + "; indices: " + *indices);
         parameters.emplace(name, parameter);
       }
     }
