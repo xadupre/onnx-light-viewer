@@ -79,7 +79,7 @@
     "test": "npm run compile && node --test test/*.test.cjs"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0",
+    "@types/node": "^26.6.5",
     "@types/vscode": "^1.96.0",
     "cmake-js": "^8.0.0",
     "jsdom": "^27.0.0",
