@@ -203,43 +203,40 @@ async function readGraph(
 }
 
 async function assertSaveDestination(
-  source: vscode.Uri | undefined,
+  sources: readonly vscode.Uri[],
   destination: vscode.Uri,
 ): Promise<void> {
-  if (!source || source.scheme !== destination.scheme) return;
-  const samePath =
-    process.platform === "win32"
-      ? source.path.toLowerCase() === destination.path.toLowerCase()
-      : source.path === destination.path;
-  let sameFile = false;
-  if (!samePath && source.scheme === "file") {
-    const existingFile = async (uri: vscode.Uri) => {
-      try {
-        return await stat(uri.fsPath, { bigint: true });
-      } catch (error) {
-        if (
-          error instanceof Error &&
-          "code" in error &&
-          error.code === "ENOENT"
-        )
-          return undefined;
-        throw error;
-      }
-    };
-    const [original, target] = await Promise.all([
-      existingFile(source),
-      existingFile(destination),
-    ]);
-    sameFile =
-      original !== undefined &&
-      target !== undefined &&
-      original.dev === target.dev &&
-      original.ino === target.ino;
-  }
-  if (samePath || sameFile)
+  const reject = () => {
     throw new Error(
-      "Choose a different destination to preserve the source model.",
+      "Choose a different destination to preserve the source model and its external weights.",
     );
+  };
+  for (const source of sources) {
+    if (source.scheme !== destination.scheme) continue;
+    const samePath =
+      process.platform === "win32"
+        ? source.path.toLowerCase() === destination.path.toLowerCase()
+        : source.path === destination.path;
+    if (samePath) reject();
+  }
+  if (destination.scheme !== "file") return;
+  const existingFile = async (uri: vscode.Uri) => {
+    try {
+      return await stat(uri.fsPath, { bigint: true });
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "ENOENT")
+        return undefined;
+      throw error;
+    }
+  };
+  const target = await existingFile(destination);
+  if (!target) return;
+  for (const source of sources) {
+    if (source.scheme !== "file") continue;
+    const original = await existingFile(source);
+    if (original && original.dev === target.dev && original.ino === target.ino)
+      reject();
+  }
 }
 
 /** Publishes a complete file only while the originating model is still current. */
@@ -715,7 +712,7 @@ async function configurePanel(
               if (!destination || !active || model !== current)
                 return cancelled();
               const source = current.source?.uri;
-              await assertSaveDestination(source, destination);
+              await assertSaveDestination(source ? [source] : [], destination);
               const isCurrent = () => active && model === current;
               const native = await nativeModel(current, log, () => {
                 void sendStatus();
@@ -735,6 +732,18 @@ async function configurePanel(
                     weights: [],
                   };
               if (!active || model !== current) return cancelled();
+              const sources = source
+                ? [
+                    source,
+                    ...native
+                      .externalDataLocations()
+                      .map((location) =>
+                        vscode.Uri.joinPath(source, "..", location),
+                      ),
+                  ]
+                : [];
+              await assertSaveDestination(sources, destination);
+              if (!isCurrent()) return cancelled();
               const writtenWeights: vscode.Uri[] = [];
               let committed = false;
               try {
@@ -753,7 +762,7 @@ async function configurePanel(
                   true,
                   async () => {
                     if (!isCurrent()) return false;
-                    await assertSaveDestination(source, destination);
+                    await assertSaveDestination(sources, destination);
                     return isCurrent();
                   },
                 );

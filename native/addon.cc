@@ -1539,10 +1539,15 @@ void ReadEncryptedModel(ol::ModelProto &model, const std::string &bytes,
                           &written) != 1)
     throw std::runtime_error("Could not decrypt the ONNX model: wrong password or damaged file.");
   output_size += static_cast<size_t>(written);
-  has_training_info =
-      HasTrainingInfo(reinterpret_cast<const uint8_t *>(plaintext.data()), output_size);
-  ol::utils::StringStream stream(plaintext.data(), output_size);
-  ReadModel(model, stream, ol::ParseOptions{});
+  try {
+    has_training_info =
+        HasTrainingInfo(reinterpret_cast<const uint8_t *>(plaintext.data()), output_size);
+    ol::utils::StringStream stream(plaintext.data(), output_size);
+    ReadModel(model, stream, ol::ParseOptions{});
+  } catch (const std::exception &) {
+    // Parser diagnostics can contain nearby plaintext bytes.
+    throw std::runtime_error("Could not decode the decrypted ONNX model.");
+  }
 #else
   (void)model;
   (void)bytes;
@@ -1552,8 +1557,16 @@ void ReadEncryptedModel(ol::ModelProto &model, const std::string &bytes,
 #endif
 }
 
-void LoadExternalTensor(ol::TensorProto &tensor, const std::filesystem::path &directory) {
+std::string ExternalDataLocation(const ol::TensorProto &tensor) {
   std::string location;
+  for (const auto &entry : tensor.external_data())
+    if (entry.key() == "location")
+      location = entry.value();
+  return location;
+}
+
+void LoadExternalTensor(ol::TensorProto &tensor, const std::filesystem::path &directory) {
+  const auto location = ExternalDataLocation(tensor);
   int64_t offset = 0;
   int64_t length = -1;
   const auto number = [](std::string_view text) {
@@ -1564,9 +1577,7 @@ void LoadExternalTensor(ol::TensorProto &tensor, const std::filesystem::path &di
     return value;
   };
   for (const auto &entry : tensor.external_data()) {
-    if (entry.key() == "location")
-      location = entry.value();
-    else if (entry.key() == "offset")
+    if (entry.key() == "offset")
       offset = number(std::string_view(entry.value()));
     else if (entry.key() == "length" || entry.key() == "size")
       length = number(std::string_view(entry.value()));
@@ -1816,6 +1827,33 @@ private:
 /** Method closures share ownership, even if JavaScript retains only one method. */
 Napi::Object ModelHandle(Napi::Env env, std::shared_ptr<StoredModel> model) {
   auto result = Napi::Object::New(env);
+  result.Set("externalDataLocations",
+             Napi::Function::New(env, [model](const Napi::CallbackInfo &call) -> Napi::Value {
+               try {
+                 if (call.Length() != 0)
+                   throw std::runtime_error("Expected no external-data location arguments.");
+                 std::set<const ol::TensorProto *> omitted;
+                 for (const auto &payload : model->skipped) {
+                   const auto *tensor = FindTensor(*model->model, payload);
+                   if (!tensor)
+                     throw std::runtime_error("Could not locate an omitted tensor payload.");
+                   omitted.insert(tensor);
+                 }
+                 std::set<std::string> locations;
+                 for (const auto *tensor : ModelSaveTensors(*model->model))
+                   if (tensor->data_location() == ol::TensorProto::EXTERNAL &&
+                       !omitted.contains(tensor))
+                     locations.insert(ExternalDataLocation(*tensor));
+                 auto values = Napi::Array::New(call.Env(), locations.size());
+                 uint32_t index = 0;
+                 for (const auto &location : locations)
+                   values.Set(index++, location);
+                 return values;
+               } catch (const std::exception &error) {
+                 Napi::Error::New(call.Env(), error.what()).ThrowAsJavaScriptException();
+                 return call.Env().Undefined();
+               }
+             }));
   result.Set(
       "serializeFiles",
       Napi::Function::New(env, [model](const Napi::CallbackInfo &call) -> Napi::Value {

@@ -128,6 +128,8 @@ export interface Graph {
  * Methods do not execute operators or write files.
  */
 export interface NativeModel {
+  /** Whole-model external-data references, excluding omitted inline payload placeholders. */
+  externalDataLocations(): string[];
   /**
    * Serializes the whole model, including inferred information and inline weights.
    * A password produces authenticated ONNXCRY3 (AES-256-GCM), otherwise plain ONNX.

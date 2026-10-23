@@ -160,6 +160,8 @@ The native loader detects top-level ``training_info`` before parsing can discard
 it. Such models remain inspectable, but both serialization methods reject export
 explicitly. Encrypted envelopes are decrypted using OpenSSL before the same
 compatibility check; authenticated formats are verified before plaintext is parsed.
+Decrypted inspection and parser failures are replaced with content-free errors
+before reaching the host or webview logs.
 Encryption still uses onnx-light's AES-256-GCM writer and existing ONNXCRY formats.
 
 The host writes the serialized bytes to a temporary sibling of the chosen
@@ -169,6 +171,9 @@ For multiple files, fresh random weight filenames prevent collisions with source
 or previously saved weights. The host publishes weights without overwriting
 existing files, then atomically replaces the proto as the commit point. Failure
 or model replacement before that point cleans newly published weights.
+``externalDataLocations`` traverses the whole model, including nested graphs,
+sparse tensors and functions, excluding omitted inline payload placeholders.
+The host protects both the source proto and every external source file.
 For local destinations, filesystem device/inode identity detects source aliases.
 The source check is repeated after writing the temporary proto. Immediately before
 each rename, a panel/model guard propagates cancellation without marking the save

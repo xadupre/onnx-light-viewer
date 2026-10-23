@@ -45,8 +45,9 @@ storage/encryption choice grid:
 
 Encrypted output uses **AES-256-GCM / ONNXCRY3** and asks for password confirmation.
 The default filename ends in ``-copy.onnx`` or ``-copy.onnx.enc``; choose a
-different destination from the source model. Saving always includes the whole
-ModelProto, not just the selected graph, with stored metadata, all weights
+different destination from the source model and its external weight files.
+Saving always includes the whole ModelProto, not just the selected graph,
+with stored metadata, all weights
 and any persisted shape inference. It does not change the displayed selection,
 layout or camera. A temporary file is written first and renamed only after the
 write succeeds; failures and cancellations appear in Logs.
@@ -85,6 +86,8 @@ payload. Local-file decryption and serialization run on native workers; virtual
 files use VS Code's filesystem and the synchronous byte-buffer loader.
 Decrypted data is written to disk only when explicitly saving
 a plain copy; downloaded encrypted files remain encrypted in the cache.
+Malformed decrypted models produce content-free errors, so parser diagnostics
+cannot expose decrypted bytes in Logs.
 
 Hugging Face models
 -------------------

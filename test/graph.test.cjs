@@ -152,6 +152,113 @@ test("loads all three encrypted ModelProto formats from buffers and files", asyn
   }
 });
 
+test("does not disclose decrypted bytes in inspection or parser diagnostics", async (t) => {
+  const directory = mkdtempSync(
+    path.join(tmpdir(), "onnx-light-viewer-private-errors-"),
+  );
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const marker = "LEAKME42";
+  const invalid = Buffer.concat([varint(807), Buffer.from(marker)]);
+  const password = "malformed input password";
+  for (const version of [1, 2, 3]) {
+    for (const malformed of [
+      Buffer.concat([varintField(1, 8), bytesField(7, invalid)]),
+      Buffer.concat([varintField(1, 8), invalid]),
+    ]) {
+      const encrypted = encryptModelBytes(malformed, password, version);
+      const file = path.join(directory, `invalid-${version}.onnx.enc`);
+      writeFileSync(file, encrypted);
+      const safeError = (error) => {
+        assert.equal(
+          error.message,
+          "Could not decode the decrypted ONNX model.",
+        );
+        assert.equal(error.stack.includes(marker), false);
+        return true;
+      };
+      assert.throws(() => loadModel(encrypted, "invalid", password), safeError);
+      await assert.rejects(loadModelFile(file, "invalid", password), safeError);
+    }
+  }
+});
+
+test("enumerates external sources in nested graphs, sparse tensors and function defaults without loading them", async (t) => {
+  const directory = mkdtempSync(
+    path.join(tmpdir(), "onnx-light-viewer-external-sources-"),
+  );
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const tensor = (location, type = 1) =>
+    Buffer.concat([
+      varintField(1, 1),
+      varintField(2, type),
+      bytesField(8, location),
+      ...["ignored.bin", location].map((value) =>
+        bytesField(
+          13,
+          Buffer.concat([bytesField(1, "location"), bytesField(2, value)]),
+        ),
+      ),
+      varintField(14, 1),
+    ]);
+  const graph = Buffer.concat([
+    bytesField(5, tensor("dense.bin")),
+    bytesField(
+      15,
+      Buffer.concat([
+        bytesField(1, tensor("values.bin")),
+        bytesField(2, tensor("indices.bin", 7)),
+        varintField(3, 1),
+      ]),
+    ),
+    bytesField(
+      1,
+      Buffer.concat([
+        bytesField(4, "Inspect"),
+        bytesField(
+          5,
+          Buffer.concat([
+            bytesField(1, "body"),
+            bytesField(6, bytesField(5, tensor("nested.bin"))),
+            varintField(20, 5),
+          ]),
+        ),
+      ]),
+    ),
+  ]);
+  const bytes = Buffer.concat([
+    varintField(1, 8),
+    bytesField(7, graph),
+    bytesField(
+      25,
+      Buffer.concat([
+        bytesField(1, "FunctionWithDefault"),
+        bytesField(10, "example"),
+        bytesField(
+          11,
+          Buffer.concat([
+            bytesField(1, "weight"),
+            bytesField(5, tensor("function.bin")),
+            varintField(20, 4),
+          ]),
+        ),
+      ]),
+    ),
+  ]);
+  const file = path.join(directory, "source.onnx");
+  writeFileSync(file, bytes);
+  for (const model of [
+    loadModel(bytes, "source"),
+    await loadModelFile(file, "source"),
+  ])
+    assert.deepEqual(model.externalDataLocations(), [
+      "dense.bin",
+      "function.bin",
+      "indices.bin",
+      "nested.bin",
+      "values.bin",
+    ]);
+});
+
 test("inspects models with training_info but rejects every export before unsupported fields are lost", async (t) => {
   const directory = mkdtempSync(
     path.join(tmpdir(), "onnx-light-viewer-training-"),
