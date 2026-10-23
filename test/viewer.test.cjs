@@ -288,12 +288,24 @@ for (const initialTab of ["model", "logs"]) {
       assert.equal(link.textContent, name);
       assert.equal(link.href, `https://github.com/${repository}`);
       assert.ok(card.querySelector("p").textContent.trim().length > 20);
-      const icon = link.querySelector("img");
+      const icon = link.querySelector("svg, img");
       assert.ok(icon);
       assert.equal(icon.getAttribute("width"), "28");
       assert.equal(icon.getAttribute("height"), "28");
-      assert.equal(icon.alt, "");
-      assert.equal(icon.src, `https://viewer.invalid/${logo}`);
+      if (repository === "xadupre/onnx-light-viewer") {
+        assert.equal(icon.alt, "");
+        assert.equal(icon.src, "https://viewer.invalid/logo.svg");
+      } else {
+        assert.equal(icon.localName, "svg");
+        assert.equal(icon.getAttribute("aria-hidden"), "true");
+        assert.ok(icon.querySelector("path"));
+      }
+      const image = card.querySelector(":scope > .repository-logo");
+      assert.ok(image);
+      assert.equal(image.alt, "");
+      assert.equal(image.src, `https://viewer.invalid/${logo}`);
+      assert.equal(image.getAttribute("width"), "96");
+      assert.equal(image.getAttribute("height"), "64");
       const asset = readFileSync(require.resolve(`../media/${logo}`));
       if (logo.endsWith(".svg")) {
         const svg = new JSDOM(asset.toString(), {
