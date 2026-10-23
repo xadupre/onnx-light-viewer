@@ -13,6 +13,7 @@ const {
 const { tmpdir } = require("node:os");
 const path = require("node:path");
 const { test } = require("node:test");
+const { withCommaLocale } = require("../build/native/Release/test_locale.node");
 const {
   decodeGraph,
   demoGraph,
@@ -778,7 +779,7 @@ test("exposes connected initializer metadata and tiny values without external re
   );
 });
 
-test("previews fewer than 16 initializer elements with raw decoding and exact integer precision", async () => {
+test("previews fewer than 16 initializer elements with locale-independent decimals and exact integer precision", async () => {
   const bytes = modelBytes("tiny-initializers.onnx");
   const graph = decodeGraph(bytes, "tiny-initializers.onnx");
   const parameters = Object.fromEntries(
@@ -819,6 +820,14 @@ test("previews fewer than 16 initializer elements with raw decoding and exact in
     graph,
     loadModel(bytes, "tiny-initializers.onnx").graph(),
     streamed.graph(),
+    ...withCommaLocale((number) => {
+      assert.equal(number, "1.234,5");
+      return [
+        decodeGraph(bytes, "tiny-initializers.onnx"),
+        loadModel(bytes, "tiny-initializers.onnx").graph(),
+        streamed.graph(),
+      ];
+    }),
   ]) {
     const values = Object.fromEntries(
       snapshot.nodes[0].parameters.map((p) => [p.name, p.value]),
