@@ -59,7 +59,7 @@ External weights from virtual sources require opening a local copy with its
 weight files available; Hugging Face weight files are not downloaded automatically.
 
 For external output, choose the **maximum weight file size in MiB**
-(1 MiB = 1,048,576 bytes). The default is 1024 MiB. This is a file-size limit,
+(1 MiB = 1,048,576 bytes). The default is 5120 MiB (5 GiB). This is a file-size limit,
 not an I/O buffer size. One tensor cannot span files, so the limit must fit the
 largest tensor; an insufficient limit is reported as an error.
 Small tensors, strings and sparse components may remain inline according to

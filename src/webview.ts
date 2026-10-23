@@ -214,7 +214,7 @@ export function webviewHtml(
       </table>
       <div id="external-size" hidden>
         <label for="weight-file-size">Maximum weight file size (MiB)</label>
-        <input id="weight-file-size" type="number" min="1" max="8589934591" step="1" value="1024" required disabled aria-describedby="weight-size-note">
+        <input id="weight-file-size" type="number" min="1" max="8589934591" step="1" value="5120" required disabled aria-describedby="weight-size-note">
         <p id="weight-size-note">1 MiB = 1,048,576 bytes. A tensor cannot span files; choose a size large enough for the largest tensor.</p>
       </div>
       <p id="save-options-error" role="alert"></p>
