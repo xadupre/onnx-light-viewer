@@ -34,6 +34,7 @@ export function webviewHtml(
       <button id="logs-tab" role="tab" aria-controls="logs-view" aria-selected="${initialTab === "logs"}" tabindex="${initialTab === "logs" ? 0 : -1}">Logs</button>
       <button id="status-tab" role="tab" aria-controls="status-view" aria-selected="false" tabindex="-1">Status</button>
       <button id="controls-tab" role="tab" aria-controls="controls-view" aria-selected="false" tabindex="-1">Controls</button>
+      <button id="repositories-tab" role="tab" aria-controls="repositories-view" aria-selected="false" tabindex="-1">Repositories</button>
     </nav>
     <section id="model-view" role="tabpanel" aria-labelledby="model-tab"${initialTab === "logs" ? " hidden" : ""}>
       <header class="graph-toolbar">
@@ -47,7 +48,7 @@ export function webviewHtml(
         <div class="canvas" id="canvas">
           <form id="find-node" role="search"><input id="node-search" type="search" placeholder="Find node or operator" aria-label="Find a node by name or operator" autocomplete="off"><button type="submit" title="Go to the next matching node" aria-label="Go to the next matching node">Go</button><span id="node-search-result" role="status"></span></form>
           <svg id="graph" role="group" aria-label="Interactive ONNX graph" tabindex="0"><defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs><g id="graph-overview" aria-hidden="true" display="none"><path id="overview-edges"/><path id="overview-nodes"/></g><path id="crossing-edges" class="crossing-edge"/><path id="released-crossing-edges" class="crossing-edge released"/><g id="edges"></g><g id="nodes"></g></svg>
-          <div class="zoom-controls" aria-label="Graph zoom"><button id="zoom-out" aria-label="Zoom out">−</button><button id="zoom-fit" title="Fit graph">Fit</button><button id="zoom-readable" title="Zoom to readable size (100%), centered on the inspected node" aria-label="Zoom to readable size"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="m8 17 4-10 4 10M10 13h4M4 8V4h4M16 4h4v4M20 16v4h-4M8 20H4v-4"/></svg></button><button id="zoom-in" aria-label="Zoom in">+</button></div>
+          <div class="zoom-controls" aria-label="Graph zoom"><button id="zoom-out" title="Zoom out (-)" aria-label="Zoom out" aria-keyshortcuts="-">−</button><button id="zoom-fit" title="Fit graph (F)" aria-keyshortcuts="F">Fit</button><button id="zoom-readable" title="Zoom to readable size (100%), centered on the inspected node (R)" aria-label="Zoom to readable size" aria-keyshortcuts="R"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="m8 17 4-10 4 10M10 13h4M4 8V4h4M16 4h4v4M20 16v4h-4M8 20H4v-4"/></svg></button><button id="zoom-area" title="Drag a rectangle to zoom into an area; Alt+drag also works. Escape cancels." aria-pressed="false">Zoom area</button><button id="zoom-in" title="Zoom in (+)" aria-label="Zoom in" aria-keyshortcuts="+">+</button></div>
         </div>
         <aside aria-label="Node inspector">
           <div class="eyebrow">INSPECTOR</div><div class="inspector-heading"><h2 id="node-title">No model loaded</h2><button id="show-doc" disabled aria-haspopup="dialog">Doc</button></div><p id="node-description">Open an ONNX model to explore its connections.</p>
@@ -100,7 +101,7 @@ export function webviewHtml(
     </section>
     <section id="controls-view" role="tabpanel" aria-labelledby="controls-tab" tabindex="0" hidden>
       <h2>Keyboard and mouse controls</h2>
-      <p>Graph shortcuts apply when the graph or one of its nodes has focus. Use Cmd on macOS where Ctrl/Cmd is shown.</p>
+      <p>Graph shortcuts apply when the graph, one of its nodes or its zoom controls has focus. Use Cmd on macOS where Ctrl/Cmd is shown.</p>
       <h3 id="mouse-controls-heading">Mouse and trackpad</h3>
       <table class="controls-table" aria-labelledby="mouse-controls-heading">
         <thead><tr><th scope="col">Control</th><th scope="col">Action</th></tr></thead>
@@ -112,7 +113,9 @@ export function webviewHtml(
           <tr><th scope="row">Drag the background</th><td>Select nodes in a rectangle. Hold <kbd>Ctrl/Cmd</kbd> or <kbd>Shift</kbd> to add to the selection.</td></tr>
           <tr><th scope="row">Scroll</th><td>Pan vertically.</td></tr>
           <tr><th scope="row"><kbd>Shift</kbd> + scroll</th><td>Pan horizontally. Horizontal trackpad scrolling also pans horizontally.</td></tr>
-          <tr><th scope="row"><kbd>Ctrl</kbd> + scroll</th><td>Zoom in or out.</td></tr>
+          <tr><th scope="row"><kbd>Ctrl</kbd> + scroll</th><td>Zoom in or out around the pointer.</td></tr>
+          <tr><th scope="row">Zoom area, then drag</th><td>Magnify the rectangle without changing selection or node positions. The mode ends after one drag.</td></tr>
+          <tr><th scope="row"><kbd>Alt</kbd> + drag</th><td>Magnify a rectangle, including over nodes and subgraph links, without opening the subgraph.</td></tr>
         </tbody>
       </table>
       <h3 id="keyboard-controls-heading">Graph keyboard shortcuts</h3>
@@ -121,7 +124,10 @@ export function webviewHtml(
         <tbody>
           <tr><th scope="row"><kbd>Enter</kbd> or <kbd>Space</kbd></th><td>Select the focused node, input or output. Hold <kbd>Ctrl/Cmd</kbd> or <kbd>Shift</kbd> to toggle it in the selection.</td></tr>
           <tr><th scope="row"><kbd>Ctrl/Cmd + A</kbd></th><td>Select all nodes, inputs and outputs.</td></tr>
-          <tr><th scope="row"><kbd>Escape</kbd></th><td>Cancel the current drag or selection rectangle; otherwise clear selection.</td></tr>
+          <tr><th scope="row"><kbd>F</kbd></th><td>Fit the graph.</td></tr>
+          <tr><th scope="row"><kbd>R</kbd></th><td>Jump to readable size (100%), centered on the inspected node.</td></tr>
+          <tr><th scope="row"><kbd>+</kbd> / <kbd>−</kbd></th><td>Zoom in / out.</td></tr>
+          <tr><th scope="row"><kbd>Escape</kbd></th><td>Cancel the current drag, selection rectangle or Zoom area mode; otherwise clear selection.</td></tr>
         </tbody>
       </table>
       <h3 id="navigation-controls-heading">Navigation and buttons</h3>
@@ -140,6 +146,48 @@ export function webviewHtml(
           <tr><th scope="row">Doc</th><td>Open operator documentation from the inspector. Use Close or <kbd>Escape</kbd> to dismiss it.</td></tr>
         </tbody>
       </table>
+    </section>
+    <section id="repositories-view" role="tabpanel" aria-labelledby="repositories-tab" tabindex="0" hidden>
+      <h2>ONNX repositories</h2>
+      <p>Explore the official ONNX projects and the onnx-light ecosystem on GitHub.</p>
+      <h3>Official projects</h3>
+      <ul class="repository-list">
+        <li>
+          <a href="https://github.com/onnx/onnx"><svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true"><circle cx="5" cy="12" r="3"/><circle cx="18" cy="5" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8 11 7-5M8 13l7 5"/></svg>ONNX</a>
+          <p>An open standard for representing machine learning models, with a common model format and operator definitions.</p>
+        </li>
+        <li>
+          <a href="https://github.com/microsoft/onnxruntime"><svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m10 7 7 5-7 5Z"/></svg>ONNX Runtime</a>
+          <p>A cross-platform engine for accelerating machine learning inference and training across hardware backends.</p>
+        </li>
+        <li>
+          <a href="https://github.com/microsoft/onnxruntime-extensions"><svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true"><path d="M8 4H4v16h16v-7h-4a3 3 0 1 1 0-6h4V4h-7V3a3 3 0 0 0-6 0v1"/></svg>ONNX Runtime Extensions</a>
+          <p>Custom operators and tools for adding preprocessing and postprocessing to ONNX models.</p>
+        </li>
+        <li>
+          <a href="https://github.com/microsoft/onnxruntime-genai"><svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true"><path d="m12 3 3 6 6 3-6 3-3 6-3-6-6-3 6-3ZM19 2v4M17 4h4"/></svg>ONNX Runtime GenAI</a>
+          <p>Generative AI APIs for ONNX Runtime, including tokenization, generation loops, sampling and beam search.</p>
+        </li>
+      </ul>
+      <h3>onnx-light ecosystem</h3>
+      <ul class="repository-list">
+        <li>
+          <a href="https://github.com/xadupre/onnx-light"><svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true"><path d="m14 2-9 12h6l-1 8 9-13h-6Z"/></svg>onnx-light</a>
+          <p>A lightweight C++ library with Python bindings for manipulating ONNX models, shape inference and graph optimization.</p>
+        </li>
+        <li>
+          <a href="https://github.com/xadupre/onnx-light-cpu"><svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4m6-4v4M9 18v4m6-4v4M2 9h4m-4 6h4m12-6h4m-4 6h4M10 10h4v4h-4Z"/></svg>onnx-light-cpu</a>
+          <p>CPU execution kernels for running ONNX models with onnx-light.</p>
+        </li>
+        <li>
+          <a href="https://github.com/xadupre/onnx-light-ort"><svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true"><path d="M8 4v5m8-5v5M5 9h14v3a7 7 0 0 1-14 0ZM12 19v3"/></svg>onnx-light-ort</a>
+          <p>Custom-operator interoperability between onnx-light and ONNX Runtime, in both directions.</p>
+        </li>
+        <li>
+          <a href="https://github.com/xadupre/onnx-light-viewer"><img src="${resource("logo.svg")}" alt="" width="28" height="28">onnx-light-viewer</a>
+          <p>An interactive ONNX graph viewer for VS Code, powered by onnx-light.</p>
+        </li>
+      </ul>
     </section>
   </main>
   <dialog id="operator-doc" aria-labelledby="doc-title">

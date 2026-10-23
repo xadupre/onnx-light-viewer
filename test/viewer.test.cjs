@@ -204,9 +204,12 @@ test("switches all tabs without logging clicks or changing graph, selection or c
     .dispatchEvent(
       new window.KeyboardEvent("keydown", { key: "End", bubbles: true }),
     );
-  assert.equal(document.activeElement.id, "controls-tab");
-  assert.equal(document.getElementById("controls-view").hidden, false);
+  assert.equal(document.activeElement.id, "repositories-tab");
+  assert.equal(document.getElementById("repositories-view").hidden, false);
   assert.equal(document.getElementById("status-view").hidden, true);
+  document.getElementById("controls-tab").click();
+  assert.equal(document.getElementById("controls-view").hidden, false);
+  assert.equal(document.getElementById("repositories-view").hidden, true);
   document.getElementById("logs-tab").click();
   document
     .getElementById("logs-tab")
@@ -227,6 +230,81 @@ test("switches all tabs without logging clicks or changing graph, selection or c
 });
 
 for (const initialTab of ["model", "logs"]) {
+  test(`opens Repositories without a model from ${initialTab} with local icons and project summaries`, (t) => {
+    const { document, window, messages } = openViewer(t, initialTab);
+    const tab = document.getElementById("repositories-tab");
+    const panel = document.getElementById("repositories-view");
+    assert.equal(panel.hidden, true);
+    assert.equal(tab.getAttribute("aria-selected"), "false");
+    assert.equal(tab.tabIndex, -1);
+    assert.equal(tab.getAttribute("role"), "tab");
+    assert.equal(tab.getAttribute("aria-controls"), panel.id);
+    assert.equal(panel.getAttribute("role"), "tabpanel");
+    assert.equal(panel.getAttribute("aria-labelledby"), tab.id);
+    assert.equal(panel.tabIndex, 0);
+    tab.click();
+    assert.equal(panel.hidden, false);
+    assert.equal(tab.getAttribute("aria-selected"), "true");
+    assert.equal(tab.tabIndex, 0);
+    for (const name of ["model", "logs", "status", "controls"]) {
+      assert.equal(document.getElementById(`${name}-view`).hidden, true);
+      assert.equal(
+        document.getElementById(`${name}-tab`).getAttribute("aria-selected"),
+        "false",
+      );
+      assert.equal(document.getElementById(`${name}-tab`).tabIndex, -1);
+    }
+    const repositories = [
+      ["ONNX", "onnx/onnx"],
+      ["ONNX Runtime", "microsoft/onnxruntime"],
+      ["ONNX Runtime Extensions", "microsoft/onnxruntime-extensions"],
+      ["ONNX Runtime GenAI", "microsoft/onnxruntime-genai"],
+      ["onnx-light", "xadupre/onnx-light"],
+      ["onnx-light-cpu", "xadupre/onnx-light-cpu"],
+      ["onnx-light-ort", "xadupre/onnx-light-ort"],
+      ["onnx-light-viewer", "xadupre/onnx-light-viewer"],
+    ];
+    const cards = [...panel.querySelectorAll(".repository-list li")];
+    assert.equal(cards.length, repositories.length);
+    cards.forEach((card, index) => {
+      const [name, repository] = repositories[index];
+      const link = card.querySelector("a");
+      assert.equal(link.textContent, name);
+      assert.equal(link.href, `https://github.com/${repository}`);
+      assert.ok(card.querySelector("p").textContent.trim().length > 20);
+      const icon = link.querySelector("svg, img");
+      assert.ok(icon);
+      assert.equal(icon.getAttribute("width"), "28");
+      assert.equal(icon.getAttribute("height"), "28");
+      if (icon.tagName === "svg") {
+        assert.equal(icon.getAttribute("aria-hidden"), "true");
+        assert.ok(icon.querySelector("path"));
+      } else {
+        assert.equal(icon.alt, "");
+        assert.equal(icon.src, "https://viewer.invalid/logo.svg");
+      }
+    });
+    tab.focus();
+    for (const [key, expected] of [
+      ["ArrowRight", "model"],
+      ["ArrowLeft", "repositories"],
+      ["ArrowLeft", "controls"],
+      ["ArrowRight", "repositories"],
+      ["Home", "model"],
+      ["End", "repositories"],
+    ]) {
+      document.activeElement.dispatchEvent(
+        new window.KeyboardEvent("keydown", { key, bubbles: true }),
+      );
+      assert.equal(document.activeElement.id, `${expected}-tab`);
+      assert.equal(document.getElementById(`${expected}-view`).hidden, false);
+    }
+    assert.deepEqual(
+      messages.map(({ type }) => type),
+      ["ready"],
+    );
+  });
+
   test(`opens Controls without a model from ${initialTab} and supports keyboard tab navigation`, (t) => {
     const { document, window, messages } = openViewer(t, initialTab);
     const tab = document.getElementById("controls-tab");
@@ -243,7 +321,7 @@ for (const initialTab of ["model", "logs"]) {
     assert.equal(panel.hidden, false);
     assert.equal(tab.getAttribute("aria-selected"), "true");
     assert.equal(tab.tabIndex, 0);
-    for (const name of ["model", "logs", "status"]) {
+    for (const name of ["model", "logs", "status", "repositories"]) {
       assert.equal(document.getElementById(`${name}-view`).hidden, true);
       assert.equal(
         document.getElementById(`${name}-tab`).getAttribute("aria-selected"),
@@ -287,6 +365,9 @@ for (const initialTab of ["model", "logs"]) {
     }
     for (const control of [
       "Ctrl + scroll",
+      "Alt + drag",
+      "Fit the graph",
+      "Jump to readable size",
       "Shift + scroll",
       "Ctrl/Cmd + A",
       "Enter or Space",
@@ -297,12 +378,14 @@ for (const initialTab of ["model", "logs"]) {
       assert.ok(panel.textContent.includes(control), control);
     tab.focus();
     for (const [key, expected] of [
+      ["ArrowRight", "repositories"],
       ["ArrowRight", "model"],
+      ["ArrowLeft", "repositories"],
       ["ArrowLeft", "controls"],
       ["ArrowLeft", "status"],
       ["ArrowRight", "controls"],
       ["Home", "model"],
-      ["End", "controls"],
+      ["End", "repositories"],
     ]) {
       document.activeElement.dispatchEvent(
         new window.KeyboardEvent("keydown", { key, bubbles: true }),
@@ -651,8 +734,12 @@ test("sizes subgraph operators for their links and preserves dragging, selection
   assert.equal(group.classList.contains("selected"), false);
 });
 
-for (const kind of ["shapes", "metadata"]) {
-  test(`keeps ${kind} button colors in sync with the latest refresh result`, (t) => {
+for (const [kind, panelOpen] of [
+  ["shapes", false],
+  ["metadata", false],
+  ["metadata", true],
+]) {
+  test(`keeps ${kind} button colors in sync with the latest refresh result with the panel ${panelOpen ? "open" : "closed"}`, (t) => {
     const { document, window, load } = openViewer(t);
     const stylesheet = document.createElement("style");
     stylesheet.textContent = readFileSync(
@@ -685,10 +772,20 @@ for (const kind of ["shapes", "metadata"]) {
           String(expected === "pending"),
         );
         assert.equal(button.title, status.textContent || titles[index]);
-        if (button.getAttribute("aria-expanded") !== "true") {
+        assert.equal(
+          window.getComputedStyle(button).color,
+          window.getComputedStyle(refresh).color,
+        );
+        if (expected !== "idle") {
           assert.equal(
-            window.getComputedStyle(button).color,
-            window.getComputedStyle(refresh).color,
+            window.getComputedStyle(button).borderColor,
+            window.getComputedStyle(refresh).borderColor,
+          );
+        }
+        if (button.id === "show-metadata") {
+          assert.equal(
+            Boolean(window.getComputedStyle(button).boxShadow),
+            button.getAttribute("aria-expanded") === "true",
           );
         }
       }
@@ -708,6 +805,7 @@ for (const kind of ["shapes", "metadata"]) {
         : { type: "metadata-info", metadata: model.metadata() };
 
     check("idle");
+    if (panelOpen) document.getElementById("show-metadata").click();
     refresh.click();
     check("pending");
     receive(result);
@@ -731,14 +829,12 @@ for (const kind of ["shapes", "metadata"]) {
     receive(result);
     check("unchanged");
 
-    // We only require that non-idle states are visually distinguishable from idle.
-    // Do not require every status to have a unique color (brittle across CSS refactors/JSDOM).
-    assert.ok(colors.size >= 2);
+    assert.equal(colors.size, 5);
 
     load(demoGraph);
-    check("idle");
+    check(panelOpen ? "pending" : "idle");
     if (kind === "metadata") {
-      document.getElementById("show-metadata").click();
+      if (!panelOpen) document.getElementById("show-metadata").click();
       check("pending");
       receive(result);
       check("updated");
@@ -889,11 +985,11 @@ test("keeps the metadata button highlighted until its panel is closed", (t) => {
   );
   load(model.graph());
   const toggle = document.getElementById("show-metadata");
-  const color = () => window.getComputedStyle(toggle).color;
-  const inactive = color();
+  const highlight = () => window.getComputedStyle(toggle).boxShadow;
+  const inactive = highlight();
   assert.equal(toggle.getAttribute("aria-expanded"), "false");
   toggle.click();
-  const active = color();
+  const active = highlight();
   assert.notEqual(active, inactive);
   assert.equal(toggle.getAttribute("aria-expanded"), "true");
   assert.equal(document.getElementById("metadata-panel").hidden, false);
@@ -902,14 +998,15 @@ test("keeps the metadata button highlighted until its panel is closed", (t) => {
       data: { type: "metadata-info", metadata: model.metadata() },
     }),
   );
-  assert.equal(color(), active);
+  assert.equal(highlight(), active);
   load(model.graph());
-  assert.equal(color(), active);
+  assert.equal(highlight(), active);
   toggle.click();
   assert.equal(toggle.getAttribute("aria-expanded"), "false");
   assert.equal(document.getElementById("metadata-panel").hidden, true);
+  assert.equal(highlight(), inactive);
   toggle.click();
-  assert.equal(color(), active);
+  assert.equal(highlight(), active);
 });
 
 test("shows native metadata in the sidebar and marks released and never-used results without changing the layout", (t) => {
@@ -2120,7 +2217,15 @@ test("zooms in and out with buttons and Ctrl+wheel without rearranging the graph
   assert.equal(wheel(-100).defaultPrevented, true);
   assert.ok(viewWidth() < initialWidth);
   wheel(100);
-  assert.equal(graph.getAttribute("viewBox"), initialViewBox);
+  graph
+    .getAttribute("viewBox")
+    .split(" ")
+    .map(Number)
+    .forEach((value, index) =>
+      assert.ok(
+        Math.abs(value - Number(initialViewBox.split(" ")[index])) < 1e-9,
+      ),
+    );
   wheel(100);
   assert.ok(viewWidth() > initialWidth);
   const zoomedOut = graph.getAttribute("viewBox");
@@ -2129,6 +2234,292 @@ test("zooms in and out with buttons and Ctrl+wheel without rearranging the graph
   document.getElementById("zoom-fit").click();
   assert.equal(graph.getAttribute("viewBox"), initialViewBox);
   assert.deepEqual(nodePositions(document), positions);
+});
+
+test("magnifies a rectangle in either direction without moving or selecting nodes", (t) => {
+  const { document, load, pointer } = openViewer(t);
+  load(chainGraph());
+  const graph = document.getElementById("graph");
+  const button = document.getElementById("zoom-area");
+  const initial = graph.getAttribute("viewBox");
+  const positions = nodePositions(document);
+  const nodes = [...document.querySelectorAll(".graph-node")];
+  const selection = () =>
+    nodes.map((node) => node.classList.contains("selected"));
+  const selected = selection();
+  const inspector = document.querySelector("aside").textContent;
+  for (const reverse of [false, true]) {
+    const start = reverse ? { x: 300, y: 300 } : { x: 100, y: 150 };
+    const end = reverse ? { x: 100, y: 150 } : { x: 300, y: 300 };
+    if (!reverse) {
+      button.click();
+      assert.equal(button.getAttribute("aria-pressed"), "true");
+      assert.equal(document.activeElement, graph);
+    }
+    pointer(nodes[0], "pointerdown", start.x, start.y, { altKey: reverse });
+    pointer(graph, "pointermove", end.x, end.y);
+    assert.ok(document.querySelector(".selection-rectangle"));
+    assert.deepEqual(selection(), selected);
+    pointer(graph, "pointerup", end.x, end.y);
+    const [x, y, width, height] = graph
+      .getAttribute("viewBox")
+      .split(" ")
+      .map(Number);
+    assert.ok(Math.abs(x + width / 2 - 200) < 1e-9);
+    assert.ok(Math.abs(y + height / 2 - 225) < 1e-9);
+    assert.ok(Math.abs(height - 150) < 1e-9);
+    assert.ok(Math.abs(width / height - 1060 / 350) < 1e-9);
+    assert.equal(document.querySelector(".selection-rectangle"), null);
+    assert.equal(button.getAttribute("aria-pressed"), "false");
+    assert.equal(graph.hasPointerCapture(1), false);
+    assert.deepEqual(selection(), selected);
+    assert.deepEqual(nodePositions(document), positions);
+    assert.equal(document.querySelector("aside").textContent, inspector);
+    document.getElementById("zoom-out").click();
+    assert.ok(Number(graph.getAttribute("viewBox").split(" ")[3]) > height);
+    document.getElementById("zoom-fit").click();
+    assert.equal(graph.getAttribute("viewBox"), initial);
+  }
+});
+
+test("clamps area zoom outside the captured viewport so zooming out never zooms in", (t) => {
+  const { document, load, pointer } = openViewer(t);
+  load(chainGraph());
+  const graph = document.getElementById("graph");
+  const box = () => graph.getAttribute("viewBox").split(" ").map(Number);
+  for (let index = 0; index < 10; index++)
+    document.getElementById("zoom-out").click();
+  const [, , minimumWidth, minimumHeight] = box();
+  for (const altKey of [false, true]) {
+    const [x, y, width, height] = box();
+    if (!altKey) document.getElementById("zoom-area").click();
+    pointer(graph, "pointerdown", x + width * 0.05, y + height * 0.05, {
+      altKey,
+    });
+    assert.equal(graph.hasPointerCapture(1), true);
+    pointer(graph, "pointerup", x + width * 1.15, y + height * 1.15);
+    const area = box();
+    assert.ok(Math.abs(area[2] - minimumWidth) < 1e-8);
+    assert.ok(Math.abs(area[3] - minimumHeight) < 1e-8);
+    assert.ok(Math.abs(area[0] + area[2] / 2 - (x + width * 0.6)) < 1e-8);
+    assert.ok(Math.abs(area[1] + area[3] / 2 - (y + height * 0.6)) < 1e-8);
+    document.getElementById("zoom-out").click();
+    assert.deepEqual(box(), area);
+  }
+});
+
+test("cancels area zoom and ignores clicks and degenerate rectangles", (t) => {
+  const { document, window, load, pointer, resize } = openViewer(t);
+  load(chainGraph());
+  const graph = document.getElementById("graph");
+  const button = document.getElementById("zoom-area");
+  const initial = graph.getAttribute("viewBox");
+  const selected = document.querySelector(".graph-node.selected");
+  for (const cancel of [
+    () =>
+      graph.dispatchEvent(
+        new window.KeyboardEvent("keydown", { key: "Escape" }),
+      ),
+    () => pointer(graph, "pointercancel", 300, 300),
+    () => graph.releasePointerCapture(1),
+    () => window.dispatchEvent(new window.Event("blur")),
+    () => resize(1060, 350),
+    () => button.click(),
+  ]) {
+    button.click();
+    pointer(graph, "pointerdown", 100, 100);
+    pointer(graph, "pointermove", 300, 300);
+    cancel();
+    pointer(graph, "pointerup", 300, 300);
+    assert.equal(graph.getAttribute("viewBox"), initial);
+    assert.equal(button.getAttribute("aria-pressed"), "false");
+    assert.equal(document.querySelector(".selection-rectangle"), null);
+    assert.equal(document.querySelector(".graph-node.selected"), selected);
+  }
+  for (const [x, y] of [
+    [100, 100],
+    [100, 300],
+    [300, 100],
+    [100.1, 100.1],
+  ]) {
+    button.click();
+    pointer(graph, "pointerdown", 100, 100);
+    pointer(graph, "pointerup", x, y);
+    assert.equal(graph.getAttribute("viewBox"), initial);
+    assert.equal(button.getAttribute("aria-pressed"), "false");
+  }
+  button.click();
+  graph.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape" }));
+  assert.equal(button.getAttribute("aria-pressed"), "false");
+  assert.equal(document.querySelector(".graph-node.selected"), selected);
+  button.click();
+  pointer(graph, "pointerdown", 100, 100);
+  load(demoGraph);
+  assert.equal(button.getAttribute("aria-pressed"), "false");
+  assert.equal(graph.hasPointerCapture(1), false);
+  assert.equal(document.querySelector(".selection-rectangle"), null);
+});
+
+test("prioritizes area zoom on subgraph rows without breaking normal activation", (t) => {
+  const { document, window, load, pointer, messages } = openViewer(t);
+  const model = loadModel(
+    readFileSync(require.resolve("./models/subgraphs.onnx")),
+    "subgraphs.onnx",
+  );
+  const graph = document.getElementById("graph");
+  for (const altKey of [false, true]) {
+    for (const outcome of ["zoom", "cancel", "click"]) {
+      load(model.graph());
+      const link = document.querySelector(".subgraph-link");
+      const target = link.querySelector("text");
+      const row = link.querySelector("rect");
+      const x = Number(row.getAttribute("x")) + 10;
+      const y = Number(row.getAttribute("y")) + 10;
+      const initial = graph.getAttribute("viewBox");
+      const positions = nodePositions(document);
+      const selected = document.querySelector(".graph-node.selected");
+      const count = messages.length;
+      if (!altKey) document.getElementById("zoom-area").click();
+      pointer(target, "pointerdown", x, y, { altKey });
+      assert.equal(graph.hasPointerCapture(1), true);
+      assert.ok(document.querySelector(".selection-rectangle"));
+      if (outcome !== "click") {
+        pointer(graph, "pointermove", x + 40, y + 40);
+      }
+      if (outcome === "cancel") {
+        graph.dispatchEvent(
+          new window.KeyboardEvent("keydown", { key: "Escape" }),
+        );
+      }
+      pointer(
+        graph,
+        "pointerup",
+        x + (outcome === "click" ? 0 : 40),
+        y + (outcome === "click" ? 0 : 40),
+      );
+      target.dispatchEvent(
+        new window.MouseEvent("click", { bubbles: true, detail: 1 }),
+      );
+      assert.equal(messages.length, count);
+      assert.equal(graph.getAttribute("aria-busy"), "false");
+      assert.equal(document.querySelector(".selection-rectangle"), null);
+      assert.equal(graph.hasPointerCapture(1), false);
+      assert.equal(
+        document.getElementById("zoom-area").getAttribute("aria-pressed"),
+        "false",
+      );
+      assert.equal(document.querySelector(".graph-node.selected"), selected);
+      assert.deepEqual(nodePositions(document), positions);
+      if (outcome === "zoom") {
+        assert.ok(
+          Number(graph.getAttribute("viewBox").split(" ")[3]) <
+            Number(initial.split(" ")[3]),
+        );
+        pointer(target, "pointerdown", x, y);
+        pointer(graph, "pointerup", x, y);
+        target.dispatchEvent(
+          new window.MouseEvent("click", { bubbles: true, detail: 1 }),
+        );
+      } else {
+        assert.equal(graph.getAttribute("viewBox"), initial);
+        if (outcome === "cancel") {
+          link.dispatchEvent(
+            new window.KeyboardEvent("keydown", {
+              key: "Enter",
+              bubbles: true,
+            }),
+          );
+        } else {
+          target.dispatchEvent(
+            new window.MouseEvent("click", { bubbles: true }),
+          );
+        }
+      }
+      assert.equal(messages.length, count + 1);
+      assert.equal(messages.at(-1).type, "navigate");
+    }
+  }
+});
+
+test("keyboard zoom shortcuts match controls and stay scoped to the graph canvas", (t) => {
+  const { document, window, load } = openViewer(t);
+  const graph = document.getElementById("graph");
+  const key = (target, value, modifiers = {}) => {
+    const event = new window.KeyboardEvent("keydown", {
+      key: value,
+      bubbles: true,
+      cancelable: true,
+      ...modifiers,
+    });
+    target.dispatchEvent(event);
+    return event;
+  };
+  assert.equal(key(graph, "r").defaultPrevented, false);
+  load(chainGraph());
+  const initial = graph.getAttribute("viewBox");
+  const node = document.querySelector(".graph-node");
+  assert.equal(key(node, "+").defaultPrevented, true);
+  const zoomed = graph.getAttribute("viewBox");
+  assert.notEqual(zoomed, initial);
+  key(graph, "-");
+  assert.equal(graph.getAttribute("viewBox"), initial);
+  key(graph, "=");
+  assert.equal(graph.getAttribute("viewBox"), zoomed);
+  key(document.getElementById("zoom-fit"), "F");
+  assert.equal(graph.getAttribute("viewBox"), initial);
+  key(node, "R");
+  const readable = graph.getAttribute("viewBox");
+  assert.equal(Number(readable.split(" ")[2]), 1060);
+  document.getElementById("zoom-fit").click();
+  document.getElementById("zoom-readable").click();
+  assert.equal(graph.getAttribute("viewBox"), readable);
+  for (const target of [
+    document.getElementById("model-tab"),
+    document.querySelector("aside"),
+    document.getElementById("operator-doc"),
+    document.getElementById("node-search"),
+    document.querySelector("#find-node button"),
+  ]) {
+    for (const shortcut of ["f", "r", "+", "-"]) {
+      assert.equal(key(target, shortcut).defaultPrevented, false);
+      assert.equal(graph.getAttribute("viewBox"), readable);
+    }
+  }
+  for (const modifiers of [
+    { ctrlKey: true },
+    { metaKey: true },
+    { altKey: true },
+  ]) {
+    assert.equal(key(graph, "f", modifiers).defaultPrevented, false);
+    assert.equal(graph.getAttribute("viewBox"), readable);
+  }
+});
+
+test("Ctrl+wheel keeps the graph point under the pointer fixed while zooming in and out", (t) => {
+  const { document, window, load } = openViewer(t);
+  load(chainGraph());
+  const graph = document.getElementById("graph");
+  const view = () => graph.getAttribute("viewBox").split(" ").map(Number);
+  const point = () => {
+    const [x, y, width, height] = view();
+    return [x + width * 0.75, y + height * 0.25];
+  };
+  const initialWidth = view()[2];
+  const anchor = point();
+  for (const deltaY of [-100, 100, 100, -100]) {
+    graph.dispatchEvent(
+      new window.WheelEvent("wheel", {
+        ctrlKey: true,
+        deltaY,
+        clientX: 1060 * 0.75,
+        clientY: 350 * 0.25,
+      }),
+    );
+    point().forEach((value, index) =>
+      assert.ok(Math.abs(value - anchor[index]) < 1e-9),
+    );
+  }
+  assert.ok(Math.abs(view()[2] - initialWidth) < 1e-9);
 });
 
 test("zooms large graphs to a readable scale beyond four times Fit with buttons and Ctrl+wheel", (t) => {

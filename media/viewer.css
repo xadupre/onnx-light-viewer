@@ -65,6 +65,7 @@ p {
 }
 .viewer-tabs {
   display: flex;
+  overflow-x: auto;
   border-bottom: 1px solid var(--border);
 }
 .viewer-tabs button {
@@ -85,15 +86,49 @@ p {
 }
 #logs-view,
 #status-view,
-#controls-view {
+#controls-view,
+#repositories-view {
   padding: 16px;
   overflow: auto;
   min-height: 0;
 }
 #logs-view h2,
 #status-view h2,
-#controls-view h2 {
+#controls-view h2,
+#repositories-view h2 {
   margin-top: 0;
+}
+.repository-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
+  gap: 16px;
+  padding: 0;
+  list-style: none;
+}
+.repository-list li {
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+}
+.repository-list a {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+  color: var(--mint);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.repository-list svg,
+.repository-list img {
+  flex-shrink: 0;
+}
+.repository-list svg {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 #controls-view h3 {
   margin: 24px 0 8px;
@@ -239,15 +274,7 @@ a:focus-visible {
   color: #ff9e9e;
 }
 #show-metadata[aria-expanded="true"] {
-  background: var(--mint);
-  color: #102a28;
-  border-color: var(--mint);
-}
-#show-metadata[aria-expanded="true"]:hover:not(:disabled),
-#show-metadata[aria-expanded="true"]:focus-visible {
-  background: var(--mint);
-  color: #102a28;
-  border-color: var(--mint);
+  box-shadow: inset 0 -3px 0 var(--mint);
 }
 .icon-button svg {
   fill: none;
@@ -312,7 +339,10 @@ a:focus-visible {
 #graph.dragging .port {
   cursor: grabbing;
 }
-#graph.selecting {
+#graph.selecting,
+#graph.zoom-area,
+#graph.zoom-area .graph-node,
+#graph.zoom-area .port {
   cursor: crosshair;
 }
 #graph.overview text {
