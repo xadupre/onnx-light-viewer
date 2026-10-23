@@ -687,6 +687,18 @@ button:disabled {
   line-height: 1.5;
   overflow-wrap: anywhere;
 }
+#doc-body h2 {
+  margin: 28px 0 14px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+#doc-body h3 {
+  margin: 20px 0 8px;
+  font-size: 16px;
+}
+#doc-body p {
+  margin: 8px 0 16px;
+}
 #doc-body pre {
   padding: 12px;
   overflow-x: auto;

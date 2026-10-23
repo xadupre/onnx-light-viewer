@@ -1555,6 +1555,31 @@ test("opens native LightOpSchema docs and clears stale docs and parameters on se
   assert.equal(document.getElementById("node-initializers").children.length, 0);
 });
 
+test("separates native input and output entries from their descriptions", (t) => {
+  const { document, load } = openViewer(t);
+  load(
+    decodeGraph(
+      readFileSync(require.resolve("./models/custom.onnx")),
+      "custom.onnx",
+    ),
+  );
+  document.getElementById("show-doc").click();
+  const body = document.getElementById("doc-body");
+  assert.deepEqual(
+    [...body.querySelectorAll("h2")].map((heading) => heading.textContent),
+    ["Inputs", "Outputs", "Attributes", "Type constraints"],
+  );
+  const parameters = [...body.querySelectorAll("h3")];
+  assert.deepEqual(
+    parameters.map((heading) => heading.textContent),
+    ["A (T)", "B (T)", "C (T)"],
+  );
+  for (const parameter of parameters) {
+    assert.equal(parameter.nextElementSibling.tagName, "P");
+    assert.ok(parameter.nextElementSibling.textContent.trim());
+  }
+});
+
 test("renders Markdown documentation with headings, lists, code, tables and links", (t) => {
   const { document, load } = openViewer(t);
   const graph = structuredClone(demoGraph);
