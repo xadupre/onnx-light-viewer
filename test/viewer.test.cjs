@@ -259,6 +259,32 @@ for (const initialTab of ["model", "logs"]) {
         "Navigation and buttons",
       ],
     );
+    const tables = panel.querySelectorAll("table");
+    assert.equal(tables.length, 3);
+    for (const [index, table] of [...tables].entries()) {
+      assert.equal(
+        document.getElementById(table.getAttribute("aria-labelledby")),
+        panel.querySelectorAll("h3")[index],
+      );
+      assert.deepEqual(
+        [...table.querySelectorAll("thead th")].map((cell) => [
+          cell.textContent,
+          cell.getAttribute("scope"),
+        ]),
+        [
+          ["Control", "col"],
+          ["Action", "col"],
+        ],
+      );
+      for (const row of table.querySelectorAll("tbody tr")) {
+        assert.equal(row.cells.length, 2);
+        assert.equal(row.cells[0].tagName, "TH");
+        assert.equal(row.cells[0].getAttribute("scope"), "row");
+        assert.equal(row.cells[1].tagName, "TD");
+        assert.ok(row.cells[0].textContent.trim());
+        assert.ok(row.cells[1].textContent.trim());
+      }
+    }
     for (const control of [
       "Ctrl + scroll",
       "Shift + scroll",
