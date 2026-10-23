@@ -65,6 +65,7 @@ struct ProtoFrame {
   uint32_t field = 0;
   uint8_t wire_type = 0;
   std::map<uint32_t, size_t> child_counts;
+  std::set<uint32_t> singular_children;
   std::map<uint32_t, uint64_t> payload_sizes;
   std::set<uint32_t> skipped_fields;
   bool packed_values = false;
@@ -216,10 +217,15 @@ public:
   int64_t ByteCount() const override { return stream_.ByteCount(); }
 
   void LimitToNext(uint64_t len) override {
+    auto &frame = frames_.back();
+    const auto child = ChildMessage(frame.kind, frame.field);
+    if (child && !child->repeated && frame.wire_type == 2 &&
+        !frame.singular_children.insert(frame.field).second) {
+      throw std::runtime_error("Duplicate singular protobuf message field.");
+    }
     stream_.LimitToNext(len);
     limit_scopes_.push_back({});
-    auto &frame = frames_.back();
-    if (const auto child = ChildMessage(frame.kind, frame.field); child && frame.wire_type == 2) {
+    if (child && frame.wire_type == 2) {
       const size_t index = child->repeated ? frame.child_counts[frame.field]++ : 0;
       auto path = frame.path;
       path.push_back({frame.field, index});

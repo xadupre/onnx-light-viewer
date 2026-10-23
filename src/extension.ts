@@ -216,6 +216,7 @@ async function configurePanel(
   };
   panel.iconPath = vscode.Uri.joinPath(mediaRoot, "logo.svg");
   let model: LoadedModel | undefined;
+  let graphRevision = 0;
   let ready = false;
   let showLogsRequested = false;
   let initialLoading = !!uri;
@@ -501,6 +502,7 @@ async function configurePanel(
         await sendGraph();
       } else if (message?.type === "navigate") {
         const requestedModel = model;
+        const requestedGraphRevision = ++graphRevision;
         let graph: Graph;
         try {
           graph = await log.run(
@@ -517,7 +519,11 @@ async function configurePanel(
             message.actionId,
           );
         } catch (error) {
-          if (model !== requestedModel) return;
+          if (
+            model !== requestedModel ||
+            graphRevision !== requestedGraphRevision
+          )
+            return;
           const detail = error instanceof Error ? error.message : String(error);
           await panel.webview.postMessage({
             type: "navigation-error",
@@ -528,12 +534,18 @@ async function configurePanel(
           );
           return;
         }
-        if (model !== requestedModel) return;
+        if (
+          model !== requestedModel ||
+          graphRevision !== requestedGraphRevision
+        )
+          return;
         requireModel().graph = graph;
         requireModel().metadata = undefined;
+        graphRevision++;
         await sendGraph();
       } else if (message?.type === "metadata") {
         const requestedModel = model;
+        const requestedGraphRevision = graphRevision;
         let metadata: GraphMetadata;
         try {
           metadata = await log.run(
@@ -548,7 +560,11 @@ async function configurePanel(
             message.actionId,
           );
         } catch (error) {
-          if (model !== requestedModel) return;
+          if (
+            model !== requestedModel ||
+            graphRevision !== requestedGraphRevision
+          )
+            return;
           if (model) invalidateModel(model, log);
           const detail = error instanceof Error ? error.message : String(error);
           await panel.webview.postMessage({
@@ -560,11 +576,16 @@ async function configurePanel(
           );
           return;
         }
-        if (model !== requestedModel) return;
+        if (
+          model !== requestedModel ||
+          graphRevision !== requestedGraphRevision
+        )
+          return;
         requireModel().metadata = metadata;
         await panel.webview.postMessage({ type: "metadata-info", metadata });
       } else if (message?.type === "refresh-shapes") {
         const requestedModel = model;
+        const requestedGraphRevision = graphRevision;
         let refreshed: Graph;
         try {
           refreshed = await log.run(
@@ -579,7 +600,11 @@ async function configurePanel(
             message.actionId,
           );
         } catch (error) {
-          if (model !== requestedModel) return;
+          if (
+            model !== requestedModel ||
+            graphRevision !== requestedGraphRevision
+          )
+            return;
           if (model) invalidateModel(model, log);
           const detail = error instanceof Error ? error.message : String(error);
           await panel.webview.postMessage({
@@ -591,8 +616,13 @@ async function configurePanel(
           );
           return;
         }
-        if (model !== requestedModel) return;
+        if (
+          model !== requestedModel ||
+          graphRevision !== requestedGraphRevision
+        )
+          return;
         requireModel().graph = refreshed;
+        graphRevision++;
         await panel.webview.postMessage({
           type: "shape-info",
           tensors: refreshed.tensors,

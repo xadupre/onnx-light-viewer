@@ -323,6 +323,57 @@ test("shares concurrent native recovery and keeps inferred state for navigation"
   );
 });
 
+test("discards analysis from the previous graph when navigation shares delayed recovery", async () => {
+  for (const type of ["refresh-shapes", "metadata"]) {
+    const extension = await openExtension("nested-if.onnx", undefined, true);
+    const native = extension.nativeModels.at(-1);
+    const graph = native.graph;
+    const root = graph(false);
+    const path = root.nodes[0].attributes.find(
+      ({ name }) => name === "then_branch",
+    ).graphs[0].path;
+    native.graph = (infer, ...args) => {
+      if (infer) throw new Error("temporary inference failure");
+      return graph(infer, ...args);
+    };
+    await extension.receive({ type: "refresh-shapes" });
+    assert.equal(extension.messages.at(-1).type, "shape-error");
+
+    const resume = extension.pauseNextFileLoad();
+    const navigation = extension.receive({ type: "navigate", path });
+    const analysis = extension.receive({ type });
+    resume();
+    await Promise.all([navigation, analysis]);
+
+    const child = extension.messages
+      .filter(({ type }) => type === "graph")
+      .at(-1).graph;
+    assert.equal(child.breadcrumbs.length, 2);
+    assert.equal(child.nodes.length, 2);
+    assert.equal(
+      extension.messages.some(({ type: messageType }) =>
+        type === "refresh-shapes"
+          ? messageType === "shape-info"
+          : messageType === "metadata-info",
+      ),
+      false,
+    );
+
+    await extension.receive({ type });
+    if (type === "refresh-shapes") {
+      assert.equal(extension.messages.at(-1).type, "shape-info");
+      assert.deepEqual(
+        extension.messages.at(-1).tensors.find(({ name }) => name === "sum")
+          .shape,
+        ["N", "3"],
+      );
+    } else {
+      assert.equal(extension.messages.at(-1).type, "metadata-info");
+      assert.equal(extension.messages.at(-1).metadata.nodes.length, 2);
+    }
+  }
+});
+
 test("opens a cached Hugging Face model and preserves the display on invalid input or cancellation", async (t) => {
   const storage = await mkdtemp(path.join(tmpdir(), "onnx-viewer-hf-host-"));
   t.after(() => rm(storage, { recursive: true }));

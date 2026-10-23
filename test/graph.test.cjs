@@ -226,6 +226,44 @@ test("skips a large packed float initializer without allocating its payload", as
   assert.ok(process.memoryUsage().rss - rss < 64 * 1024 * 1024);
 });
 
+test("rejects duplicate graphs before applying skipped tensor paths", async (t) => {
+  const directory = mkdtempSync(path.join(tmpdir(), "onnx-light-viewer-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const file = path.join(directory, "duplicate-graph.onnx");
+  const size = 256 * 1024 * 1024;
+  const tensorHeader = Buffer.concat([
+    Buffer.from([0x08]),
+    varint(size),
+    Buffer.from([0x10, 0x02, 0x42, 0x01, 0x77, 0x4a]),
+    varint(size),
+  ]);
+  const graphHeader = Buffer.concat([
+    Buffer.from([0x2a]),
+    varint(tensorHeader.length + size),
+    tensorHeader,
+  ]);
+  const prefix = Buffer.concat([
+    varintField(1, 8),
+    bytesField(8, varintField(2, 13)),
+    Buffer.from([0x3a]),
+    varint(graphHeader.length + size),
+    graphHeader,
+  ]);
+  const duplicate = bytesField(7, Buffer.alloc(0));
+  const fd = openSync(file, "w");
+  try {
+    writeSync(fd, prefix);
+    ftruncateSync(fd, prefix.length + size + duplicate.length);
+    writeSync(fd, duplicate, 0, duplicate.length, prefix.length + size);
+  } finally {
+    closeSync(fd);
+  }
+  await assert.rejects(
+    loadModelFile(file, "duplicate-graph.onnx"),
+    /Duplicate singular protobuf message field/,
+  );
+});
+
 test("isolates untracked messages before a Constant with an omitted tensor payload", async (t) => {
   const directory = mkdtempSync(path.join(tmpdir(), "onnx-light-viewer-"));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
