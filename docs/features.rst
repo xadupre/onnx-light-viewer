@@ -31,8 +31,9 @@ underlying onnx-light libraries. Start with the worked example in
        sidebar node/operator search with live suggestions.
      - :doc:`features/navigation`. Moving a node changes only its display position.
    * - Inspection
-     - Types, symbolic shapes, attributes/schema defaults, dense/sparse initializer
-       metadata, bounded small-value previews and Markdown operator documentation.
+     - Types, symbolic shapes, attributes/schema defaults, dense/sparse/encoded
+       initializer metadata, opaque/structured types, bounded previews and
+       Markdown operator documentation.
      - :doc:`features/inspection`. External or omitted payloads are not read for
        previews; this is not a full tensor-data browser.
    * - Subgraphs and functions
@@ -74,8 +75,8 @@ viewer control.
      - Planned: fusion/Layer patterns, weight quantization and rewriting
        scenarios/pipelines.
    * - Full tensor analytics
-     - Planned: statistics, histograms, color maps and dedicated
-       OpaqueProto/StructProto/EncodedValueProto inspectors.
+     - Planned: statistics, histograms, color maps and decoded payload browsing.
+       Opaque/structured type and encoded layout previews are already available.
    * - Execution and benchmarking
      - Planned: whole-model/subgraph execution, CPU/CUDA engine comparison and
        input/output export with reproducible execution scripts.

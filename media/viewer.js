@@ -414,7 +414,7 @@ function operatorSizes(nodes) {
       const typeWidth = widths.get(node.opType);
       const nameWidth = context.measureText(node.name).width;
       const initializers = (node.parameters ?? []).map((parameter) => {
-        const description = `${parameter.name}: ${parameter.type} [${parameter.shape.join(", ")}]${parameter.value === undefined ? "" : ` = ${parameter.value}`}`;
+        const description = `${parameter.name}: ${parameter.type}${parameter.shape === undefined ? "" : ` [${parameter.shape?.join(", ") ?? "?"}]`}${parameter.value === undefined ? "" : ` = ${parameter.value}`}`;
         const text = shortName(description, 38);
         return {
           description,
@@ -832,8 +832,15 @@ function initializerList(parameters) {
       heading.textContent = `${parameter.name} (${parameter.type})`;
       const shape = document.createElement("div");
       shape.className = "tensor-info";
-      shape.textContent = `Shape: [${parameter.shape.join(", ")}]`;
-      item.append(heading, shape);
+      shape.textContent = `Shape: [${parameter.shape?.join(", ") ?? "?"}]`;
+      item.append(heading);
+      if (parameter.shape !== undefined) item.append(shape);
+      if (parameter.encoding !== undefined) {
+        const encoding = document.createElement("pre");
+        encoding.className = "initializer-values";
+        encoding.textContent = `Encoding: ${parameter.encoding}`;
+        item.append(encoding);
+      }
       if (parameter.value !== undefined) {
         const values = document.createElement("pre");
         values.className = "initializer-values";

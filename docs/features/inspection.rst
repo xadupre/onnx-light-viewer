@@ -34,6 +34,31 @@ strings are limited to 128 bytes, with an ellipsis for truncation. External file
 and payloads omitted during loading are never read for a preview. The initializer
 list scrolls without limiting the number of connected parameters.
 
+Opaque and encoded values
+-------------------------
+
+Opaque ports show their domain/name; structured ports show their declared layout,
+including model-scoped type references. These are ``TypeProto.Opaque`` and
+``StructTypeProto`` in onnx-light, rather than ordinary tensor types.
+``EncodedValueProto`` initializers appear in the connected parameter list with
+their logical type/shape when present, an **Encoding** layout preview and
+embedded/external storage. Affine and structured layouts are supported.
+Packed bytes are not displayed as ordinary tensor values or decoded by the viewer.
+
+Open ``examples/quantized-2bit.onnx`` or ``examples/quantized-3bit.onnx`` and select
+**Dequantize** to inspect portable Q2_K/Q3_K weight layouts. The 2-bit example
+uses an inline declaration; the 3-bit example uses a model-scoped type reference.
+These are onnx-light extensions, not standard ONNX or GGUF storage formats.
+With onnx-light 0.2.0 Python bindings and their dependencies available, regenerate
+both examples from the repository root:
+
+.. code-block:: sh
+
+   python examples/generate_quantized.py
+
+Operator documentation and inference
+-------------------------------------
+
 **Doc** opens the selected operator's available onnx-light schema documentation,
 with its schema version, formal inputs/outputs, attributes and type constraints.
 It is disabled when no documentation is available. **Close** or Escape dismisses it.

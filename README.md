@@ -17,8 +17,9 @@ files.
 - Search nodes and operators with live suggestions; zoom, pan, select and move
   nodes, including in large graphs.
 - Navigate nested subgraphs and model-local function definitions with breadcrumbs.
-- Inspect shapes, attributes, dense/sparse initializer metadata and small available
-  tensor values; open operator documentation rendered as Markdown.
+- Inspect shapes, attributes, opaque/structured types, dense/sparse/encoded
+  initializer metadata and small available tensor values; open operator
+  documentation rendered as Markdown.
 - Refresh inferred shapes/types and static constant, tag and lifetime metadata,
   with visible update counts.
 - Use **Logs**, **Status** and **Controls** for diagnostics and shortcuts, and
