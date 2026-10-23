@@ -2034,6 +2034,87 @@ test("cancels area zoom and ignores clicks and degenerate rectangles", (t) => {
   assert.equal(document.querySelector(".selection-rectangle"), null);
 });
 
+test("prioritizes area zoom on subgraph rows without breaking normal activation", (t) => {
+  const { document, window, load, pointer, messages } = openViewer(t);
+  const model = loadModel(
+    readFileSync(require.resolve("./models/subgraphs.onnx")),
+    "subgraphs.onnx",
+  );
+  const graph = document.getElementById("graph");
+  for (const altKey of [false, true]) {
+    for (const outcome of ["zoom", "cancel", "click"]) {
+      load(model.graph());
+      const link = document.querySelector(".subgraph-link");
+      const target = link.querySelector("text");
+      const row = link.querySelector("rect");
+      const x = Number(row.getAttribute("x")) + 10;
+      const y = Number(row.getAttribute("y")) + 10;
+      const initial = graph.getAttribute("viewBox");
+      const positions = nodePositions(document);
+      const selected = document.querySelector(".graph-node.selected");
+      const count = messages.length;
+      if (!altKey) document.getElementById("zoom-area").click();
+      pointer(target, "pointerdown", x, y, { altKey });
+      assert.equal(graph.hasPointerCapture(1), true);
+      assert.ok(document.querySelector(".selection-rectangle"));
+      if (outcome !== "click") {
+        pointer(graph, "pointermove", x + 40, y + 40);
+      }
+      if (outcome === "cancel") {
+        graph.dispatchEvent(
+          new window.KeyboardEvent("keydown", { key: "Escape" }),
+        );
+      }
+      pointer(
+        graph,
+        "pointerup",
+        x + (outcome === "click" ? 0 : 40),
+        y + (outcome === "click" ? 0 : 40),
+      );
+      target.dispatchEvent(
+        new window.MouseEvent("click", { bubbles: true, detail: 1 }),
+      );
+      assert.equal(messages.length, count);
+      assert.equal(graph.getAttribute("aria-busy"), "false");
+      assert.equal(document.querySelector(".selection-rectangle"), null);
+      assert.equal(graph.hasPointerCapture(1), false);
+      assert.equal(
+        document.getElementById("zoom-area").getAttribute("aria-pressed"),
+        "false",
+      );
+      assert.equal(document.querySelector(".graph-node.selected"), selected);
+      assert.deepEqual(nodePositions(document), positions);
+      if (outcome === "zoom") {
+        assert.ok(
+          Number(graph.getAttribute("viewBox").split(" ")[3]) <
+            Number(initial.split(" ")[3]),
+        );
+        pointer(target, "pointerdown", x, y);
+        pointer(graph, "pointerup", x, y);
+        target.dispatchEvent(
+          new window.MouseEvent("click", { bubbles: true, detail: 1 }),
+        );
+      } else {
+        assert.equal(graph.getAttribute("viewBox"), initial);
+        if (outcome === "cancel") {
+          link.dispatchEvent(
+            new window.KeyboardEvent("keydown", {
+              key: "Enter",
+              bubbles: true,
+            }),
+          );
+        } else {
+          target.dispatchEvent(
+            new window.MouseEvent("click", { bubbles: true }),
+          );
+        }
+      }
+      assert.equal(messages.length, count + 1);
+      assert.equal(messages.at(-1).type, "navigate");
+    }
+  }
+});
+
 test("keyboard zoom shortcuts match controls and stay scoped to the graph canvas", (t) => {
   const { document, window, load } = openViewer(t);
   const graph = document.getElementById("graph");

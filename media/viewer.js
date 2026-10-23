@@ -1218,9 +1218,17 @@ function render(graph, metadata) {
         "subgraph-label",
         "end",
       );
-      link.addEventListener("pointerdown", (event) => event.stopPropagation());
+      let suppressPointerClick = false;
+      link.addEventListener("pointerdown", (event) => {
+        suppressPointerClick = zoomAreaMode || event.altKey;
+        if (!suppressPointerClick) event.stopPropagation();
+      });
       link.addEventListener("click", (event) => {
         event.stopPropagation();
+        if (suppressPointerClick) {
+          suppressPointerClick = false;
+          if (event.detail > 0) return;
+        }
         if (svg.getAttribute("aria-busy") !== "true") navigate(graph.path);
       });
       link.addEventListener("keydown", (event) => {
