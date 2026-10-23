@@ -338,13 +338,23 @@ async function openExtension(
       selection = [uri(filePath)];
       await receive({ type: "open" });
     },
-    save: async (filePath, encrypted = false, passwords = [], externalSize) => {
+    save: async (
+      filePath,
+      encrypted = false,
+      passwords = [],
+      externalSize,
+      reuse = false,
+    ) => {
       saveDestination = filePath ? vscode.Uri.file(filePath) : undefined;
       passwordValues = passwords;
       await receive({
         type: "save",
         encrypted,
-        storage: externalSize === undefined ? "embedded" : "external",
+        storage: reuse
+          ? "reuse"
+          : externalSize === undefined
+            ? "embedded"
+            : "external",
         ...(externalSize === undefined
           ? {}
           : { maxExternalFileSize: externalSize }),
@@ -402,6 +412,161 @@ async function openExtension(
     },
   };
 }
+
+test("previews and applies selected native fusions, rejects stale previews and saves edited copies", async (t) => {
+  const directory = await mkdtemp(
+    path.join(tmpdir(), "onnx-light-fusion-host-"),
+  );
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const source = path.join(directory, "source.onnx");
+  await copyFile(require.resolve("./models/fusion.onnx"), source);
+  const extension = await openExtension(
+    undefined,
+    "onnxLightViewer.open",
+    true,
+  );
+  await extension.openFile(source);
+  const original = await readFile(source);
+  let edited;
+  const native = extension.nativeModels.at(-1);
+  const previewFusion = native.previewFusion;
+  native.previewFusion = async (...args) => {
+    const preview = await previewFusion(...args);
+    const applyFusion = preview.model.applyFusion;
+    preview.model.applyFusion = async (...selected) =>
+      (edited = await applyFusion(...selected));
+    return preview;
+  };
+  await extension.receive({ type: "fusion-patterns", requestId: 1 });
+  assert.ok(extension.messages.at(-1).patterns.includes("TransposeTranspose"));
+  await extension.receive({
+    type: "preview-fusion",
+    pattern: "TransposeTranspose",
+    requestId: 2,
+  });
+  const preview = extension.messages.at(-1);
+  assert.equal(preview.type, "fusion-preview");
+  assert.equal(preview.matches.length, 2);
+  assert.equal(preview.model, undefined);
+  await extension.receive({
+    type: "apply-fusion",
+    previewId: preview.previewId,
+    anchors: [0],
+    requestId: 3,
+  });
+  assert.equal(extension.messages.at(-1).type, "fusion-info");
+  const graph = extension.messages.findLast(
+    (message) => message.type === "graph",
+  ).graph;
+  assert.deepEqual(
+    graph.nodes.map((node) => node.opType),
+    ["Identity", "Transpose", "Transpose", "MatMul"],
+  );
+  const destination = path.join(directory, "edited.onnx");
+  await extension.save(destination);
+  const { loadModelFile } = require("../dist/graph");
+  assert.deepEqual(
+    (await loadModelFile(destination, "edited"))
+      .graph()
+      .nodes.map((node) => node.opType),
+    graph.nodes.map((node) => node.opType),
+  );
+  await extension.receive({
+    type: "apply-fusion",
+    previewId: preview.previewId,
+    anchors: [2],
+    requestId: 4,
+  });
+  assert.equal(extension.messages.at(-1).type, "fusion-error");
+  assert.deepEqual(await readFile(source), original);
+  edited.metadata = () => {
+    throw new Error("Native metadata failure after editing");
+  };
+  await extension.receive({ type: "metadata" });
+  assert.equal(extension.messages.at(-1).type, "metadata-error");
+  await extension.save(destination);
+  assert.equal(extension.messages.at(-1).type, "save-info");
+  assert.deepEqual(
+    (await loadModelFile(destination, "edited"))
+      .graph()
+      .nodes.map((node) => node.opType),
+    graph.nodes.map((node) => node.opType),
+  );
+  await extension.receive({
+    type: "preview-fusion",
+    pattern: "TransposeTranspose",
+    requestId: 5,
+  });
+  const discarded = extension.messages.at(-1);
+  await extension.receive({ type: "cancel-fusion" });
+  await extension.receive({
+    type: "apply-fusion",
+    previewId: discarded.previewId,
+    anchors: [1],
+    requestId: 6,
+  });
+  assert.equal(extension.messages.at(-1).type, "fusion-error");
+  const pending = extension.receive({
+    type: "preview-fusion",
+    pattern: "TransposeTranspose",
+    requestId: 7,
+  });
+  await extension.openFile(require.resolve("./models/relu.onnx"));
+  await pending;
+  assert.notEqual(extension.messages.at(-1).requestId, 7);
+});
+
+test("saves reused external weights only beside their original source", async (t) => {
+  const directory = await mkdtemp(
+    path.join(tmpdir(), "onnx-light-reuse-host-"),
+  );
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const { loadModel, loadModelFile } = require("../dist/graph");
+  const native = loadModel(
+    readFileSync(require.resolve("./models/fusion.onnx")),
+    "fusion",
+  );
+  const files = await native.serializeFiles(1024, "original.data");
+  const source = path.join(directory, "source.onnx");
+  await writeFile(source, files.model);
+  for (const weight of files.weights)
+    await writeFile(path.join(directory, weight.name), weight.bytes);
+  const extension = await openExtension(
+    undefined,
+    "onnxLightViewer.open",
+    true,
+  );
+  await extension.openFile(source);
+  await extension.receive({
+    type: "preview-fusion",
+    pattern: "TransposeTranspose",
+    requestId: 1,
+  });
+  await extension.receive({
+    type: "apply-fusion",
+    previewId: extension.messages.at(-1).previewId,
+    anchors: [0, 2],
+    requestId: 2,
+  });
+  const destination = path.join(directory, "edited.onnx");
+  const before = await readdir(directory);
+  await extension.save(destination, false, [], 1024, true);
+  assert.equal(extension.messages.at(-1).type, "save-info");
+  assert.deepEqual(
+    (await readdir(directory)).sort(),
+    [...before, "edited.onnx"].sort(),
+  );
+  assert.deepEqual(
+    (await loadModelFile(destination, "edited")).externalDataLocations(),
+    [files.weights[0].name],
+  );
+  const other = path.join(directory, "other");
+  await mkdir(other);
+  await extension.save(path.join(other, "edited.onnx"), false, [], 1024, true);
+  assert.equal(extension.messages.at(-1).type, "save-error");
+  assert.match(extension.errors.at(-1), /source folder/);
+  assert.deepEqual(await readdir(other), []);
+});
 
 test("saves inferred ModelProto copies as plain or encrypted files and opens encrypted copies", async (t) => {
   const directory = await mkdtemp(

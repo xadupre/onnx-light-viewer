@@ -40,6 +40,10 @@ let connectionsByName = new Map();
 let releasedValues = new Set();
 let unusedLabels = [];
 let hasModel = false;
+let fusionGraph;
+let fusionRequest = 0;
+let fusionPreview;
+let fusionBusy = false;
 let replacementPending = false;
 let nextAction = 0;
 const logSession = crypto.randomUUID();
@@ -167,6 +171,98 @@ function setLoading(pending, message = "") {
       pending || !hasModel || byId(id).getAttribute("aria-busy") === "true";
   byId("load-status").textContent =
     message || (pending ? "Loading model…" : "");
+  byId("fuse-pattern").disabled =
+    pending ||
+    !hasModel ||
+    fusionBusy ||
+    fusionGraph?.breadcrumbs?.length !== 1;
+}
+
+function fusionControls(busy, message = "") {
+  fusionBusy = busy;
+  for (const input of byId("fusion-matches").querySelectorAll("input"))
+    input.disabled = busy;
+  byId("fusion-panel").setAttribute("aria-busy", String(busy));
+  byId("close-fusion").disabled = busy;
+  byId("fusion-pattern").disabled =
+    busy || !byId("fusion-pattern").options.length;
+  byId("preview-fusion").disabled = byId("fusion-pattern").disabled;
+  byId("select-fusions").disabled = busy || !fusionPreview?.matches.length;
+  byId("apply-fusion").disabled = busy || !fusionSelection().length;
+  byId("fuse-pattern").disabled =
+    busy ||
+    replacementPending ||
+    !hasModel ||
+    fusionGraph?.breadcrumbs?.length !== 1;
+  if (message) byId("fusion-feedback").textContent = message;
+}
+
+function fusionSelection() {
+  return [...byId("fusion-matches").querySelectorAll("input:checked")].map(
+    (input) => Number(input.value),
+  );
+}
+
+function updateFusionSelection() {
+  const anchors = new Set(fusionSelection());
+  const nodes = new Set();
+  let overlap = false;
+  for (const match of fusionPreview?.matches ?? []) {
+    if (!anchors.has(match.anchor)) continue;
+    for (const node of match.nodes) {
+      if (nodes.has(node)) overlap = true;
+      nodes.add(node);
+    }
+  }
+  byId("apply-fusion").disabled = fusionBusy || !anchors.size || overlap;
+  byId("fusion-feedback").textContent = overlap
+    ? "Selected matches overlap. Select disjoint matches."
+    : `${anchors.size} selected / ${fusionPreview?.matches.length ?? 0} matches.`;
+}
+
+function clearFusionPreview() {
+  fusionPreview = undefined;
+  byId("fusion-matches").replaceChildren();
+  fusionControls(false);
+}
+
+function showFusionMatches(data) {
+  fusionPreview = { id: data.previewId, matches: data.matches };
+  byId("fusion-matches").replaceChildren();
+  for (const match of data.matches) {
+    const item = document.createElement("li");
+    item.className = "fusion-match";
+    const label = document.createElement("label");
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.value = String(match.anchor);
+    checkbox.addEventListener("change", updateFusionSelection);
+    const names = match.nodes.map((index) => {
+      const node = fusionGraph.nodes[index];
+      return `${node.name || node.id} (${node.opType})`;
+    });
+    label.append(checkbox, document.createTextNode(names.join(" + ")));
+    const highlight = document.createElement("button");
+    highlight.textContent = "Show nodes";
+    highlight.addEventListener("click", () => {
+      selected = new Set(match.nodes.map((index) => `node-${index}`));
+      updateSelection(`node-${match.nodes[0]}`);
+      readableZoom();
+    });
+    const replacement = document.createElement("pre");
+    replacement.textContent = match.replacement.length
+      ? match.replacement
+          .map(
+            (node) =>
+              `${node.domain ? `${node.domain}::` : ""}${node.opType}(${node.inputs.join(", ")}) -> ${node.outputs.join(", ")}${node.attributes.length ? `\n  ${node.attributes.map((attribute) => `${attribute.name}=${attribute.value}`).join(", ")}` : ""}`,
+          )
+          .join("\n")
+      : "Remove matched nodes (no replacement operators).";
+    item.append(label, highlight, replacement);
+    byId("fusion-matches").append(item);
+  }
+  fusionControls(false);
+  updateFusionSelection();
 }
 
 window.addEventListener("error", (event) => {
@@ -1704,10 +1800,59 @@ byId("save-model").addEventListener("click", () => {
   byId("save-options-error").textContent = "";
   byId("save-options").showModal();
 });
+byId("fuse-pattern").addEventListener("click", () => {
+  byId("fusion-panel").hidden = false;
+  clearFusionPreview();
+  byId("fusion-pattern").replaceChildren();
+  fusionControls(true, "Listing applicable pattern anchors…");
+  requestAction("fusion-patterns", "List fusion patterns", {
+    requestId: ++fusionRequest,
+  });
+});
+byId("close-fusion").addEventListener("click", () => {
+  fusionRequest++;
+  byId("fusion-panel").hidden = true;
+  clearFusionPreview();
+  vscode.postMessage({ type: "cancel-fusion" });
+});
+byId("fusion-pattern").addEventListener("change", () => {
+  fusionRequest++;
+  clearFusionPreview();
+  byId("fusion-feedback").textContent =
+    "Preview this pattern to see its matches.";
+});
+byId("preview-fusion").addEventListener("click", () => {
+  clearFusionPreview();
+  fusionControls(true, "Matching pattern and building replacements…");
+  requestAction("preview-fusion", "Preview fusion pattern", {
+    requestId: ++fusionRequest,
+    pattern: byId("fusion-pattern").value,
+  });
+});
+byId("select-fusions").addEventListener("click", () => {
+  const used = new Set();
+  for (const input of byId("fusion-matches").querySelectorAll("input")) {
+    const match = fusionPreview.matches.find(
+      (candidate) => candidate.anchor === Number(input.value),
+    );
+    input.checked = !match.nodes.some((node) => used.has(node));
+    if (input.checked) for (const node of match.nodes) used.add(node);
+  }
+  updateFusionSelection();
+});
+byId("apply-fusion").addEventListener("click", () => {
+  const anchors = fusionSelection();
+  fusionControls(true, "Applying selected matches…");
+  requestAction("apply-fusion", "Apply fusion pattern", {
+    requestId: ++fusionRequest,
+    previewId: fusionPreview.id,
+    anchors,
+  });
+});
 byId("save-form").addEventListener("change", () => {
-  const external =
-    document.querySelector('input[name="save-format"]:checked').value ===
-    "external-plain";
+  const external = ["external-plain", "reuse-plain"].includes(
+    document.querySelector('input[name="save-format"]:checked').value,
+  );
   byId("external-size").hidden = !external;
   byId("weight-file-size").disabled = !external;
   byId("save-options-error").textContent = "";
@@ -1720,13 +1865,16 @@ byId("save-form").addEventListener("submit", (event) => {
   const format = document.querySelector(
     'input[name="save-format"]:checked',
   ).value;
-  const external = format === "external-plain";
+  const external = format === "external-plain" || format === "reuse-plain";
   const maxExternalFileSize =
     Number(byId("weight-file-size").value) * 1024 * 1024;
   if (
-    !["embedded-plain", "embedded-encrypted", "external-plain"].includes(
-      format,
-    ) ||
+    ![
+      "embedded-plain",
+      "embedded-encrypted",
+      "external-plain",
+      "reuse-plain",
+    ].includes(format) ||
     (external &&
       (!Number.isSafeInteger(maxExternalFileSize) ||
         maxExternalFileSize < 1024 * 1024 ||
@@ -1738,7 +1886,8 @@ byId("save-form").addEventListener("submit", (event) => {
   }
   byId("save-options").close();
   requestAction("save", "Save ONNX model", {
-    storage: external ? "external" : "embedded",
+    storage:
+      format === "reuse-plain" ? "reuse" : external ? "external" : "embedded",
     encrypted: format === "embedded-encrypted",
     ...(external ? { maxExternalFileSize } : {}),
   });
@@ -1853,8 +2002,36 @@ window.addEventListener("message", (event) => {
     }
     setLoading(false, `Could not open model: ${event.data.error}`);
   } else if (event.data?.type === "graph") {
+    fusionGraph = event.data.graph;
+    fusionRequest++;
+    byId("fusion-panel").hidden = true;
+    clearFusionPreview();
     byId("save-status").textContent = "";
+    byId("fusion-status").textContent = "";
     render(event.data.graph, event.data.metadata);
+    fusionControls(false);
+  } else if (event.data?.type === "fusion-patterns") {
+    if (event.data.requestId !== fusionRequest) return;
+    byId("fusion-pattern").replaceChildren();
+    for (const pattern of [...event.data.patterns].sort()) {
+      const option = document.createElement("option");
+      option.value = pattern;
+      option.textContent = pattern;
+      byId("fusion-pattern").append(option);
+    }
+    fusionControls(
+      false,
+      `${event.data.patterns.length} patterns with compatible anchors.`,
+    );
+  } else if (event.data?.type === "fusion-preview") {
+    if (event.data.requestId === fusionRequest) showFusionMatches(event.data);
+  } else if (event.data?.type === "fusion-error") {
+    if (event.data.requestId !== fusionRequest) return;
+    fusionControls(false, event.data.error);
+    byId("fusion-status").textContent = `Fusion failed: ${event.data.error}`;
+  } else if (event.data?.type === "fusion-info") {
+    byId("fusion-status").textContent =
+      `Applied ${event.data.count} fusion matches. Save a copy to keep changes.`;
   } else if (event.data?.type === "save-info") {
     byId("save-status").textContent = `Saved ${event.data.name}`;
   } else if (event.data?.type === "save-error") {

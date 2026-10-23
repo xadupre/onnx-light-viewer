@@ -5,7 +5,7 @@
 import * as vscode from "vscode";
 import { randomBytes } from "node:crypto";
 import { open, stat } from "node:fs/promises";
-import { join, posix } from "node:path";
+import { dirname, join, posix } from "node:path";
 import {
   listBackendTests,
   loadBackendTest,
@@ -328,6 +328,18 @@ async function configurePanel(
   let model: LoadedModel | undefined;
   let graphRevision = 0;
   let navigationRequest = 0;
+  let fusionRequest = 0;
+  let fusionPreview:
+    | {
+        id: number;
+        owner: LoadedModel;
+        native: NativeModel;
+        snapshot: NativeModel;
+        revision: number;
+        pattern: string;
+        anchors: Set<number>;
+      }
+    | undefined;
   let ready = false;
   let showLogsRequested = false;
   let initialLoading = !!uri;
@@ -368,6 +380,8 @@ async function configurePanel(
     return model;
   };
   const sendGraph = () => {
+    fusionPreview = undefined;
+    fusionRequest++;
     const current = requireModel();
     void sendStatus();
     return postMessage({
@@ -417,6 +431,10 @@ async function configurePanel(
         storage?: unknown;
         encrypted?: unknown;
         maxExternalFileSize?: unknown;
+        requestId?: unknown;
+        previewId?: unknown;
+        pattern?: unknown;
+        anchors?: unknown;
       } | null,
     ) => {
       if (!active) return;
@@ -635,6 +653,147 @@ async function configurePanel(
         model = loaded.model;
         panel.title = `ONNX: ${loaded.name}`;
         await sendGraph();
+      } else if (message?.type === "cancel-fusion") {
+        fusionPreview = undefined;
+        fusionRequest++;
+      } else if (
+        message?.type === "fusion-patterns" ||
+        message?.type === "preview-fusion" ||
+        message?.type === "apply-fusion"
+      ) {
+        const owner = model;
+        const revision = graphRevision;
+        const generation = ++fusionRequest;
+        try {
+          await log.run(
+            message.type === "apply-fusion"
+              ? "Apply fusion pattern"
+              : message.type === "preview-fusion"
+                ? "Preview fusion pattern"
+                : "List fusion patterns",
+            async () => {
+              const current = requireModel();
+              if (current.graph.breadcrumbs.length !== 1)
+                throw new Error(
+                  "Return to the main graph to apply fusion patterns.",
+                );
+              const isCurrent = () =>
+                active &&
+                model === owner &&
+                graphRevision === revision &&
+                fusionRequest === generation;
+              if (message.type === "apply-fusion") {
+                const preview = fusionPreview;
+                if (
+                  !preview ||
+                  preview.owner !== current ||
+                  preview.native !== current.native ||
+                  preview.revision !== revision ||
+                  preview.id !== message.previewId ||
+                  !Array.isArray(message.anchors) ||
+                  !message.anchors.length ||
+                  !message.anchors.every(
+                    (anchor: unknown) =>
+                      typeof anchor === "number" &&
+                      Number.isSafeInteger(anchor) &&
+                      preview.anchors.has(anchor),
+                  )
+                )
+                  throw new Error(
+                    "The fusion preview is stale or invalid. Preview again.",
+                  );
+                const edited = await preview.snapshot.applyFusion(
+                  preview.pattern,
+                  message.anchors,
+                );
+                if (!isCurrent()) return;
+                const retained = edited.clone();
+                const graph = edited.graph();
+                const replacement: LoadedModel = {
+                  ...current,
+                  native: edited,
+                  nativeReload: undefined,
+                  graph,
+                  metadata: undefined,
+                  reload: () => retained.clone(),
+                };
+                model = replacement;
+                fusionPreview = undefined;
+                graphRevision++;
+                navigationRequest++;
+                panel.title = `ONNX: ${current.fileName ?? graph.name} (modified)`;
+                await sendGraph();
+                if (!active || model !== replacement) return;
+                await postMessage({
+                  type: "fusion-info",
+                  count: message.anchors.length,
+                });
+                return;
+              }
+              fusionPreview = undefined;
+              const native = await nativeModel(
+                current,
+                log,
+                () => void sendStatus(),
+              );
+              if (!isCurrent()) return;
+              const patterns = native.fusionPatterns();
+              if (message.type === "fusion-patterns") {
+                await postMessage({
+                  type: "fusion-patterns",
+                  requestId: message.requestId,
+                  patterns,
+                });
+                return;
+              }
+              if (
+                typeof message.pattern !== "string" ||
+                !patterns.includes(message.pattern)
+              )
+                throw new Error("Choose an applicable fusion pattern.");
+              const preview = await native.previewFusion(
+                message.pattern,
+                current.source?.uri.scheme === "file"
+                  ? current.source.uri.fsPath
+                  : undefined,
+              );
+              if (!isCurrent()) return;
+              fusionPreview = {
+                id: generation,
+                owner: current,
+                native,
+                snapshot: preview.model,
+                revision,
+                pattern: message.pattern,
+                anchors: new Set(preview.matches.map((match) => match.anchor)),
+              };
+              await postMessage({
+                type: "fusion-preview",
+                requestId: message.requestId,
+                previewId: generation,
+                matches: preview.matches,
+              });
+            },
+            message.actionId,
+          );
+        } catch (error) {
+          if (
+            !active ||
+            model !== owner ||
+            graphRevision !== revision ||
+            fusionRequest !== generation
+          )
+            return;
+          const detail = error instanceof Error ? error.message : String(error);
+          await postMessage({
+            type: "fusion-error",
+            requestId: message.requestId,
+            error: detail,
+          });
+          await vscode.window.showErrorMessage(
+            `Could not fuse ONNX model: ${detail}`,
+          );
+        }
       } else if (message?.type === "save") {
         const requestedModel = model;
         try {
@@ -645,13 +804,16 @@ async function configurePanel(
               if (
                 (message.storage !== undefined &&
                   message.storage !== "embedded" &&
-                  message.storage !== "external") ||
+                  message.storage !== "external" &&
+                  message.storage !== "reuse") ||
                 (message.encrypted !== undefined &&
                   typeof message.encrypted !== "boolean")
               )
                 throw new Error("Invalid model save format.");
               const format = {
-                external: message.storage === "external",
+                external:
+                  message.storage === "external" || message.storage === "reuse",
+                reuse: message.storage === "reuse",
                 encrypted: message.encrypted === true,
               };
               if (format.external && format.encrypted)
@@ -714,6 +876,24 @@ async function configurePanel(
                 return cancelled();
               const source = current.source?.uri;
               await assertSaveDestination(source ? [source] : [], destination);
+              if (format.reuse) {
+                if (
+                  !source ||
+                  source.scheme !== "file" ||
+                  destination.scheme !== "file"
+                )
+                  throw new Error(
+                    "Reusing weights requires a local source and destination.",
+                  );
+                const [original, target] = await Promise.all([
+                  stat(dirname(source.fsPath), { bigint: true }),
+                  stat(dirname(destination.fsPath), { bigint: true }),
+                ]);
+                if (original.dev !== target.dev || original.ino !== target.ino)
+                  throw new Error(
+                    "Save in the source folder to reuse relative external weights.",
+                  );
+              }
               const isCurrent = () => active && model === current;
               const native = await nativeModel(current, log, () => {
                 void sendStatus();
@@ -727,6 +907,7 @@ async function configurePanel(
                     maxExternalFileSize,
                     `${posix.basename(destination.path)}.${randomBytes(12).toString("hex")}.data`,
                     sourcePath,
+                    format.reuse,
                   )
                 : {
                     model: await native.serialize(password, sourcePath),

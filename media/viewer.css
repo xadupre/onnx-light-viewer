@@ -705,6 +705,38 @@ button:disabled {
   fill: #e2b77a;
   font-size: 9px;
 }
+#fusion-panel {
+  padding: 16px 24px;
+  max-height: 45vh;
+  overflow: auto;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--vscode-panel-border, #d0d7de);
+}
+#fusion-panel[hidden] {
+  display: none;
+}
+#fusion-matches {
+  max-height: 300px;
+  overflow: auto;
+}
+.fusion-match {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--vscode-panel-border, #d0d7de);
+}
+.fusion-match label {
+  display: inline-flex;
+  gap: 8px;
+  margin-right: 16px;
+}
+.fusion-match pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+#fusion-panel footer {
+  display: flex;
+  gap: 12px;
+  margin-top: 12px;
+}
 #operator-doc,
 #save-options {
   width: min(900px, 95vw);

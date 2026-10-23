@@ -171,7 +171,7 @@ test("shows matching adjacent Open/Save buttons and an explicit storage/encrypti
     form.dispatchEvent(new window.Event("submit", { cancelable: true }));
   save.click();
   assert.equal(dialog.open, true);
-  assert.equal(form.querySelectorAll('input[type="radio"]').length, 4);
+  assert.equal(form.querySelectorAll('input[type="radio"]').length, 5);
   assert.equal(
     form.querySelector('input[value="external-encrypted"]').disabled,
     true,
@@ -211,6 +211,126 @@ test("shows matching adjacent Open/Save buttons and an explicit storage/encrypti
       actionId: undefined,
     },
   );
+});
+
+test("previews replacements, highlights affected nodes and applies one or all compatible fusion matches", async (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const native = loadModel(
+    readFileSync(require.resolve("./models/fusion.onnx")),
+    "fusion",
+  );
+  const preview = await native.previewFusion("TransposeTranspose");
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  const button = document.getElementById("fuse-pattern");
+  assert.equal(button.disabled, true);
+  load(native.graph());
+  button.click();
+  assert.equal(document.getElementById("fusion-panel").hidden, false);
+  send({
+    type: "fusion-patterns",
+    requestId: messages.at(-1).requestId,
+    patterns: ["TransposeTranspose"],
+  });
+  document.getElementById("preview-fusion").click();
+  const requestId = messages.at(-1).requestId;
+  assert.equal(messages.at(-1).pattern, "TransposeTranspose");
+  send({
+    type: "fusion-preview",
+    requestId,
+    previewId: 42,
+    matches: preview.matches,
+  });
+  const matches = document.getElementById("fusion-matches");
+  assert.equal(matches.children.length, 2);
+  assert.match(matches.textContent, /first.*second/);
+  assert.match(matches.textContent, /Identity\(x\) -> a/);
+  assert.equal(document.getElementById("apply-fusion").disabled, true);
+  matches.querySelector("button").click();
+  assert.equal(document.querySelectorAll(".graph-node.selected").length, 2);
+  const first = matches.querySelector("input");
+  first.checked = true;
+  first.dispatchEvent(new window.Event("change"));
+  document.getElementById("apply-fusion").click();
+  assert.deepEqual(Array.from(messages.at(-1).anchors), [0]);
+  assert.equal(messages.at(-1).previewId, 42);
+  send({
+    type: "fusion-error",
+    requestId: messages.at(-1).requestId,
+    error: "Please retry.",
+  });
+  assert.match(
+    document.getElementById("fusion-feedback").textContent,
+    /Please retry/,
+  );
+  document.getElementById("select-fusions").click();
+  document.getElementById("apply-fusion").click();
+  assert.deepEqual(Array.from(messages.at(-1).anchors), [0, 2]);
+  load(native.graph());
+  send({
+    type: "fusion-preview",
+    requestId,
+    previewId: 42,
+    matches: preview.matches,
+  });
+  assert.equal(matches.children.length, 0);
+  assert.equal(document.getElementById("fusion-panel").hidden, true);
+  const graph = native.graph();
+  load({
+    ...graph,
+    breadcrumbs: [...graph.breadcrumbs, { name: "nested", path: [] }],
+  });
+  assert.equal(button.disabled, true);
+});
+
+test("selects only non-overlapping matches and sends the external-weight reuse choice", async (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const native = loadModel(
+    readFileSync(require.resolve("./models/fusion.onnx")),
+    "fusion",
+  );
+  load(native.graph());
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  document.getElementById("fuse-pattern").click();
+  send({
+    type: "fusion-patterns",
+    requestId: messages.at(-1).requestId,
+    patterns: ["TransposeTranspose"],
+  });
+  document.getElementById("preview-fusion").click();
+  const preview = await native.previewFusion("TransposeTranspose");
+  preview.matches[1].nodes = [1, 2];
+  send({
+    type: "fusion-preview",
+    requestId: messages.at(-1).requestId,
+    previewId: 1,
+    matches: preview.matches,
+  });
+  const inputs = [...document.querySelectorAll("#fusion-matches input")];
+  for (const input of inputs) input.checked = true;
+  inputs[0].dispatchEvent(new window.Event("change"));
+  assert.equal(document.getElementById("apply-fusion").disabled, true);
+  assert.match(
+    document.getElementById("fusion-feedback").textContent,
+    /overlap/,
+  );
+  document.getElementById("select-fusions").click();
+  assert.deepEqual(
+    inputs.map((input) => input.checked),
+    [true, false],
+  );
+  document.getElementById("close-fusion").click();
+  document.getElementById("save-model").click();
+  const reuse = document.querySelector('input[value="reuse-plain"]');
+  reuse.checked = true;
+  reuse.dispatchEvent(new window.Event("change", { bubbles: true }));
+  assert.equal(document.getElementById("weight-file-size").disabled, false);
+  document
+    .getElementById("save-form")
+    .dispatchEvent(new window.Event("submit", { cancelable: true }));
+  assert.equal(messages.at(-1).storage, "reuse");
+  assert.equal(messages.at(-1).maxExternalFileSize, 5120 * 1024 * 1024);
 });
 
 test("shows loading progress until success, failure or cancellation, including initial loads", (t) => {

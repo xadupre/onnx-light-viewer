@@ -41,10 +41,23 @@ export function webviewHtml(
         <div><a id="repository-link" href="https://github.com/xadupre/onnx-light-viewer" title="ONNX Light Viewer on GitHub" aria-label="Open the ONNX Light Viewer GitHub repository"><img src="${resource("logo.svg")}" alt="" width="24" height="24"></a><button id="open-model" class="primary" title="Open an ONNX model">Open</button><button id="save-model" class="primary" disabled title="Save a plain or encrypted copy of the whole ONNX model" aria-haspopup="dialog" aria-controls="save-options" aria-describedby="save-status">Save</button><button id="refresh-shapes" class="icon-button" disabled title="Refresh shape and type information with onnx-light" aria-label="Refresh shape and type information" aria-describedby="shape-status"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2 6M20 4v7h-7"/></svg>Refresh shapes</button><button id="refresh-metadata" class="icon-button" disabled title="Recompute constants, tags and lifetimes for the displayed graph with onnx-light" aria-label="Refresh metadata for the displayed graph" aria-describedby="metadata-status"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2 6M20 4v7h-7"/></svg>Refresh metadata</button><button id="refresh-positions" class="icon-button" disabled title="Reset the portrait layout with new random horizontal positions" aria-label="Refresh node positions"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2 6M20 4v7h-7"/></svg>Refresh positions</button></div>
         <div><button id="show-metadata" class="icon-button" aria-expanded="false" aria-controls="metadata-panel" title="Show native constants, tags, lifetimes and stored metadata" aria-describedby="metadata-status"><span class="toggle-indicator" aria-hidden="true">&#10003;</span>Metadata</button></div>
         <div class="graph-stats" aria-live="polite"><span id="graph-summary">No model loaded</span><span id="initializer-count">0 initializers</span><span id="onnx-light-version" title="onnx-light C++ release used by this viewer">onnx-light ${onnxLightVersion}</span><span id="shape-status" role="status"></span><span id="metadata-status" role="status"></span><span id="navigation-status" role="status"></span><span id="load-status" role="status"></span></div>
+        <button id="fuse-pattern" disabled title="Preview and apply a native pattern on the main graph">Fuse pattern</button>
         <span id="save-status" role="status"></span>
+        <span id="fusion-status" role="status"></span>
         <nav id="graph-navigation" aria-label="Graph breadcrumbs" hidden></nav>
         <progress id="load-progress" aria-label="Loading ONNX model" hidden></progress>
       </header>
+      <section id="fusion-panel" aria-labelledby="fusion-title" hidden>
+        <h2 id="fusion-title">Fusion patterns</h2>
+        <p>Preview changes before applying. Choose individual matches or all compatible matches. The source file is never changed; use Save afterwards.</p>
+        <label for="fusion-pattern">Native pattern</label>
+        <select id="fusion-pattern" disabled></select>
+        <button id="preview-fusion" disabled>Preview matches</button>
+        <button id="close-fusion">Close</button>
+        <p id="fusion-feedback" role="status"></p>
+        <ul id="fusion-matches" aria-label="Fusion matches"></ul>
+        <footer><button id="select-fusions" disabled>Select all compatible</button><button id="apply-fusion" class="primary" disabled>Apply selected</button></footer>
+      </section>
       <div class="graph-body">
         <div class="canvas" id="canvas">
           <svg id="graph" role="group" aria-label="Interactive ONNX graph" tabindex="0"><defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs><g id="graph-overview" aria-hidden="true" display="none"><path id="overview-edges"/><path id="overview-nodes"/></g><path id="crossing-edges" class="crossing-edge"/><path id="released-crossing-edges" class="crossing-edge released"/><g id="edges"></g><g id="nodes"></g></svg>
@@ -212,6 +225,7 @@ export function webviewHtml(
           <tr><th scope="row">External weights</th><td><label><input type="radio" name="save-format" value="external-plain">.onnx model and separate weight files</label></td><td><label class="unavailable"><input type="radio" name="save-format" value="external-encrypted" disabled aria-describedby="external-encryption-note">Model and separate encrypted weight files</label><p id="external-encryption-note">Unavailable in onnx-light. <a href="https://github.com/xadupre/onnx-light/issues/5533">Track native support</a>.</p></td></tr>
         </tbody>
       </table>
+      <p><label><input type="radio" name="save-format" value="reuse-plain">Reuse unchanged external files; write only new or modified weights</label><br>Save in the source folder. Embedded weights still need saving. Choose embedded encryption to protect all weights.</p>
       <div id="external-size" hidden>
         <label for="weight-file-size">Maximum weight file size (MiB)</label>
         <input id="weight-file-size" type="number" min="1" max="8589934591" step="1" value="5120" required disabled aria-describedby="weight-size-note">

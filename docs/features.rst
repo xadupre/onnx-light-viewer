@@ -12,5 +12,6 @@ or executed, and viewer actions do not save or modify the source file.
    features/inspection
    features/subgraphs
    features/metadata
+   features/fusion_patterns
    features/backend_tests
    features/action_logs

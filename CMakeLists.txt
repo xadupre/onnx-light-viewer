@@ -44,6 +44,7 @@ target_compile_definitions(onnx_light_viewer PRIVATE
 target_include_directories(onnx_light_viewer PRIVATE ${CMAKE_JS_INC})
 target_link_libraries(onnx_light_viewer PRIVATE
   onnx_light::lib_onnx_op onnx_light::lib_onnx_shape
+  onnx_light::lib_onnx_patterns
   onnx_light::lib_onnx_backend_test ${CMAKE_JS_LIB}
 )
 set(_output "${CMAKE_CURRENT_SOURCE_DIR}/dist/native")
