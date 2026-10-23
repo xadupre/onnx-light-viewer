@@ -59,17 +59,17 @@ function matmulWithWeight(dataField) {
           1,
           Buffer.concat([
             varintField(1, 1),
-            bytesField(2, Buffer.concat([dimension("N"), dimension(4)])),
+            bytesField(2, Buffer.concat([dimension("N"), dimension(8)])),
           ]),
         ),
       ),
     ]);
   const weight = Buffer.concat([
-    varintField(1, 4),
-    varintField(1, 4),
+    varintField(1, 8),
+    varintField(1, 8),
     varintField(2, 1),
     bytesField(8, "weight"),
-    bytesField(dataField, Buffer.alloc(64)),
+    bytesField(dataField, Buffer.alloc(256)),
   ]);
   const node = Buffer.concat([
     bytesField(1, "x"),
@@ -345,7 +345,7 @@ test("allows shape and metadata analysis after omitting raw or typed initializer
     const model = await loadModelFile(file, `matmul-${name}.onnx`);
     assert.deepEqual(
       model.graph(true).tensors.find(({ name }) => name === "y").shape,
-      ["N", "4"],
+      ["N", "8"],
     );
     assert.equal(model.metadata().nodes.length, 1);
   }
@@ -714,7 +714,10 @@ test("loads typed attributes and dense/sparse initializer parameters without los
     external: false,
     location: null,
   });
-  assert.equal("value" in conv.parameters[0], false);
+  assert.equal(
+    conv.parameters[0].value,
+    `[${Array(9).fill("0.5").join(", ")}]`,
+  );
   assert.equal(custom.parameters[0].name, "sparse");
   assert.equal(custom.parameters[0].type, "SPARSE FLOAT");
   const attributes = Object.fromEntries(
@@ -741,7 +744,7 @@ test("loads typed attributes and dense/sparse initializer parameters without los
   );
 });
 
-test("exposes all connected initializer shapes/types and external file locations, without values or external reads", () => {
+test("exposes connected initializer metadata and tiny values without external reads", () => {
   const graph = decodeGraph(
     modelBytes("initializers.onnx"),
     "initializers.onnx",
@@ -754,6 +757,7 @@ test("exposes all connected initializer shapes/types and external file locations
     type: "FLOAT",
     shape: ["1"],
     storage: { external: false, location: null },
+    value: "[9.25]",
   });
   assert.deepEqual(parameters[10].storage, {
     external: true,
@@ -766,11 +770,90 @@ test("exposes all connected initializer shapes/types and external file locations
     storage: { external: true, location: "weights/values.bin" },
     indicesStorage: { external: true, location: "weights/indices.bin" },
   });
-  assert.ok(parameters.every((parameter) => !("value" in parameter)));
+  assert.ok(parameters.slice(0, 10).every((parameter) => "value" in parameter));
+  assert.equal("value" in parameters[10], false);
   assert.deepEqual(
     loadModel(modelBytes("initializers.onnx"), "initializers.onnx").graph(),
     graph,
   );
+});
+
+test("previews fewer than 16 initializer elements with raw decoding and exact integer precision", async () => {
+  const bytes = modelBytes("tiny-initializers.onnx");
+  const graph = decodeGraph(bytes, "tiny-initializers.onnx");
+  const parameters = Object.fromEntries(
+    graph.nodes[0].parameters.map((p) => [p.name, p]),
+  );
+  const expected = {
+    typed_floats: "[0.5, -2, 3]",
+    precision_float: "[0.100000001]",
+    precision_double: "[0.10000000000000001]",
+    precision_complex64: "[(0.100000001, -0.200000003)]",
+    precision_complex128: "[(0.10000000000000001, -0.20000000000000001)]",
+    raw_fifteen: `[${Array.from({ length: 15 }, (_, index) => index).join(", ")}]`,
+    raw_int64: "[1152921504606846977, -1152921504606846979]",
+    int64_fifteen: `[${Array.from({ length: 15 }, (_, index) => index).join(", ")}]`,
+    uint64_max: "[18446744073709551615]",
+    scalar: "[0.125]",
+    booleans: "[false, true]",
+    strings: '["<img src=x onerror=alert(1)>", "hello"]',
+    empty: "[]",
+    float16: "[1, -2]",
+    bfloat16: "[1, -2]",
+    uint4: "[1, 15, 2]",
+    int4: "[-8, -1, 7]",
+    uint2: "[0, 1, 2, 3, 3]",
+    int2: "[0, 1, -2, -1, -1]",
+    float4: "[1, -1]",
+    float8: "[1, -2]",
+    float6: "[1, 2, 3]",
+    complex_fifteen: `[${Array(15).fill("(0.5, -1)").join(", ")}]`,
+    tiny_sparse: "values: [0.5, 2]; indices: [0, 3]",
+    large_sparse: "values: [0.5, 2]; indices: [0, 999999]",
+  };
+  const streamed = await loadModelFile(
+    path.join(__dirname, "models", "tiny-initializers.onnx"),
+    "tiny-initializers.onnx",
+  );
+  for (const snapshot of [
+    graph,
+    loadModel(bytes, "tiny-initializers.onnx").graph(),
+    streamed.graph(),
+  ]) {
+    const values = Object.fromEntries(
+      snapshot.nodes[0].parameters.map((p) => [p.name, p.value]),
+    );
+    for (const [name, value] of Object.entries(expected))
+      assert.equal(values[name], value, name);
+    assert.equal(values.sixteen, undefined);
+    assert.equal(values.external, undefined);
+    assert.equal(values.wide_sparse_indices, undefined);
+    assert.equal(values.sparse_sixteen, undefined);
+  }
+  assert.deepEqual(parameters.large_sparse.shape, ["1000000"]);
+  assert.equal(parameters.long_string.value, `["${"x".repeat(128)}"...]`);
+});
+
+test("identifies malformed string initializer counts in native preview errors", () => {
+  const tensor = Buffer.concat([
+    varintField(1, 2),
+    varintField(2, 8),
+    bytesField(8, "broken_labels"),
+    bytesField(6, "only one value"),
+  ]);
+  const bytes = Buffer.concat([
+    varintField(1, 9),
+    bytesField(7, bytesField(5, tensor)),
+  ]);
+  for (const graph of [
+    () => decodeGraph(bytes, "malformed-strings.onnx"),
+    () => loadModel(bytes, "malformed-strings.onnx").graph(),
+  ]) {
+    assert.throws(
+      graph,
+      /Initializer 'broken_labels'.*expected 2 elements, got 1/,
+    );
+  }
 });
 
 test("the bundled tiny language model preserves symbolic batch/sequence dimensions through attention inference", () => {

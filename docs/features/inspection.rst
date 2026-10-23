@@ -12,8 +12,14 @@ show a bounded preview.
 Graph labels and the inspector show declared tensor types and dimensions,
 including symbolic dimensions, scalars and unknown shapes. Dense and sparse
 initializers show type, shape and embedded/external storage information,
-including external filenames, but not weight values. The initializer list
-scrolls without limiting the number of connected parameters.
+including external filenames. Dense embedded initializers with fewer than 16
+elements also show their available values in the inspector and graph-label
+tooltip. Scalars count as one element; 64-bit integers retain their exact precision.
+Sparse previews label stored values and indices separately when each component
+has fewer than 16 elements, regardless of the logical dense shape. Individual
+strings are limited to 128 bytes, with an ellipsis for truncation. External files
+and payloads omitted during loading are never read for a preview. The initializer
+list scrolls without limiting the number of connected parameters.
 
 **Doc** opens the selected operator's available onnx-light schema documentation,
 with its schema version, formal inputs/outputs, attributes and type constraints.

@@ -10,6 +10,9 @@
 #include <onnx_core/compute/result_lifetime.h>
 #include <onnx_core/compute/value_tags.h>
 #include <onnx_core/graph/graph_manipulations.h>
+#include <onnx_core/runtime/kernels/cast_float8.h>
+#include <onnx_core/runtime/kernels/cast_helper.h>
+#include <onnx_core/runtime/memory/simple_tensor.h>
 #include <onnx_core/shapes/shape_inference.h>
 #include <onnx_extensions/shapes/dispatch_table.h>
 #include <onnx_op/operator_sets.h>
@@ -17,9 +20,13 @@
 #include <onnx_proto/onnx_verify.h>
 
 #include <algorithm>
+#include <array>
+#include <bit>
 #include <cerrno>
 #include <cmath>
+#include <cstring>
 #include <filesystem>
+#include <iomanip>
 #include <limits>
 #include <map>
 #include <memory>
@@ -46,6 +53,7 @@ namespace ol = ONNX_LIGHT_NAMESPACE;
 namespace {
 
 constexpr std::string_view skippedPayloadLocation = "onnx-light-viewer:payload-omitted";
+constexpr int64_t previewPayloadThreshold = 256; // Retain up to 15 complex128 elements.
 
 enum class ProtoKind { Model, Graph, Node, Attribute, SparseTensor, Function, Tensor, Opaque };
 
@@ -771,6 +779,159 @@ Napi::Object StorageInformation(Napi::Env env, const ol::TensorProto &tensor) {
   return result;
 }
 
+template <typename Dims> std::optional<size_t> TinyElementCount(const Dims &dims) {
+  if (std::find(dims.begin(), dims.end(), 0) != dims.end())
+    return 0;
+  size_t count = 1;
+  for (const auto dim : dims) {
+    if (dim < 0 || dim >= 16 || count > 15 / static_cast<size_t>(dim))
+      return std::nullopt;
+    count *= static_cast<size_t>(dim);
+  }
+  return count;
+}
+
+template <typename T> T TensorElement(const ol::core::runtime::Tensor &tensor, size_t index) {
+  std::array<uint8_t, sizeof(T)> bytes;
+  std::copy_n(tensor.bytes() + index * sizeof(T), sizeof(T), bytes.begin());
+  if constexpr (std::endian::native == std::endian::big)
+    std::reverse(bytes.begin(), bytes.end());
+  T value;
+  std::memcpy(&value, bytes.data(), sizeof(T));
+  return value;
+}
+
+std::optional<std::string> TinyTensorValues(const ol::TensorProto &tensor) {
+  using namespace ol::core::runtime;
+  const auto count = TinyElementCount(tensor.dims());
+  if (!count || tensor.data_location() == ol::TensorProto::EXTERNAL ||
+      !tensor.external_data().empty())
+    return std::nullopt;
+  if (*count == 0)
+    return "[]";
+  if (!tensor.has_raw_data() && tensor.float_data().empty() && tensor.double_data().empty() &&
+      tensor.int32_data().empty() && tensor.int64_data().empty() && tensor.uint64_data().empty() &&
+      tensor.string_data().empty())
+    return std::nullopt;
+  std::stringstream values;
+  values << std::setprecision(tensor.data_type() == ol::TensorProto::DOUBLE ||
+                                      tensor.data_type() == ol::TensorProto::COMPLEX128
+                                  ? std::numeric_limits<double>::max_digits10
+                                  : std::numeric_limits<float>::max_digits10)
+         << "[";
+  if (tensor.data_type() == ol::TensorProto::STRING) {
+    if (tensor.string_data().size() != *count)
+      throw std::runtime_error("Initializer '" + std::string(tensor.name()) +
+                               "' string values do not match its shape: expected " +
+                               std::to_string(*count) + " elements, got " +
+                               std::to_string(tensor.string_data().size()) + ".");
+    for (size_t index = 0; index < *count; ++index) {
+      const auto &text = tensor.string_data(index);
+      values << (index ? ", " : "") << std::quoted(std::string(text.substr(0, 128)));
+      if (text.size() > 128)
+        values << "...";
+    }
+  } else {
+    const auto data = TensorFromProto(tensor);
+    for (size_t index = 0; index < *count; ++index) {
+      values << (index ? ", " : "");
+      const auto bits = [&] { return TensorElement<uint8_t>(data, index); };
+      switch (tensor.data_type()) {
+      case ol::TensorProto::FLOAT:
+        values << TensorElement<float>(data, index);
+        break;
+      case ol::TensorProto::DOUBLE:
+        values << TensorElement<double>(data, index);
+        break;
+      case ol::TensorProto::INT8:
+        values << +TensorElement<int8_t>(data, index);
+        break;
+      case ol::TensorProto::UINT8:
+        values << +bits();
+        break;
+      case ol::TensorProto::INT16:
+        values << TensorElement<int16_t>(data, index);
+        break;
+      case ol::TensorProto::UINT16:
+        values << TensorElement<uint16_t>(data, index);
+        break;
+      case ol::TensorProto::INT32:
+        values << TensorElement<int32_t>(data, index);
+        break;
+      case ol::TensorProto::UINT32:
+        values << TensorElement<uint32_t>(data, index);
+        break;
+      case ol::TensorProto::INT64:
+        values << TensorElement<int64_t>(data, index);
+        break;
+      case ol::TensorProto::UINT64:
+        values << TensorElement<uint64_t>(data, index);
+        break;
+      case ol::TensorProto::BOOL:
+        values << (bits() ? "true" : "false");
+        break;
+      case ol::TensorProto::FLOAT16:
+        values << Float16BitsToFloat(TensorElement<uint16_t>(data, index));
+        break;
+      case ol::TensorProto::BFLOAT16:
+        values << Bfloat16BitsToFloat(TensorElement<uint16_t>(data, index));
+        break;
+      case ol::TensorProto::FLOAT8E4M3FN:
+        values << Float8E4M3FNBitsToFloat(bits());
+        break;
+      case ol::TensorProto::FLOAT8E4M3FNUZ:
+        values << Float8E4M3FNUZBitsToFloat(bits());
+        break;
+      case ol::TensorProto::FLOAT8E5M2:
+        values << Float8E5M2BitsToFloat(bits());
+        break;
+      case ol::TensorProto::FLOAT8E5M2FNUZ:
+        values << Float8E5M2FNUZBitsToFloat(bits());
+        break;
+      case ol::TensorProto::FLOAT8E8M0:
+        values << Float8E8M0BitsToFloat(bits());
+        break;
+      case ol::TensorProto::FLOAT6E2M3:
+      case ol::TensorProto::FLOAT6E3M2:
+        values << Float6BitsToFloat(Read6BitElement(data.bytes(), static_cast<int64_t>(index)),
+                                    static_cast<DataType>(tensor.data_type()));
+        break;
+      case ol::TensorProto::UINT4:
+      case ol::TensorProto::INT4:
+      case ol::TensorProto::FLOAT4E2M1:
+      case ol::TensorProto::UINT2:
+      case ol::TensorProto::INT2: {
+        const bool two_bits = tensor.data_type() == ol::TensorProto::UINT2 ||
+                              tensor.data_type() == ol::TensorProto::INT2;
+        const int width = two_bits ? 2 : 4;
+        const int value = (TensorElement<uint8_t>(data, index * width / 8) >> (index * width % 8)) &
+                          ((1 << width) - 1);
+        if (tensor.data_type() == ol::TensorProto::FLOAT4E2M1)
+          values << Float4E2M1NibbleToFloat(static_cast<uint8_t>(value));
+        else if (tensor.data_type() == ol::TensorProto::INT4 ||
+                 tensor.data_type() == ol::TensorProto::INT2)
+          values << (value >= (1 << (width - 1)) ? value - (1 << width) : value);
+        else
+          values << value;
+        break;
+      }
+      case ol::TensorProto::COMPLEX64:
+        values << "(" << TensorElement<float>(data, index * 2) << ", "
+               << TensorElement<float>(data, index * 2 + 1) << ")";
+        break;
+      case ol::TensorProto::COMPLEX128:
+        values << "(" << TensorElement<double>(data, index * 2) << ", "
+               << TensorElement<double>(data, index * 2 + 1) << ")";
+        break;
+      default:
+        throw std::runtime_error("Unsupported initializer element type.");
+      }
+    }
+  }
+  values << "]";
+  return values.str();
+}
+
 template <typename Proto> Napi::Array MetadataEntries(Napi::Env env, const Proto &proto) {
   auto result = Napi::Array::New(env);
   uint32_t index = 0;
@@ -913,6 +1074,8 @@ Napi::Object ModelGraph(Napi::Env env, const ol::ModelProto &model, const std::s
             name, InitializerInformation(env, name, tensor.data_type(), tensor.dims()));
         auto parameter = InitializerInformation(env, name, tensor.data_type(), tensor.dims());
         parameter.Set("storage", StorageInformation(env, tensor));
+        if (const auto value = TinyTensorValues(tensor))
+          parameter.Set("value", *value);
         parameters.emplace(name, parameter);
       }
     }
@@ -927,6 +1090,10 @@ Napi::Object ModelGraph(Napi::Env env, const ol::ModelProto &model, const std::s
             InitializerInformation(env, name, tensor.values().data_type(), tensor.dims(), true);
         parameter.Set("storage", StorageInformation(env, tensor.values()));
         parameter.Set("indicesStorage", StorageInformation(env, tensor.indices()));
+        const auto values = TinyTensorValues(tensor.values());
+        const auto indices = TinyTensorValues(tensor.indices());
+        if (values && indices)
+          parameter.Set("value", "values: " + *values + "; indices: " + *indices);
         parameters.emplace(name, parameter);
       }
     }
@@ -1085,6 +1252,7 @@ void ReadModel(ol::ModelProto &model, const Napi::Uint8Array &bytes, bool skip_r
   ol::utils::StringStream stream(bytes.Data(), bytes.ByteLength());
   ol::ParseOptions options;
   options.skip_raw_data = skip_raw_data;
+  options.raw_data_threshold = previewPayloadThreshold;
   options.no_copy = !skip_raw_data;
   ReadModel(model, stream, options);
 }
@@ -1232,6 +1400,7 @@ public:
         throw std::system_error(errno, std::generic_category(), "Could not open model file");
       ol::utils::FdReadStream source(file.get());
       ol::ParseOptions options;
+      options.raw_data_threshold = previewPayloadThreshold;
       PayloadSkippingStream stream(source, static_cast<uint64_t>(options.raw_data_threshold));
       ReadModel(*model_->model, stream, options);
       ApplySkippedPayloads(*model_->model, stream.skipped());

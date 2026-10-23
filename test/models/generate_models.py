@@ -227,6 +227,93 @@ initializer_model = helper.make_model(
 # External files are intentionally absent: viewing metadata must not open them.
 save_model(initializer_model, Path(__file__).with_name("initializers.onnx"))
 
+
+def raw_initializer(name, dtype, shape, data):
+    tensor = TensorProto()
+    tensor.name = name
+    tensor.data_type = dtype
+    tensor.dims.extend(shape)
+    tensor.raw_data = data
+    return tensor
+
+
+tiny_initializers = [
+    helper.make_tensor("typed_floats", TensorProto.FLOAT, [3], [0.5, -2.0, 3.0]),
+    helper.make_tensor("precision_float", TensorProto.FLOAT, [1], [0.1]),
+    helper.make_tensor("precision_double", TensorProto.DOUBLE, [1], [0.1]),
+    raw_initializer("precision_complex64", TensorProto.COMPLEX64, [1], pack("<ff", 0.1, -0.2)),
+    raw_initializer("precision_complex128", TensorProto.COMPLEX128, [1], pack("<dd", 0.1, -0.2)),
+    raw_initializer("raw_fifteen", TensorProto.FLOAT, [3, 5], pack("<15f", *range(15))),
+    raw_initializer("sixteen", TensorProto.FLOAT, [16], pack("<16f", *range(16))),
+    raw_initializer("raw_int64", TensorProto.INT64, [2], pack("<qq", 2**60 + 1, -(2**60) - 3)),
+    raw_initializer("int64_fifteen", TensorProto.INT64, [15], pack("<15q", *range(15))),
+    helper.make_tensor("uint64_max", TensorProto.UINT64, [1], [2**64 - 1]),
+    helper.make_tensor("scalar", TensorProto.DOUBLE, [], [0.125]),
+    raw_initializer("booleans", TensorProto.BOOL, [2], bytes([0, 1])),
+    helper.make_tensor(
+        "strings", TensorProto.STRING, [2], ["<img src=x onerror=alert(1)>", "hello"]
+    ),
+    helper.make_tensor("long_string", TensorProto.STRING, [1], ["x" * 4096]),
+    helper.make_tensor("empty", TensorProto.FLOAT, [0], []),
+    raw_initializer("float16", TensorProto.FLOAT16, [2], pack("<HH", 0x3C00, 0xC000)),
+    raw_initializer("bfloat16", TensorProto.BFLOAT16, [2], pack("<HH", 0x3F80, 0xC000)),
+    raw_initializer("uint4", TensorProto.UINT4, [3], bytes([0xF1, 0x02])),
+    raw_initializer("int4", TensorProto.INT4, [3], bytes([0xF8, 0x07])),
+    raw_initializer("uint2", TensorProto.UINT2, [5], bytes([0xE4, 0x03])),
+    raw_initializer("int2", TensorProto.INT2, [5], bytes([0xE4, 0x03])),
+    raw_initializer("float4", TensorProto.FLOAT4E2M1, [2], bytes([0xA2])),
+    raw_initializer("float8", TensorProto.FLOAT8E4M3FN, [2], bytes([0x38, 0xC0])),
+    raw_initializer(
+        "float6", TensorProto.FLOAT6E2M3, [3], (8 | (16 << 6) | (20 << 12)).to_bytes(3, "little")
+    ),
+    raw_initializer(
+        "complex_fifteen", TensorProto.COMPLEX128, [15], pack("<30d", *([0.5, -1.0] * 15))
+    ),
+    external_tensor("external", TensorProto.FLOAT, [1], "missing/tiny.bin"),
+]
+tiny_model = helper.make_model(
+    helper.make_graph(
+        [
+            helper.make_node(
+                "Inspect",
+                [tensor.name for tensor in tiny_initializers]
+                + ["tiny_sparse", "large_sparse", "wide_sparse_indices", "sparse_sixteen"],
+                ["y"],
+                domain="example",
+            )
+        ],
+        "Tiny initializer values",
+        [],
+        [value_info("y")],
+        initializer=tiny_initializers,
+        sparse_initializer=[
+            helper.make_sparse_tensor(
+                helper.make_tensor("tiny_sparse", TensorProto.FLOAT, [2], [0.5, 2.0]),
+                helper.make_tensor("indices", TensorProto.INT64, [2], [0, 3]),
+                [4],
+            ),
+            helper.make_sparse_tensor(
+                helper.make_tensor("large_sparse", TensorProto.FLOAT, [2], [0.5, 2.0]),
+                helper.make_tensor("indices", TensorProto.INT64, [2], [0, 999999]),
+                [1000000],
+            ),
+            helper.make_sparse_tensor(
+                helper.make_tensor("wide_sparse_indices", TensorProto.FLOAT, [1], [1.0]),
+                helper.make_tensor("indices", TensorProto.INT64, [1, 16], [0] * 16),
+                [1] * 16,
+            ),
+            helper.make_sparse_tensor(
+                helper.make_tensor("sparse_sixteen", TensorProto.FLOAT, [16], [1.0] * 16),
+                helper.make_tensor("indices", TensorProto.INT64, [16], list(range(16))),
+                [1000000],
+            ),
+        ],
+    ),
+    ir_version=9,
+    opset_imports=[helper.make_opsetid("example", 1)],
+)
+save_model(tiny_model, Path(__file__).with_name("tiny-initializers.onnx"))
+
 shared_name = "shared;activation"
 metadata_model = helper.make_model(
     helper.make_graph(
