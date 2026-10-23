@@ -366,6 +366,13 @@ a:focus-visible {
 #graph.overview text {
   display: none;
 }
+#graph.overview .graph-node rect,
+#graph.overview .port rect,
+#graph.overview .edge,
+#graph.overview .crossing-edge,
+#graph.overview #graph-overview path {
+  vector-effect: non-scaling-stroke;
+}
 .selection-rectangle {
   fill: var(--mint);
   fill-opacity: 0.12;

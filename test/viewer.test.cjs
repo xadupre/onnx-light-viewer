@@ -2842,6 +2842,55 @@ test("zooms large graphs to a readable scale beyond four times Fit with buttons 
   }
 });
 
+test("keeps graph outlines visible when zooming out in regular and virtualized overviews", (t) => {
+  const { document, window, load } = openViewer(t);
+  const style = document.createElement("style");
+  style.textContent = readFileSync(
+    require.resolve("../media/viewer.css"),
+    "utf8",
+  );
+  document.head.append(style);
+  const graph = document.getElementById("graph");
+  for (const length of [6, 2000]) {
+    load(chainGraph(length));
+    document.getElementById("zoom-readable").click();
+    const node = document.querySelector(".graph-node rect");
+    assert.notEqual(
+      window.getComputedStyle(node).getPropertyValue("vector-effect"),
+      "non-scaling-stroke",
+    );
+    for (const zoomOut of [
+      () => document.getElementById("zoom-out").click(),
+      () =>
+        graph.dispatchEvent(
+          new window.WheelEvent("wheel", { deltaY: 100, ctrlKey: true }),
+        ),
+    ]) {
+      for (let step = 0; step < 50; step++) zoomOut();
+      assert.equal(graph.classList.contains("overview"), true);
+      const outlines =
+        length === 6
+          ? document.querySelectorAll(".graph-node rect, .port rect, .edge")
+          : document.querySelectorAll("#graph-overview path");
+      assert.ok(outlines.length > 0);
+      for (const outline of outlines) {
+        assert.equal(
+          window.getComputedStyle(outline).getPropertyValue("vector-effect"),
+          "non-scaling-stroke",
+        );
+      }
+      assert.ok(
+        graph
+          .getAttribute("viewBox")
+          .split(" ")
+          .map(Number)
+          .every(Number.isFinite),
+      );
+      document.getElementById("zoom-readable").click();
+    }
+  }
+});
+
 test("jumps to readable zoom and culls offscreen SVG content without rebuilding a large graph", (t) => {
   const { document, window, load } = openViewer(t);
   const model = chainGraph(400);
