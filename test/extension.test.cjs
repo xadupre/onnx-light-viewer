@@ -23,7 +23,11 @@ async function openExtension(
   const events = [];
   const nativeModels = [];
   const commands = new Map();
-  let receive;
+  const receivers = new Set();
+  const disposals = new Set();
+  const pendingReads = new Map();
+  const receive = (message) =>
+    Promise.all([...receivers].map((callback) => callback(message)));
   let selection;
   let editor;
   let backendSelection;
@@ -55,14 +59,17 @@ async function openExtension(
       return true;
     },
     onDidReceiveMessage: (callback) => {
-      receive = callback;
-      return disposable();
+      receivers.add(callback);
+      return { dispose: () => receivers.delete(callback) };
     },
     asWebviewUri: (uri) => ({ toString: () => `file://${uri.path}` }),
   };
   const panel = {
     webview,
-    onDidDispose: disposable,
+    onDidDispose: (callback) => {
+      disposals.add(callback);
+      return { dispose: () => disposals.delete(callback) };
+    },
     onDidChangeViewState: disposable,
     reveal() {},
   };
@@ -85,6 +92,10 @@ async function openExtension(
       fs: {
         readFile: async (uri) => {
           reads.push(uri.path);
+          const key = path.basename(uri.path);
+          const pending = pendingReads.get(key);
+          await (pending ?? Promise.resolve());
+          pendingReads.delete(key);
           return readFile(uri.path);
         },
       },
@@ -181,6 +192,27 @@ async function openExtension(
     logViews,
     events,
     webview,
+    resolveCustomEditor: (name) =>
+      editor.resolveCustomEditor(
+        { uri: { path: path.join(__dirname, "models", name) } },
+        panel,
+      ),
+    deferRead: (name) => {
+      let release;
+      pendingReads.set(
+        name,
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+      );
+      return release;
+    },
+    dispose: () => {
+      // Ensure idempotency: once disposed, subsequent calls do nothing.
+      const callbacks = [...disposals];
+      disposals.clear();
+      for (const callback of callbacks) callback();
+    },
     connect: (callback) => {
       client = callback;
     },
@@ -736,4 +768,67 @@ test("supports native shape refresh when a model is opened directly as a custom 
     "FLOAT",
   );
   assert.deepEqual(extension.errors, []);
+});
+
+test("keeps only the latest custom editor model when a panel is reused during loading", async () => {
+  const extension = await openExtension();
+  const release = extension.deferRead("relu.onnx");
+  const first = extension.resolveCustomEditor("relu.onnx");
+  await extension.receive({ type: "ready" });
+  await extension.resolveCustomEditor("inference.onnx");
+  await extension.receive({ type: "ready" });
+  assert.equal(extension.messages.at(-1).graph.name, "Shape inference");
+
+  const count = extension.events.length;
+  release();
+  await first;
+  assert.equal(extension.events.length, count);
+  const messageCount = extension.messages.length;
+  await extension.receive({ type: "ready" });
+  assert.deepEqual(
+    extension.messages.slice(messageCount).map(({ graph }) => graph.name),
+    ["Shape inference"],
+  );
+  await extension.receive({ type: "refresh-shapes" });
+  assert.deepEqual(
+    extension.messages.at(-1).tensors.find(({ name }) => name === "hidden"),
+    { name: "hidden", type: "FLOAT", shape: ["N", "3"] },
+  );
+  assert.deepEqual(extension.errors, []);
+});
+
+test("discards native responses from a previous custom editor session", async () => {
+  for (const type of ["navigate", "metadata", "refresh-shapes"]) {
+    const extension = await openExtension("analysis.onnx");
+    const pending = extension.receive({ type, path: [] });
+    const next = extension.resolveCustomEditor("inference.onnx");
+    await extension.receive({ type: "ready" });
+    await Promise.all([pending, next]);
+    const results = extension.messages.filter(({ type }) =>
+      ["graph", "metadata-info", "shape-info"].includes(type),
+    );
+    assert.deepEqual(
+      results.map(({ graph }) => graph?.name),
+      ["Shape inference"],
+    );
+    assert.deepEqual(extension.errors, []);
+  }
+});
+
+test("ignores initial loading failures after a panel is replaced or disposed", async () => {
+  for (const dispose of [false, true]) {
+    const extension = await openExtension();
+    const release = extension.deferRead("missing.onnx");
+    const first = extension.resolveCustomEditor("missing.onnx");
+    if (dispose) extension.dispose();
+    else {
+      await extension.resolveCustomEditor("inference.onnx");
+      await extension.receive({ type: "ready" });
+    }
+    const count = extension.events.length;
+    release();
+    await first;
+    assert.equal(extension.events.length, count);
+    assert.deepEqual(extension.errors, []);
+  }
 });
