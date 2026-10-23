@@ -204,9 +204,12 @@ test("switches all tabs without logging clicks or changing graph, selection or c
     .dispatchEvent(
       new window.KeyboardEvent("keydown", { key: "End", bubbles: true }),
     );
-  assert.equal(document.activeElement.id, "controls-tab");
-  assert.equal(document.getElementById("controls-view").hidden, false);
+  assert.equal(document.activeElement.id, "repositories-tab");
+  assert.equal(document.getElementById("repositories-view").hidden, false);
   assert.equal(document.getElementById("status-view").hidden, true);
+  document.getElementById("controls-tab").click();
+  assert.equal(document.getElementById("controls-view").hidden, false);
+  assert.equal(document.getElementById("repositories-view").hidden, true);
   document.getElementById("logs-tab").click();
   document
     .getElementById("logs-tab")
@@ -227,6 +230,81 @@ test("switches all tabs without logging clicks or changing graph, selection or c
 });
 
 for (const initialTab of ["model", "logs"]) {
+  test(`opens Repositories without a model from ${initialTab} with local icons and project summaries`, (t) => {
+    const { document, window, messages } = openViewer(t, initialTab);
+    const tab = document.getElementById("repositories-tab");
+    const panel = document.getElementById("repositories-view");
+    assert.equal(panel.hidden, true);
+    assert.equal(tab.getAttribute("aria-selected"), "false");
+    assert.equal(tab.tabIndex, -1);
+    assert.equal(tab.getAttribute("role"), "tab");
+    assert.equal(tab.getAttribute("aria-controls"), panel.id);
+    assert.equal(panel.getAttribute("role"), "tabpanel");
+    assert.equal(panel.getAttribute("aria-labelledby"), tab.id);
+    assert.equal(panel.tabIndex, 0);
+    tab.click();
+    assert.equal(panel.hidden, false);
+    assert.equal(tab.getAttribute("aria-selected"), "true");
+    assert.equal(tab.tabIndex, 0);
+    for (const name of ["model", "logs", "status", "controls"]) {
+      assert.equal(document.getElementById(`${name}-view`).hidden, true);
+      assert.equal(
+        document.getElementById(`${name}-tab`).getAttribute("aria-selected"),
+        "false",
+      );
+      assert.equal(document.getElementById(`${name}-tab`).tabIndex, -1);
+    }
+    const repositories = [
+      ["ONNX", "onnx/onnx"],
+      ["ONNX Runtime", "microsoft/onnxruntime"],
+      ["ONNX Runtime Extensions", "microsoft/onnxruntime-extensions"],
+      ["ONNX Runtime GenAI", "microsoft/onnxruntime-genai"],
+      ["onnx-light", "xadupre/onnx-light"],
+      ["onnx-light-cpu", "xadupre/onnx-light-cpu"],
+      ["onnx-light-ort", "xadupre/onnx-light-ort"],
+      ["onnx-light-viewer", "xadupre/onnx-light-viewer"],
+    ];
+    const cards = [...panel.querySelectorAll(".repository-list li")];
+    assert.equal(cards.length, repositories.length);
+    cards.forEach((card, index) => {
+      const [name, repository] = repositories[index];
+      const link = card.querySelector("a");
+      assert.equal(link.textContent, name);
+      assert.equal(link.href, `https://github.com/${repository}`);
+      assert.ok(card.querySelector("p").textContent.trim().length > 20);
+      const icon = link.querySelector("svg, img");
+      assert.ok(icon);
+      assert.equal(icon.getAttribute("width"), "28");
+      assert.equal(icon.getAttribute("height"), "28");
+      if (icon.tagName === "svg") {
+        assert.equal(icon.getAttribute("aria-hidden"), "true");
+        assert.ok(icon.querySelector("path"));
+      } else {
+        assert.equal(icon.alt, "");
+        assert.equal(icon.src, "https://viewer.invalid/logo.svg");
+      }
+    });
+    tab.focus();
+    for (const [key, expected] of [
+      ["ArrowRight", "model"],
+      ["ArrowLeft", "repositories"],
+      ["ArrowLeft", "controls"],
+      ["ArrowRight", "repositories"],
+      ["Home", "model"],
+      ["End", "repositories"],
+    ]) {
+      document.activeElement.dispatchEvent(
+        new window.KeyboardEvent("keydown", { key, bubbles: true }),
+      );
+      assert.equal(document.activeElement.id, `${expected}-tab`);
+      assert.equal(document.getElementById(`${expected}-view`).hidden, false);
+    }
+    assert.deepEqual(
+      messages.map(({ type }) => type),
+      ["ready"],
+    );
+  });
+
   test(`opens Controls without a model from ${initialTab} and supports keyboard tab navigation`, (t) => {
     const { document, window, messages } = openViewer(t, initialTab);
     const tab = document.getElementById("controls-tab");
@@ -243,7 +321,7 @@ for (const initialTab of ["model", "logs"]) {
     assert.equal(panel.hidden, false);
     assert.equal(tab.getAttribute("aria-selected"), "true");
     assert.equal(tab.tabIndex, 0);
-    for (const name of ["model", "logs", "status"]) {
+    for (const name of ["model", "logs", "status", "repositories"]) {
       assert.equal(document.getElementById(`${name}-view`).hidden, true);
       assert.equal(
         document.getElementById(`${name}-tab`).getAttribute("aria-selected"),
@@ -300,12 +378,14 @@ for (const initialTab of ["model", "logs"]) {
       assert.ok(panel.textContent.includes(control), control);
     tab.focus();
     for (const [key, expected] of [
+      ["ArrowRight", "repositories"],
       ["ArrowRight", "model"],
+      ["ArrowLeft", "repositories"],
       ["ArrowLeft", "controls"],
       ["ArrowLeft", "status"],
       ["ArrowRight", "controls"],
       ["Home", "model"],
-      ["End", "controls"],
+      ["End", "repositories"],
     ]) {
       document.activeElement.dispatchEvent(
         new window.KeyboardEvent("keydown", { key, bubbles: true }),

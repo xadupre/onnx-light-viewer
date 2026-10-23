@@ -53,7 +53,7 @@ const RefreshStatus = Object.freeze({
   UNCHANGED: "unchanged",
   FAILED: "failed",
 });
-const tabs = ["model", "logs", "status", "controls"];
+const tabs = ["model", "logs", "status", "controls", "repositories"];
 
 function showTab(name, focus = false) {
   endGesture();
