@@ -29,8 +29,12 @@ before a model is loaded.
   elements are created and attached; **Fit** uses two batched paths rather than
   thousands of interactive elements. Long connections crossing the viewport
   are batched when their labels are offscreen.
-* **Find node or operator** searches the whole graph, including offscreen nodes.
-  Press Enter or **Go** to select and center the next match at readable size.
+* **Find node or operator**, above the sidebar inspector, searches the whole
+  graph by node name or operator, including offscreen nodes. Matching is
+  case-insensitive. As you type, up to 20 suggestions show matching node names
+  and operators. Click a suggestion (or Tab to it and press Enter) to select and
+  center that node at readable size. Press Enter in the search field or **Go**
+  to cycle through all matches.
 * Wheel scrolling moves the view vertically; Shift+wheel moves it horizontally.
   Horizontal trackpad scrolling is supported.
 * Drag an operator, input or output to move it. Connections and tensor labels
