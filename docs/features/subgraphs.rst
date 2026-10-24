@@ -9,7 +9,9 @@ Explore graph attributes of operators such as **If**, **Loop** and **Scan**.
 Click a subgraph entry inside the operator's rectangle, or **Open** in the
 inspector. Entries support Tab followed by Enter or Space; dragging the
 operator's header still moves it. Each graph in a graph-list attribute has its
-own entry. Breadcrumbs return to enclosing graphs, including the main graph.
+own entry. The breadcrumb bar remains visible on the main graph, showing the
+model's root name. Subgraph and function names are appended as you navigate;
+click an ancestor to return to it.
 
 Nested graphs retain enclosing opsets and captured tensor/initializer
 information. Captured values appear as input ports; captured initializers stay

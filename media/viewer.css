@@ -820,8 +820,12 @@ button:disabled {
   cursor: pointer;
 }
 #fusion-pattern label:has(input:checked) {
-  background: var(--vscode-list-activeSelectionBackground, var(--mint));
-  color: var(--vscode-list-activeSelectionForeground, var(--bg));
+  background: color-mix(
+    in srgb,
+    var(--vscode-list-activeSelectionBackground, var(--mint)) 22%,
+    var(--panel)
+  );
+  color: var(--text);
 }
 .fusion-selection-controls {
   display: flex;

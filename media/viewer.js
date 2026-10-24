@@ -90,7 +90,7 @@ const fusionPanel = createFusionPanel({
   canFuse: () =>
     !replacementPending &&
     hasModel &&
-    displayedGraph?.breadcrumbs?.length === 1,
+    (displayedGraph?.canFuse ?? displayedGraph?.breadcrumbs?.length === 1),
   clearSelection: () => {
     selected = new Set();
     updateSelection();
@@ -199,7 +199,9 @@ function setLoading(pending, message = "") {
   byId("load-status").textContent =
     message || (pending ? "Loading model…" : "");
   fusionPanel.setEnabled(
-    !pending && hasModel && displayedGraph?.breadcrumbs?.length === 1,
+    !pending &&
+      hasModel &&
+      (displayedGraph?.canFuse ?? displayedGraph?.breadcrumbs?.length === 1),
   );
 }
 
@@ -1116,13 +1118,17 @@ function render(graph, metadata) {
   svg.setAttribute("aria-busy", "false");
   byId("navigation-status").textContent = "";
   const breadcrumbs = graph.breadcrumbs ?? [];
-  byId("graph-navigation").hidden = breadcrumbs.length < 2;
+  const navigation = graph.pipelineStages?.length
+    ? [breadcrumbs[0], ...graph.pipelineStages, ...breadcrumbs.slice(2)]
+    : breadcrumbs;
+  const currentPath = JSON.stringify(breadcrumbs.at(-1)?.path);
+  byId("graph-navigation").hidden = false;
   byId("graph-navigation").replaceChildren(
-    ...(breadcrumbs.length > 1 ? breadcrumbs : []).map((crumb, index) => {
+    ...navigation.map((crumb) => {
       const button = document.createElement("button");
       button.className = "icon-button";
       button.textContent = crumb.name;
-      if (index === breadcrumbs.length - 1) {
+      if (JSON.stringify(crumb.path) === currentPath) {
         button.disabled = true;
         button.setAttribute("aria-current", "page");
       } else {

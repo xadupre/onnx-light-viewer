@@ -3,6 +3,7 @@
  * These describe the view, not the model's tensor payloads.
  * Native calls are synchronous and report parsing/analysis failures as errors.
  */
+import { PipelineModel, PipelineData } from "./pipeline";
 
 /** Display-ready attribute preview, rather than an editable ONNX value. */
 export interface GraphParameter {
@@ -34,12 +35,18 @@ export interface FunctionStep {
   function: number;
 }
 
-export type GraphStep = SubgraphStep | FunctionStep;
+export type PipelineRole = "embedding" | "prefill" | "decode";
+
+export interface PipelineStep {
+  pipeline: PipelineRole;
+}
+
+export type GraphStep = SubgraphStep | FunctionStep | PipelineStep;
 
 /**
  * Absolute path from the model's root graph; an empty path selects the root.
- * Steps enter graph attributes or the local function called by a node.
- * Indices, rather than names, distinguish potentially duplicate nodes/graphs.
+ * Steps enter a pipeline stage, graph attribute or model-local function.
+ * Stage roles identify contained models; indices distinguish duplicate nodes/graphs.
  */
 export type GraphPath = GraphStep[];
 
@@ -117,6 +124,12 @@ export interface TensorInformation {
 /** Display snapshot of one graph, not a recursive serialization of the model. */
 export interface Graph {
   name: string;
+  /** Pipeline container or one of its stage graphs. */
+  pipeline?: boolean;
+  /** Persistent links to every model present in a pipeline. */
+  pipelineStages?: GraphBreadcrumb[];
+  /** Overrides root-only fusion availability for pipeline stage roots. */
+  canFuse?: boolean;
   breadcrumbs: GraphBreadcrumb[];
   nodes: GraphNode[];
   inputs: string[];
@@ -139,25 +152,28 @@ export interface FusionMatch {
 }
 
 /**
- * Retained native model whose inferred information survives graph projections.
+ * Retained model or pipeline whose inferred information survives graph projections.
  * Methods do not execute the model or write files.
  */
 export interface NativeModel {
   clone(): NativeModel;
-  fusionPatterns(): string[];
+  /** Pipeline fusions require the path of a stage root; ordinary models use []. */
+  fusionPatterns(path?: GraphPath): string[];
   previewFusion(
     pattern: string,
     sourceFilePath?: string,
+    path?: GraphPath,
   ): Promise<{ model: NativeModel; matches: FusionMatch[] }>;
   /** A pattern array assigns one pattern to each corresponding anchor. */
   applyFusion(
     pattern: string | string[],
     anchors: number[],
+    path?: GraphPath,
   ): Promise<NativeModel>;
   /** Whole-model external-data references, excluding omitted inline payload placeholders. */
   externalDataLocations(): string[];
   /**
-   * Serializes the whole model, including inferred information and inline weights.
+   * Serializes the whole model or pipeline, including inferred information and weights.
    * A password produces authenticated ONNXCRY3 (AES-256-GCM), otherwise plain ONNX.
    * External weights are read relative to the source model and embedded before saving.
    * sourceFilePath supplies the new location after a source file is moved into a cache.
@@ -253,6 +269,8 @@ const native: {
     fileName: string,
     password?: string,
   ): Promise<NativeModel>;
+  loadPipeline(bytes: Uint8Array, fileName: string): PipelineData;
+  loadPipelineFile(filePath: string, fileName: string): Promise<PipelineData>;
   listBackendTests(): BackendTest[];
   loadBackendTest(id: number): NativeModel;
 } = require("./native/onnx_light_viewer.node");
@@ -291,8 +309,8 @@ export const demoGraph: Graph = {
 /**
  * One-shot projection, skipping raw tensor bytes unless inference is requested.
  * Use loadModel instead when inferred value_info must survive subsequent calls.
- * @param bytes Serialized ONNX ModelProto bytes.
- * @param fileName Display label only; no file is opened or saved.
+ * @param bytes Serialized ONNX ModelProto or PipelineProto bytes.
+ * @param fileName Display label; a .pipe-onnx suffix selects PipelineProto.
  * @param inferShapes Whether to infer shapes before projecting the root graph.
  * @returns Root graph snapshot without a retained native handle.
  */
@@ -301,15 +319,16 @@ export function decodeGraph(
   fileName: string,
   inferShapes = false,
 ): Graph {
+  if (/\.pipe-onnx$/i.test(fileName))
+    return loadModel(bytes, fileName).graph(inferShapes);
   return native.decodeGraph(bytes, fileName, inferShapes);
 }
 
 /**
- * Retains bytes in the native handle without copying their tensor payloads.
- * Do not mutate the buffer while the handle is in use. fileName is a display
- * label, not a path to read or save.
- * @param bytes Serialized ONNX ModelProto bytes kept alive by the native handle.
- * @param fileName Display label used for the model.
+ * ModelProto borrows tensor payloads; PipelineProto currently owns parsed copies.
+ * Do not mutate borrowed buffers while the handle is in use.
+ * @param bytes Serialized ONNX ModelProto or PipelineProto bytes.
+ * @param fileName Display label; a .pipe-onnx suffix selects PipelineProto, not a file to open.
  * @returns A handle for repeated graph projection and analysis.
  */
 export function loadModel(
@@ -317,6 +336,13 @@ export function loadModel(
   fileName: string,
   password?: string,
 ): NativeModel {
+  if (/\.pipe-onnx$/i.test(fileName)) {
+    if (password !== undefined)
+      throw new Error(
+        "PipelineProto encryption is not supported by onnx-light.",
+      );
+    return new PipelineModel(native.loadPipeline(bytes, fileName), fileName);
+  }
   return native.loadModel(bytes, fileName, password);
 }
 
@@ -326,6 +352,15 @@ export function loadModelFile(
   fileName: string,
   password?: string,
 ): Promise<NativeModel> {
+  if (/\.pipe-onnx$/i.test(fileName)) {
+    if (password !== undefined)
+      return Promise.reject(
+        new Error("PipelineProto encryption is not supported by onnx-light."),
+      );
+    return native
+      .loadPipelineFile(filePath, fileName)
+      .then((pipeline) => new PipelineModel(pipeline, fileName));
+  }
   return native.loadModelFile(filePath, fileName, password);
 }
 

@@ -11,13 +11,68 @@ Opening models
   **Parent folder** navigates up a local directory. You can also enter a model
   path or file URL directly. The panel closes after a successful opening;
   **Open** can show it again. Errors and cancellations keep the panel open.
-  Opening an ``.onnx`` file in VS Code
+  Opening an ``.onnx`` or ``.pipe-onnx`` file in VS Code
   also uses the viewer; use **Reopen Editor With...** if another editor handles it.
 * **ONNX Light Viewer: Open Graph** opens the bundled Relu demo.
   **ONNX Light Viewer: Open Symbolic Transformer Example** opens a bundled,
   randomly initialized transformer graph with symbolic batch/sequence dimensions.
 * The toolbar shows the native onnx-light C++ release, graph counts, refresh
   progress and errors. Its logo links to the GitHub repository.
+
+PipelineProto containers
+------------------------
+
+Open an onnx-light ``PipelineProto`` using the ``.pipe-onnx`` extension. The
+overview lists the required **prefill** model and optional **embedding** and
+**decode** models. Click a stage link to inspect its graph, subgraphs and local
+functions; breadcrumbs return to the overview.
+The permanent navigation bar also links directly to every available stage,
+including while viewing another stage or one of its subgraphs. Nested graph
+and function names follow the stage links.
+
+For a ready-to-open example, use
+:download:`examples/tiny.pipe-onnx <../../examples/tiny.pipe-onnx>`.
+It contains three small, coherent stages with symbolic batch/sequence dimensions
+and a three-token vocabulary. Open **prefill**, preview **TransposeTranspose**,
+apply the match, then save a ``.pipe-onnx`` copy and reopen it. The transpose pair
+becomes an Identity while **embedding**, **decode** and generation settings remain
+present. **Refresh shapes** exposes the intermediate transpose dimensions.
+
+The same fixture is stored in ``test/models/tiny.pipe-onnx`` and loaded by the
+native integration tests. Regenerate both copies from the repository root with
+onnx-light on ``PYTHONPATH``:
+
+.. code-block:: bash
+
+   python3 examples/generate_pipeline.py
+
+.. figure:: ../_static/pipeline-container.svg
+   :alt: A pipeline keeps independent embedding, prefill and decode models.
+         Stage actions affect the selected model; Save writes the entire container.
+
+   Inspect or transform one stage; save all stages and pipeline settings together.
+
+**Refresh metadata** on the overview shows a bounded preview of the stored
+generation settings, interface names and pipeline metadata. Inside a stage,
+metadata analysis and shape inference use that model's own opsets and types.
+Fusion patterns are available at each stage's root, not on the overview or
+inside nested graphs. The overview namespaces stage ports: it is a container
+view, not an execution graph or a reconstruction of the generation loop.
+The viewer does not execute pipelines.
+
+**Save** always writes the complete ``PipelineProto``, including unchanged
+stages, generation settings, metadata and in-memory shape or fusion changes.
+Choose embedded weights, separate weight files, or reuse existing external
+weights in the source folder. External references are relative to the local
+pipeline file; generated weight filenames distinguish stages.
+The default copy ends in ``-copy.pipe-onnx``. Pipeline encryption is unavailable
+in onnx-light and is disabled in the save selector.
+
+Local pipelines load off-thread with bounded ordinary tensor payloads. Omitted
+payloads are recovered from the unchanged source when saving or transforming,
+as for ModelProto. Encoded payloads retain the existing ModelProto loading
+behavior. Malformed or duplicate stages fail explicitly; a pipeline containing
+unsupported ``training_info`` can be inspected but cannot be exported.
 
 Recent paths and progress
 -------------------------

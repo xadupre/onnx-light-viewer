@@ -15,6 +15,7 @@ Napi::Object ModelHandle(Napi::Env env, std::shared_ptr<StoredModel> model) {
                  copy->model = std::make_shared<ol::ModelProto>(model->model->SharedCopy());
                  copy->file_name = model->file_name;
                  copy->file_path = model->file_path;
+                 copy->pipeline_stage = model->pipeline_stage;
                  copy->source_size = model->source_size;
                  copy->source_time = model->source_time;
                  copy->skipped = model->skipped;

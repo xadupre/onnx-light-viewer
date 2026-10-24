@@ -53,6 +53,278 @@ function bytesField(number, value) {
   return Buffer.concat([varint(number * 8 + 2), varint(bytes.length), bytes]);
 }
 
+function pipelineBytes({
+  embedding,
+  prefill = modelBytes("relu.onnx"),
+  decode,
+} = {}) {
+  return Buffer.concat([
+    bytesField(1, "Test pipeline"),
+    varintField(5, 0),
+    ...(embedding ? [bytesField(7, embedding)] : []),
+    ...(prefill ? [bytesField(8, prefill)] : []),
+    ...(decode ? [bytesField(9, decode)] : []),
+    varintField(10, 4),
+    Buffer.concat([varint(11 * 8 + 5), Buffer.from([0, 0, 0, 0])]),
+    varintField(12, 42),
+    varintField(14, 0),
+    bytesField(17, "input_ids"),
+    bytesField(18, "logits"),
+    bytesField(
+      21,
+      Buffer.concat([bytesField(1, "source"), bytesField(2, "test")]),
+    ),
+  ]);
+}
+
+test("opens and transforms the bundled three-stage pipeline through native file loading", async () => {
+  const file = path.join(__dirname, "models", "tiny.pipe-onnx");
+  const model = await loadModelFile(file, "tiny.pipe-onnx");
+  assert.deepEqual(
+    model.graph().nodes.map((node) => node.name),
+    ["embedding", "prefill", "decode"],
+  );
+  const embeddingPath = [{ pipeline: "embedding" }];
+  const prefillPath = [{ pipeline: "prefill" }];
+  const decodePath = [{ pipeline: "decode" }];
+  const embedding = model.graph(false, embeddingPath);
+  assert.equal(embedding.nodes[0].opType, "Gather");
+  assert.equal(
+    embedding.nodes[0].parameters[0].name,
+    "embedding.transition_table",
+  );
+  const prefill = model.graph(true, prefillPath);
+  assert.deepEqual(
+    prefill.tensors.find((tensor) => tensor.name === "prefill.transposed")
+      .shape,
+    ["batch", "3", "sequence"],
+  );
+  const preview = await model.previewFusion(
+    "TransposeTranspose",
+    undefined,
+    prefillPath,
+  );
+  assert.equal(preview.matches.length, 1);
+  const fused = await preview.model.applyFusion(
+    "TransposeTranspose",
+    [0],
+    prefillPath,
+  );
+  const restored = loadModel(await fused.serialize(), "copy.pipe-onnx");
+  assert.deepEqual(
+    restored.graph(false, prefillPath).nodes.map((node) => node.opType),
+    ["Identity"],
+  );
+  assert.deepEqual(restored.graph(false, embeddingPath), embedding);
+  assert.deepEqual(
+    restored.graph(false, decodePath),
+    model.graph(false, decodePath),
+  );
+  assert.deepEqual(restored.metadata(), model.metadata());
+});
+
+test("opens PipelineProto stages, rebases nested links and preserves settings on save", async () => {
+  const bytes = pipelineBytes({
+    embedding: modelBytes("functions.onnx"),
+    decode: modelBytes("nested-if.onnx"),
+  });
+  const model = loadModel(bytes, "test.pipe-onnx");
+  const overview = model.graph();
+  assert.deepEqual(
+    overview.nodes.map((node) => node.name),
+    ["embedding", "prefill", "decode"],
+  );
+  assert.equal(overview.canFuse, false);
+  assert.deepEqual(overview.pipelineStages, [
+    { name: "embedding", path: [{ pipeline: "embedding" }] },
+    { name: "prefill", path: [{ pipeline: "prefill" }] },
+    { name: "decode", path: [{ pipeline: "decode" }] },
+  ]);
+  assert.equal(
+    new Set(overview.tensors.map((tensor) => tensor.name)).size,
+    overview.tensors.length,
+  );
+  const prefillPath = overview.nodes[1].attributes[0].graphs[0].path;
+  const stage = model.graph(true, prefillPath);
+  assert.equal(stage.nodes[0].opType, "Relu");
+  assert.equal(stage.canFuse, true);
+  assert.deepEqual(
+    stage.breadcrumbs.map((crumb) => crumb.name),
+    ["Test pipeline", "prefill"],
+  );
+  const embedding = model.graph(false, [{ pipeline: "embedding" }]);
+  const call = embedding.nodes.find((node) => node.function);
+  assert.deepEqual(call.function.path[0], { pipeline: "embedding" });
+  assert.ok(model.graph(false, call.function.path).nodes.length);
+  const decode = model.graph(false, [{ pipeline: "decode" }]);
+  const link = decode.nodes.flatMap((node) =>
+    node.attributes.flatMap((attr) => attr.graphs ?? []),
+  )[0];
+  assert.deepEqual(link.path[0], { pipeline: "decode" });
+  const nested = model.graph(false, link.path);
+  assert.deepEqual(nested.pipelineStages, overview.pipelineStages);
+  assert.equal(nested.canFuse, false);
+  assert.equal(nested.breadcrumbs[1].name, "decode");
+  assert.ok(model.metadata(prefillPath).nodes.length);
+  const metadata = model.metadata();
+  assert.match(metadata.model[0].value, /pipeline_version: 0/);
+  assert.match(metadata.model[0].value, /temperature: 0/);
+  assert.doesNotMatch(metadata.model[0].value, /top_p/);
+  const restored = loadModel(await model.serialize(), "saved.pipe-onnx");
+  assert.deepEqual(restored.metadata(), metadata);
+  assert.deepEqual(
+    restored.graph(false, prefillPath),
+    model.graph(false, prefillPath),
+  );
+  assert.deepEqual(decodeGraph(bytes, "test.pipe-onnx"), overview);
+});
+
+test("transforms only the chosen PipelineProto stage and saves the whole cloned container", async () => {
+  const bytes = pipelineBytes({
+    prefill: modelBytes("fusion.onnx"),
+    decode: modelBytes("inference.onnx"),
+  });
+  const model = loadModel(bytes, "fusion.pipe-onnx");
+  const path = [{ pipeline: "prefill" }];
+  assert.throws(() => model.fusionPatterns(), /Choose a pipeline stage/);
+  assert.ok(model.fusionPatterns(path).includes("TransposeTranspose"));
+  const preview = await model.previewFusion(
+    "TransposeTranspose",
+    undefined,
+    path,
+  );
+  const fused = await preview.model.applyFusion(
+    "TransposeTranspose",
+    [0],
+    path,
+  );
+  const decodePath = [{ pipeline: "decode" }];
+  const originalDecode = model.graph(false, decodePath);
+  assert.equal(
+    fused.graph(false, path).nodes.length,
+    model.graph(false, path).nodes.length - 1,
+  );
+  assert.deepEqual(
+    fused.graph(false, [{ pipeline: "decode" }]),
+    model.graph(false, [{ pipeline: "decode" }]),
+  );
+  fused.graph(true, decodePath);
+  assert.deepEqual(model.graph(false, decodePath), originalDecode);
+  const clone = fused.clone();
+  clone.graph(true, path);
+  const restored = loadModel(await clone.serialize(), "copy.pipe-onnx");
+  assert.deepEqual(restored.graph(false, path), clone.graph(false, path));
+  assert.deepEqual(restored.metadata(), model.metadata());
+  const { graph } = restored;
+  assert.deepEqual(graph(false, path), restored.graph(false, path));
+  assert.equal(model.graph(false, path).nodes[0].opType, "Transpose");
+  await assert.rejects(model.serialize("password"), /PipelineProto encryption/);
+  assert.throws(
+    () => model.graph(false, [{ pipeline: "embedding" }]),
+    /Invalid pipeline stage/,
+  );
+  assert.throws(
+    () => model.graph(false, [{ node: 0, attribute: 0, graph: 0 }]),
+    /Choose a pipeline stage/,
+  );
+  assert.throws(
+    () => loadModel(pipelineBytes({ prefill: null }), "bad.pipe-onnx"),
+    /prefill model/,
+  );
+});
+
+test("streams pipeline weights, restores omitted payloads and partitions stage files without collisions", async (t) => {
+  const directory = mkdtempSync(path.join(tmpdir(), "pipeline-weights-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const payload = Buffer.alloc(256, 63);
+  const bytes = pipelineBytes({
+    embedding: matmulWithWeight(9, payload),
+    prefill: matmulWithWeight(4, payload),
+  });
+  const file = path.join(directory, "weights.pipe-onnx");
+  writeFileSync(file, bytes);
+  const model = await loadModelFile(file, "weights.pipe-onnx");
+  const complete = loadModel(bytes, "weights.pipe-onnx");
+  assert.deepEqual(
+    Buffer.from(await model.clone().serialize()),
+    Buffer.from(await complete.serialize()),
+  );
+  const saved = await model.serializeFiles(1024, "weights");
+  assert.equal(saved.weights.length, 2);
+  assert.equal(new Set(saved.weights.map((weight) => weight.name)).size, 2);
+  assert.ok(saved.weights.some((weight) => weight.name.includes("embedding")));
+  for (const weight of saved.weights)
+    writeFileSync(path.join(directory, weight.name), weight.bytes);
+  const externalFile = path.join(directory, "external.pipe-onnx");
+  writeFileSync(externalFile, saved.model);
+  const external = await loadModelFile(externalFile, "external.pipe-onnx");
+  assert.equal(external.externalDataLocations().length, 2);
+  const restored = loadModel(await external.serialize(), "restored.pipe-onnx");
+  const repartitioned = await restored.serializeFiles(1024, "roundtrip");
+  assert.deepEqual(
+    repartitioned.weights.map((weight) => Buffer.from(weight.bytes)),
+    saved.weights.map((weight) => Buffer.from(weight.bytes)),
+  );
+  const reused = await external.serializeFiles(1024, "reused", undefined, true);
+  assert.equal(reused.weights.length, 0);
+  assert.deepEqual(
+    loadModel(reused.model, "reused.pipe-onnx").externalDataLocations(),
+    external.externalDataLocations(),
+  );
+  writeFileSync(file, Buffer.concat([bytes, varintField(12, 43)]));
+  await assert.rejects(model.serialize(), /source model changed/);
+});
+
+test("rejects incomplete, duplicate-stage and training-info pipeline exports explicitly", async (t) => {
+  const directory = mkdtempSync(path.join(tmpdir(), "pipeline-invalid-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  assert.throws(
+    () => loadModel(Buffer.from([0x42, 0x80]), "bad.pipe-onnx"),
+    Error,
+  );
+  assert.throws(
+    () =>
+      loadModel(
+        pipelineBytes({ prefill: modelBytes("missing-ir.onnx") }),
+        "bad.pipe-onnx",
+      ),
+    /Invalid pipeline model/,
+  );
+  assert.throws(
+    () =>
+      loadModel(
+        Buffer.concat([
+          pipelineBytes(),
+          bytesField(8, modelBytes("relu.onnx")),
+        ]),
+        "bad.pipe-onnx",
+      ),
+    /Duplicate singular/,
+  );
+  const bytes = pipelineBytes({
+    prefill: Buffer.concat([
+      modelBytes("relu.onnx"),
+      bytesField(20, Buffer.alloc(0)),
+    ]),
+  });
+  const file = path.join(directory, "training.pipe-onnx");
+  writeFileSync(file, bytes);
+  for (const model of [
+    loadModel(bytes, "training.pipe-onnx"),
+    await loadModelFile(file, "training.pipe-onnx"),
+  ]) {
+    assert.equal(
+      model.graph(false, [{ pipeline: "prefill" }]).nodes[0].opType,
+      "Relu",
+    );
+    await assert.rejects(model.serialize(), /training_info.*not supported/);
+    await assert.rejects(
+      model.serializeFiles(1024, "weights"),
+      /training_info.*not supported/,
+    );
+  }
+});
+
 function encodedModel({
   external,
   logical = true,

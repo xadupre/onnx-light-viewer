@@ -46,6 +46,7 @@ struct StoredModel {
   std::shared_ptr<ol::ModelProto> model;
   std::string file_name;
   std::string file_path;
+  std::string pipeline_stage;
   uintmax_t source_size = 0;
   std::filesystem::file_time_type source_time;
   std::vector<SkippedTensorPayload> skipped;

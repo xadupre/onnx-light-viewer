@@ -9,6 +9,8 @@ Napi::Object Initialize(Napi::Env env, Napi::Object exports) {
   exports.Set("getSchema", Napi::Function::New(env, onnx_light_viewer::GetSchema));
   exports.Set("loadModel", Napi::Function::New(env, onnx_light_viewer::LoadModel));
   exports.Set("loadModelFile", Napi::Function::New(env, onnx_light_viewer::LoadModelFile));
+  exports.Set("loadPipeline", Napi::Function::New(env, onnx_light_viewer::LoadPipeline));
+  exports.Set("loadPipelineFile", Napi::Function::New(env, onnx_light_viewer::LoadPipelineFile));
   exports.Set("listBackendTests", Napi::Function::New(env, onnx_light_viewer::ListBackendTests));
   exports.Set("loadBackendTest", Napi::Function::New(env, onnx_light_viewer::LoadBackendTest));
   return exports;

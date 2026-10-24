@@ -48,6 +48,9 @@
           },
           {
             "filenamePattern": "*.onnx.enc"
+          },
+          {
+            "filenamePattern": "*.pipe-onnx"
           }
         ],
         "priority": "default"

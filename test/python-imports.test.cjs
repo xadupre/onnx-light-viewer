@@ -6,6 +6,7 @@ const { test } = require("node:test");
 for (const file of [
   "examples/generate_tiny_llm.py",
   "examples/generate_quantized.py",
+  "examples/generate_pipeline.py",
   "test/models/generate_models.py",
 ]) {
   test(`${file} imports the ONNX helper module as oh`, () => {

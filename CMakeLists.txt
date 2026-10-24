@@ -39,6 +39,7 @@ add_library(onnx_light_viewer SHARED
   native/addon.cc
   native/model.cc
   native/model_io.cc
+  native/pipeline.cc
   native/model_storage.cc
   native/model_tensors.cc
   native/model_serialization.cc
