@@ -1299,8 +1299,13 @@ function goToBoundary(bottom) {
   const viewport = byId("canvas").getBoundingClientRect();
   if (!viewport.width || !viewport.height) return;
   endGesture();
-  fit();
-  const { width, height } = camera;
+  const scale = readablePending
+    ? 1
+    : Math.max(bounds.width / viewport.width, bounds.height / viewport.height) /
+      zoom;
+  readablePending = false;
+  const width = viewport.width * scale;
+  const height = viewport.height * scale;
   reframe();
   zoom = Math.max(bounds.width / width, bounds.height / height);
   pan = {
@@ -1817,12 +1822,13 @@ svg.addEventListener("keydown", (event) => {
   }
 });
 byId("canvas").addEventListener("keydown", (event) => {
+  const editable = event.target.closest("[contenteditable]");
   if (
     event.defaultPrevented ||
     event.altKey ||
-    event.target.closest(
-      "#find-node, input, textarea, select, [contenteditable]",
-    ) ||
+    event.target.closest("#find-node, input, textarea, select") ||
+    (editable &&
+      editable.getAttribute("contenteditable").toLowerCase() !== "false") ||
     !hasModel
   )
     return;

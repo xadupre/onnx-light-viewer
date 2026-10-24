@@ -3477,7 +3477,7 @@ test("keyboard zoom shortcuts match controls and stay scoped to the graph canvas
 });
 
 test("Top/Bottom buttons align model boundaries without changing zoom or node positions", (t) => {
-  const { document, load, resize } = openViewer(t);
+  const { document, window, load, resize } = openViewer(t);
   const graph = document.getElementById("graph");
   const top = document.getElementById("go-top");
   const bottom = document.getElementById("go-bottom");
@@ -3500,13 +3500,19 @@ test("Top/Bottom buttons align model boundaries without changing zoom or node po
   const positions = nodePositions(document);
   document.getElementById("zoom-readable").click();
   const size = view().slice(2);
+  const observer = new window.MutationObserver(() => {});
+  observer.observe(graph, { attributes: true, attributeFilter: ["viewBox"] });
+  t.after(() => observer.disconnect());
   for (const width of [1060, 600]) {
     resize(width, 350);
+    observer.takeRecords();
     const currentSize = view().slice(2);
     top.click();
+    assert.equal(observer.takeRecords().length, 1);
     assert.ok(Math.abs(view()[1] - modelTop) < 1e-8);
     assert.deepEqual(view().slice(2), currentSize);
     bottom.click();
+    assert.equal(observer.takeRecords().length, 1);
     assert.ok(Math.abs(view()[1] + view()[3] - modelTop - modelHeight) < 1e-8);
     assert.deepEqual(view().slice(2), currentSize);
   }
@@ -3541,6 +3547,19 @@ test("model boundary shortcuts match buttons and do not intercept editing or oth
   document.getElementById("go-bottom").click();
   const bottom = graph.getAttribute("viewBox");
   assert.notEqual(top, bottom);
+  const editable = document.createElement("div");
+  const child = document.createElement("span");
+  editable.append(child);
+  document.getElementById("canvas").append(editable);
+  for (const value of ["true", "", "plaintext-only"]) {
+    editable.setAttribute("contenteditable", value);
+    assert.equal(key(child, "Home", { ctrlKey: true }).defaultPrevented, false);
+    assert.equal(graph.getAttribute("viewBox"), bottom);
+  }
+  editable.setAttribute("contenteditable", "false");
+  assert.equal(key(child, "Home", { ctrlKey: true }).defaultPrevented, true);
+  assert.equal(graph.getAttribute("viewBox"), top);
+  document.getElementById("go-bottom").click();
   for (const modifiers of [{ ctrlKey: true }, { metaKey: true }]) {
     for (const target of [
       graph,
