@@ -19,6 +19,9 @@ const path = require("node:path");
 const { test } = require("node:test");
 const { withCommaLocale } = require("../build/native/Release/test_locale.node");
 const {
+  layoutTensors,
+} = require("../build/native/Release/test_model_storage.node");
+const {
   decodeGraph,
   demoGraph,
   loadModel,
@@ -192,6 +195,8 @@ for (const bits of [2, 3]) {
     );
     const directory = mkdtempSync(path.join(tmpdir(), "encoded-model-"));
     t.after(() => rmSync(directory, { recursive: true, force: true }));
+    const layout = layoutTensors(readFileSync(file));
+    assert.ok(layout.length > 0);
     for (const model of [
       loadModel(readFileSync(file), file),
       await loadModelFile(file, file),
@@ -215,11 +220,11 @@ for (const bits of [2, 3]) {
         model.metadata().values.find((v) => v.name === "weight").constant,
         true,
       );
-      assert.deepEqual(
-        loadModel(await model.serialize(), "saved").graph(),
-        graph,
-      );
+      const saved = await model.serialize();
+      assert.deepEqual(loadModel(saved, "saved").graph(), graph);
+      assert.deepEqual(layoutTensors(saved), layout);
       const split = await model.serializeFiles(1024, "weights");
+      assert.deepEqual(layoutTensors(split.model), layout);
       writeFileSync(path.join(directory, "split.onnx"), split.model);
       for (const weight of split.weights)
         writeFileSync(path.join(directory, weight.name), weight.bytes);
@@ -227,6 +232,14 @@ for (const bits of [2, 3]) {
         path.join(directory, "split.onnx"),
         file,
       );
+      const reused = await reloaded.serializeFiles(
+        1024,
+        "reused",
+        path.join(directory, "split.onnx"),
+        true,
+      );
+      assert.deepEqual(layoutTensors(reused.model), layout);
+      assert.deepEqual(reused.weights, []);
       assert.deepEqual(
         loadModel(await reloaded.serialize(), "saved").graph(),
         graph,

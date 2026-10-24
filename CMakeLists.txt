@@ -40,6 +40,7 @@ add_library(onnx_light_viewer SHARED
   native/model.cc
   native/model_io.cc
   native/model_storage.cc
+  native/model_tensors.cc
   native/model_serialization.cc
   native/fusion.cc
   native/graph_analysis.cc
@@ -88,6 +89,16 @@ set_target_properties(test_locale PROPERTIES PREFIX "" SUFFIX ".node")
 if(MSVC)
   set_property(TARGET test_locale PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreadedDLL")
   target_compile_options(test_locale PRIVATE /EHsc)
+endif()
+
+add_library(test_model_storage SHARED test/model-storage-addon.cc native/model_tensors.cc ${CMAKE_JS_SRC})
+target_compile_features(test_model_storage PRIVATE cxx_std_20)
+target_include_directories(test_model_storage PRIVATE ${CMAKE_JS_INC})
+target_link_libraries(test_model_storage PRIVATE onnx_proto::lib_onnx_proto ${CMAKE_JS_LIB})
+set_target_properties(test_model_storage PROPERTIES PREFIX "" SUFFIX ".node")
+if(MSVC)
+  set_property(TARGET test_model_storage PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreadedDLL")
+  target_compile_options(test_model_storage PRIVATE /EHsc)
 endif()
 
 file(MAKE_DIRECTORY "${_output}")
