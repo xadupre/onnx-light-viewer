@@ -1244,13 +1244,13 @@ Napi::Object ModelGraph(Napi::Env env, const ol::ModelProto &model, const std::s
       const auto &value = initializer.encoded_value();
       const std::string name(value.name());
       initializers.emplace(name);
-      auto information =
-          TensorInformation(env, name, value.has_logical_type() ? &value.logical_type() : nullptr);
+      auto information = TensorInformation(
+          env, name, value.has_logical_type() ? &value.logical_type() : nullptr, &model);
       if (information.Get("type").IsNull())
         information.Set("type", "ENCODED");
       tensor_information.insert_or_assign(name, information);
-      auto parameter =
-          TensorInformation(env, name, value.has_logical_type() ? &value.logical_type() : nullptr);
+      auto parameter = TensorInformation(
+          env, name, value.has_logical_type() ? &value.logical_type() : nullptr, &model);
       parameter.Set("type", information.Get("type"));
       parameter.Set("storage", StorageInformation(env, value));
       if (value.has_affine())
@@ -2078,8 +2078,16 @@ public:
   void Execute() override {
     try {
       RestoreModelPayloads(snapshot_, *source_, path_);
+      std::vector<ol::EncodedValueProto *> encoded;
       std::set<const ol::TensorProto *> layout_tensors;
-      for (auto *tensor : ModelSaveTensors(snapshot_, nullptr, &layout_tensors))
+      const auto tensors = ModelSaveTensors(snapshot_, &encoded, &layout_tensors);
+      for (auto *value : encoded)
+        if (value->has_data_location() && value->data_location() == ol::TensorProto::EXTERNAL) {
+          if (path_.empty())
+            throw std::runtime_error("Fusion needs a local source path for external weights.");
+          LoadExternalTensor(*value, ModelFilePath(path_).parent_path());
+        }
+      for (auto *tensor : tensors)
         if ((!layout_tensors.contains(tensor) || tensor->has_data_location()) &&
             tensor->data_location() == ol::TensorProto::EXTERNAL) {
           if (path_.empty())

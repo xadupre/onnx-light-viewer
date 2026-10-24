@@ -50,7 +50,12 @@ function bytesField(number, value) {
   return Buffer.concat([varint(number * 8 + 2), varint(bytes.length), bytes]);
 }
 
-function encodedModel({ external, logical = true, structured = false } = {}) {
+function encodedModel({
+  external,
+  logical = true,
+  structured = false,
+  logicalType,
+} = {}) {
   const scale = Buffer.alloc(4);
   scale.writeFloatLE(0.5);
   const layout = structured
@@ -77,13 +82,15 @@ function encodedModel({ external, logical = true, structured = false } = {}) {
           ),
         ]),
       );
-  const logicalType = bytesField(
-    1,
-    Buffer.concat([
-      varintField(1, 1),
-      bytesField(2, bytesField(1, varintField(1, 8))),
-    ]),
-  );
+  const type =
+    logicalType ??
+    bytesField(
+      1,
+      Buffer.concat([
+        varintField(1, 1),
+        bytesField(2, bytesField(1, varintField(1, 8))),
+      ]),
+    );
   const payload = external
     ? Buffer.concat([
         ...Object.entries({ location: external, offset: "1", length: "2" }).map(
@@ -101,7 +108,7 @@ function encodedModel({ external, logical = true, structured = false } = {}) {
       );
   const value = Buffer.concat([
     layout,
-    ...(logical ? [bytesField(3, logicalType)] : []),
+    ...(logical ? [bytesField(3, type)] : []),
     payload,
     bytesField(7, "weight"),
   ]);
@@ -121,7 +128,10 @@ function encodedModel({ external, logical = true, structured = false } = {}) {
           ]),
         ),
         bytesField(1000, bytesField(1, value)),
-        bytesField(12, bytesField(1, "y")),
+        bytesField(
+          12,
+          Buffer.concat([bytesField(1, "y"), bytesField(2, type)]),
+        ),
       ]),
     ),
   ]);
@@ -289,6 +299,66 @@ test("lists and safely embeds external encoded payloads when saving", async (t) 
   );
   writeFileSync(path.join(directory, "codes.bin"), Buffer.from([0]));
   await assert.rejects(model.serialize(), /length exceeds/);
+});
+
+test("resolves model-scoped logical types of encoded initializers", () => {
+  const declaration = Buffer.concat([
+    bytesField(
+      2,
+      bytesField(
+        1,
+        Buffer.concat([
+          bytesField(1, "handle"),
+          bytesField(2, bytesField(7, bytesField(2, "Handle"))),
+        ]),
+      ),
+    ),
+    bytesField(7, "Record"),
+    varintField(10, 7),
+  ]);
+  const model = loadModel(
+    Buffer.concat([
+      encodedModel({ logicalType: bytesField(1000, varintField(4, 7)) }),
+      bytesField(1000, declaration),
+    ]),
+    "encoded-record",
+  );
+  assert.match(
+    model.graph().nodes[0].parameters[0].type,
+    /^STRUCT .*handle.*Record/,
+  );
+  assert.match(
+    model.graph().tensors.find((tensor) => tensor.name === "weight").type,
+    /^STRUCT .*handle.*Record/,
+  );
+});
+
+test("fusion embeds external encoded payloads and requires a safe local source", async (t) => {
+  const directory = mkdtempSync(path.join(tmpdir(), "encoded-fusion-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const file = path.join(directory, "model.onnx");
+  const bytes = encodedModel({ external: "codes.bin" });
+  writeFileSync(file, bytes);
+  writeFileSync(
+    path.join(directory, "codes.bin"),
+    Buffer.from([0, 0xe4, 0xe4]),
+  );
+  await assert.rejects(
+    loadModel(bytes, "buffer").previewFusion("TransposeTranspose"),
+    /local source path/,
+  );
+  const model = await loadModelFile(file, "external");
+  const preview = await model.previewFusion("TransposeTranspose");
+  assert.deepEqual(preview.model.externalDataLocations(), []);
+  assert.deepEqual(
+    loadModel(await preview.model.serialize(), "embedded").graph(),
+    loadModel(encodedModel(), "embedded").graph(),
+  );
+  writeFileSync(path.join(directory, "codes.bin"), Buffer.from([0]));
+  await assert.rejects(
+    model.previewFusion("TransposeTranspose"),
+    /length exceeds/,
+  );
 });
 
 function matmulWithWeight(dataField, data = Buffer.alloc(256)) {
