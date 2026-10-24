@@ -27,5 +27,5 @@ jobs:
       - run: npm ci
       - run: npm run format:check
       - if: runner.os == 'Linux'
-        run: clang-format --dry-run --Werror native/addon.cc
+        run: clang-format --dry-run --Werror native/*.cc native/*.h
       - run: npm test

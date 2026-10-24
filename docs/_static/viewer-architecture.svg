@@ -40,7 +40,7 @@
     <text x="110" y="312" class="note">Local-file parsing uses a worker; graph projection and analysis are synchronous.</text>
     <rect x="80" y="415" width="800" height="95" rx="12" class="card native"/>
     <text x="110" y="453" class="heading">Native addon</text>
-    <text x="110" y="485" class="code">native/addon.cc</text>
+    <text x="110" y="485" class="code">native/*.cc</text>
     <text x="510" y="453">Retained model + onnx-light</text>
     <text x="510" y="485">Parsing, inference, static analysis</text>
     <g class="arrow" marker-end="url(#arrow)">

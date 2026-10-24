@@ -1,0 +1,61 @@
+#pragma once
+
+#include <napi.h>
+#include <onnx_proto/onnx.h>
+
+#include <cstddef>
+#include <cstdint>
+#include <filesystem>
+#include <memory>
+#include <set>
+#include <string>
+#include <string_view>
+#include <vector>
+
+namespace ONNX_LIGHT_NAMESPACE::core::backend_test {
+struct TestCase;
+}
+
+namespace onnx_light_viewer {
+namespace ol = ONNX_LIGHT_NAMESPACE;
+
+inline constexpr std::string_view skippedPayloadLocation = "onnx-light-viewer:payload-omitted";
+
+struct ProtoPathStep {
+  uint32_t field;
+  size_t index;
+};
+
+struct SkippedTensorPayload {
+  std::vector<ProtoPathStep> path;
+  std::set<uint32_t> fields;
+};
+
+/**
+ * Owns the parsed model and its backing storage. Declaration order keeps the
+ * source buffer or backend case alive until after the model is destroyed.
+ */
+struct StoredModel {
+  struct ExternalWeight {
+    ol::TensorProto reference;
+    ol::TensorProto value;
+  };
+  Napi::Reference<Napi::Uint8Array> source;
+  std::shared_ptr<StoredModel> backing;
+  std::shared_ptr<ol::core::backend_test::TestCase> backend_case;
+  std::shared_ptr<ol::ModelProto> model;
+  std::string file_name;
+  std::string file_path;
+  uintmax_t source_size = 0;
+  std::filesystem::file_time_type source_time;
+  std::vector<SkippedTensorPayload> skipped;
+  bool has_training_info = false;
+  std::vector<ExternalWeight> external_weights;
+};
+
+Napi::Object ModelHandle(Napi::Env env, std::shared_ptr<StoredModel> model);
+void AddSerializationMethods(Napi::Env env, Napi::Object result,
+                             std::shared_ptr<StoredModel> model);
+void AddFusionMethods(Napi::Env env, Napi::Object result, std::shared_ptr<StoredModel> model);
+
+} // namespace onnx_light_viewer

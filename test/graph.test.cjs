@@ -2357,6 +2357,51 @@ test("keeps borrowed raw tensor data alive when only the native graph method is 
   ]);
 });
 
+test("keeps cloned backing storage alive through detached save and fusion workers", () => {
+  execFileSync(process.execPath, [
+    "--expose-gc",
+    "-e",
+    `
+    const assert = require("node:assert/strict");
+    const { readFileSync } = require("node:fs");
+    const { loadModel } = require(${JSON.stringify(require.resolve("../dist/graph"))});
+    (async () => {
+      let serialize = (() => {
+        const bytes = readFileSync(${JSON.stringify(require.resolve("./models/inference.onnx"))});
+        const padded = new Uint8Array(bytes.length + 16);
+        padded.set(bytes, 8);
+        return loadModel(padded.subarray(8, 8 + bytes.length), "inference.onnx").clone().serialize;
+      })();
+      global.gc();
+      const saving = serialize();
+      serialize = undefined;
+      global.gc();
+      assert.deepEqual(
+        loadModel(await saving, "saved.onnx").graph(true)
+          .tensors.find(({ name }) => name === "reshaped").shape,
+        ["N", "3", "1"],
+      );
+
+      let previewFusion = (() => {
+        const bytes = readFileSync(${JSON.stringify(require.resolve("./models/fusion.onnx"))});
+        return loadModel(bytes, "fusion.onnx").clone().previewFusion;
+      })();
+      global.gc();
+      const matching = previewFusion("TransposeTranspose");
+      previewFusion = undefined;
+      global.gc();
+      const preview = await matching;
+      assert.deepEqual(preview.matches.map(({ anchor }) => anchor), [0, 2]);
+      const fused = await preview.model.applyFusion("TransposeTranspose", [0, 2]);
+      assert.deepEqual(
+        loadModel(await fused.serialize(), "fused.onnx").graph().nodes.map(node => node.opType),
+        ["Identity", "Identity", "MatMul"],
+      );
+    })();
+  `,
+  ]);
+});
+
 test("keeps native backend case resources alive through garbage collection and later catalog loads", () => {
   execFileSync(process.execPath, [
     "--expose-gc",
