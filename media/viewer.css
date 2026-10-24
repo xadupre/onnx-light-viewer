@@ -119,6 +119,24 @@ p {
   font-weight: 600;
   overflow-wrap: anywhere;
 }
+.repository-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.repository-heading a {
+  min-width: 0;
+  margin-bottom: 0;
+}
+.repository-documentation {
+  flex-shrink: 0;
+}
+.repository-specialization {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
 .repository-list svg,
 .repository-list img {
   flex-shrink: 0;
