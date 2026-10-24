@@ -77,11 +77,53 @@ export async function inspectPythonPackages(pythonPath: string): Promise<{
   const script = `
 import importlib.metadata as metadata
 import json
+import os
+from pathlib import Path
 import re
+import site
 import sys
+prefixes = [sys.prefix, sys.exec_prefix]
+executable = os.environ.get("__PYVENV_LAUNCHER__", sys.executable) if sys.platform == "darwin" else sys.executable
+executable_directory = Path(executable).absolute().parent
+for config in (executable_directory / "pyvenv.cfg", executable_directory.parent / "pyvenv.cfg"):
+    if not config.is_file():
+        continue
+    include_system = True
+    for line in config.read_text(encoding="utf-8").splitlines():
+        key, separator, value = line.partition("=")
+        if separator and key.strip().lower() == "include-system-site-packages":
+            include_system = value.strip().lower() == "true"
+    sys.prefix = sys.exec_prefix = str(config.parent)
+    prefixes = [sys.prefix]
+    if include_system:
+        prefixes.extend([sys.base_prefix, sys.base_exec_prefix])
+    break
+paths = []
+seen = set()
+def add_path(path):
+    path = os.path.normcase(os.path.abspath(path))
+    if path not in seen and os.path.exists(path):
+        seen.add(path)
+        paths.append(path)
+for directory in site.getsitepackages(prefixes):
+    if not os.path.isdir(directory):
+        continue
+    add_path(directory)
+    for entry in sorted(Path(directory).glob("*.pth")):
+        if entry.name.startswith(".") or not entry.is_file():
+            continue
+        try:
+            contents = entry.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            contents = entry.read_text(encoding="locale")
+        for line in contents.splitlines():
+            if not line.strip() or line.startswith(("#", "import ", "import\\t")):
+                continue
+            add_path(os.path.join(directory, line.rstrip()))
 normalize = lambda name: re.sub(r"[-_.]+", "-", name).lower()
 installed = {}
-for distribution in metadata.distributions():
+# Keep environment paths out of sys.path so only distribution metadata is read.
+for distribution in metadata.distributions(path=paths):
     name = distribution.metadata["Name"]
     if name:
         installed.setdefault(normalize(name), distribution.version)
@@ -93,7 +135,7 @@ print(json.dumps({
 `;
   const { stdout } = await promisify(execFile)(
     pythonPath,
-    ["-I", "-c", script, JSON.stringify(pythonPackages)],
+    ["-I", "-S", "-c", script, JSON.stringify(pythonPackages)],
     { cwd: homedir(), timeout: 10000, maxBuffer: 1024 * 1024 },
   );
   return JSON.parse(stdout);

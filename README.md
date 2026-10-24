@@ -31,7 +31,9 @@ files.
   optional: save its executable path, then choose **Refresh package versions**
   in a trusted workspace to inspect installed ecosystem/exporter packages.
   Inspection uses an isolated interpreter (excluding user-site and `PYTHONPATH`
-  packages), imports no model libraries, and installs nothing.
+  packages), disables startup hooks (`sitecustomize` and executable `.pth` lines),
+  imports no model libraries, and installs nothing. Virtualenv metadata and
+  path-only `.pth` entries remain discoverable.
 
 See the [feature guide](docs/features.rst) for controls, examples and limitations.
 Model saving and encrypted I/O are under review in [#115](https://github.com/xadupre/onnx-light-viewer/pull/115),
