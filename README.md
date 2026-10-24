@@ -26,6 +26,12 @@ files.
   with visible update counts.
 - Use **Logs**, **Status** and **Controls** for diagnostics and shortcuts, and
   **Repositories** for ONNX ecosystem links.
+- Use **Settings** to change the download cache directory and saved sidebar
+  preferences, or check the app and compiled onnx-light versions. Python is
+  optional: save its executable path, then choose **Refresh package versions**
+  in a trusted workspace to inspect installed ecosystem/exporter packages.
+  Inspection uses an isolated interpreter (excluding user-site and `PYTHONPATH`
+  packages), imports no model libraries, and installs nothing.
 
 See the [feature guide](docs/features.rst) for controls, examples and limitations.
 Model saving and encrypted I/O are under review in [#115](https://github.com/xadupre/onnx-light-viewer/pull/115),

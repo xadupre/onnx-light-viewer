@@ -21,6 +21,7 @@ import {
   FusionMatch,
 } from "./graph";
 import { webviewHtml } from "./webview";
+import { applicationSettings, inspectPythonPackages } from "./settings";
 import { ActionLog, LogEntry } from "./log";
 import {
   PathHistory,
@@ -466,6 +467,28 @@ async function configurePanel(
         vscode.Uri.file(homedir()));
   const locationText = (uri: vscode.Uri) =>
     uri.scheme === "file" ? uri.fsPath : uri.toString();
+  const getApplicationSettings = () =>
+    applicationSettings(
+      context.globalState.get<unknown>("applicationSettings") ?? {
+        downloadDirectory: join(context.globalStorageUri.fsPath, "huggingface"),
+        pythonPath: process.platform === "win32" ? "python" : "python3",
+      },
+    );
+  const sendSettings = () =>
+    postMessage({
+      type: "settings-info",
+      application: getApplicationSettings(),
+      viewer: viewerSettings(
+        context.globalState.get<unknown>("viewerSettings") ?? {
+          panels: { operator: true, find: true, metadata: false },
+        },
+      ),
+      appVersion: context.extension.packageJSON.version,
+      nativeVersion: onnxLightVersion,
+      platform: `${process.platform} / ${process.arch}`,
+      trusted: vscode.workspace.isTrusted,
+    });
+  let inspectingPackages = false;
   const locationUri = (value: unknown) => {
     if (typeof value !== "string" || !value.trim() || value.includes("\0"))
       throw new Error("Enter a file or directory path.");
@@ -569,6 +592,37 @@ async function configurePanel(
       if (!active) return;
       if (message?.type === "show-logs") {
         showLogs();
+      } else if (
+        message?.type === "get-settings" ||
+        message?.type === "application-settings" ||
+        message?.type === "inspect-python"
+      ) {
+        try {
+          if (message.type === "application-settings") {
+            await context.globalState.update(
+              "applicationSettings",
+              applicationSettings(message.settings),
+            );
+          }
+          if (message.type === "inspect-python") {
+            if (!vscode.workspace.isTrusted)
+              throw new Error("Trust this workspace before running Python.");
+            if (inspectingPackages) return;
+            inspectingPackages = true;
+            try {
+              const python = await inspectPythonPackages(
+                getApplicationSettings().pythonPath,
+              );
+              await postMessage({ type: "python-info", python });
+            } finally {
+              inspectingPackages = false;
+            }
+          } else await sendSettings();
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error);
+          log.record("FAILED", `Settings: ${detail}`);
+          await postMessage({ type: "settings-error", error: detail });
+        }
       } else if (message?.type === "interaction") {
         log.interaction(message.entry);
       } else if (message?.type === "path-history-edit") {
@@ -941,7 +995,7 @@ async function configurePanel(
                     controller.signal.throwIfAborted();
                     const result = await cachedHuggingFaceModel(
                       source,
-                      join(context.globalStorageUri.fsPath, "huggingface"),
+                      getApplicationSettings().downloadDirectory,
                       async (path) => {
                         await postMessage({
                           type: "model-progress",

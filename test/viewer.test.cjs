@@ -1743,8 +1743,8 @@ test("switches all tabs without logging clicks or changing graph, selection or c
     .dispatchEvent(
       new window.KeyboardEvent("keydown", { key: "End", bubbles: true }),
     );
-  assert.equal(document.activeElement.id, "repositories-tab");
-  assert.equal(document.getElementById("repositories-view").hidden, false);
+  assert.equal(document.activeElement.id, "settings-tab");
+  assert.equal(document.getElementById("settings-view").hidden, false);
   assert.equal(document.getElementById("status-view").hidden, true);
   document.getElementById("controls-tab").click();
   assert.equal(document.getElementById("controls-view").hidden, false);
@@ -1766,6 +1766,102 @@ test("switches all tabs without logging clicks or changing graph, selection or c
     document.getElementById("graph").getAttribute("viewBox"),
     camera,
   );
+});
+
+test("Settings edits saved paths and existing sidebar preferences and renders package versions safely", (t) => {
+  const { document, window, messages } = openViewer(t);
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  const byId = (id) => document.getElementById(id);
+  byId("settings-tab").click();
+  assert.equal(messages.at(-1).type, "get-settings");
+  send({
+    type: "settings-info",
+    application: {
+      downloadDirectory: "/downloads",
+      pythonPath: "/usr/bin/python3",
+    },
+    viewer: {
+      width: 420,
+      panels: { operator: false, find: true, metadata: false },
+    },
+    appVersion: "1.2.3",
+    nativeVersion: "0.2.0",
+    platform: "linux / x64",
+    trusted: true,
+  });
+  assert.equal(byId("settings-app-version").textContent, "1.2.3");
+  assert.equal(byId("settings-native-version").textContent, "0.2.0");
+  assert.equal(byId("settings-width").value, "420");
+  byId("settings-download").value = "/new-downloads";
+  byId("application-settings-form").dispatchEvent(
+    new window.Event("submit", { cancelable: true }),
+  );
+  assert.deepEqual(JSON.parse(JSON.stringify(messages.at(-1))), {
+    type: "application-settings",
+    settings: {
+      downloadDirectory: "/new-downloads",
+      pythonPath: "/usr/bin/python3",
+    },
+  });
+  byId("settings-operator").click();
+  assert.equal(byId("operator-panel").hidden, false);
+  assert.equal(messages.at(-1).type, "viewer-settings");
+  byId("settings-width").value = "";
+  byId("settings-width").dispatchEvent(new window.Event("change"));
+  assert.equal(
+    document
+      .querySelector(".graph-body")
+      .style.getPropertyValue("--sidebar-width"),
+    "",
+  );
+  byId("show-find").click();
+  assert.equal(byId("settings-find").checked, false);
+  byId("settings-inspect-python").click();
+  assert.equal(messages.at(-1).type, "inspect-python");
+  assert.equal(byId("settings-inspect-python").disabled, true);
+  send({
+    type: "python-info",
+    python: {
+      executable: "/usr/bin/python3",
+      version: "3.12.3",
+      packages: [
+        { name: "onnx", version: null },
+        { name: "torch", version: "<img src=x onerror=alert(1)>" },
+      ],
+    },
+  });
+  assert.equal(byId("settings-inspect-python").disabled, false);
+  assert.match(byId("settings-packages").textContent, /Not installed/);
+  assert.equal(byId("settings-packages").querySelector("img"), null);
+  send({ type: "settings-error", error: "Python not found" });
+  assert.equal(byId("settings-feedback").textContent, "Python not found");
+  assert.equal(byId("settings-packages").children.length, 0);
+  const info = {
+    type: "settings-info",
+    application: {
+      downloadDirectory: "/downloads",
+      pythonPath: "/other/python",
+    },
+    viewer: { panels: { operator: true, find: true, metadata: false } },
+    trusted: true,
+  };
+  byId("settings-inspect-python").click();
+  send(info);
+  send({
+    type: "python-info",
+    python: {
+      executable: "/usr/bin/python3",
+      version: "3.12.3",
+      packages: [{ name: "onnx", version: "old" }],
+    },
+  });
+  assert.equal(byId("settings-packages").children.length, 0);
+  assert.equal(byId("settings-python-status").textContent, "Not checked");
+  send({ ...info, trusted: false });
+  assert.equal(byId("settings-inspect-python").disabled, true);
+  send({ type: "settings-error", error: "Invalid path" });
+  assert.equal(byId("settings-inspect-python").disabled, true);
 });
 
 for (const initialTab of ["model", "logs"]) {
@@ -2013,12 +2109,14 @@ for (const initialTab of ["model", "logs"]) {
     });
     tab.focus();
     for (const [key, expected] of [
+      ["ArrowRight", "settings"],
       ["ArrowRight", "model"],
+      ["ArrowLeft", "settings"],
       ["ArrowLeft", "repositories"],
       ["ArrowLeft", "controls"],
       ["ArrowRight", "repositories"],
       ["Home", "model"],
-      ["End", "repositories"],
+      ["End", "settings"],
     ]) {
       document.activeElement.dispatchEvent(
         new window.KeyboardEvent("keydown", { key, bubbles: true }),
@@ -2028,7 +2126,7 @@ for (const initialTab of ["model", "logs"]) {
     }
     assert.deepEqual(
       messages.map(({ type }) => type),
-      ["ready"],
+      ["ready", "get-settings", "get-settings", "get-settings"],
     );
   });
 
@@ -2109,13 +2207,15 @@ for (const initialTab of ["model", "logs"]) {
     tab.focus();
     for (const [key, expected] of [
       ["ArrowRight", "repositories"],
+      ["ArrowRight", "settings"],
       ["ArrowRight", "model"],
+      ["ArrowLeft", "settings"],
       ["ArrowLeft", "repositories"],
       ["ArrowLeft", "controls"],
       ["ArrowLeft", "status"],
       ["ArrowRight", "controls"],
       ["Home", "model"],
-      ["End", "repositories"],
+      ["End", "settings"],
     ]) {
       document.activeElement.dispatchEvent(
         new window.KeyboardEvent("keydown", { key, bubbles: true }),
@@ -2125,7 +2225,7 @@ for (const initialTab of ["model", "logs"]) {
     }
     assert.deepEqual(
       messages.map(({ type }) => type),
-      ["ready"],
+      ["ready", "get-settings", "get-settings", "get-settings"],
     );
   });
 }

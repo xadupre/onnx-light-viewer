@@ -1,5 +1,5 @@
 /* global acquireVsCodeApi, createSidebar, createFilePanels, createInspector,
-          createMetadataPanel, createFusionPanel */
+          createMetadataPanel, createFusionPanel, createSettingsPanel */
 const vscode = acquireVsCodeApi();
 const svgNS = "http://www.w3.org/2000/svg";
 const byId = (id) => document.getElementById(id);
@@ -57,15 +57,32 @@ const RefreshStatus = Object.freeze({
   UNCHANGED: "unchanged",
   FAILED: "failed",
 });
-const tabs = ["model", "logs", "status", "controls", "repositories"];
+const tabs = [
+  "model",
+  "logs",
+  "status",
+  "controls",
+  "repositories",
+  "settings",
+];
 
 const sidebar = createSidebar({
   byId,
   fit,
   endGesture,
   onMetadataToggle: setMetadataVisible,
-  onSettingsChange: (settings) =>
-    vscode.postMessage({ type: "viewer-settings", settings }),
+  onSettingsChange: (settings) => {
+    settingsPanel.restoreViewer(settings);
+    vscode.postMessage({ type: "viewer-settings", settings });
+  },
+});
+const settingsPanel = createSettingsPanel({
+  byId,
+  postMessage: (message) => vscode.postMessage(message),
+  onViewerSettings: (settings) => {
+    sidebar.restoreSettings(settings);
+    vscode.postMessage({ type: "viewer-settings", settings });
+  },
 });
 const inspector = createInspector({
   byId,
@@ -112,6 +129,7 @@ function showTab(name, focus = false) {
   }
   if (focus) byId(`${name}-tab`).focus();
   if (name === "model") fit();
+  else if (name === "settings") vscode.postMessage({ type: "get-settings" });
   else if (name === "logs")
     byId("logs-view").scrollTop = byId("logs-view").scrollHeight;
 }
@@ -1674,6 +1692,13 @@ window.addEventListener("message", (event) => {
     displayStatus(event.data);
   } else if (event.data?.type === "viewer-settings") {
     sidebar.restoreSettings(event.data.settings);
+    settingsPanel.restoreViewer(event.data.settings);
+  } else if (
+    ["settings-info", "python-info", "settings-error"].includes(
+      event.data?.type,
+    )
+  ) {
+    settingsPanel.receive(event.data);
   } else if (event.data?.type === "log-entry") {
     displayLog(event.data.entry);
   } else if (event.data?.type === "log-history") {

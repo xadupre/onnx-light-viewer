@@ -41,6 +41,7 @@ export function webviewHtml(
       <button id="status-tab" role="tab" aria-controls="status-view" aria-selected="false" tabindex="-1">Status</button>
       <button id="controls-tab" role="tab" aria-controls="controls-view" aria-selected="false" tabindex="-1">Controls</button>
       <button id="repositories-tab" role="tab" aria-controls="repositories-view" aria-selected="false" tabindex="-1">ONNX</button>
+      <button id="settings-tab" role="tab" aria-controls="settings-view" aria-selected="false" tabindex="-1">Settings</button>
     </nav>
     <section id="model-view" role="tabpanel" aria-labelledby="model-tab"${initialTab === "logs" ? " hidden" : ""}>
       <header class="graph-toolbar">
@@ -221,6 +222,39 @@ export function webviewHtml(
         <p id="status-failure-time"></p>
         <pre id="status-failure-details"></pre>
       </section>
+    </section>
+    <section id="settings-view" role="tabpanel" aria-labelledby="settings-tab" tabindex="0" hidden>
+      <h2>Settings</h2>
+      <p>Settings are saved for this VS Code user. Existing downloads are not moved when the directory changes.</p>
+      <form id="application-settings-form">
+        <label for="settings-download">Default download directory (Hugging Face cache)</label>
+        <input id="settings-download" type="text" required autocomplete="off">
+        <label for="settings-python">Python executable</label>
+        <input id="settings-python" type="text" required autocomplete="off">
+        <p>Python is not needed to view models. Save an executable name or absolute path to inspect optional packages on the extension host.</p>
+        <button type="submit">Save paths</button>
+      </form>
+      <p id="settings-feedback" role="status"></p>
+      <h3>Viewer preferences</h3>
+      <label for="settings-width">Sidebar width (pixels; blank uses the default)</label>
+      <input id="settings-width" type="number" min="200" step="1">
+      <div id="settings-panels">
+        <label><input id="settings-operator" type="checkbox" checked> Operator inspector</label>
+        <label><input id="settings-find" type="checkbox" checked> Find panel</label>
+        <label><input id="settings-metadata" type="checkbox"> Data panel</label>
+      </div>
+      <h3>Application and native build</h3>
+      <dl class="status-details">
+        <dt>ONNX Light Viewer</dt><dd id="settings-app-version">Waiting for extension host</dd>
+        <dt>Compiled with onnx-light C++</dt><dd id="settings-native-version">Waiting for extension host</dd>
+        <dt>Extension host platform</dt><dd id="settings-platform">Waiting for extension host</dd>
+      </dl>
+      <p>The bundled native addon uses the onnx-light C++ release above, independently of any Python installation.</p>
+      <h3>Optional Python packages</h3>
+      <p>Checks installed distribution metadata in the selected interpreter's isolated environment, without importing model libraries. Nothing is installed. Requires a trusted workspace.</p>
+      <button id="settings-inspect-python" type="button" disabled>Refresh package versions</button>
+      <p id="settings-python-status" role="status">Not checked</p>
+      <dl id="settings-packages" class="status-details"></dl>
     </section>
     <section id="controls-view" role="tabpanel" aria-labelledby="controls-tab" tabindex="0" hidden>
       <h2>Keyboard and mouse controls</h2>
@@ -435,6 +469,7 @@ export function webviewHtml(
   <script nonce="${nonce}" src="${resource("inspector.js")}"></script>
   <script nonce="${nonce}" src="${resource("metadata-panel.js")}"></script>
   <script nonce="${nonce}" src="${resource("fusion-panel.js")}"></script>
+  <script nonce="${nonce}" src="${resource("settings-panel.js")}"></script>
   <script nonce="${nonce}" src="${resource("viewer.js")}"></script>
 </body>
 </html>`;
