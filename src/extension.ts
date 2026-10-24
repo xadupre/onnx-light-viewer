@@ -1621,6 +1621,9 @@ async function configurePanel(
       if (!active) return;
       model = loaded;
       initialLoading = false;
+      if (ready && model) await sendGraph();
+      else if (ready) await postMessage({ type: "load-state", pending: false });
+      else void sendStatus();
       if (loaded && !uri.path.startsWith(`${mediaRoot.path}/`)) {
         await updateHistory("open", {
           action: "remember",
@@ -1631,9 +1634,6 @@ async function configurePanel(
           ),
         });
       }
-      if (ready && model) await sendGraph();
-      else if (ready) await postMessage({ type: "load-state", pending: false });
-      else void sendStatus();
     } catch (error) {
       if (!active) return;
       initialLoading = false;

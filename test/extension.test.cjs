@@ -355,7 +355,7 @@ async function openExtension(
     webview,
     resolveCustomEditor: (name) =>
       editor.resolveCustomEditor(
-        { uri: { path: path.join(__dirname, "models", name) } },
+        { uri: uri(path.join(__dirname, "models", name)) },
         panel,
       ),
     deferRead: (name) => {
@@ -809,6 +809,31 @@ test("publishes replacement graphs before delayed Open history persistence", asy
       source === "local" ? "local" : "backend",
     );
   }
+});
+
+test("publishes initial editor graphs before delayed Open history persistence", async (t) => {
+  const extension = await openExtension();
+  t.after(() => extension.dispose());
+  const releaseRead = extension.deferRead("relu.onnx");
+  const gate = extension.pauseNextHistoryUpdate();
+  const opening = extension.resolveCustomEditor("relu.onnx");
+  await extension.receive({ type: "ready" });
+  releaseRead();
+  await gate.started;
+  try {
+    const graph = extension.messages.findLast(({ type }) => type === "graph");
+    assert.ok(graph);
+    assert.equal(graph.graph.nodes[0].opType, "Relu");
+    assert.equal(extension.preferences.get("pathHistory"), undefined);
+    assert.equal(extension.errors.length, 0);
+  } finally {
+    gate.release();
+    await opening;
+  }
+  const history = extension.preferences.get("pathHistory").open;
+  assert.equal(history[0].source, "local");
+  assert.equal(history[0].kind, "file");
+  assert.match(history[0].path, /\/relu\.onnx$/);
 });
 
 test("opens, browses and saves encrypted copies through embedded selectors without popup pickers", async (t) => {
