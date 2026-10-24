@@ -715,27 +715,31 @@ button:disabled {
   overflow-wrap: anywhere;
   font: inherit;
 }
-#metadata-panel dl {
+#metadata-panel table {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
   margin: 8px 0 12px;
 }
-#metadata-panel dt {
-  margin-top: 6px;
-  font-size: 10px;
+#metadata-panel th,
+#metadata-panel td {
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  font-size: 11px;
   letter-spacing: 0;
 }
-#metadata-panel dd {
-  font-size: 11px;
-  white-space: pre-wrap;
+#metadata-panel th:first-child {
+  width: 35%;
 }
-#metadata-panel #metadata-analysis {
-  display: grid;
-  grid-template-columns: max-content minmax(0, 1fr);
-  gap: 4px 10px;
-  margin: 12px 0;
+#metadata-panel thead {
+  background: var(--border);
 }
-#metadata-analysis dt,
-#metadata-analysis dd {
-  margin: 0;
+#metadata-panel tbody th {
+  font-weight: 500;
 }
 #metadata-panel details {
   margin-top: 10px;

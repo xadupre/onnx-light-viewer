@@ -86,14 +86,14 @@ export function webviewHtml(
           <section id="metadata-panel" class="inspector-panel" aria-labelledby="metadata-title" hidden>
             <h2 id="metadata-title" class="eyebrow panel-title">Data</h2>
             <div id="metadata-content" hidden>
-              <dl id="metadata-analysis"></dl>
+              <table id="metadata-analysis" aria-label="Selection metadata"></table>
               <section id="metadata-releases-section" hidden><h3>Releasable after this node</h3><ul id="metadata-releases"></ul></section>
               <section id="metadata-last-use-section" hidden><h3 title="Last reads of caller-owned values; these are not released">Last use: inputs / weights</h3><ul id="metadata-last-use"></ul></section>
               <section id="metadata-unused-section" hidden><h3>Unused outputs</h3><ul id="metadata-unused"></ul></section>
-              <details><summary>Stored node metadata</summary><dl id="metadata-node"></dl></details>
+              <details><summary>Stored node metadata</summary><table id="metadata-node" aria-label="Stored node metadata"></table></details>
               <details><summary>Connected tensors (<span id="metadata-value-count">0</span>)</summary><ul id="metadata-values"></ul></details>
-              <details><summary>Model metadata</summary><dl id="metadata-model"></dl></details>
-              <details><summary>Graph metadata</summary><dl id="metadata-graph"></dl></details>
+              <details><summary>Model metadata</summary><table id="metadata-model" aria-label="Model metadata"></table></details>
+              <details><summary>Graph metadata</summary><table id="metadata-graph" aria-label="Graph metadata"></table></details>
             </div>
           </section>
           <section id="fusion-panel" class="inspector-panel" aria-labelledby="fusion-title" hidden>

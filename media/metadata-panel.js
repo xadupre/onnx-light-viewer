@@ -3,12 +3,23 @@ function createMetadataPanel({ byId, tensorDescription }) {
     parent.replaceChildren();
     if (parent.parentElement.tagName === "DETAILS")
       parent.parentElement.hidden = entries.length === 0;
+    const head = parent.createTHead();
+    const header = head.insertRow();
+    for (const label of ["Key", "Value"]) {
+      const cell = document.createElement("th");
+      cell.scope = "col";
+      cell.textContent = label;
+      header.append(cell);
+    }
+    const body = parent.createTBody();
     for (const { key, value } of entries) {
-      const term = document.createElement("dt");
-      const description = document.createElement("dd");
+      const row = body.insertRow();
+      const term = document.createElement("th");
+      term.scope = "row";
+      const description = document.createElement("td");
       term.textContent = key;
       description.textContent = value;
-      parent.append(term, description);
+      row.append(term, description);
     }
   }
 
@@ -74,7 +85,8 @@ function createMetadataPanel({ byId, tensorDescription }) {
           const details = document.createElement("details");
           const summary = document.createElement("summary");
           summary.textContent = "Stored metadata";
-          const entries = document.createElement("dl");
+          const entries = document.createElement("table");
+          entries.setAttribute("aria-label", "Stored tensor metadata");
           details.append(summary, entries);
           metadataEntries(entries, value.entries);
           item.append(details);
