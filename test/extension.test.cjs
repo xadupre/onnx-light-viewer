@@ -116,9 +116,15 @@ async function openExtension(
   };
   const vscode = {
     FileSystemError,
+    FileType: { File: 1, Directory: 2, SymbolicLink: 64 },
     Uri: {
       file: (filePath) => uri(filePath, "file"),
-      joinPath: (base, ...parts) => uri(path.posix.join(base.path, ...parts)),
+      parse: (value) => {
+        const url = new URL(value);
+        return uri(decodeURIComponent(url.pathname), url.protocol.slice(0, -1));
+      },
+      joinPath: (base, ...parts) =>
+        uri(path.posix.join(base.path, ...parts), base.scheme),
     },
     ViewColumn: { One: 1 },
     ProgressLocation: { Notification: 15 },
@@ -130,6 +136,10 @@ async function openExtension(
     },
     workspace: {
       fs: {
+        readDirectory: async (directory) =>
+          (await readdir(directory.path, { withFileTypes: true })).map(
+            (entry) => [entry.name, entry.isDirectory() ? 2 : 1],
+          ),
         readFile: async (uri) => {
           reads.push(uri.path);
           const key = path.basename(uri.path);
@@ -155,11 +165,14 @@ async function openExtension(
             await gate.wait;
           }
         },
-        rename: async (source, destination) => {
+        rename: async (source, destination, options) => {
           if (failSaveRename > 0 && --failSaveRename === 0) {
             throw new Error("Test filesystem refused the rename.");
           }
-          await rename(source.path, destination.path);
+          if (!options.overwrite) {
+            await link(source.path, destination.path);
+            await rm(source.path);
+          } else await rename(source.path, destination.path);
         },
         delete: async (uri) => {
           try {
@@ -338,13 +351,23 @@ async function openExtension(
       selection = [uri(filePath)];
       await receive({ type: "open" });
     },
-    save: async (filePath, encrypted = false, passwords = [], externalSize) => {
+    save: async (
+      filePath,
+      encrypted = false,
+      passwords = [],
+      externalSize,
+      reuse = false,
+    ) => {
       saveDestination = filePath ? vscode.Uri.file(filePath) : undefined;
       passwordValues = passwords;
       await receive({
         type: "save",
         encrypted,
-        storage: externalSize === undefined ? "embedded" : "external",
+        storage: reuse
+          ? "reuse"
+          : externalSize === undefined
+            ? "embedded"
+            : "external",
         ...(externalSize === undefined
           ? {}
           : { maxExternalFileSize: externalSize }),
@@ -402,6 +425,374 @@ async function openExtension(
     },
   };
 }
+
+test("opens, browses and saves encrypted copies through embedded selectors without popup pickers", async (t) => {
+  const directory = await mkdtemp(
+    path.join(tmpdir(), "onnx-light-inline-files-"),
+  );
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const source = path.join(directory, "source.onnx");
+  await copyFile(require.resolve("./models/fusion.onnx"), source);
+  await mkdir(path.join(directory, "nested"));
+  await writeFile(path.join(directory, "notes.txt"), "not a model");
+  const original = await readFile(source);
+  const extension = await openExtension(
+    undefined,
+    "onnxLightViewer.open",
+    true,
+  );
+  const dom = new JSDOM(extension.webview.html, { runScripts: "outside-only" });
+  t.after(() => dom.window.close());
+  const { window } = dom;
+  const { document } = window;
+  const requests = [];
+  window.HTMLCanvasElement.prototype.getContext = () => ({
+    font: "",
+    measureText: (text) => ({ width: text.length * 8 }),
+  });
+  document.getElementById("canvas").getBoundingClientRect = () =>
+    new window.DOMRect(0, 0, 1060, 350);
+  window.acquireVsCodeApi = () => ({
+    postMessage: (message) => requests.push(extension.receive(message)),
+  });
+  extension.connect((data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data })),
+  );
+  for (const name of ["vendor/markdown-it.min.js", "viewer.js"])
+    window.eval(
+      readFileSync(path.resolve(__dirname, "../media", name), "utf8"),
+    );
+  const flush = async () => {
+    while (requests.length) await Promise.all(requests.splice(0));
+  };
+  const submit = (id) =>
+    document
+      .getElementById(id)
+      .dispatchEvent(new window.Event("submit", { cancelable: true }));
+  await flush();
+  document.getElementById("open-model").click();
+  await flush();
+  document.getElementById("open-location").value = directory;
+  submit("open-browse");
+  await flush();
+  let files = document.querySelectorAll("#open-files button");
+  assert.deepEqual(
+    [...files].map((button) => button.textContent),
+    ["[Folder] nested", "source.onnx"],
+  );
+  files[0].click();
+  await flush();
+  assert.equal(
+    document.getElementById("open-location").value,
+    path.join(directory, "nested"),
+  );
+  document.getElementById("open-parent").click();
+  await flush();
+  files = document.querySelectorAll("#open-files button");
+  files[1].click();
+  submit("open-form");
+  await flush();
+  assert.equal(document.querySelectorAll(".graph-node").length, 5);
+  document.getElementById("save-model").click();
+  await flush();
+  assert.equal(document.getElementById("save-options").hidden, false);
+  assert.equal(document.getElementById("open-panel").hidden, true);
+  assert.equal(document.querySelector("dialog[open]"), null);
+  const encrypted = document.querySelector('input[value="embedded-encrypted"]');
+  encrypted.click();
+  const destination = path.join(directory, "source-copy.onnx.enc");
+  assert.equal(document.getElementById("save-file").value, destination);
+  document.getElementById("save-password").value = "inline-password";
+  document.getElementById("save-confirmation").value = "wrong";
+  submit("save-form");
+  assert.match(
+    document.getElementById("save-options-error").textContent,
+    /same non-empty password/,
+  );
+  document.getElementById("save-confirmation").value = "inline-password";
+  submit("save-form");
+  assert.equal(document.getElementById("save-submit").disabled, true);
+  assert.equal(document.getElementById("save-password").value, "");
+  await flush();
+  const { loadModelFile } = require("../dist/graph");
+  assert.equal(
+    (await loadModelFile(destination, "copy", "inline-password")).graph().nodes
+      .length,
+    5,
+  );
+  assert.equal(document.getElementById("save-submit").disabled, false);
+  assert.match(document.getElementById("save-status").textContent, /Saved/);
+  const saved = await readFile(destination);
+  for (const overwrite of [false, true]) {
+    document.getElementById("save-overwrite").checked = overwrite;
+    document.getElementById("save-password").value = "inline-password";
+    document.getElementById("save-confirmation").value = "inline-password";
+    submit("save-form");
+    await flush();
+    if (!overwrite) {
+      assert.match(
+        document.getElementById("save-options-error").textContent,
+        /exist/i,
+      );
+      assert.deepEqual(await readFile(destination), saved);
+    } else
+      assert.match(document.getElementById("save-status").textContent, /Saved/);
+  }
+  document.getElementById("open-model").click();
+  await flush();
+  assert.equal(document.getElementById("save-options").hidden, true);
+  document.getElementById("open-file").value = destination;
+  document.getElementById("open-password").value = "inline-password";
+  submit("open-form");
+  await flush();
+  assert.equal(document.querySelectorAll(".graph-node").length, 5);
+  assert.deepEqual(await readFile(source), original);
+  assert.deepEqual(extension.picks, []);
+  assert.deepEqual(extension.passwordPrompts, []);
+  assert.deepEqual(extension.saveDialogs, []);
+  assert.equal(extension.errors.length, 1);
+  assert.ok(
+    extension.logs.every((entry) => !entry.includes("inline-password")),
+  );
+});
+
+test("lists and opens backend models in the embedded selector without a quick pick", async () => {
+  const extension = await openExtension();
+  await extension.receive({
+    type: "browse-files",
+    target: "open",
+    source: "backend",
+    requestId: 1,
+  });
+  const listing = extension.messages.at(-1);
+  assert.equal(listing.type, "file-list");
+  assert.ok(listing.entries.length > 0);
+  await extension.receive({
+    type: "open",
+    source: "backend",
+    location: listing.entries[0].path,
+    password: "",
+    actionId: "ui:inline-backend",
+  });
+  assert.equal(extension.messages.at(-1).type, "graph");
+  assert.deepEqual(extension.picks, []);
+  assert.deepEqual(extension.errors, []);
+  const location =
+    "https://huggingface.co/example/models/resolve/main/model.onnx";
+  await extension.receive({
+    type: "browse-files",
+    source: "huggingface",
+    target: "open",
+    location,
+    requestId: 2,
+  });
+  const remote = extension.messages.at(-1);
+  assert.equal(remote.type, "file-list");
+  assert.equal(remote.entries.length, 1);
+  assert.equal(remote.entries[0].name, "model.onnx");
+  assert.equal(remote.entries[0].path, location);
+  await extension.receive({
+    type: "browse-files",
+    source: "local",
+    target: "open",
+    location: "/does-not-exist/onnx-light-viewer",
+    requestId: 3,
+  });
+  assert.equal(extension.messages.at(-1).type, "file-list-error");
+});
+
+test("previews and applies selected native fusions, rejects stale previews and saves edited copies", async (t) => {
+  const directory = await mkdtemp(
+    path.join(tmpdir(), "onnx-light-fusion-host-"),
+  );
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const source = path.join(directory, "source.onnx");
+  await copyFile(require.resolve("./models/fusion.onnx"), source);
+  const extension = await openExtension(
+    undefined,
+    "onnxLightViewer.open",
+    true,
+  );
+  await extension.openFile(source);
+  const original = await readFile(source);
+  let edited;
+  const native = extension.nativeModels.at(-1);
+  const previewFusion = native.previewFusion;
+  native.previewFusion = async (...args) => {
+    const preview = await previewFusion(...args);
+    const applyFusion = preview.model.applyFusion;
+    preview.model.applyFusion = async (...selected) =>
+      (edited = await applyFusion(...selected));
+    return preview;
+  };
+  await extension.receive({ type: "fusion-patterns", requestId: 1 });
+  assert.ok(extension.messages.at(-1).patterns.includes("TransposeTranspose"));
+  await extension.receive({
+    type: "preview-fusion",
+    pattern: "TransposeTranspose",
+    requestId: 2,
+  });
+  const preview = extension.messages.at(-1);
+  assert.equal(preview.type, "fusion-preview");
+  assert.equal(preview.matches.length, 2);
+  assert.equal(preview.model, undefined);
+  await extension.receive({
+    type: "apply-fusion",
+    previewId: preview.previewId,
+    anchors: [0],
+    requestId: 3,
+  });
+  assert.equal(extension.messages.at(-1).type, "fusion-info");
+  const graph = extension.messages.findLast(
+    (message) => message.type === "graph",
+  ).graph;
+  assert.deepEqual(
+    graph.nodes.map((node) => node.opType),
+    ["Identity", "Transpose", "Transpose", "MatMul"],
+  );
+  const destination = path.join(directory, "edited.onnx");
+  await extension.save(destination);
+  const { loadModelFile } = require("../dist/graph");
+  assert.deepEqual(
+    (await loadModelFile(destination, "edited"))
+      .graph()
+      .nodes.map((node) => node.opType),
+    graph.nodes.map((node) => node.opType),
+  );
+  await extension.receive({
+    type: "apply-fusion",
+    previewId: preview.previewId,
+    anchors: [2],
+    requestId: 4,
+  });
+  assert.equal(extension.messages.at(-1).type, "fusion-error");
+  assert.deepEqual(await readFile(source), original);
+  edited.metadata = () => {
+    throw new Error("Native metadata failure after editing");
+  };
+  await extension.receive({ type: "metadata" });
+  assert.equal(extension.messages.at(-1).type, "metadata-error");
+  await extension.save(destination);
+  assert.equal(extension.messages.at(-1).type, "save-info");
+  assert.deepEqual(
+    (await loadModelFile(destination, "edited"))
+      .graph()
+      .nodes.map((node) => node.opType),
+    graph.nodes.map((node) => node.opType),
+  );
+  await extension.receive({
+    type: "preview-fusion",
+    pattern: "TransposeTranspose",
+    requestId: 5,
+  });
+  const discarded = extension.messages.at(-1);
+  await extension.receive({ type: "cancel-fusion" });
+  await extension.receive({
+    type: "apply-fusion",
+    previewId: discarded.previewId,
+    anchors: [1],
+    requestId: 6,
+  });
+  assert.equal(extension.messages.at(-1).type, "fusion-error");
+  const pending = extension.receive({
+    type: "preview-fusion",
+    pattern: "TransposeTranspose",
+    requestId: 7,
+  });
+  await extension.openFile(require.resolve("./models/relu.onnx"));
+  await pending;
+  assert.notEqual(extension.messages.at(-1).requestId, 7);
+});
+
+test("rejects invalid candidate selections and stale multi-pattern matching results", async () => {
+  const extension = await openExtension("fusion-scaled.onnx");
+  const request = {
+    type: "preview-fusion",
+    patterns: ["TransposeTranspose", "MatMulScaleFusion"],
+    requestId: 1,
+  };
+  await extension.receive(request);
+  const preview = extension.messages.at(-1);
+  assert.equal(preview.type, "fusion-preview");
+  assert.deepEqual(
+    preview.matches.map(({ pattern, anchor }) => [pattern, anchor]),
+    [
+      ["TransposeTranspose", 0],
+      ["TransposeTranspose", 2],
+      ["MatMulScaleFusion", 4],
+    ],
+  );
+  for (const candidates of [[], [0, 0], [3], [-1]]) {
+    await extension.receive({
+      type: "apply-fusion",
+      previewId: preview.previewId,
+      candidates,
+      requestId: 2,
+    });
+    assert.equal(extension.messages.at(-1).type, "fusion-error");
+  }
+  await extension.receive({ ...request, requestId: 3 });
+  assert.notEqual(extension.messages.at(-1).previewId, preview.previewId);
+  await extension.receive({
+    type: "apply-fusion",
+    previewId: preview.previewId,
+    candidates: [0, 2],
+    requestId: 4,
+  });
+  assert.equal(extension.messages.at(-1).type, "fusion-error");
+});
+
+test("saves reused external weights only beside their original source", async (t) => {
+  const directory = await mkdtemp(
+    path.join(tmpdir(), "onnx-light-reuse-host-"),
+  );
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const { loadModel, loadModelFile } = require("../dist/graph");
+  const native = loadModel(
+    readFileSync(require.resolve("./models/fusion.onnx")),
+    "fusion",
+  );
+  const files = await native.serializeFiles(1024, "original.data");
+  const source = path.join(directory, "source.onnx");
+  await writeFile(source, files.model);
+  for (const weight of files.weights)
+    await writeFile(path.join(directory, weight.name), weight.bytes);
+  const extension = await openExtension(
+    undefined,
+    "onnxLightViewer.open",
+    true,
+  );
+  await extension.openFile(source);
+  await extension.receive({
+    type: "preview-fusion",
+    pattern: "TransposeTranspose",
+    requestId: 1,
+  });
+  await extension.receive({
+    type: "apply-fusion",
+    previewId: extension.messages.at(-1).previewId,
+    anchors: [0, 2],
+    requestId: 2,
+  });
+  const destination = path.join(directory, "edited.onnx");
+  const before = await readdir(directory);
+  await extension.save(destination, false, [], 1024, true);
+  assert.equal(extension.messages.at(-1).type, "save-info");
+  assert.deepEqual(
+    (await readdir(directory)).sort(),
+    [...before, "edited.onnx"].sort(),
+  );
+  assert.deepEqual(
+    (await loadModelFile(destination, "edited")).externalDataLocations(),
+    [files.weights[0].name],
+  );
+  const other = path.join(directory, "other");
+  await mkdir(other);
+  await extension.save(path.join(other, "edited.onnx"), false, [], 1024, true);
+  assert.equal(extension.messages.at(-1).type, "save-error");
+  assert.match(extension.errors.at(-1), /source folder/);
+  assert.deepEqual(await readdir(other), []);
+});
 
 test("saves inferred ModelProto copies as plain or encrypted files and opens encrypted copies", async (t) => {
   const directory = await mkdtemp(
@@ -1214,6 +1605,92 @@ test("recovers a downloaded model from its published cache path after the tempor
   assert.equal(extension.messages.at(-1).type, "metadata-info");
   assert.equal(downloads, 1);
   assert.deepEqual(extension.reads, []);
+});
+
+test("matches multiple patterns and fuses checked candidates through the real webview bridge", async (t) => {
+  const extension = await openExtension("fusion-scaled.onnx");
+  const dom = new JSDOM(extension.webview.html, { runScripts: "outside-only" });
+  t.after(() => dom.window.close());
+  const { window } = dom;
+  const { document } = window;
+  const requests = [];
+  window.HTMLCanvasElement.prototype.getContext = () => ({
+    font: "",
+    measureText: (text) => ({ width: text.length * 8 }),
+  });
+  document.getElementById("canvas").getBoundingClientRect = () =>
+    new window.DOMRect(0, 0, 1060, 350);
+  window.acquireVsCodeApi = () => ({
+    postMessage: (message) => requests.push(extension.receive(message)),
+  });
+  extension.connect((data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data })),
+  );
+  for (const name of ["vendor/markdown-it.min.js", "viewer.js"])
+    window.eval(
+      readFileSync(path.resolve(__dirname, "../media", name), "utf8"),
+    );
+  const flush = async () => {
+    while (requests.length) await Promise.all(requests.splice(0));
+  };
+  await flush();
+  document.getElementById("fuse-pattern").click();
+  await flush();
+  const list = document.getElementById("fusion-pattern");
+  const actual = [...list.querySelectorAll('input[type="checkbox"]')].map(
+    (input) => input.value,
+  );
+  const expected = extension.nativeModels.at(-1).fusionPatterns().sort();
+  assert.ok(actual.length > 0);
+  assert.deepEqual(actual, expected);
+  assert.ok(actual.includes("TransposeTranspose"));
+  assert.equal(list.disabled, false);
+  assert.equal(list.closest("details").open, true);
+  assert.equal(document.getElementById("fusion-panel").hidden, false);
+  assert.equal(
+    list.closest("aside"),
+    document.querySelector(".graph-body aside"),
+  );
+  for (const input of list.querySelectorAll("input"))
+    if (["TransposeTranspose", "MatMulScaleFusion"].includes(input.value))
+      input.parentElement.click();
+  await flush();
+  assert.equal(document.querySelectorAll("#fusion-matches li").length, 0);
+  document.getElementById("preview-fusion").click();
+  await flush();
+  assert.equal(document.querySelectorAll("#fusion-matches li").length, 3);
+  document.querySelector("#fusion-matches input").click();
+  const previous = extension.messages.findLast(
+    (message) => message.type === "fusion-preview",
+  );
+  document.getElementById("preview-fusion").click();
+  await flush();
+  const current = extension.messages.findLast(
+    (message) => message.type === "fusion-preview",
+  );
+  assert.notEqual(current.previewId, previous.previewId);
+  assert.equal(document.querySelectorAll("#fusion-matches li").length, 3);
+  assert.equal(
+    document.querySelectorAll("#fusion-matches input:checked").length,
+    0,
+  );
+  assert.equal(document.querySelectorAll(".graph-node.selected").length, 0);
+  const candidates = document.querySelectorAll("#fusion-matches input");
+  candidates[0].click();
+  candidates[1].click();
+  assert.equal(document.querySelectorAll(".graph-node.selected").length, 2);
+  document.getElementById("apply-fusion").click();
+  assert.match(
+    document.getElementById("fusion-status").textContent,
+    /Applying 2 fusion/,
+  );
+  await flush();
+  assert.equal(document.querySelectorAll(".graph-node").length, 4);
+  assert.match(
+    document.getElementById("fusion-status").textContent,
+    /Applied 2 fusion/,
+  );
+  assert.deepEqual(extension.errors, []);
 });
 
 test("keeps operation logs quiet and exposes real native exception recovery in Status", async (t) => {

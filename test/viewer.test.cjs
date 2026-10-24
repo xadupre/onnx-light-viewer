@@ -102,6 +102,13 @@ function openViewer(t, initialTab = "model") {
   };
 }
 
+function submitOpen(document, window) {
+  document.getElementById("open-file").value = "/models/model.onnx";
+  document
+    .getElementById("open-form")
+    .dispatchEvent(new window.Event("submit", { cancelable: true }));
+}
+
 test("saves without replacing the graph and reports success, cancellation and errors", (t) => {
   const { document, window, messages, load } = openViewer(t);
   const button = document.getElementById("save-model");
@@ -150,7 +157,7 @@ test("saves without replacing the graph and reports success, cancellation and er
   }
 });
 
-test("shows matching adjacent Open/Save buttons and an explicit storage/encryption grid", (t) => {
+test("shows matching adjacent Open/Save sidebar buttons and an explicit storage/encryption grid", (t) => {
   const { document, window, messages, load } = openViewer(t);
   load(demoGraph);
   const open = document.getElementById("open-model");
@@ -159,6 +166,11 @@ test("shows matching adjacent Open/Save buttons and an explicit storage/encrypti
   assert.equal(save.textContent, "Save");
   assert.equal(open.nextElementSibling, save);
   assert.equal(open.className, save.className);
+  assert.equal(open.parentElement, document.getElementById("sidebar-controls"));
+  assert.equal(
+    open.className,
+    document.getElementById("show-operator").className,
+  );
   const dialog = document.getElementById("save-options");
   const form = document.getElementById("save-form");
   const size = document.getElementById("weight-file-size");
@@ -170,8 +182,10 @@ test("shows matching adjacent Open/Save buttons and an explicit storage/encrypti
   const submit = () =>
     form.dispatchEvent(new window.Event("submit", { cancelable: true }));
   save.click();
-  assert.equal(dialog.open, true);
-  assert.equal(form.querySelectorAll('input[type="radio"]').length, 4);
+  assert.equal(dialog.hidden, false);
+  assert.equal(dialog.tagName, "SECTION");
+  assert.equal(dialog.closest("aside"), open.closest("aside"));
+  assert.equal(form.querySelectorAll('input[type="radio"]').length, 5);
   assert.equal(
     form.querySelector('input[value="external-encrypted"]').disabled,
     true,
@@ -180,18 +194,19 @@ test("shows matching adjacent Open/Save buttons and an explicit storage/encrypti
     form.querySelector("a").href,
     "https://github.com/xadupre/onnx-light/issues/5533",
   );
-  const before = messages.length;
+  let before = messages.length;
   document.getElementById("cancel-save").click();
-  assert.equal(dialog.open, false);
+  assert.equal(dialog.hidden, true);
   assert.equal(messages.length, before);
   save.click();
+  before = messages.length;
   select("external-plain");
   assert.equal(size.disabled, false);
   assert.equal(document.getElementById("external-size").hidden, false);
   for (const value of ["", "0", "-1", "0.5", "8589934592"]) {
     size.value = value;
     submit();
-    assert.equal(dialog.open, true);
+    assert.equal(dialog.hidden, false);
     assert.equal(messages.length, before);
     assert.match(
       document.getElementById("save-options-error").textContent,
@@ -200,7 +215,7 @@ test("shows matching adjacent Open/Save buttons and an explicit storage/encrypti
   }
   size.value = "2";
   submit();
-  assert.equal(dialog.open, false);
+  assert.equal(dialog.hidden, false);
   assert.deepEqual(
     { ...messages.at(-1), actionId: undefined },
     {
@@ -208,9 +223,567 @@ test("shows matching adjacent Open/Save buttons and an explicit storage/encrypti
       storage: "external",
       encrypted: false,
       maxExternalFileSize: 2 * 1024 * 1024,
+      location: "model-copy.onnx",
+      password: "",
+      confirmation: "",
+      overwrite: false,
       actionId: undefined,
     },
   );
+  open.click();
+  submitOpen(document, window);
+  assert.equal(messages.at(-1).type, "open");
+});
+
+test("makes Open and Save mutually exclusive while preserving other sidebar panels", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  load(demoGraph);
+  for (const [first, second] of [
+    ["open", "save"],
+    ["save", "open"],
+  ]) {
+    const firstPanel = document.getElementById(
+      first === "open" ? "open-panel" : "save-options",
+    );
+    const secondPanel = document.getElementById(
+      second === "open" ? "open-panel" : "save-options",
+    );
+    if (firstPanel.hidden) document.getElementById(`${first}-model`).click();
+    const previous = messages.at(-1);
+    document.getElementById(`${first}-password`).value = "temporary";
+    document.getElementById(`${second}-model`).click();
+    assert.equal(firstPanel.hidden, true);
+    assert.equal(secondPanel.hidden, false);
+    assert.equal(
+      document.getElementById(`${first}-model`).getAttribute("aria-expanded"),
+      "false",
+    );
+    assert.equal(
+      document.getElementById(`${second}-model`).getAttribute("aria-expanded"),
+      "true",
+    );
+    assert.equal(document.getElementById(`${first}-password`).value, "");
+    assert.equal(document.getElementById("operator-panel").hidden, false);
+    assert.equal(document.getElementById("find-panel").hidden, false);
+    window.dispatchEvent(
+      new window.MessageEvent("message", {
+        data: {
+          type: "file-list-error",
+          target: first,
+          requestId: previous.requestId,
+          error: "Old listing",
+        },
+      }),
+    );
+    assert.doesNotMatch(firstPanel.textContent, /Old listing/);
+  }
+  document.getElementById("open-model").click();
+  assert.equal(document.getElementById("open-panel").hidden, true);
+  assert.equal(document.getElementById("save-options").hidden, true);
+});
+
+test("browses folders inline, selects files without opening and ignores stale listings", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  load(demoGraph);
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  const open = document.getElementById("open-model");
+  open.click();
+  assert.equal(document.getElementById("open-panel").hidden, false);
+  assert.equal(open.getAttribute("aria-expanded"), "true");
+  const request = messages.at(-1);
+  assert.equal(request.type, "browse-files");
+  assert.equal(
+    messages.some((message) => message.type === "open"),
+    false,
+  );
+  send({
+    type: "file-list",
+    target: "open",
+    requestId: request.requestId,
+    location: "/models",
+    parent: "/",
+    entries: [
+      { name: "nested", path: "/models/nested", directory: true },
+      { name: "<model>.onnx", path: "/models/<model>.onnx", directory: false },
+    ],
+  });
+  const list = document.getElementById("open-files");
+  assert.equal(list.querySelector("model"), null);
+  document.getElementById("open-filter").value = "MODEL";
+  document
+    .getElementById("open-filter")
+    .dispatchEvent(new window.Event("input"));
+  assert.deepEqual(
+    [...list.children].map((item) => item.hidden),
+    [true, false],
+  );
+  document.getElementById("open-filter").value = "";
+  document
+    .getElementById("open-filter")
+    .dispatchEvent(new window.Event("input"));
+  list.querySelectorAll("button")[1].click();
+  assert.equal(
+    document.getElementById("open-file").value,
+    "/models/<model>.onnx",
+  );
+  assert.equal(
+    messages.some((message) => message.type === "open"),
+    false,
+  );
+  list.querySelector("button").click();
+  const nested = messages.at(-1);
+  assert.equal(nested.location, "/models/nested");
+  send({
+    type: "file-list-error",
+    target: "open",
+    requestId: request.requestId,
+    error: "Old error",
+  });
+  assert.equal(document.getElementById("open-error").textContent, "");
+  send({
+    type: "file-list-error",
+    target: "open",
+    requestId: nested.requestId,
+    error: "Access denied",
+  });
+  assert.equal(
+    document.getElementById("open-error").textContent,
+    "Access denied",
+  );
+  assert.equal(list.children.length, 0);
+  document.getElementById("open-password").value = "not-persisted";
+  open.click();
+  assert.equal(document.getElementById("open-panel").hidden, true);
+  assert.equal(document.getElementById("open-password").value, "");
+  send({
+    type: "file-list",
+    target: "open",
+    requestId: nested.requestId,
+    location: "/old",
+    entries: [],
+  });
+  assert.equal(
+    document.getElementById("open-location").value,
+    "/models/nested",
+  );
+});
+
+test("preserves save destination separators while browsing directories inline", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  load(demoGraph);
+  document.getElementById("save-model").click();
+  const requestId = messages.at(-1).requestId;
+  for (const [location, expected] of [
+    ["/models", "/models/copy.onnx"],
+    ["/", "/copy.onnx"],
+    ["/models/with\\backslash", "/models/with\\backslash/copy.onnx"],
+    ["C:\\models", "C:\\models\\copy.onnx"],
+    ["C:\\", "C:\\copy.onnx"],
+    ["C:\\models\\", "C:\\models\\copy.onnx"],
+    ["C:/models", "C:/models/copy.onnx"],
+    ["\\\\server\\share\\models", "\\\\server\\share\\models\\copy.onnx"],
+    ["\\\\server\\share\\", "\\\\server\\share\\copy.onnx"],
+    ["vscode-remote://host/models", "vscode-remote://host/models/copy.onnx"],
+  ]) {
+    document.getElementById("save-file").value = "copy.onnx";
+    window.dispatchEvent(
+      new window.MessageEvent("message", {
+        data: {
+          type: "file-list",
+          target: "save",
+          requestId,
+          location,
+          entries: [],
+        },
+      }),
+    );
+    assert.equal(document.getElementById("save-file").value, expected);
+  }
+});
+
+test("toggles separated, stacked sidebar panels independently from Op Data Find Fuse controls", (t) => {
+  const { document, window, load } = openViewer(t);
+  const style = document.createElement("style");
+  style.textContent = readFileSync(
+    require.resolve("../media/viewer.css"),
+    "utf8",
+  );
+  document.head.append(style);
+  load(demoGraph);
+  const sidebar = document.querySelector("aside");
+  const controls = document.getElementById("sidebar-controls");
+  assert.equal(sidebar.firstElementChild, controls);
+  const allButtons = [...controls.querySelectorAll("button")];
+  assert.deepEqual(
+    allButtons.map((button) => button.lastChild.textContent.trim()),
+    ["Open", "Save", "Find", "Fuse", "Op", "Data"],
+  );
+  assert.match(
+    window.getComputedStyle(controls).gridTemplateColumns,
+    /^repeat\(3,/,
+  );
+  const buttons = [
+    "show-find",
+    "show-operator",
+    "show-metadata",
+    "fuse-pattern",
+  ].map((id) => document.getElementById(id));
+  const panels = buttons.map((button) =>
+    document.getElementById(button.getAttribute("aria-controls")),
+  );
+  assert.deepEqual(
+    [...sidebar.querySelectorAll(":scope > section")].filter(
+      (panel) => !["open-panel", "save-options"].includes(panel.id),
+    ),
+    panels,
+  );
+  assert.deepEqual(
+    panels.map((panel) => panel.hidden),
+    [false, false, true, true],
+  );
+  const panelStyle = [...style.sheet.cssRules].find(
+    (rule) => rule.selectorText === ".inspector-panel",
+  ).style;
+  assert.match(panelStyle.border, /solid/);
+  const inspectorTitle = document.getElementById("operator-title");
+  const inspectorFont = window.getComputedStyle(inspectorTitle);
+  for (const panel of sidebar.querySelectorAll(":scope > .inspector-panel")) {
+    const title = panel.firstElementChild;
+    assert.equal(title.tagName, "H2");
+    assert.equal(title.id, panel.getAttribute("aria-labelledby"));
+    assert.ok(title.classList.contains("panel-title"));
+    const titleStyle = window.getComputedStyle(title);
+    for (const property of [
+      "fontFamily",
+      "fontSize",
+      "fontWeight",
+      "letterSpacing",
+    ])
+      assert.equal(titleStyle[property], inspectorFont[property]);
+    assert.equal(titleStyle.textTransform, "uppercase");
+  }
+  const titleStyle = [...style.sheet.cssRules].find(
+    (rule) => rule.selectorText === ".inspector-panel > .panel-title",
+  ).style;
+  assert.equal(titleStyle.color, "var(--bg)");
+  assert.equal(titleStyle.background, "var(--text)");
+  const verify = () => {
+    for (const [index, panel] of panels.entries()) {
+      assert.equal(
+        buttons[index].getAttribute("aria-expanded"),
+        String(!panel.hidden),
+      );
+      assert.ok(parseFloat(window.getComputedStyle(panel).marginBottom) > 0);
+    }
+  };
+  verify();
+  for (const [index, button] of buttons.entries()) {
+    const before = panels.map((panel) => panel.hidden);
+    button.click();
+    assert.deepEqual(
+      panels.map((panel) => panel.hidden),
+      before.map((hidden, position) => (position === index ? !hidden : hidden)),
+    );
+    verify();
+    button.click();
+    assert.deepEqual(
+      panels.map((panel) => panel.hidden),
+      before,
+    );
+    verify();
+  }
+  buttons[2].click();
+  buttons[3].click();
+  assert.deepEqual(
+    panels.map((panel) => panel.hidden),
+    [false, false, false, false],
+  );
+  buttons[0].click();
+  buttons[1].click();
+  const title = document.getElementById("node-title").textContent;
+  buttons[0].click();
+  buttons[1].click();
+  assert.equal(document.getElementById("node-title").textContent, title);
+  assert.equal(
+    document.getElementById("node-search").closest("section").hidden,
+    false,
+  );
+});
+
+test("runs matching explicitly, highlights candidates and fuses only checked matches", async (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const native = loadModel(
+    readFileSync(require.resolve("./models/fusion.onnx")),
+    "fusion",
+  );
+  const preview = await native.previewFusion("TransposeTranspose");
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  const button = document.getElementById("fuse-pattern");
+  assert.equal(
+    button.parentElement,
+    document.getElementById("sidebar-controls"),
+  );
+  assert.equal(button.textContent, "Fuse");
+  assert.equal(
+    button.className,
+    document.getElementById("show-operator").className,
+  );
+  assert.equal(button.disabled, true);
+  load(native.graph());
+  document.querySelector("aside").scrollTop = 500;
+  button.click();
+  assert.equal(document.querySelector("aside").scrollTop, 0);
+  assert.equal(document.getElementById("fusion-panel").hidden, false);
+  assert.equal(
+    document.getElementById("fusion-panel").parentElement.tagName,
+    "ASIDE",
+  );
+  send({
+    type: "fusion-patterns",
+    requestId: messages.at(-1).requestId,
+    patterns: ["TransposeTranspose"],
+  });
+  assert.equal(document.getElementById("preview-fusion").disabled, true);
+  const pattern = document.getElementById("fusion-pattern");
+  pattern.querySelector("label").click();
+  assert.equal(messages.at(-1).type, "cancel-fusion");
+  document.getElementById("preview-fusion").click();
+  const requestId = messages.at(-1).requestId;
+  assert.deepEqual(Array.from(messages.at(-1).patterns), [
+    "TransposeTranspose",
+  ]);
+  send({
+    type: "fusion-preview",
+    requestId,
+    previewId: 42,
+    matches: preview.matches,
+  });
+  const matches = document.getElementById("fusion-matches");
+  assert.equal(matches.closest("details").open, true);
+  assert.equal(matches.querySelector("button"), null);
+  assert.equal(matches.children.length, 2);
+  assert.match(matches.textContent, /first.*second/);
+  assert.match(matches.textContent, /Identity\(x\) -> a/);
+  assert.equal(document.getElementById("apply-fusion").disabled, true);
+  assert.equal(document.querySelectorAll(".graph-node.selected").length, 1);
+  matches.children[1].querySelector("pre").click();
+  assert.deepEqual(
+    [...document.querySelectorAll(".graph-node.selected")].map(
+      (node) => node.dataset.id,
+    ),
+    ["node-2", "node-3"],
+  );
+  assert.equal(matches.querySelectorAll("input:checked").length, 0);
+  const first = matches.querySelector("input");
+  first.checked = true;
+  first.dispatchEvent(new window.Event("change"));
+  first.checked = false;
+  first.dispatchEvent(new window.Event("change"));
+  assert.equal(first.checked, false);
+  assert.equal(document.getElementById("apply-fusion").disabled, true);
+  assert.equal(
+    messages.some((message) => message.type === "apply-fusion"),
+    false,
+  );
+  assert.equal(matches.querySelector(".approve-fusion, .reject-fusion"), null);
+  first.click();
+  document.getElementById("apply-fusion").click();
+  assert.deepEqual(Array.from(messages.at(-1).candidates), [0]);
+  assert.equal(messages.at(-1).previewId, 42);
+  send({
+    type: "fusion-error",
+    requestId: messages.at(-1).requestId,
+    error: "Please retry.",
+  });
+  assert.match(
+    document.getElementById("fusion-feedback").textContent,
+    /Please retry/,
+  );
+  document.getElementById("select-fusions").click();
+  assert.equal(matches.querySelectorAll("input:checked").length, 2);
+  document.getElementById("clear-fusions").click();
+  assert.equal(matches.querySelectorAll("input:checked").length, 0);
+  assert.equal(document.getElementById("apply-fusion").disabled, true);
+  document.getElementById("select-fusions").click();
+  document.getElementById("apply-fusion").click();
+  assert.deepEqual(Array.from(messages.at(-1).candidates), [0, 1]);
+  load(native.graph());
+  send({
+    type: "fusion-preview",
+    requestId,
+    previewId: 42,
+    matches: preview.matches,
+  });
+  assert.equal(matches.children.length, 0);
+  assert.equal(document.getElementById("fusion-panel").hidden, true);
+  const graph = native.graph();
+  load({
+    ...graph,
+    breadcrumbs: [...graph.breadcrumbs, { name: "nested", path: [] }],
+  });
+  assert.equal(button.disabled, true);
+});
+
+test("selects multiple patterns, reruns matching from scratch and ignores old previews", async (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const native = loadModel(
+    readFileSync(require.resolve("./models/fusion.onnx")),
+    "fusion",
+  );
+  load(native.graph());
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  document.getElementById("fuse-pattern").click();
+  send({
+    type: "fusion-patterns",
+    requestId: messages.at(-1).requestId,
+    patterns: ["TransposeTranspose", "Identity"],
+  });
+  const pattern = document.getElementById("fusion-pattern");
+  const transpose = pattern.querySelector('input[value="TransposeTranspose"]');
+  const identity = pattern.querySelector('input[value="Identity"]');
+  assert.equal(document.getElementById("clear-patterns").disabled, true);
+  document.getElementById("select-patterns").click();
+  assert.equal(pattern.querySelectorAll("input:checked").length, 2);
+  assert.equal(document.getElementById("preview-fusion").disabled, false);
+  document.getElementById("clear-patterns").click();
+  assert.equal(pattern.querySelectorAll("input:checked").length, 0);
+  assert.equal(document.getElementById("preview-fusion").disabled, true);
+  transpose.parentElement.click();
+  assert.equal(transpose.checked, true);
+  transpose.parentElement.click();
+  assert.equal(transpose.checked, false);
+  assert.equal(document.getElementById("preview-fusion").disabled, true);
+  transpose.parentElement.click();
+  document.getElementById("preview-fusion").click();
+  const previous = messages.at(-1).requestId;
+  const { matches } = await native.previewFusion("TransposeTranspose");
+  send({ type: "fusion-preview", requestId: previous, previewId: 1, matches });
+  const approved = document.querySelector("#fusion-matches input");
+  approved.checked = true;
+  approved.dispatchEvent(new window.Event("change"));
+  assert.equal(document.getElementById("apply-fusion").disabled, false);
+  identity.parentElement.click();
+  assert.equal(pattern.querySelectorAll("input:checked").length, 2);
+  assert.equal(transpose.checked, true);
+  assert.equal(messages.at(-1).type, "cancel-fusion");
+  document.getElementById("preview-fusion").click();
+  const current = messages.at(-1).requestId;
+  assert.deepEqual(Array.from(messages.at(-1).patterns), [
+    "Identity",
+    "TransposeTranspose",
+  ]);
+  const checkedBefore = [...pattern.querySelectorAll("input")].map(
+    (input) => input.checked,
+  );
+  document.getElementById("clear-patterns").click();
+  transpose.parentElement.click();
+  assert.deepEqual(
+    [...pattern.querySelectorAll("input")].map((input) => input.checked),
+    checkedBefore,
+  );
+  assert.notEqual(current, previous);
+  assert.equal(document.querySelectorAll(".graph-node.selected").length, 0);
+  assert.equal(document.querySelectorAll("#fusion-matches input").length, 0);
+  assert.equal(document.getElementById("apply-fusion").disabled, true);
+  send({ type: "fusion-preview", requestId: previous, previewId: 1, matches });
+  assert.equal(document.querySelectorAll("#fusion-matches input").length, 0);
+  send({
+    type: "fusion-preview",
+    requestId: current,
+    previewId: 2,
+    matches: [],
+  });
+  assert.match(
+    document.getElementById("fusion-feedback").textContent,
+    /0 selected \/ 0 matches/,
+  );
+  document.getElementById("preview-fusion").click();
+  assert.notEqual(messages.at(-1).requestId, current);
+  assert.equal(messages.at(-1).type, "preview-fusion");
+  document.getElementById("fuse-pattern").click();
+  assert.equal(document.getElementById("fusion-panel").hidden, true);
+  assert.equal(
+    document.getElementById("fuse-pattern").getAttribute("aria-expanded"),
+    "false",
+  );
+  assert.equal(messages.at(-1).type, "cancel-fusion");
+  send({
+    type: "fusion-preview",
+    requestId: messages.at(-2).requestId,
+    previewId: 3,
+    matches,
+  });
+  assert.equal(document.querySelectorAll("#fusion-matches input").length, 0);
+  document.getElementById("fuse-pattern").click();
+  assert.equal(document.getElementById("fusion-panel").hidden, false);
+  document.getElementById("fuse-pattern").click();
+  assert.equal(document.getElementById("fusion-panel").hidden, true);
+  assert.equal(
+    messages.some((message) => message.type === "apply-fusion"),
+    false,
+  );
+});
+
+test("selects only non-overlapping matches and sends the external-weight reuse choice", async (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const native = loadModel(
+    readFileSync(require.resolve("./models/fusion.onnx")),
+    "fusion",
+  );
+  load(native.graph());
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  document.getElementById("fuse-pattern").click();
+  send({
+    type: "fusion-patterns",
+    requestId: messages.at(-1).requestId,
+    patterns: ["TransposeTranspose"],
+  });
+  const pattern = document.getElementById("fusion-pattern");
+  pattern.querySelector("label").click();
+  document.getElementById("preview-fusion").click();
+  const preview = await native.previewFusion("TransposeTranspose");
+  preview.matches[1].nodes = [1, 2];
+  send({
+    type: "fusion-preview",
+    requestId: messages.at(-1).requestId,
+    previewId: 1,
+    matches: preview.matches,
+  });
+  const inputs = [...document.querySelectorAll("#fusion-matches input")];
+  for (const input of inputs) input.checked = true;
+  inputs[0].dispatchEvent(new window.Event("change"));
+  assert.equal(document.getElementById("apply-fusion").disabled, true);
+  assert.match(
+    document.getElementById("fusion-feedback").textContent,
+    /overlap/,
+  );
+  document.getElementById("select-fusions").click();
+  assert.deepEqual(
+    inputs.map((input) => input.checked),
+    [true, false],
+  );
+  document.getElementById("close-fusion").click();
+  assert.equal(document.querySelectorAll(".graph-node.selected").length, 0);
+  assert.equal(document.getElementById("fusion-panel").hidden, true);
+  assert.equal(messages.at(-1).type, "cancel-fusion");
+  assert.equal(
+    messages.some((message) => message.type === "apply-fusion"),
+    false,
+  );
+  document.getElementById("save-model").click();
+  const reuse = document.querySelector('input[value="reuse-plain"]');
+  reuse.checked = true;
+  reuse.dispatchEvent(new window.Event("change", { bubbles: true }));
+  assert.equal(document.getElementById("weight-file-size").disabled, false);
+  document
+    .getElementById("save-form")
+    .dispatchEvent(new window.Event("submit", { cancelable: true }));
+  assert.equal(messages.at(-1).storage, "reuse");
+  assert.equal(messages.at(-1).maxExternalFileSize, 5120 * 1024 * 1024);
 });
 
 test("shows loading progress until success, failure or cancellation, including initial loads", (t) => {
@@ -225,6 +798,7 @@ test("shows loading progress until success, failure or cancellation, including i
   load(demoGraph);
   assert.equal(progress.hidden, true);
   document.getElementById("open-model").click();
+  submitOpen(document, window);
   assert.equal(progress.hidden, false);
   const request = messages.at(-1);
   state({
@@ -273,6 +847,7 @@ test("keeps replacement loading visible when an in-flight navigation renders", (
     window.dispatchEvent(new window.MessageEvent("message", { data }));
 
   document.getElementById("open-model").click();
+  submitOpen(document, window);
   const replacement = messages.at(-1);
   document.querySelector("#graph-navigation button").click();
   assert.equal(messages.at(-1).type, "navigate");
@@ -577,6 +1152,7 @@ test("requests model opening without a separate Hugging Face button and clears b
   assert.equal(document.getElementById("open-huggingface"), null);
   const button = document.getElementById("open-model");
   button.click();
+  submitOpen(document, window);
   const request = messages.at(-1);
   assert.equal(request.type, "open");
   assert.equal(button.disabled, true);
@@ -600,6 +1176,7 @@ test("requests model opening without a separate Hugging Face button and clears b
   assert.equal(document.getElementById("logs-tab").textContent, "Logs");
   document.getElementById("model-tab").click();
   button.click();
+  submitOpen(document, window);
   window.dispatchEvent(
     new window.MessageEvent("message", {
       data: { type: "load-error", error: "HTTP 403" },
@@ -906,10 +1483,7 @@ for (const [kind, panelOpen] of [
     );
     load(model.graph());
     const refresh = document.getElementById(`refresh-${kind}`);
-    const buttons =
-      kind === "metadata"
-        ? [refresh, document.getElementById("show-metadata")]
-        : [refresh];
+    const buttons = [refresh];
     const titles = buttons.map((button) => button.title);
     const idleColor = window.getComputedStyle(refresh).color;
     const colors = new Set([idleColor]);
@@ -933,13 +1507,6 @@ for (const [kind, panelOpen] of [
           assert.equal(
             window.getComputedStyle(button).borderColor,
             window.getComputedStyle(refresh).borderColor,
-          );
-        }
-        if (button.id === "show-metadata") {
-          const shadow = window.getComputedStyle(button).boxShadow;
-          assert.equal(
-            shadow !== "" && shadow !== "none",
-            button.getAttribute("aria-expanded") === "true",
           );
         }
       }
@@ -1125,7 +1692,7 @@ test("counts metadata changes and replaces cached analysis and graph markers on 
   assert.deepEqual(errors, []);
 });
 
-test("keeps Metadata filled and checked until its panel is closed without hiding refresh status", (t) => {
+test("styles Data like the other panel toggles independently of metadata refresh status", (t) => {
   const { document, window, load } = openViewer(t);
   const style = document.createElement("style");
   style.textContent = readFileSync(
@@ -1139,26 +1706,25 @@ test("keeps Metadata filled and checked until its panel is closed without hiding
   );
   load(model.graph());
   const toggle = document.getElementById("show-metadata");
+  const title = toggle.title;
   const highlight = () => {
     const style = window.getComputedStyle(toggle);
     return {
       background: style.backgroundColor,
       shadow: style.boxShadow,
       weight: style.fontWeight,
-      indicator: window.getComputedStyle(
-        toggle.querySelector(".toggle-indicator"),
-      ).visibility,
+      color: style.color,
     };
   };
   const inactive = highlight();
-  assert.equal(inactive.indicator, "hidden");
+  assert.equal(toggle.querySelector(".toggle-indicator"), null);
   assert.equal(toggle.getAttribute("aria-expanded"), "false");
   toggle.click();
   const active = highlight();
   assert.notEqual(active.background, inactive.background);
   assert.notEqual(active.shadow, inactive.shadow);
   assert.equal(active.weight, "700");
-  assert.equal(active.indicator, "visible");
+  assert.equal(toggle.dataset.refreshStatus, undefined);
   assert.equal(toggle.getAttribute("aria-expanded"), "true");
   assert.equal(document.getElementById("metadata-panel").hidden, false);
   window.dispatchEvent(
@@ -1167,6 +1733,7 @@ test("keeps Metadata filled and checked until its panel is closed without hiding
     }),
   );
   assert.deepEqual(highlight(), active);
+  assert.equal(toggle.title, title);
   load(model.graph());
   assert.deepEqual(highlight(), active);
   toggle.click();
@@ -1176,7 +1743,7 @@ test("keeps Metadata filled and checked until its panel is closed without hiding
   assert.notEqual(closed.background, active.background);
   assert.equal(closed.shadow, inactive.shadow);
   assert.equal(closed.weight, inactive.weight);
-  assert.equal(closed.indicator, "hidden");
+  assert.equal(closed.color, inactive.color);
   toggle.click();
   assert.deepEqual(highlight(), active);
 });
@@ -1196,13 +1763,17 @@ test("shows native metadata in the sidebar and marks released and never-used res
   assert.equal(messages.at(-1).type, "metadata");
   assert.equal(toggle.getAttribute("aria-expanded"), "true");
   assert.equal(document.getElementById("metadata-panel").hidden, false);
-  assert.equal(document.getElementById("node-details").hidden, true);
+  assert.equal(document.getElementById("node-details").hidden, false);
+  assert.equal(document.getElementById("operator-panel").hidden, false);
   window.dispatchEvent(
     new window.MessageEvent("message", {
       data: { type: "metadata-info", metadata: model.metadata() },
     }),
   );
-  assert.equal(toggle.getAttribute("aria-busy"), "false");
+  assert.equal(
+    document.getElementById("metadata-panel").getAttribute("aria-busy"),
+    "false",
+  );
   assert.equal(document.getElementById("metadata-content").hidden, false);
   assert.equal(document.getElementById("metadata-unused-section").hidden, true);
   assert.equal(
@@ -1324,7 +1895,10 @@ test("reports metadata errors, allows retry and clears stale metadata and releas
     document.getElementById("metadata-status").textContent,
     /analysis failed/,
   );
-  assert.equal(toggle.getAttribute("aria-busy"), "false");
+  assert.equal(
+    document.getElementById("metadata-panel").getAttribute("aria-busy"),
+    "false",
+  );
   toggle.click();
   toggle.click();
   assert.equal(
@@ -1470,6 +2044,7 @@ test("renders the demo, inspects its operator and requests a real file", (t) => 
     "true",
   );
   document.getElementById("open-model").click();
+  submitOpen(document, window);
   assert.equal(messages.filter((message) => message.type === "open").length, 1);
   window.dispatchEvent(
     new window.MessageEvent("message", {

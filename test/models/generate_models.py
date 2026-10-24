@@ -530,3 +530,48 @@ if_model = oh.make_model(
 )
 checker.check_model(if_model)
 save_model(if_model, Path(__file__).with_name("nested-if.onnx"))
+
+fusion_model = oh.make_model(
+    oh.make_graph(
+        [
+            oh.make_node("Transpose", ["x"], ["xt"], name="first", perm=[1, 0]),
+            oh.make_node("Transpose", ["xt"], ["a"], name="second", perm=[1, 0]),
+            oh.make_node("Transpose", ["x"], ["yt"], name="third", perm=[1, 0]),
+            oh.make_node("Transpose", ["yt"], ["b"], name="fourth", perm=[1, 0]),
+            oh.make_node("MatMul", ["x", "weight"], ["z"], name="projection"),
+        ],
+        "Selective fusion",
+        [oh.make_tensor_value_info("x", TensorProto.FLOAT, [2, 8])],
+        [
+            oh.make_tensor_value_info(name, TensorProto.FLOAT, [2, 8])
+            for name in ["a", "b", "z"]
+        ],
+        initializer=[
+            oh.make_tensor(
+                "weight", TensorProto.FLOAT, [8, 8], pack("<64f", *range(64)), raw=True
+            )
+        ],
+    ),
+    ir_version=9,
+    opset_imports=[oh.make_opsetid("", 13)],
+)
+checker.check_model(fusion_model)
+save_model(fusion_model, Path(__file__).with_name("fusion.onnx"))
+fusion_scaled = oh.make_model(
+    oh.make_graph(
+        list(fusion_model.graph.node)[:-1]
+        + [
+            oh.make_node("MatMul", ["x", "weight"], ["mm"]),
+            oh.make_node("Mul", ["mm", "scale"], ["z"]),
+        ],
+        "Fusion with folded weights",
+        list(fusion_model.graph.input),
+        list(fusion_model.graph.output),
+        initializer=list(fusion_model.graph.initializer)
+        + [oh.make_tensor("scale", TensorProto.FLOAT, [], [2.0])],
+    ),
+    ir_version=9,
+    opset_imports=[oh.make_opsetid("", 13)],
+)
+checker.check_model(fusion_scaled)
+save_model(fusion_scaled, Path(__file__).with_name("fusion-scaled.onnx"))

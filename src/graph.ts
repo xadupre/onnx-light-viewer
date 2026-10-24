@@ -123,11 +123,35 @@ export interface Graph {
   tensors: TensorInformation[];
 }
 
+export interface FusionMatch {
+  anchor: number;
+  nodes: number[];
+  replacement: {
+    opType: string;
+    domain: string;
+    name: string;
+    inputs: string[];
+    outputs: string[];
+    attributes: { name: string; value: string }[];
+  }[];
+}
+
 /**
  * Retained native model whose inferred information survives graph projections.
- * Methods do not execute operators or write files.
+ * Methods do not execute the model or write files.
  */
 export interface NativeModel {
+  clone(): NativeModel;
+  fusionPatterns(): string[];
+  previewFusion(
+    pattern: string,
+    sourceFilePath?: string,
+  ): Promise<{ model: NativeModel; matches: FusionMatch[] }>;
+  /** A pattern array assigns one pattern to each corresponding anchor. */
+  applyFusion(
+    pattern: string | string[],
+    anchors: number[],
+  ): Promise<NativeModel>;
   /** Whole-model external-data references, excluding omitted inline payload placeholders. */
   externalDataLocations(): string[];
   /**
@@ -137,11 +161,12 @@ export interface NativeModel {
    * sourceFilePath supplies the new location after a source file is moved into a cache.
    */
   serialize(password?: string, sourceFilePath?: string): Promise<Uint8Array>;
-  /** Serializes a plain proto and newly partitioned external weight files. */
+  /** Partitions a plain copy; optionally retains unchanged source external references. */
   serializeFiles(
     maxFileSize: number,
     prefix: string,
     sourceFilePath?: string,
+    reuseExternalWeights?: boolean,
   ): Promise<{
     model: Uint8Array;
     weights: { name: string; bytes: Uint8Array }[];

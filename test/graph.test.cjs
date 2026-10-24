@@ -361,6 +361,431 @@ test("saves complete streamed weights, inferred shapes and authenticated encrypt
   );
 });
 
+test("previews native fusion matches and applies only selected disjoint matches without changing the source", async () => {
+  const model = loadModel(modelBytes("fusion.onnx"), "fusion");
+  const original = Buffer.from(await model.serialize());
+  assert.ok(model.fusionPatterns().includes("TransposeTranspose"));
+  assert.ok(
+    !loadModel(modelBytes("relu.onnx"), "relu")
+      .fusionPatterns()
+      .includes("TransposeTranspose"),
+  );
+  const preview = await model.previewFusion("TransposeTranspose");
+  assert.deepEqual(
+    preview.matches.map(({ anchor, nodes }) => ({ anchor, nodes })),
+    [
+      { anchor: 0, nodes: [0, 1] },
+      { anchor: 2, nodes: [2, 3] },
+    ],
+  );
+  assert.deepEqual(
+    preview.matches[0].replacement.map((node) => [
+      node.opType,
+      node.inputs,
+      node.outputs,
+    ]),
+    [["Identity", ["x"], ["a"]]],
+  );
+  for (const [anchors, expected] of [
+    [[0], ["Identity", "Transpose", "Transpose", "MatMul"]],
+    [[2], ["Transpose", "Transpose", "Identity", "MatMul"]],
+    [
+      [0, 2],
+      ["Identity", "Identity", "MatMul"],
+    ],
+  ]) {
+    const fused = await preview.model.applyFusion(
+      "TransposeTranspose",
+      anchors,
+    );
+    assert.deepEqual(
+      fused.graph().nodes.map((node) => node.opType),
+      expected,
+    );
+    const clone = fused.clone();
+    clone.graph(true);
+    assert.deepEqual(
+      loadModel(await fused.serialize(), "fusion")
+        .graph()
+        .nodes.map((node) => node.opType),
+      expected,
+    );
+  }
+  await assert.rejects(
+    preview.model.applyFusion("TransposeTranspose", []),
+    /distinct/,
+  );
+  await assert.rejects(
+    preview.model.applyFusion("TransposeTranspose", [0, 0]),
+    /distinct/,
+  );
+  await assert.rejects(
+    preview.model.applyFusion("TransposeTranspose", [1]),
+    /no longer applicable/,
+  );
+  assert.throws(
+    () => preview.model.applyFusion("TransposeTranspose", [-1]),
+    /index/,
+  );
+  await assert.rejects(model.previewFusion("not-a-pattern"), /pattern/i);
+  assert.deepEqual(Buffer.from(await model.serialize()), original);
+  assert.deepEqual(Buffer.from(await preview.model.serialize()), original);
+});
+
+test("applies disjoint candidates from different patterns atomically on original node indices", async () => {
+  const model = loadModel(modelBytes("fusion-scaled.onnx"), "fusion");
+  const original = Buffer.from(await model.serialize());
+  const preview = await model.previewFusion("TransposeTranspose");
+  const fused = await preview.model.applyFusion(
+    ["TransposeTranspose", "MatMulScaleFusion"],
+    [0, 4],
+  );
+  assert.deepEqual(
+    fused.graph().nodes.map((node) => node.opType),
+    ["Identity", "Transpose", "Transpose", "MatMul"],
+  );
+  const reversed = await preview.model.applyFusion(
+    ["MatMulScaleFusion", "TransposeTranspose"],
+    [4, 0],
+  );
+  assert.deepEqual(reversed.graph(), fused.graph());
+  await assert.rejects(
+    preview.model.applyFusion(
+      ["TransposeTranspose", "SameChildrenFromInput"],
+      [0, 0],
+    ),
+    /overlap/,
+  );
+  await assert.rejects(
+    preview.model.applyFusion(
+      ["TransposeTranspose", "TransposeTranspose"],
+      [0, 0],
+    ),
+    /distinct/,
+  );
+  assert.throws(
+    () => preview.model.applyFusion(["TransposeTranspose"], [0, 4]),
+    /one fusion pattern/,
+  );
+  assert.deepEqual(Buffer.from(await model.serialize()), original);
+  assert.deepEqual(Buffer.from(await preview.model.serialize()), original);
+});
+
+test("rejects overlapping native matches without modifying the source", async () => {
+  const node = (input, output) =>
+    bytesField(
+      1,
+      Buffer.concat([
+        bytesField(1, input),
+        bytesField(2, output),
+        bytesField(4, "Transpose"),
+        bytesField(
+          5,
+          Buffer.concat([
+            bytesField(1, "perm"),
+            varintField(20, 7),
+            varintField(8, 1),
+            varintField(8, 0),
+          ]),
+        ),
+      ]),
+    );
+  const value = (name, dimensions) =>
+    Buffer.concat([
+      bytesField(1, name),
+      bytesField(
+        2,
+        bytesField(
+          1,
+          Buffer.concat([
+            varintField(1, 1),
+            bytesField(
+              2,
+              Buffer.concat(
+                dimensions.map((dimension) =>
+                  bytesField(1, varintField(1, dimension)),
+                ),
+              ),
+            ),
+          ]),
+        ),
+      ),
+    ]);
+  const model = loadModel(
+    Buffer.concat([
+      varintField(1, 9),
+      bytesField(8, varintField(2, 13)),
+      bytesField(
+        7,
+        Buffer.concat([
+          bytesField(2, "overlap"),
+          bytesField(11, value("x", [2, 8])),
+          bytesField(12, value("c", [8, 2])),
+          node("x", "a"),
+          node("a", "b"),
+          node("b", "c"),
+        ]),
+      ),
+    ]),
+    "overlap",
+  );
+  const original = Buffer.from(await model.serialize());
+  const preview = await model.previewFusion("TransposeTranspose");
+  assert.deepEqual(
+    preview.matches.map((match) => match.nodes),
+    [
+      [0, 1],
+      [1, 2],
+    ],
+  );
+  await assert.rejects(
+    preview.model.applyFusion("TransposeTranspose", [0, 1]),
+    /overlap/,
+  );
+  assert.deepEqual(Buffer.from(await model.serialize()), original);
+});
+
+test("previews multiple constant-folding matches without leaking trial weights into the model", async () => {
+  const branches = [2, 3, 4];
+  const node = (opType, inputs, output) =>
+    bytesField(
+      1,
+      Buffer.concat([
+        ...inputs.map((input) => bytesField(1, input)),
+        bytesField(2, output),
+        bytesField(4, opType),
+      ]),
+    );
+  const valueInfo = (name) =>
+    Buffer.concat([
+      bytesField(1, name),
+      bytesField(
+        2,
+        bytesField(
+          1,
+          Buffer.concat([
+            varintField(1, 1),
+            bytesField(
+              2,
+              Buffer.concat(
+                [8, 8].map((dim) => bytesField(1, varintField(1, dim))),
+              ),
+            ),
+          ]),
+        ),
+      ),
+    ]);
+  const tensor = (name, dims, values) => {
+    const data = Buffer.alloc(values.length * 4);
+    values.forEach((value, i) => data.writeFloatLE(value, i * 4));
+    return bytesField(
+      5,
+      Buffer.concat([
+        ...dims.map((dim) => varintField(1, dim)),
+        varintField(2, 1),
+        bytesField(8, name),
+        bytesField(9, data),
+      ]),
+    );
+  };
+  const model = loadModel(
+    Buffer.concat([
+      varintField(1, 9),
+      bytesField(8, varintField(2, 13)),
+      bytesField(
+        7,
+        Buffer.concat([
+          bytesField(2, "shared folding weights"),
+          ...branches.flatMap((scale, i) => [
+            node("MatMul", ["x", "weight"], `matrix${i}`),
+            node("Mul", [`matrix${i}`, `scale${i}`], `y${i}`),
+            tensor(`scale${i}`, [], [scale]),
+            bytesField(12, valueInfo(`y${i}`)),
+          ]),
+          tensor(
+            "weight",
+            [8, 8],
+            Array.from({ length: 64 }, (_, i) => i + 1),
+          ),
+          bytesField(11, valueInfo("x")),
+        ]),
+      ),
+    ]),
+    "shared folding weights",
+  );
+  const original = Buffer.from(await model.serialize());
+  const preview = await model.previewFusion("MatMulScaleFusion");
+  assert.deepEqual(
+    preview.matches.map(({ anchor, nodes }) => ({ anchor, nodes })),
+    branches.map((_, i) => ({ anchor: i * 2, nodes: [i * 2, i * 2 + 1] })),
+  );
+  for (const [i, match] of preview.matches.entries()) {
+    assert.equal(match.replacement.length, 1);
+    assert.equal(match.replacement[0].opType, "MatMul");
+    assert.deepEqual(match.replacement[0].outputs, [`y${i}`]);
+    const fused = await preview.model.applyFusion("MatMulScaleFusion", [
+      match.anchor,
+    ]);
+    const files = await fused.serializeFiles(256, "folded.data");
+    const expected = Buffer.alloc(256);
+    for (let j = 0; j < 64; j++)
+      expected.writeFloatLE((j + 1) * branches[i], j * 4);
+    assert.ok(
+      files.weights.some(({ bytes }) => Buffer.from(bytes).equals(expected)),
+    );
+  }
+  assert.deepEqual(
+    (await model.previewFusion("MatMulScaleFusion")).matches,
+    preview.matches,
+  );
+  assert.deepEqual(Buffer.from(await preview.model.serialize()), original);
+  assert.deepEqual(Buffer.from(await model.serialize()), original);
+});
+
+test("writes newly folded weights while reusing unchanged external payloads", async (t) => {
+  const directory = mkdtempSync(path.join(tmpdir(), "onnx-light-fusion-fold-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const original = loadModel(modelBytes("fusion-scaled.onnx"), "fusion");
+  const files = await original.serializeFiles(1024, "original.data");
+  const source = path.join(directory, "source.onnx");
+  writeFileSync(source, files.model);
+  for (const file of files.weights)
+    writeFileSync(path.join(directory, file.name), file.bytes);
+  const model = await loadModelFile(source, "fusion");
+  const preview = await model.previewFusion("MatMulScaleFusion");
+  assert.equal(preview.matches.length, 1);
+  const fused = await preview.model.applyFusion("MatMulScaleFusion", [
+    preview.matches[0].anchor,
+  ]);
+  const reused = await fused.serializeFiles(1024, "new.data", source, true);
+  assert.equal(reused.weights.length, 1);
+  const expected = Buffer.alloc(256);
+  for (let i = 0; i < 64; i++) expected.writeFloatLE(i * 2, i * 4);
+  assert.deepEqual(Buffer.from(reused.weights[0].bytes), expected);
+  for (const weight of reused.weights)
+    writeFileSync(path.join(directory, weight.name), weight.bytes);
+  const copy = path.join(directory, "copy.onnx");
+  writeFileSync(copy, reused.model);
+  assert.deepEqual(
+    loadModel(
+      await (await loadModelFile(copy, "fusion")).serialize(),
+      "fusion",
+    ).graph(),
+    loadModel(await fused.serialize(), "fusion").graph(),
+  );
+  for (const file of files.weights)
+    assert.deepEqual(
+      readFileSync(path.join(directory, file.name)),
+      Buffer.from(file.bytes),
+    );
+});
+
+test("fused models reuse original external weights and detect changed backing data", async (t) => {
+  const directory = mkdtempSync(path.join(tmpdir(), "onnx-light-fusion-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const model = loadModel(modelBytes("fusion.onnx"), "fusion");
+  const files = await model.serializeFiles(1024, "original.data");
+  assert.equal(files.weights.length, 1);
+  const source = path.join(directory, "source.onnx");
+  writeFileSync(source, files.model);
+  for (const weight of files.weights)
+    writeFileSync(path.join(directory, weight.name), weight.bytes);
+  const native = await loadModelFile(source, "fusion");
+  const preview = await native.previewFusion("TransposeTranspose");
+  const fused = await preview.model.applyFusion("TransposeTranspose", [0, 2]);
+  const copy = await fused.serializeFiles(1024, "new.data", source, true);
+  assert.equal(copy.weights.length, 0);
+  assert.deepEqual(fused.externalDataLocations(), [files.weights[0].name]);
+  const destination = path.join(directory, "copy.onnx");
+  writeFileSync(destination, copy.model);
+  const reopened = await loadModelFile(destination, "fusion");
+  assert.deepEqual(
+    Buffer.from(await reopened.serialize()),
+    Buffer.from(await fused.serialize()),
+  );
+  const ordinary = await native.serializeFiles(
+    1024,
+    "ordinary.data",
+    source,
+    true,
+  );
+  assert.equal(ordinary.weights.length, 0);
+  const copied = await fused.serializeFiles(1024, "copied.data");
+  assert.equal(copied.weights.length, 1);
+  const changed = Buffer.from(files.weights[0].bytes);
+  changed[0] ^= 1;
+  writeFileSync(path.join(directory, files.weights[0].name), changed);
+  await assert.rejects(
+    fused.serializeFiles(1024, "changed.data", source, true),
+    /changed on disk/,
+  );
+  assert.deepEqual(readFileSync(source), Buffer.from(files.model));
+});
+
+test("reuses external tensors with identical names without confusing payloads, types or dimensions", async (t) => {
+  const directory = mkdtempSync(path.join(tmpdir(), "onnx-light-reuse-index-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const tensors = [
+    { type: 1, dims: [64], data: Buffer.alloc(256, 1) },
+    { type: 1, dims: [64], data: Buffer.alloc(256, 2) },
+    { type: 1, dims: [8, 8], data: Buffer.alloc(256, 1) },
+    { type: 11, dims: [32], data: Buffer.alloc(256, 1) },
+  ];
+  const model = loadModel(
+    Buffer.concat([
+      varintField(1, 9),
+      bytesField(8, varintField(2, 13)),
+      bytesField(
+        7,
+        Buffer.concat([
+          bytesField(2, "colliding tensor names"),
+          ...tensors.map(({ type, dims, data }, i) =>
+            bytesField(
+              1,
+              Buffer.concat([
+                bytesField(2, `constant${i}`),
+                bytesField(4, "Constant"),
+                bytesField(
+                  5,
+                  Buffer.concat([
+                    bytesField(1, "value"),
+                    varintField(20, 4),
+                    bytesField(
+                      5,
+                      Buffer.concat([
+                        ...dims.map((dim) => varintField(1, dim)),
+                        varintField(2, type),
+                        bytesField(8, "weight"),
+                        bytesField(9, data),
+                      ]),
+                    ),
+                  ]),
+                ),
+              ]),
+            ),
+          ),
+        ]),
+      ),
+    ]),
+    "colliding tensor names",
+  );
+  const expected = Buffer.from(await model.serialize());
+  const files = await model.serializeFiles(1024, "original.data");
+  const source = path.join(directory, "source.onnx");
+  writeFileSync(source, files.model);
+  for (const file of files.weights)
+    writeFileSync(path.join(directory, file.name), file.bytes);
+  const external = await loadModelFile(source, "colliding tensor names");
+  const reused = await external.serializeFiles(1024, "new.data", source, true);
+  assert.equal(reused.weights.length, 0);
+  assert.deepEqual(
+    Buffer.from(
+      await loadModel(reused.model, "reused").serialize(undefined, source),
+    ),
+    expected,
+  );
+});
+
 test("embeds external weights with offsets and repartitions plain external copies without modifying sources", async (t) => {
   const directory = mkdtempSync(
     path.join(tmpdir(), "onnx-light-viewer-external-模型-"),
@@ -409,6 +834,14 @@ test("embeds external weights with offsets and repartitions plain external copie
     await loadModel(modelBytes(false), "external").serialize(),
   );
   assert.deepEqual(Buffer.from(await model.serialize()), expected);
+  const reused = await model.serializeFiles(128, "reused.data", source, true);
+  assert.equal(reused.weights.length, 0);
+  assert.deepEqual(
+    Buffer.from(
+      await loadModel(reused.model, "external").serialize(undefined, source),
+    ),
+    expected,
+  );
   const encrypted = await model.serialize("external passphrase");
   assert.deepEqual(
     Buffer.from(

@@ -56,6 +56,13 @@ dependency.
 
 ## Documentation
 
+Use **Fuse** in the right sidebar on the main graph. Check one or more patterns,
+click **Run Matching**, then check candidates and click **Fuse selected**.
+Clicking a candidate highlights its nodes. **Open** and **Save** use mutually
+exclusive inline file selectors; **Save** writes a separate copy with embedded
+weights, fresh external files, or reused unchanged external weights.
+See the [fusion walkthrough](docs/features/fusion_patterns.rst).
+
 Sphinx documentation: [getting started](docs/getting_started.rst),
 [implemented features and viewer controls](docs/features.rst),
 [application design and source guide](docs/design.rst), and

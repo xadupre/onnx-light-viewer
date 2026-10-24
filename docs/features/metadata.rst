@@ -5,10 +5,11 @@ Metadata and lifetimes
    :alt: Metadata inspector with native constant, tag and tensor lifetime analysis.
    :width: 240px
 
-**Metadata** switches the inspector to native constant, tag and lifetime
+**Data**, at the top of the right sidebar, toggles native constant, tag and lifetime
 analysis, alongside stored model, graph, node and connected-tensor metadata.
-While open, the button stays filled, outlined and checked, independently of
-its refresh-status color.
+Like the other panel toggles, it is highlighted only while its panel is open.
+Refresh status and colors belong to **Refresh metadata**, not **Data**.
+It does not hide the operator, search or fusion panels.
 **Refresh metadata** recomputes this analysis for the displayed graph,
 even with the metadata inspector closed, without changing the view.
 
