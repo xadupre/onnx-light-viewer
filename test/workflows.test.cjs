@@ -12,10 +12,11 @@ function workflow(name) {
 
 const documentation = workflow("documentation.yml");
 
-test("CI runs unit tests on Linux, macOS, and Windows without building documentation", () => {
+test("CI runs unit tests on Linux and Windows without building documentation", () => {
   const source = workflow("tests.yml");
   assert.match(source, /runs-on: \$\{\{ matrix\.os \}\}/);
-  assert.match(source, /os: \[ubuntu-latest, macos-latest, windows-latest\]/);
+  assert.match(source, /os: \[ubuntu-latest, windows-latest\]/);
+  assert.doesNotMatch(source, /macos-/);
   assert.match(source, /run: npm test/);
   assert.match(source, /if: runner\.os == 'Linux'\s+run: clang-format/);
   assert.doesNotMatch(source, /sphinx|setup-python/);
@@ -33,19 +34,18 @@ test("documentation runs weekly or manually in a Linux-only workflow", () => {
   assert.doesNotMatch(documentation, /matrix:|macos-|windows-/);
 });
 
-test("releases retain native packages for all supported platforms", () => {
+test("releases retain Linux and Windows packages while macOS builds are paused", () => {
   const source = workflow("release.yml");
   assert.match(source, /runs-on: \$\{\{ matrix\.os \}\}/);
   for (const target of [
     "linux-x64",
     "linux-arm64",
-    "darwin-x64",
-    "darwin-arm64",
     "win32-x64",
     "win32-arm64",
   ]) {
     assert.ok(source.includes(`target: ${target}`));
   }
+  assert.doesNotMatch(source, /os: macos-|target: darwin-/);
   assert.doesNotMatch(source, /sphinx|setup-python/);
 });
 
