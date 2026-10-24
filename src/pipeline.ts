@@ -72,7 +72,7 @@ export class PipelineModel implements NativeModel {
   };
 
   summary = (inferShapes = false): GraphSummary => {
-    const { name, inputs, outputs, initializerCount, tensors, nodes } =
+    const { name, inputs, outputs, initializerCount, tensors, nodes, opsets } =
       this.graph(inferShapes);
     return {
       name,
@@ -80,6 +80,7 @@ export class PipelineModel implements NativeModel {
       outputs,
       initializerCount,
       tensors,
+      opsets,
       nodeCount: nodes.length,
     };
   };
@@ -125,8 +126,13 @@ export class PipelineModel implements NativeModel {
     }));
     const port = (role: string, direction: string, value: string) =>
       `${role}:${direction}:${value}`;
+    const opsets = new Map<string, Graph["opsets"][number]>();
+    for (const { graph } of stages)
+      for (const opset of graph.opsets)
+        opsets.set(JSON.stringify([opset.domain, opset.version]), opset);
     return {
       name,
+      opsets: [...opsets.values()],
       pipeline: true,
       pipelineStages,
       canFuse: false,
@@ -135,6 +141,7 @@ export class PipelineModel implements NativeModel {
         id: `node-${index}`,
         name: role,
         opType: "Model",
+        pipelineModel: graph,
         domain: "onnx-light.pipeline",
         inputs: graph.inputs.map((name) => port(role, "input", name)),
         outputs: graph.outputs.map((name) => port(role, "output", name)),
@@ -181,6 +188,10 @@ export class PipelineModel implements NativeModel {
         ),
       ),
     };
+  };
+
+  verify = (): void => {
+    for (const [, model] of this.stages()) model.verify();
   };
 
   metadata = (path: GraphPath = []): GraphMetadata => {

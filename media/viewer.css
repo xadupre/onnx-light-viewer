@@ -120,6 +120,18 @@ p {
   width: 100%;
   box-sizing: border-box;
 }
+#settings-packages {
+  grid-template-columns: minmax(0, max-content) minmax(0, 1fr);
+  gap: 3px 12px;
+  line-height: 1.4;
+}
+#settings-packages dt {
+  margin: 0;
+  font-size: 12px;
+  letter-spacing: 0;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
 .repository-list {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
@@ -400,6 +412,27 @@ body.resizing-sidebar {
   flex-wrap: wrap;
   gap: 6px;
 }
+#model-error {
+  position: absolute;
+  z-index: 1;
+  top: 18px;
+  left: 18px;
+  right: 18px;
+  max-height: calc(100% - 36px);
+  overflow: auto;
+  padding: 16px;
+  border: 1px solid var(--vscode-errorForeground, #f88);
+  border-radius: 6px;
+  background: var(--panel);
+}
+#model-error h2 {
+  margin-top: 0;
+  color: var(--vscode-errorForeground, #f88);
+}
+#model-error-details {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 #graph-navigation button {
   max-width: 100%;
   overflow-wrap: anywhere;
@@ -497,7 +530,7 @@ li > .tensor-info {
 }
 .graph-node .operator-label {
   fill: #effff9;
-  font-size: 19px;
+  font-size: 16px;
   font-weight: 600;
 }
 .graph-node .operator-name {
@@ -547,9 +580,10 @@ li > .tensor-info {
 }
 .zoom-controls {
   position: absolute;
-  right: 18px;
+  left: 18px;
   bottom: 18px;
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   border: 1px solid #354757;
   border-radius: 6px;
   overflow: hidden;
@@ -606,19 +640,35 @@ li > .tensor-info {
   outline-offset: -2px;
 }
 .zoom-controls button {
+  grid-column: 1 / -1;
   color: #c2d1df;
   background: #16212e;
   border: 0;
   padding: 4px 11px;
 }
 .zoom-controls button + button {
+  border-top: 1px solid #354757;
+}
+.zoom-controls #go-top,
+.zoom-controls #zoom-in,
+.zoom-controls #zoom-fit {
+  grid-column: 1;
+}
+.zoom-controls #go-bottom,
+.zoom-controls #zoom-out,
+.zoom-controls #zoom-readable {
+  grid-column: 2;
   border-left: 1px solid #354757;
+}
+.zoom-controls #go-bottom {
+  border-top: 0;
 }
 .zoom-controls button:hover {
   background: #293c4e;
 }
 .zoom-controls svg {
   display: block;
+  margin: auto;
   fill: none;
   stroke: currentColor;
   stroke-width: 1.8;
@@ -762,14 +812,6 @@ button:disabled {
 }
 #metadata-panel tbody th {
   font-weight: 500;
-}
-#metadata-panel details {
-  margin-top: 10px;
-}
-#metadata-panel summary {
-  cursor: pointer;
-  font-size: 11px;
-  font-weight: 600;
 }
 #metadata-values {
   margin-top: 8px;

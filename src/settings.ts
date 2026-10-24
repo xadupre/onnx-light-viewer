@@ -72,9 +72,10 @@ export const pythonPackages = [
 export async function inspectPythonPackages(pythonPath: string): Promise<{
   executable: string;
   version: string;
-  packages: { name: string; version: string | null }[];
+  packages: { name: string; version: string | null; source?: string }[];
 }> {
   const script = `
+import ast
 import importlib.metadata as metadata
 import json
 import os
@@ -105,6 +106,12 @@ def add_path(path):
     if path not in seen and os.path.exists(path):
         seen.add(path)
         paths.append(path)
+python_paths = []
+for entry in os.environ.get("PYTHONPATH", "").split(os.pathsep):
+    if entry and os.path.isdir(entry):
+        directory = os.path.abspath(entry)
+        python_paths.append(directory)
+        add_path(directory)
 for directory in site.getsitepackages(prefixes):
     if not os.path.isdir(directory):
         continue
@@ -127,10 +134,52 @@ for distribution in metadata.distributions(path=paths):
     name = distribution.metadata["Name"]
     if name:
         installed.setdefault(normalize(name), distribution.version)
+modules = {
+    "yet-another-onnx-builder": "yobx",
+    "scikit-learn": "sklearn",
+    "scikit-survival": "sksurv",
+    "imbalanced-learn": "imblearn",
+    "optimum-onnx": "optimum.onnx",
+    "onnxruntime-gpu": None,
+}
+def source_version(package):
+    candidates = [package] if package.is_file() else [
+        package / "__init__.py", package / "_version.py", package / "version.py"
+    ]
+    for candidate in candidates:
+        if not candidate.is_file():
+            continue
+        for statement in ast.parse(candidate.read_bytes(), filename=str(candidate)).body:
+            if isinstance(statement, ast.Assign):
+                targets = statement.targets
+            elif isinstance(statement, ast.AnnAssign):
+                targets = [statement.target]
+            else:
+                continue
+            if any(isinstance(target, ast.Name) and target.id in ("__version__", "version", "VERSION") for target in targets):
+                value = statement.value
+                if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                    return value.value
+    return None
+def package_info(name):
+    module = modules.get(name, name.replace("-", "_"))
+    if module:
+        for directory in python_paths:
+            package = Path(directory).joinpath(*module.split("."))
+            if not package.is_dir():
+                package = package.with_suffix(".py")
+            if not package.exists():
+                continue
+            version = source_version(package)
+            if version is None:
+                version = next((d.version for d in metadata.distributions(path=[directory])
+                                if normalize(d.metadata["Name"] or "") == normalize(name)), None)
+            return {"name": name, "version": version, "source": str(package)}
+    return {"name": name, "version": installed.get(normalize(name))}
 print(json.dumps({
     "executable": sys.executable,
     "version": sys.version.split()[0],
-    "packages": [{"name": name, "version": installed.get(normalize(name))} for name in json.loads(sys.argv[1])]
+    "packages": [package_info(name) for name in json.loads(sys.argv[1])]
 }))
 `;
   const { stdout } = await promisify(execFile)(

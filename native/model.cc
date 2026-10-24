@@ -1,6 +1,7 @@
 /** @file Retained model handles and their shared ownership. */
 #include "model.h"
 #include "graph.h"
+#include <onnx_proto/onnx_verify.h>
 #include <stdexcept>
 
 namespace onnx_light_viewer {
@@ -29,6 +30,16 @@ Napi::Object ModelHandle(Napi::Env env, std::shared_ptr<StoredModel> model) {
              }));
   AddFusionMethods(env, result, model);
   AddSerializationMethods(env, result, model);
+  result.Set("verify",
+             Napi::Function::New(env, [model](const Napi::CallbackInfo &call) -> Napi::Value {
+               try {
+                 ol::VerifyModel(*model->model);
+               } catch (const std::exception &error) {
+                 Napi::Error::New(call.Env(), std::string("VerifyModel: ") + error.what())
+                     .ThrowAsJavaScriptException();
+               }
+               return call.Env().Undefined();
+             }));
   result.Set(
       "summary", Napi::Function::New(env, [model](const Napi::CallbackInfo &call) -> Napi::Value {
         const auto env = call.Env();

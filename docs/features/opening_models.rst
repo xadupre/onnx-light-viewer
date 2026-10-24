@@ -18,6 +18,9 @@ Opening models
   randomly initialized transformer graph with symbolic batch/sequence dimensions.
 * The toolbar shows the native onnx-light C++ release, graph counts, refresh
   progress and errors. Its logo links to the GitHub repository.
+  Loading failures also display an error panel directly over the graph canvas,
+  including when the first model cannot be opened. The previous graph, if any,
+  is preserved; use **Open** to try another file.
 
 PipelineProto containers
 ------------------------
@@ -26,6 +29,9 @@ Open an onnx-light ``PipelineProto`` using the ``.pipe-onnx`` extension. The
 overview lists the required **prefill** model and optional **embedding** and
 **decode** models. Click a stage link to inspect its graph, subgraphs and local
 functions; breadcrumbs return to the overview.
+Overview boxes represent contained models, not operators. Selecting one shows its
+stage role, graph name, operator count and all imported domains/opsets in **Op**;
+the overview counter counts models. Use the model link to enter its graph.
 The permanent navigation bar also links directly to every available stage,
 including while viewing another stage or one of its subgraphs. Nested graph
 and function names follow the stage links.

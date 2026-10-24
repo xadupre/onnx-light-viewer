@@ -12,32 +12,58 @@ function createInspector({ byId, tensorDescription, subgraphLabel, navigate }) {
     byId("doc-body").textContent = "";
   }
 
-  function inspect(view, hasOperators) {
+  function inspect(view, scope) {
     const node = view?.node;
     const port = view?.port;
+    const model = node?.pipelineModel;
     byId("node-title").textContent =
       node?.opType ??
       (port
         ? port.output
           ? "Graph output"
           : "Graph input"
-        : hasOperators
-          ? "No selection"
-          : "No operator");
-    byId("node-description").textContent = node
-      ? `${node.opType} ${node.function ? "local function" : "operator"}`
-      : port
-        ? `Graph ${port.output ? "output" : "input"} tensor.`
-        : hasOperators
-          ? "Select a node to inspect its inputs and outputs."
-          : "This graph contains no operator nodes.";
+        : (scope?.kind ?? "No model loaded"));
+    byId("node-description").textContent = model
+      ? `${node.name} model in pipeline ${scope.name}. Contains ${model.nodeCount} operator${model.nodeCount === 1 ? "" : "s"}. Use the model link below to open its graph.`
+      : node
+        ? `${node.opType} ${node.function ? "local function" : "operator"}`
+        : port
+          ? `Graph ${port.output ? "output" : "input"} tensor.`
+          : scope?.kind === "Pipeline"
+            ? "Pipeline overview: each box is a contained model, not an operator. Select a model to inspect its imports and ports; use its link to open its graph."
+            : scope
+              ? `${scope.kind} scope. Select a node or tensor to inspect its details.`
+              : "Open an ONNX model to explore its connections.";
     byId("open-function").hidden = !node?.function;
     byId("open-function").textContent = node?.function
       ? `Open function: ${node.function.name}`
       : "Open function";
-    byId("node-name").textContent = node?.name ?? port?.name ?? "—";
-    byId("node-domain").textContent = node?.domain ?? "—";
-    byId("node-opset").textContent = node?.opset ?? "—";
+    byId("node-name-label").textContent = model
+      ? "MODEL NAME"
+      : node
+        ? "NODE NAME"
+        : port
+          ? "TENSOR NAME"
+          : `${scope?.kind.toUpperCase() ?? "MODEL"} NAME`;
+    byId("node-name").textContent =
+      model?.name ?? node?.name ?? port?.name ?? scope?.name ?? "—";
+    const opsets =
+      model?.opsets ?? (!node && !port ? (scope?.opsets ?? []) : []);
+    const domains = [...new Set(opsets.map((opset) => opset.domain))].join(
+      ", ",
+    );
+    byId("node-domain").textContent =
+      (model ? domains : (node?.domain ?? domains)) || "—";
+    byId("node-opset").replaceChildren();
+    if (opsets.length) {
+      for (const { domain, version } of opsets) {
+        const entry = document.createElement("div");
+        entry.textContent = `${domain}: ${version}`;
+        byId("node-opset").append(entry);
+      }
+    } else {
+      byId("node-opset").textContent = node?.opset ?? "—";
+    }
     if (inspectedNode !== node) {
       resetDocumentation();
       inspectedNode = node;
@@ -63,7 +89,9 @@ function createInspector({ byId, tensorDescription, subgraphLabel, navigate }) {
         node?.[direction] ??
         (port && direction === (port.output ? "inputs" : "outputs")
           ? [port.name]
-          : []);
+          : !node && !port
+            ? (scope?.[direction] ?? [])
+            : []);
       byId(`${direction === "inputs" ? "input" : "output"}-count`).textContent =
         names.length;
       byId(`node-${direction}`).replaceChildren(

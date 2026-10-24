@@ -10,6 +10,9 @@ analysis, alongside stored model, graph, node and connected-tensor metadata.
 Like the other panel toggles, it is highlighted only while its panel is open.
 Refresh status and colors belong to **Refresh metadata**, not **Data**.
 It does not hide the operator, search or fusion panels.
+Metadata sections and stored tensor entries are shown directly, without
+collapsible headings. Clicking the background shows metadata for the current
+model, graph, function or pipeline.
 **Refresh metadata** recomputes this analysis for the displayed graph,
 even with the metadata inspector closed, without changing the view.
 

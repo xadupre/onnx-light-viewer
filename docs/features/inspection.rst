@@ -28,6 +28,18 @@ attributes. Scalar and list values appear below the name/type heading without
 repeating the attribute name. Schema defaults are marked ``[default]``; long
 attribute arrays show a bounded preview.
 
+Click the background to inspect the current **Model**, **Graph**, **Function** or
+**Pipeline** instead of an operator. The inspector shows its name and ports.
+It also lists every imported domain and opset version, including unused imports.
+Functions show their own imports; a pipeline overview combines the imports of
+its models, preserving different versions of the same domain.
+
+Use **Verify**, next to the refresh buttons, to run onnx-light's ``VerifyModel``
+on the entire model, including when viewing a subgraph or function. For pipelines,
+every contained model is checked. The toolbar displays success or the verification
+error, also recorded in **Logs**. Verification does not infer shapes, execute
+operators or change the model.
+
 Operator names sit at the top right of each box. Attributes and connected
 initializer previews are centered below the type in a contrasting color when there are
 at most two and each fits on one line of up to 38 characters. Otherwise, a

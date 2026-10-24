@@ -108,6 +108,8 @@ export interface GraphNode {
   schema: OperatorSchema | null;
   /** Local function called by this node, matched by domain, name and overload. */
   function?: SubgraphLink;
+  /** Summary of a contained model represented by a pipeline overview box, not an operator. */
+  pipelineModel?: GraphSummary;
 }
 
 /** Tensor labels for ports and intermediate values, without tensor data. */
@@ -124,6 +126,8 @@ export interface TensorInformation {
 /** Display snapshot of one graph, not a recursive serialization of the model. */
 export interface Graph {
   name: string;
+  /** Declared imports, including unused domains; functions have their own imports. */
+  opsets: { domain: string; version: string }[];
   /** Pipeline container or one of its stage graphs. */
   pipeline?: boolean;
   /** Persistent links to every model present in a pipeline. */
@@ -141,7 +145,7 @@ export interface Graph {
 /** Root ports and counts without projecting operators, attributes or schemas. */
 export type GraphSummary = Pick<
   Graph,
-  "name" | "inputs" | "outputs" | "initializerCount" | "tensors"
+  "name" | "inputs" | "outputs" | "initializerCount" | "tensors" | "opsets"
 > & { nodeCount: number };
 
 export interface FusionMatch {
@@ -210,6 +214,8 @@ export interface NativeModel {
    * @param path Absolute graph path; omitted or empty selects the root.
    */
   metadata(path?: GraphPath): GraphMetadata;
+  /** Checks the entire retained model, or every pipeline stage, without editing it. */
+  verify(): void;
 }
 
 /** Stored ONNX metadata property, preserved as a key/value pair. */
@@ -288,6 +294,7 @@ export const onnxLightVersion = native.onnxLightVersion;
 /** Minimal Relu snapshot with native schema documentation, requiring no model file. */
 export const demoGraph: Graph = {
   name: "A first ONNX graph",
+  opsets: [{ domain: "ai.onnx", version: "13" }],
   breadcrumbs: [{ name: "A first ONNX graph", path: [] }],
   nodes: [
     {

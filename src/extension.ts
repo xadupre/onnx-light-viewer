@@ -480,7 +480,12 @@ async function configurePanel(
   const getApplicationSettings = () =>
     applicationSettings(
       context.globalState.get<unknown>("applicationSettings") ?? {
-        downloadDirectory: join(context.globalStorageUri.fsPath, "huggingface"),
+        downloadDirectory: join(
+          homedir(),
+          ".cache",
+          "onnx-light-viewer",
+          "downloads",
+        ),
         pythonPath: process.platform === "win32" ? "python" : "python3",
       },
     );
@@ -1660,6 +1665,36 @@ async function configurePanel(
           return;
         requireModel().metadata = metadata;
         await postMessage({ type: "metadata-info", metadata });
+      } else if (message?.type === "verify") {
+        const requestedModel = model;
+        const requestedGraphRevision = graphRevision;
+        const isCurrent = () =>
+          active &&
+          model === requestedModel &&
+          graphRevision === requestedGraphRevision;
+        try {
+          await log.run(
+            `Verify model: ${model?.graph.name ?? "no model loaded"}`,
+            async () => {
+              const current = requireModel();
+              const native = await nativeModel(current, log, () => {
+                void sendStatus();
+              });
+              if (isCurrent()) native.verify();
+            },
+            message.actionId,
+          );
+        } catch (error) {
+          if (!isCurrent()) return;
+          const detail = error instanceof Error ? error.message : String(error);
+          await postMessage({ type: "verify-error", error: detail });
+          await vscode.window.showErrorMessage(
+            `ONNX verification failed: ${detail}`,
+          );
+          return;
+        }
+        if (!isCurrent()) return;
+        await postMessage({ type: "verify-info" });
       } else if (message?.type === "refresh-shapes") {
         const requestedModel = model;
         const requestedGraphRevision = graphRevision;
