@@ -55,6 +55,7 @@ function encodedModel({
   logical = true,
   structured = false,
   logicalType,
+  rawData,
 } = {}) {
   const scale = Buffer.alloc(4);
   scale.writeFloatLE(0.5);
@@ -104,7 +105,7 @@ function encodedModel({
       ])
     : bytesField(
         4,
-        Buffer.from(structured ? [0x88, 0xc6, 0xfa] : [0xe4, 0xe4]),
+        rawData ?? Buffer.from(structured ? [0x88, 0xc6, 0xfa] : [0xe4, 0xe4]),
       );
   const value = Buffer.concat([
     layout,
@@ -299,6 +300,35 @@ test("lists and safely embeds external encoded payloads when saving", async (t) 
   );
   writeFileSync(path.join(directory, "codes.bin"), Buffer.from([0]));
   await assert.rejects(model.serialize(), /length exceeds/);
+});
+
+test("retains inline encoded payloads across the tensor omission threshold", async (t) => {
+  const directory = mkdtempSync(path.join(tmpdir(), "encoded-inline-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  for (const size of [255, 256, 1024]) {
+    const rawData = Buffer.alloc(size, 0xe4);
+    const logicalType = bytesField(
+      1,
+      Buffer.concat([
+        varintField(1, 1),
+        bytesField(2, bytesField(1, varintField(1, size * 4))),
+      ]),
+    );
+    const bytes = encodedModel({ rawData, logicalType });
+    const file = path.join(directory, `inline-${size}.onnx`);
+    writeFileSync(file, bytes);
+    const model = await loadModelFile(file, "inline");
+    assert.deepEqual(model.graph(), loadModel(bytes, "inline").graph());
+    assert.deepEqual(model.graph().nodes[0].parameters[0].storage, {
+      external: false,
+      location: null,
+    });
+    assert.deepEqual(model.externalDataLocations(), []);
+    rmSync(file);
+    const saved = await model.serialize();
+    assert.ok(saved.includes(bytesField(4, rawData)));
+    assert.deepEqual(loadModel(saved, "inline").graph(), model.graph());
+  }
 });
 
 test("resolves model-scoped logical types of encoded initializers", () => {
@@ -1584,6 +1614,10 @@ test("allows shape and metadata analysis after omitting raw or typed initializer
     const file = path.join(directory, `matmul-${name}.onnx`);
     writeFileSync(file, matmulWithWeight(dataField));
     const model = await loadModelFile(file, `matmul-${name}.onnx`);
+    const [parameter] = model.graph().nodes[0].parameters;
+    assert.deepEqual(parameter.storage, { external: false, location: null });
+    assert.equal(parameter.value, undefined);
+    assert.deepEqual(model.externalDataLocations(), []);
     assert.deepEqual(
       model.graph(true).tensors.find(({ name }) => name === "y").shape,
       ["N", "8"],

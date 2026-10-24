@@ -124,6 +124,17 @@ a plain copy; downloaded encrypted files remain encrypted in the cache.
 Malformed decrypted models produce content-free errors, so parser diagnostics
 cannot expose decrypted bytes in Logs.
 
+Payload omission applies to tracked ``TensorProto`` raw and typed data: dense
+initializers, sparse components and tensors in attributes, nested graphs and
+functions. Internally, omitted tensors use the
+``onnx-light-viewer:payload-omitted`` location sentinel, which is not reported
+as an external filename. ``EncodedValueProto`` payloads and their layout
+constants are not tracked by this omission pass: inline encoded bytes remain
+in memory, even above the tensor omission threshold, and genuinely external
+encoded payloads retain their external filenames. The loader does not generate
+the omission sentinel for encoded values (investigation: `#144
+<https://github.com/xadupre/onnx-light-viewer/issues/144>`_).
+
 Hugging Face models
 -------------------
 
