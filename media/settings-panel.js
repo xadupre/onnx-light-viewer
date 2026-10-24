@@ -1,9 +1,9 @@
 function createSettingsPanel({ byId, postMessage, onViewerSettings }) {
   const panelNames = ["operator", "find", "metadata"];
-  let inspecting = false;
+  let inspecting;
+  let nextRequestId = 0;
   let trusted = false;
   let pythonPath;
-  let inspectedPath;
 
   function restoreViewer(settings) {
     byId("settings-width").value = settings.width ?? "";
@@ -35,11 +35,10 @@ function createSettingsPanel({ byId, postMessage, onViewerSettings }) {
     });
   byId("settings-inspect-python").addEventListener("click", () => {
     if (inspecting) return;
-    inspecting = true;
-    inspectedPath = pythonPath;
+    inspecting = { requestId: ++nextRequestId, pythonPath };
     byId("settings-inspect-python").disabled = true;
     byId("settings-python-status").textContent = "Checking Python packages…";
-    postMessage({ type: "inspect-python" });
+    postMessage({ type: "inspect-python", ...inspecting });
   });
 
   function receive(message) {
@@ -55,15 +54,31 @@ function createSettingsPanel({ byId, postMessage, onViewerSettings }) {
       byId("settings-app-version").textContent = message.appVersion;
       byId("settings-native-version").textContent = message.nativeVersion;
       byId("settings-platform").textContent = message.platform;
-      byId("settings-inspect-python").disabled = inspecting || !trusted;
+      byId("settings-inspect-python").disabled =
+        Boolean(inspecting) || !trusted;
       byId("settings-feedback").textContent = trusted
         ? "Settings loaded."
         : "Trust this workspace to inspect Python packages.";
       restoreViewer(message.viewer);
-    } else if (message.type === "python-info") {
-      inspecting = false;
+    } else if (
+      message.type === "python-info" ||
+      (message.type === "settings-error" && message.requestId !== undefined)
+    ) {
+      if (
+        !inspecting ||
+        message.requestId !== inspecting.requestId ||
+        message.pythonPath !== inspecting.pythonPath
+      )
+        return;
+      inspecting = undefined;
       byId("settings-inspect-python").disabled = !trusted;
-      if (inspectedPath !== pythonPath) return;
+      if (message.pythonPath !== pythonPath) return;
+      if (message.type === "settings-error") {
+        byId("settings-feedback").textContent = message.error;
+        byId("settings-python-status").textContent = "Not checked";
+        byId("settings-packages").replaceChildren();
+        return;
+      }
       byId("settings-python-status").textContent =
         `Python ${message.python.version} — ${message.python.executable}`;
       byId("settings-packages").replaceChildren();
@@ -75,11 +90,7 @@ function createSettingsPanel({ byId, postMessage, onViewerSettings }) {
         byId("settings-packages").append(name, version);
       }
     } else if (message.type === "settings-error") {
-      inspecting = false;
-      byId("settings-inspect-python").disabled = !trusted;
       byId("settings-feedback").textContent = message.error;
-      byId("settings-python-status").textContent = "Not checked";
-      byId("settings-packages").replaceChildren();
     }
   }
 

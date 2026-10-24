@@ -1698,6 +1698,8 @@ window.addEventListener("message", (event) => {
       event.data?.type,
     )
   ) {
+    if (event.data.type === "settings-info")
+      sidebar.restoreSettings(event.data.viewer);
     settingsPanel.receive(event.data);
   } else if (event.data?.type === "log-entry") {
     displayLog(event.data.entry);

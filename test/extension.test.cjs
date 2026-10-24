@@ -570,12 +570,53 @@ test("Settings reports defaults, versions and persisted paths without running Py
   t.after(() => second.dispose());
   await second.receive({ type: "get-settings" });
   assert.deepEqual(second.messages.at(-1).application, settings);
-  await second.receive({ type: "inspect-python" });
+  await first.receive({
+    type: "application-settings",
+    settings: {
+      ...settings,
+      pythonPath: path.join(storage, "different-python"),
+    },
+  });
+  const inspection = {
+    type: "inspect-python",
+    requestId: 1,
+    pythonPath: settings.pythonPath,
+  };
+  await second.receive(inspection);
   assert.equal(second.messages.at(-1).type, "settings-error");
   assert.match(second.messages.at(-1).error, /ENOENT/);
+  assert.ok(second.messages.at(-1).error.includes(settings.pythonPath));
+  assert.equal(second.messages.at(-1).requestId, inspection.requestId);
+  assert.equal(second.messages.at(-1).pythonPath, inspection.pythonPath);
   second.setTrusted(false);
-  await second.receive({ type: "inspect-python" });
+  await second.receive({ ...inspection, requestId: 2 });
   assert.match(second.messages.at(-1).error, /Trust this workspace/);
+  assert.equal(second.messages.at(-1).requestId, 2);
+});
+
+test("Settings correlates real Python results with the panel's requested interpreter", async (t) => {
+  const extension = await openExtension();
+  t.after(() => extension.dispose());
+  await extension.receive({ type: "get-settings" });
+  const { application } = extension.messages.at(-1);
+  await extension.receive({
+    type: "application-settings",
+    settings: {
+      ...application,
+      pythonPath: path.join(tmpdir(), "missing-python"),
+    },
+  });
+  await extension.receive({
+    type: "inspect-python",
+    requestId: 7,
+    pythonPath: application.pythonPath,
+  });
+  const response = extension.messages.at(-1);
+  assert.equal(response.type, "python-info");
+  assert.equal(response.requestId, 7);
+  assert.equal(response.pythonPath, application.pythonPath);
+  assert.match(response.python.version, /^\d+\.\d+\.\d+/);
+  assert.ok(response.python.packages.some(({ name }) => name === "onnx"));
 });
 
 test("Settings rejects invalid paths without overwriting preferences", async (t) => {

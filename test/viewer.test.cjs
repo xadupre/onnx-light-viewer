@@ -1793,6 +1793,14 @@ test("Settings edits saved paths and existing sidebar preferences and renders pa
   assert.equal(byId("settings-app-version").textContent, "1.2.3");
   assert.equal(byId("settings-native-version").textContent, "0.2.0");
   assert.equal(byId("settings-width").value, "420");
+  assert.equal(byId("operator-panel").hidden, true);
+  assert.equal(byId("show-operator").getAttribute("aria-expanded"), "false");
+  assert.equal(
+    document
+      .querySelector(".graph-body")
+      .style.getPropertyValue("--sidebar-width"),
+    "420px",
+  );
   byId("settings-download").value = "/new-downloads";
   byId("application-settings-form").dispatchEvent(
     new window.Event("submit", { cancelable: true }),
@@ -1819,8 +1827,11 @@ test("Settings edits saved paths and existing sidebar preferences and renders pa
   assert.equal(byId("settings-find").checked, false);
   byId("settings-inspect-python").click();
   assert.equal(messages.at(-1).type, "inspect-python");
+  const inspection = messages.at(-1);
+  assert.equal(inspection.pythonPath, "/usr/bin/python3");
   assert.equal(byId("settings-inspect-python").disabled, true);
   send({
+    ...inspection,
     type: "python-info",
     python: {
       executable: "/usr/bin/python3",
@@ -1834,7 +1845,12 @@ test("Settings edits saved paths and existing sidebar preferences and renders pa
   assert.equal(byId("settings-inspect-python").disabled, false);
   assert.match(byId("settings-packages").textContent, /Not installed/);
   assert.equal(byId("settings-packages").querySelector("img"), null);
-  send({ type: "settings-error", error: "Python not found" });
+  byId("settings-inspect-python").click();
+  send({
+    ...messages.at(-1),
+    type: "settings-error",
+    error: "Python not found",
+  });
   assert.equal(byId("settings-feedback").textContent, "Python not found");
   assert.equal(byId("settings-packages").children.length, 0);
   const info = {
@@ -1847,8 +1863,10 @@ test("Settings edits saved paths and existing sidebar preferences and renders pa
     trusted: true,
   };
   byId("settings-inspect-python").click();
+  const staleInspection = messages.at(-1);
   send(info);
   send({
+    ...staleInspection,
     type: "python-info",
     python: {
       executable: "/usr/bin/python3",
@@ -1862,6 +1880,70 @@ test("Settings edits saved paths and existing sidebar preferences and renders pa
   assert.equal(byId("settings-inspect-python").disabled, true);
   send({ type: "settings-error", error: "Invalid path" });
   assert.equal(byId("settings-inspect-python").disabled, true);
+});
+
+test("Settings keeps inspections pending after save errors and rejects unrelated responses", (t) => {
+  const { document, window, messages } = openViewer(t);
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  const byId = (id) => document.getElementById(id);
+  const info = {
+    type: "settings-info",
+    application: {
+      downloadDirectory: "/downloads",
+      pythonPath: "/first/python",
+    },
+    viewer: { panels: { operator: true, find: true, metadata: false } },
+    trusted: true,
+  };
+  send(info);
+  byId("settings-inspect-python").click();
+  const first = messages.at(-1);
+  send({ type: "settings-error", error: "Invalid download directory" });
+  assert.equal(
+    byId("settings-feedback").textContent,
+    "Invalid download directory",
+  );
+  assert.equal(byId("settings-inspect-python").disabled, true);
+  assert.equal(
+    byId("settings-python-status").textContent,
+    "Checking Python packages…",
+  );
+  send({
+    ...info,
+    application: { ...info.application, pythonPath: "/second/python" },
+  });
+  byId("settings-inspect-python").click();
+  assert.equal(messages.at(-1), first);
+  const python = {
+    executable: "/first/python",
+    version: "3.12",
+    packages: [{ name: "onnx", version: "old" }],
+  };
+  send({ ...first, type: "python-info", python });
+  assert.equal(byId("settings-packages").children.length, 0);
+  assert.equal(byId("settings-inspect-python").disabled, false);
+  byId("settings-inspect-python").click();
+  const second = messages.at(-1);
+  assert.notEqual(second.requestId, first.requestId);
+  assert.equal(second.pythonPath, "/second/python");
+  send({ ...first, type: "settings-error", error: "Old inspection failed" });
+  send({ ...first, type: "python-info", python });
+  send({
+    ...second,
+    pythonPath: first.pythonPath,
+    type: "python-info",
+    python,
+  });
+  assert.equal(byId("settings-inspect-python").disabled, true);
+  assert.equal(byId("settings-packages").children.length, 0);
+  send({
+    ...second,
+    type: "python-info",
+    python: { ...python, executable: "/second/python", packages: [] },
+  });
+  assert.equal(byId("settings-inspect-python").disabled, false);
+  assert.match(byId("settings-python-status").textContent, /\/second\/python/);
 });
 
 for (const initialTab of ["model", "logs"]) {

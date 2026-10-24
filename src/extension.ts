@@ -583,6 +583,7 @@ async function configurePanel(
         confirmation?: unknown;
         overwrite?: unknown;
         settings?: unknown;
+        pythonPath?: unknown;
         historyAction?: unknown;
         historyEntry?: unknown;
         query?: unknown;
@@ -607,13 +608,26 @@ async function configurePanel(
           if (message.type === "inspect-python") {
             if (!vscode.workspace.isTrusted)
               throw new Error("Trust this workspace before running Python.");
+            if (
+              typeof message.requestId !== "number" ||
+              !Number.isSafeInteger(message.requestId) ||
+              message.requestId <= 0
+            )
+              throw new Error("Invalid Python inspection request.");
+            const { pythonPath } = applicationSettings({
+              ...getApplicationSettings(),
+              pythonPath: message.pythonPath,
+            });
             if (inspectingPackages) return;
             inspectingPackages = true;
             try {
-              const python = await inspectPythonPackages(
-                getApplicationSettings().pythonPath,
-              );
-              await postMessage({ type: "python-info", python });
+              const python = await inspectPythonPackages(pythonPath);
+              await postMessage({
+                type: "python-info",
+                requestId: message.requestId,
+                pythonPath,
+                python,
+              });
             } finally {
               inspectingPackages = false;
             }
@@ -621,7 +635,13 @@ async function configurePanel(
         } catch (error) {
           const detail = error instanceof Error ? error.message : String(error);
           log.record("FAILED", `Settings: ${detail}`);
-          await postMessage({ type: "settings-error", error: detail });
+          await postMessage({
+            type: "settings-error",
+            ...(message.type === "inspect-python"
+              ? { requestId: message.requestId, pythonPath: message.pythonPath }
+              : {}),
+            error: detail,
+          });
         }
       } else if (message?.type === "interaction") {
         log.interaction(message.entry);
