@@ -243,10 +243,13 @@ test("reuses model-scoped struct declarations for repeated and missing reference
       assert.equal(parameter.type, type);
       assert.equal(parameter.encoding, type);
       if (id === 7) {
-        assert.match(type, new RegExp(`^STRUCT .*name: "${name}".*type_id: 7`));
+        assert.match(
+          type,
+          new RegExp(`^STRUCT .*name: "${name}".*type_id: 7`, "s"),
+        );
         assert.doesNotMatch(type, /Duplicate|Unused/);
       } else {
-        assert.match(type, /^STRUCT .*type_ref: 99/);
+        assert.match(type, /^STRUCT .*type_ref: 99/s);
         assert.doesNotMatch(type, /type_id/);
       }
     }
@@ -286,8 +289,10 @@ test("keeps recursive struct references bounded when resolving declarations", ()
     "recursive",
   );
   const { type } = model.graph().tensors[0];
-  assert.match(type, /^STRUCT .*self.*type_ref: 7.*Recursive.*type_id: 7/);
-  assert.ok(type.length < 4104);
+  assert.match(type, /^STRUCT .*self.*type_ref: 7.*Recursive.*type_id: 7/s);
+  // Preview() in native/tensor_preview.h limits the body, excluding this prefix.
+  const maxPreviewLength = 4096;
+  assert.ok(type.length <= "STRUCT ".length + maxPreviewLength);
 });
 
 for (const bits of [2, 3]) {
