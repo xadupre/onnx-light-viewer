@@ -1,0 +1,17 @@
+export const huggingFaceTasks = [
+  { value: "", label: "All tasks" },
+  { value: "feature-extraction", label: "Feature extraction / embeddings" },
+  { value: "sentence-similarity", label: "Sentence similarity" },
+  { value: "text-ranking", label: "Text ranking" },
+  { value: "text-generation", label: "Text generation" },
+  { value: "text-classification", label: "Text classification" },
+  { value: "token-classification", label: "Token classification" },
+  { value: "question-answering", label: "Question answering" },
+  { value: "summarization", label: "Summarization" },
+  { value: "translation", label: "Translation" },
+  { value: "image-classification", label: "Image classification" },
+  { value: "object-detection", label: "Object detection" },
+  { value: "image-segmentation", label: "Image segmentation" },
+  { value: "automatic-speech-recognition", label: "Speech recognition" },
+  { value: "text-to-speech", label: "Text to speech" },
+] as const;

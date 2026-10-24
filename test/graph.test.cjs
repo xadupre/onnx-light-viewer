@@ -19,6 +19,9 @@ const path = require("node:path");
 const { test } = require("node:test");
 const { withCommaLocale } = require("../build/native/Release/test_locale.node");
 const {
+  layoutTensors,
+} = require("../build/native/Release/test_model_storage.node");
+const {
   decodeGraph,
   demoGraph,
   loadModel,
@@ -55,6 +58,7 @@ function encodedModel({
   logical = true,
   structured = false,
   logicalType,
+  rawData,
 } = {}) {
   const scale = Buffer.alloc(4);
   scale.writeFloatLE(0.5);
@@ -104,7 +108,7 @@ function encodedModel({
       ])
     : bytesField(
         4,
-        Buffer.from(structured ? [0x88, 0xc6, 0xfa] : [0xe4, 0xe4]),
+        rawData ?? Buffer.from(structured ? [0x88, 0xc6, 0xfa] : [0xe4, 0xe4]),
       );
   const value = Buffer.concat([
     layout,
@@ -303,6 +307,8 @@ for (const bits of [2, 3]) {
     );
     const directory = mkdtempSync(path.join(tmpdir(), "encoded-model-"));
     t.after(() => rmSync(directory, { recursive: true, force: true }));
+    const layout = layoutTensors(readFileSync(file));
+    assert.ok(layout.length > 0);
     for (const model of [
       loadModel(readFileSync(file), file),
       await loadModelFile(file, file),
@@ -326,11 +332,11 @@ for (const bits of [2, 3]) {
         model.metadata().values.find((v) => v.name === "weight").constant,
         true,
       );
-      assert.deepEqual(
-        loadModel(await model.serialize(), "saved").graph(),
-        graph,
-      );
+      const saved = await model.serialize();
+      assert.deepEqual(loadModel(saved, "saved").graph(), graph);
+      assert.deepEqual(layoutTensors(saved), layout);
       const split = await model.serializeFiles(1024, "weights");
+      assert.deepEqual(layoutTensors(split.model), layout);
       writeFileSync(path.join(directory, "split.onnx"), split.model);
       for (const weight of split.weights)
         writeFileSync(path.join(directory, weight.name), weight.bytes);
@@ -338,6 +344,14 @@ for (const bits of [2, 3]) {
         path.join(directory, "split.onnx"),
         file,
       );
+      const reused = await reloaded.serializeFiles(
+        1024,
+        "reused",
+        path.join(directory, "split.onnx"),
+        true,
+      );
+      assert.deepEqual(layoutTensors(reused.model), layout);
+      assert.deepEqual(reused.weights, []);
       assert.deepEqual(
         loadModel(await reloaded.serialize(), "saved").graph(),
         graph,
@@ -372,6 +386,23 @@ test("shows affine and shape-less bit-packed encoded initializers", async () => 
     loadModel(await structured.serialize(), "packed").graph(),
     structured.graph(),
   );
+});
+
+test("keeps encoded parameter fields separate from common tensor metadata", () => {
+  for (const options of [{}, { structured: true, logical: false }]) {
+    const graph = loadModel(encodedModel(options), "encoded").graph();
+    const [parameter] = graph.nodes[0].parameters;
+    const tensor = graph.tensors.find((tensor) => tensor.name === "weight");
+    const { storage, encoding, ...metadata } = parameter;
+    assert.notStrictEqual(parameter, tensor);
+    assert.deepEqual(metadata, tensor);
+    assert.deepEqual(storage, { external: false, location: null });
+    assert.equal(typeof encoding, "string");
+    assert.equal(Object.hasOwn(tensor, "storage"), false);
+    assert.equal(Object.hasOwn(tensor, "encoding"), false);
+    parameter.type = "changed";
+    assert.notEqual(tensor.type, parameter.type);
+  }
 });
 
 test("lists and safely embeds external encoded payloads when saving", async (t) => {
@@ -412,6 +443,35 @@ test("lists and safely embeds external encoded payloads when saving", async (t) 
   await assert.rejects(model.serialize(), /length exceeds/);
 });
 
+test("retains inline encoded payloads across the tensor omission threshold", async (t) => {
+  const directory = mkdtempSync(path.join(tmpdir(), "encoded-inline-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  for (const size of [255, 256, 1024]) {
+    const rawData = Buffer.alloc(size, 0xe4);
+    const logicalType = bytesField(
+      1,
+      Buffer.concat([
+        varintField(1, 1),
+        bytesField(2, bytesField(1, varintField(1, size * 4))),
+      ]),
+    );
+    const bytes = encodedModel({ rawData, logicalType });
+    const file = path.join(directory, `inline-${size}.onnx`);
+    writeFileSync(file, bytes);
+    const model = await loadModelFile(file, "inline");
+    assert.deepEqual(model.graph(), loadModel(bytes, "inline").graph());
+    assert.deepEqual(model.graph().nodes[0].parameters[0].storage, {
+      external: false,
+      location: null,
+    });
+    assert.deepEqual(model.externalDataLocations(), []);
+    rmSync(file);
+    const saved = await model.serialize();
+    assert.ok(saved.includes(bytesField(4, rawData)));
+    assert.deepEqual(loadModel(saved, "inline").graph(), model.graph());
+  }
+});
+
 test("resolves model-scoped logical types of encoded initializers", () => {
   const declaration = Buffer.concat([
     bytesField(
@@ -434,14 +494,12 @@ test("resolves model-scoped logical types of encoded initializers", () => {
     ]),
     "encoded-record",
   );
-  assert.match(
-    model.graph().nodes[0].parameters[0].type,
-    /^STRUCT .*handle.*Record/,
-  );
-  assert.match(
-    model.graph().tensors.find((tensor) => tensor.name === "weight").type,
-    /^STRUCT .*handle.*Record/,
-  );
+  const graph = model.graph();
+  const [parameter] = graph.nodes[0].parameters;
+  const tensor = graph.tensors.find((tensor) => tensor.name === "weight");
+  assert.match(parameter.type, /^STRUCT .*handle.*Record/);
+  const { storage, encoding, ...metadata } = parameter;
+  assert.deepEqual(metadata, tensor);
 });
 
 test("fusion embeds external encoded payloads and requires a safe local source", async (t) => {
@@ -1695,6 +1753,10 @@ test("allows shape and metadata analysis after omitting raw or typed initializer
     const file = path.join(directory, `matmul-${name}.onnx`);
     writeFileSync(file, matmulWithWeight(dataField));
     const model = await loadModelFile(file, `matmul-${name}.onnx`);
+    const [parameter] = model.graph().nodes[0].parameters;
+    assert.deepEqual(parameter.storage, { external: false, location: null });
+    assert.equal(parameter.value, undefined);
+    assert.deepEqual(model.externalDataLocations(), []);
     assert.deepEqual(
       model.graph(true).tensors.find(({ name }) => name === "y").shape,
       ["N", "8"],

@@ -1,4 +1,4 @@
-import { huggingFaceTasks } from "./huggingface";
+import { huggingFaceTasks } from "./huggingFaceTasks";
 
 /**
  * Builds the static shell; model-derived text arrives later through messages.
