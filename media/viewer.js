@@ -2155,27 +2155,54 @@ svg.addEventListener(
 const sidebar = byId("graph-panels");
 const sidebarResizer = byId("sidebar-resizer");
 const graphBody = sidebar.parentElement;
+const sidebarStyle = getComputedStyle(graphBody);
+const sidebarMinimumWidth = parseFloat(
+  sidebarStyle.getPropertyValue("--sidebar-min-width"),
+);
+const graphMinimumWidth = parseFloat(
+  sidebarStyle.getPropertyValue("--graph-min-width"),
+);
+const sidebarResizerWidth = parseFloat(
+  sidebarStyle.getPropertyValue("--sidebar-resizer-width"),
+);
+const sidebarKeyboardStep = 20;
 let sidebarDrag;
+let sidebarFitPending = false;
 
 function maximumSidebarWidth() {
-  return Math.max(200, graphBody.getBoundingClientRect().width - 166);
+  return Math.max(
+    sidebarMinimumWidth,
+    graphBody.getBoundingClientRect().width -
+      graphMinimumWidth -
+      sidebarResizerWidth,
+  );
 }
 
 function updateSidebarSize() {
   const width = Math.round(sidebar.getBoundingClientRect().width);
-  sidebarResizer.setAttribute("aria-valuemin", "200");
+  if (!width) return;
+  sidebarResizer.setAttribute("aria-valuemin", String(sidebarMinimumWidth));
   sidebarResizer.setAttribute("aria-valuemax", String(maximumSidebarWidth()));
   sidebarResizer.setAttribute("aria-valuenow", String(width));
   sidebarResizer.setAttribute("aria-valuetext", `${width} pixels`);
-  fit();
+}
+
+function scheduleSidebarFit() {
+  if (sidebarFitPending) return;
+  sidebarFitPending = true;
+  window.requestAnimationFrame(() => {
+    sidebarFitPending = false;
+    fit();
+  });
 }
 
 function resizeSidebar(width) {
   graphBody.style.setProperty(
     "--sidebar-width",
-    `${Math.round(Math.max(200, Math.min(maximumSidebarWidth(), width)))}px`,
+    `${Math.round(Math.max(sidebarMinimumWidth, Math.min(maximumSidebarWidth(), width)))}px`,
   );
   updateSidebarSize();
+  scheduleSidebarFit();
 }
 
 function endSidebarDrag(event) {
@@ -2210,23 +2237,28 @@ for (const type of ["pointerup", "pointercancel", "lostpointercapture"]) {
 sidebarResizer.addEventListener("keydown", (event) => {
   const width = sidebar.getBoundingClientRect().width;
   const widths = {
-    ArrowLeft: width + 20,
-    ArrowRight: width - 20,
-    Home: 200,
+    ArrowLeft: width + sidebarKeyboardStep,
+    ArrowRight: width - sidebarKeyboardStep,
+    Home: sidebarMinimumWidth,
     End: graphBody.getBoundingClientRect().width,
   };
-  if (!Object.hasOwn(widths, event.key)) return;
+  if (!Object.prototype.hasOwnProperty.call(widths, event.key)) return;
   event.preventDefault();
   endGesture();
   resizeSidebar(widths[event.key]);
 });
 if (typeof ResizeObserver !== "undefined") {
-  new ResizeObserver(updateSidebarSize).observe(sidebar);
+  new ResizeObserver(() => {
+    updateSidebarSize();
+    scheduleSidebarFit();
+  }).observe(sidebar);
 }
+updateSidebarSize();
 window.addEventListener("resize", () => {
   if (sidebarDrag) endSidebarDrag(sidebarDrag);
   endGesture();
   updateSidebarSize();
+  fit();
 });
 window.addEventListener("message", (event) => {
   if (event.data?.type === "application-status") {

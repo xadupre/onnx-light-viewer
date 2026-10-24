@@ -10,7 +10,7 @@ const {
 } = require("../dist/graph");
 const { webviewHtml } = require("../dist/webview");
 
-function openViewer(t, initialTab = "model") {
+function openViewer(t, initialTab = "model", setup = () => {}) {
   const messages = [];
   const events = [];
   const dom = new JSDOM(
@@ -80,6 +80,13 @@ function openViewer(t, initialTab = "model") {
     viewport = { width, height };
     dom.window.dispatchEvent(new dom.window.Event("resize"));
   };
+  const stylesheet = dom.window.document.createElement("style");
+  stylesheet.textContent = readFileSync(
+    require.resolve("../media/viewer.css"),
+    "utf8",
+  );
+  dom.window.document.head.append(stylesheet);
+  setup(dom.window);
   for (const script of dom.window.document.querySelectorAll("script[src]")) {
     const name = new URL(script.src).pathname.slice(1);
     dom.window.eval(readFileSync(require.resolve(`../media/${name}`), "utf8"));
@@ -114,17 +121,28 @@ test("resizes the sidebar with pointer and keyboard controls without rearranging
   const sidebar = document.getElementById("graph-panels");
   const resizer = document.getElementById("sidebar-resizer");
   const body = sidebar.parentElement;
+  const style = window.getComputedStyle(body);
+  const minimumWidth = parseFloat(
+    style.getPropertyValue("--sidebar-min-width"),
+  );
+  const graphMinimum = parseFloat(style.getPropertyValue("--graph-min-width"));
+  const resizerWidth = parseFloat(
+    style.getPropertyValue("--sidebar-resizer-width"),
+  );
+  const frames = [];
+  window.requestAnimationFrame = (callback) => frames.push(callback);
+  const flushFrame = () => frames.splice(0).forEach((callback) => callback());
   let bodyWidth = 1200;
   const width = () =>
     Math.min(
-      bodyWidth - 166,
+      bodyWidth - graphMinimum - resizerWidth,
       parseFloat(body.style.getPropertyValue("--sidebar-width")) || 245,
     );
   body.getBoundingClientRect = () => new window.DOMRect(0, 0, bodyWidth, 600);
   sidebar.getBoundingClientRect = () =>
     new window.DOMRect(bodyWidth - width(), 0, width(), 600);
   document.getElementById("canvas").getBoundingClientRect = () =>
-    new window.DOMRect(0, 0, bodyWidth - width() - 6, 600);
+    new window.DOMRect(0, 0, bodyWidth - width() - resizerWidth, 600);
   let captured;
   resizer.setPointerCapture = (id) => (captured = id);
   resizer.hasPointerCapture = (id) => captured === id;
@@ -162,12 +180,16 @@ test("resizes the sidebar with pointer and keyboard controls without rearranging
   assert.equal(document.body.classList.contains("resizing-sidebar"), true);
   pointer("pointermove", 700, 2);
   assert.equal(width(), 245);
+  pointer("pointermove", 750);
   pointer("pointermove", 700);
   assert.equal(width(), 500);
-  assert.equal(resizer.getAttribute("aria-valuemin"), "200");
+  assert.equal(resizer.getAttribute("aria-valuemin"), String(minimumWidth));
   assert.equal(resizer.getAttribute("aria-valuemax"), "1034");
   assert.equal(resizer.getAttribute("aria-valuenow"), "500");
   assert.equal(resizer.getAttribute("aria-valuetext"), "500 pixels");
+  assert.equal(graph.getAttribute("viewBox"), viewBox);
+  assert.equal(frames.length, 1);
+  flushFrame();
   assert.notEqual(graph.getAttribute("viewBox"), viewBox);
   pointer("pointerup", 700);
   assert.equal(captured, undefined);
@@ -211,7 +233,46 @@ test("resizes the sidebar with pointer and keyboard controls without rearranging
   key("End");
   assert.equal(width(), 634);
   assert.equal(resizer.getAttribute("aria-valuemax"), "634");
+  flushFrame();
   assert.equal(document.getElementById("nodes").innerHTML, nodes);
+});
+
+test("initializes sidebar announcements from layout and batches observer redraws", (t) => {
+  let notifyResize;
+  let sidebarWidth = 360;
+  const frames = [];
+  const { document, window, load } = openViewer(t, "model", (window) => {
+    window.document.querySelector(".graph-body").getBoundingClientRect = () =>
+      new window.DOMRect(0, 0, 1200, 600);
+    window.document.getElementById("graph-panels").getBoundingClientRect = () =>
+      new window.DOMRect(0, 0, sidebarWidth, 600);
+    window.requestAnimationFrame = (callback) => frames.push(callback);
+    window.ResizeObserver = class {
+      constructor(callback) {
+        notifyResize = callback;
+      }
+      observe(element) {
+        assert.equal(element.id, "graph-panels");
+      }
+    };
+  });
+  const resizer = document.getElementById("sidebar-resizer");
+  assert.equal(resizer.getAttribute("aria-valuenow"), "360");
+  assert.equal(resizer.getAttribute("aria-valuetext"), "360 pixels");
+  load(demoGraph);
+  const graph = document.getElementById("graph");
+  const observer = new window.MutationObserver(() => {});
+  observer.observe(graph, { attributes: true, attributeFilter: ["viewBox"] });
+  t.after(() => observer.disconnect());
+  for (sidebarWidth of [400, 450, 500]) notifyResize();
+  assert.equal(resizer.getAttribute("aria-valuenow"), "500");
+  assert.equal(frames.length, 1);
+  assert.equal(observer.takeRecords().length, 0);
+  frames.shift()();
+  assert.equal(observer.takeRecords().length, 1);
+  notifyResize();
+  assert.equal(frames.length, 1);
+  frames.shift()();
 });
 
 test("saves without replacing the graph and reports success, cancellation and errors", (t) => {

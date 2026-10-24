@@ -319,13 +319,16 @@ a:focus-visible {
   flex-wrap: wrap;
 }
 .graph-body {
+  --sidebar-min-width: 200px;
+  --graph-min-width: 160px;
+  --sidebar-resizer-width: 6px;
   display: grid;
   grid-template-columns:
-    minmax(0, 1fr) 6px
+    minmax(0, 1fr) var(--sidebar-resizer-width)
     clamp(
-      200px,
+      var(--sidebar-min-width),
       var(--sidebar-width, var(--sidebar-default-width, 245px)),
-      calc(100% - 166px)
+      calc(100% - var(--graph-min-width) - var(--sidebar-resizer-width))
     );
   min-height: 0;
 }
