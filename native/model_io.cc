@@ -626,10 +626,58 @@ void RestoreModelPayloads(ol::ModelProto &snapshot, const StoredModel &source,
   if (source.pipeline_stage.empty()) {
     ReadModel(original, stream, ol::ParseOptions{});
   } else {
-    ol::PipelineProto pipeline;
-    if (!pipeline.ParseFromStream(stream))
-      throw std::runtime_error("Could not reopen the source pipeline.");
-    original = PipelineStage(pipeline, source.pipeline_stage).SharedCopy();
+    const uint64_t stage = source.pipeline_stage == "embedding" ? 7
+                           : source.pipeline_stage == "prefill" ? 8
+                           : source.pipeline_stage == "decode"  ? 9
+                                                                : 0;
+    if (!stage)
+      throw std::runtime_error("Unknown source pipeline stage: " + source.pipeline_stage);
+    bool found = false;
+    std::vector<uint64_t> groups;
+    const auto skip = [&](uint64_t size) {
+      stream.CanRead(size, "Truncated source pipeline field.");
+      stream.skip_bytes(static_cast<ol::utils::offset_t>(size));
+    };
+    while (stream.NotEnd()) {
+      const auto field = stream.next_field();
+      if (groups.empty() && field.field_number == stage && field.wire_type == 2) {
+        const auto size = stream.next_uint64();
+        stream.CanRead(size, "Truncated source pipeline stage.");
+        stream.LimitToNext(size);
+        ReadModel(original, stream, ol::ParseOptions{});
+        stream.Restore();
+        found = true;
+        break;
+      }
+      switch (field.wire_type) {
+      case 0:
+        stream.next_uint64();
+        break;
+      case 1:
+        skip(8);
+        break;
+      case 2:
+        skip(stream.next_uint64());
+        break;
+      case 3:
+        if (groups.size() >= static_cast<size_t>(ol::ParseOptions{}.max_recursion_depth))
+          throw std::runtime_error("Protobuf group nesting exceeds the pipeline parser limit.");
+        groups.push_back(field.field_number);
+        break;
+      case 4:
+        if (groups.empty() || groups.back() != field.field_number)
+          throw std::runtime_error("Invalid protobuf group in source pipeline.");
+        groups.pop_back();
+        break;
+      case 5:
+        skip(4);
+        break;
+      default:
+        throw std::runtime_error("Invalid protobuf wire type in source pipeline.");
+      }
+    }
+    if (!found)
+      throw std::runtime_error("Could not reopen the source pipeline stage.");
   }
   check_source();
   for (const auto &payload : source.skipped) {

@@ -3,6 +3,7 @@ import type {
   Graph,
   GraphMetadata,
   GraphPath,
+  GraphSummary,
   NativeModel,
   PipelineRole,
 } from "./graph";
@@ -70,6 +71,19 @@ export class PipelineModel implements NativeModel {
     );
   };
 
+  summary = (inferShapes = false): GraphSummary => {
+    const { name, inputs, outputs, initializerCount, tensors, nodes } =
+      this.graph(inferShapes);
+    return {
+      name,
+      inputs,
+      outputs,
+      initializerCount,
+      tensors,
+      nodeCount: nodes.length,
+    };
+  };
+
   graph = (inferShapes = false, path: GraphPath = []): Graph => {
     const name = this.data.name || this.fileName;
     const pipelineStages = this.stages().map(([role]) => ({
@@ -107,7 +121,7 @@ export class PipelineModel implements NativeModel {
     }
     const stages = this.stages().map(([role, model]) => ({
       role,
-      graph: model.graph(inferShapes),
+      graph: model.summary(inferShapes),
     }));
     const port = (role: string, direction: string, value: string) =>
       `${role}:${direction}:${value}`;
@@ -138,7 +152,7 @@ export class PipelineModel implements NativeModel {
               {
                 name: role,
                 path: [{ pipeline: role }],
-                nodeCount: graph.nodes.length,
+                nodeCount: graph.nodeCount,
               },
             ],
           },

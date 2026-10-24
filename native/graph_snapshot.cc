@@ -199,6 +199,75 @@ Napi::Value GetSchema(const Napi::CallbackInfo &info) {
   }
 }
 
+Napi::Object ModelSummary(Napi::Env env, const ol::ModelProto &model,
+                          const std::string &file_name) {
+  const auto &graph = model.graph();
+  StructDeclarations declarations;
+  for (const auto &declaration : model.struct_types())
+    declarations.emplace(declaration.type_id(), &declaration);
+  std::unordered_set<std::string> initializers;
+  std::map<std::string, Napi::Object> ports;
+  for (const auto *values : {&graph.input(), &graph.output()})
+    for (const auto &value : *values)
+      if (!value.name().empty())
+        ports.insert_or_assign(std::string(value.name()),
+                               TensorInformation(env, value.name(),
+                                                 value.has_type() ? &value.type() : nullptr,
+                                                 &declarations));
+  for (const auto &value : graph.value_info())
+    if (ports.contains(std::string(value.name())))
+      ports.insert_or_assign(std::string(value.name()),
+                             TensorInformation(env, value.name(),
+                                               value.has_type() ? &value.type() : nullptr,
+                                               &declarations));
+  for (const auto &tensor : graph.initializer()) {
+    if (tensor.name().empty())
+      continue;
+    initializers.emplace(tensor.name());
+    if (ports.contains(std::string(tensor.name())))
+      ports.insert_or_assign(
+          std::string(tensor.name()),
+          InitializerInformation(env, tensor.name(), tensor.data_type(), tensor.dims()));
+  }
+  for (const auto &tensor : graph.sparse_initializer()) {
+    if (!tensor.has_values() || tensor.values().name().empty())
+      continue;
+    const std::string name(tensor.values().name());
+    initializers.emplace(name);
+    if (ports.contains(name))
+      ports.insert_or_assign(name, InitializerInformation(env, name, tensor.values().data_type(),
+                                                          tensor.dims(), true));
+  }
+  for (const auto &tensor : graph.extended_initializer()) {
+    if (!tensor.has_encoded_value() || tensor.encoded_value().name().empty())
+      continue;
+    const auto &value = tensor.encoded_value();
+    const std::string name(value.name());
+    initializers.emplace(name);
+    if (ports.contains(name)) {
+      auto information = TensorInformation(
+          env, name, value.has_logical_type() ? &value.logical_type() : nullptr, &declarations);
+      if (information.Get("type").IsNull())
+        information.Set("type", "ENCODED");
+      ports.insert_or_assign(name, information);
+    }
+  }
+  auto tensors = Napi::Array::New(env);
+  for (const auto &[name, tensor] : ports)
+    if (!initializers.contains(name) ||
+        std::any_of(graph.output().begin(), graph.output().end(),
+                    [&](const auto &output) { return output.name() == name; }))
+      tensors.Set(tensors.Length(), tensor);
+  auto result = Napi::Object::New(env);
+  result.Set("name", graph.name().empty() ? Text(env, file_name) : Text(env, graph.name()));
+  result.Set("nodeCount", graph.node_size());
+  result.Set("initializerCount", Napi::Number::New(env, initializers.size()));
+  result.Set("inputs", ValueNames(env, graph.input(), initializers));
+  result.Set("outputs", ValueNames(env, graph.output()));
+  result.Set("tensors", tensors);
+  return result;
+}
+
 /**
  * Projects only the selected graph, inheriting outer tensor/initializer metadata
  * unless shadowed locally. Child graphs become links, not recursive snapshots.

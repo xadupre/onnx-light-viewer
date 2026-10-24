@@ -138,6 +138,12 @@ export interface Graph {
   tensors: TensorInformation[];
 }
 
+/** Root ports and counts without projecting operators, attributes or schemas. */
+export type GraphSummary = Pick<
+  Graph,
+  "name" | "inputs" | "outputs" | "initializerCount" | "tensors"
+> & { nodeCount: number };
+
 export interface FusionMatch {
   anchor: number;
   nodes: number[];
@@ -157,6 +163,7 @@ export interface FusionMatch {
  */
 export interface NativeModel {
   clone(): NativeModel;
+  summary(inferShapes?: boolean): GraphSummary;
   /** Pipeline fusions require the path of a stage root; ordinary models use []. */
   fusionPatterns(path?: GraphPath): string[];
   previewFusion(

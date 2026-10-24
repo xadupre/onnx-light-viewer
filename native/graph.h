@@ -37,6 +37,7 @@ Napi::Value Schema(Napi::Env env, const std::string &op_type, const std::string 
                    int64_t opset);
 Napi::Object ModelGraph(Napi::Env env, const ol::ModelProto &model, const std::string &file_name,
                         const GraphPath &path = {});
+Napi::Object ModelSummary(Napi::Env env, const ol::ModelProto &model, const std::string &file_name);
 Napi::Object ModelMetadata(Napi::Env env, const ol::ModelProto &model, const GraphPath &path);
 void InferShapes(ol::ModelProto &model);
 

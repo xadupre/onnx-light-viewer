@@ -179,6 +179,38 @@ test("opens PipelineProto stages, rebases nested links and preserves settings on
   assert.deepEqual(decodeGraph(bytes, "test.pipe-onnx"), overview);
 });
 
+test("projects stage summaries without inspecting stage operators", () => {
+  for (const bytes of [
+    modelBytes("relu.onnx"),
+    modelBytes("parameters.onnx"),
+    encodedModel(),
+    encodedModel({ structured: true, logical: false }),
+  ]) {
+    const model = loadModel(bytes, "stage.onnx");
+    const graph = model.graph();
+    const ports = new Set([...graph.inputs, ...graph.outputs]);
+    assert.deepEqual(model.summary(), {
+      name: graph.name,
+      inputs: graph.inputs,
+      outputs: graph.outputs,
+      initializerCount: graph.initializerCount,
+      nodeCount: graph.nodes.length,
+      tensors: graph.tensors.filter(({ name }) => ports.has(name)),
+    });
+  }
+  const model = loadModel(
+    pipelineBytes({ prefill: modelBytes("missing-operator.onnx") }),
+    "deferred.pipe-onnx",
+  );
+  const overview = model.graph();
+  assert.equal(overview.nodes[0].attributes[0].graphs[0].nodeCount, 1);
+  assert.throws(
+    () => model.graph(false, [{ pipeline: "prefill" }]),
+    /no ONNX operator type/,
+  );
+  assert.deepEqual(model.graph(), overview);
+});
+
 test("transforms only the chosen PipelineProto stage and saves the whole cloned container", async () => {
   const bytes = pipelineBytes({
     prefill: modelBytes("fusion.onnx"),
@@ -323,6 +355,67 @@ test("rejects incomplete, duplicate-stage and training-info pipeline exports exp
       /training_info.*not supported/,
     );
   }
+});
+
+test("recovers stage payloads without allocating unrelated pipeline weights", async (t) => {
+  const directory = mkdtempSync(
+    path.join(tmpdir(), "pipeline-stage-recovery-"),
+  );
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const file = path.join(directory, "large.pipe-onnx");
+  const size = 256 * 1024 * 1024;
+  const tensorHeader = Buffer.concat([
+    varintField(1, size),
+    varintField(2, 2),
+    bytesField(8, "unrelated"),
+    varint(9 * 8 + 2),
+    varint(size),
+  ]);
+  const graphHeader = Buffer.concat([
+    bytesField(2, "large"),
+    varint(5 * 8 + 2),
+    varint(tensorHeader.length + size),
+    tensorHeader,
+  ]);
+  const modelHeader = Buffer.concat([
+    varintField(1, 8),
+    varint(7 * 8 + 2),
+    varint(graphHeader.length + size),
+    graphHeader,
+  ]);
+  const selected = matmulWithWeight(9, Buffer.alloc(256, 63));
+  const fd = openSync(file, "w");
+  try {
+    let offset = 0;
+    for (const [field, header, hole] of [
+      [7, modelHeader, size],
+      [8, selected, 0],
+      [9, modelHeader, size],
+    ]) {
+      const bytes = Buffer.concat([
+        varint(field * 8 + 2),
+        varint(header.length + hole),
+        header,
+      ]);
+      writeSync(fd, bytes, 0, bytes.length, offset);
+      offset += bytes.length + hole;
+      ftruncateSync(fd, offset);
+    }
+  } finally {
+    closeSync(fd);
+  }
+  const model = await loadModelFile(file, "large.pipe-onnx");
+  const rss = process.memoryUsage().rss;
+  const preview = await model.previewFusion("TransposeTranspose", undefined, [
+    { pipeline: "prefill" },
+  ]);
+  assert.equal(preview.matches.length, 0);
+  assert.ok(process.memoryUsage().rss - rss < 64 * 1024 * 1024);
+  assert.equal(
+    preview.model.graph(false, [{ pipeline: "prefill" }]).nodes[0].parameters[0]
+      .storage.external,
+    false,
+  );
 });
 
 function encodedModel({
