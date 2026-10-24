@@ -3195,7 +3195,7 @@ test("renders the demo, inspects its operator and requests a real file", (t) => 
   load(demoGraph);
   assert.doesNotMatch(
     document.body.textContent,
-    /A LITTLE CLARITY|Your model, connected|Explore the graph|A first ONNX graph|ONNX MODEL|All connected initializers are listed|Attribute arrays show up to 8 elements/,
+    /A LITTLE CLARITY|Your model, connected|Explore the graph|ONNX MODEL|All connected initializers are listed|Attribute arrays show up to 8 elements/,
   );
   assert.equal(document.querySelectorAll(".graph-node").length, 1);
   assert.equal(document.querySelectorAll(".port").length, 2);
