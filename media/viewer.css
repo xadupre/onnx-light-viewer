@@ -119,6 +119,10 @@ p {
   font-weight: 600;
   overflow-wrap: anywhere;
 }
+.repository-specialization {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
 .repository-list svg,
 .repository-list img {
   flex-shrink: 0;

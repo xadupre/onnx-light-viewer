@@ -1084,10 +1084,11 @@ test("switches all tabs without logging clicks or changing graph, selection or c
 });
 
 for (const initialTab of ["model", "logs"]) {
-  test(`opens Repositories without a model from ${initialTab} with local icons and project summaries`, (t) => {
+  test(`opens ONNX without a model from ${initialTab} with exporter cards and package specializations`, (t) => {
     const { document, window, messages } = openViewer(t, initialTab);
     const tab = document.getElementById("repositories-tab");
     const panel = document.getElementById("repositories-view");
+    assert.equal(tab.textContent, "ONNX");
     assert.equal(panel.hidden, true);
     assert.equal(tab.getAttribute("aria-selected"), "false");
     assert.equal(tab.tabIndex, -1);
@@ -1109,39 +1110,122 @@ for (const initialTab of ["model", "logs"]) {
       assert.equal(document.getElementById(`${name}-tab`).tabIndex, -1);
     }
     const repositories = [
-      ["ONNX", "onnx/onnx", "repositories/onnx.png"],
-      ["ONNX Runtime", "microsoft/onnxruntime", "repositories/onnxruntime.png"],
+      ["ONNX", "onnx/onnx", "repositories/onnx.png", ["onnx"]],
+      [
+        "ONNX Runtime",
+        "microsoft/onnxruntime",
+        "repositories/onnxruntime.png",
+        ["onnxruntime"],
+      ],
       [
         "ONNX Runtime Extensions",
         "microsoft/onnxruntime-extensions",
         "repositories/onnxruntime.png",
+        ["onnxruntime", "onnxruntime-extensions"],
       ],
       [
         "ONNX Runtime GenAI",
         "microsoft/onnxruntime-genai",
         "repositories/onnxruntime.png",
+        ["onnxruntime-genai"],
       ],
-      ["onnx-light", "xadupre/onnx-light", "repositories/onnx-light.svg"],
+      [
+        "onnx-light",
+        "xadupre/onnx-light",
+        "repositories/onnx-light.svg",
+        ["onnx-light"],
+      ],
       [
         "onnx-light-cpu",
         "xadupre/onnx-light-cpu",
         "repositories/onnx-light-cpu.svg",
+        ["onnx-light"],
       ],
       [
         "onnx-light-ort",
         "xadupre/onnx-light-ort",
         "repositories/onnx-light-ort.svg",
+        ["onnx-light", "onnxruntime"],
       ],
-      ["onnx-light-viewer", "xadupre/onnx-light-viewer", "logo.svg"],
+      [
+        "onnx-light-viewer",
+        "xadupre/onnx-light-viewer",
+        "logo.svg",
+        ["VS Code", "onnx-light"],
+      ],
+      [
+        "Mobius",
+        "onnxruntime/mobius",
+        "repositories/onnxruntime.png",
+        ["Transformers", "Diffusers", "ONNX Runtime GenAI"],
+      ],
+      [
+        "modelbuilder",
+        "microsoft/onnxruntime-genai/tree/main/src/python/py/models",
+        "repositories/onnxruntime.png",
+        ["Transformers", "onnxruntime-genai"],
+      ],
+      [
+        "mbext",
+        "xadupre/mbext",
+        "repositories/mbext.svg",
+        ["Transformers", "onnxruntime-genai", "modelbuilder"],
+      ],
+      [
+        "yet-another-onnx-builder",
+        "xadupre/yet-another-onnx-builder",
+        "repositories/yet-another-onnx-builder.svg",
+        ["PyTorch", "TensorFlow", "scikit-learn", "yobx", "onnx-light"],
+      ],
+      [
+        "sklearn-onnx",
+        "onnx/sklearn-onnx",
+        "repositories/sklearn-onnx.png",
+        ["scikit-learn"],
+      ],
+      [
+        "tensorflow-onnx",
+        "onnx/tensorflow-onnx",
+        "repositories/onnx.png",
+        ["TensorFlow", "Keras", "TFLite", "TensorFlow.js"],
+      ],
+      [
+        "onnxmltools",
+        "onnx/onnxmltools",
+        "repositories/onnxmltools.png",
+        ["XGBoost", "LightGBM", "CatBoost", "Core ML"],
+      ],
     ];
+    assert.deepEqual(
+      [...panel.querySelectorAll("h3")].map((heading) => heading.textContent),
+      ["Official projects", "onnx-light ecosystem", "Exporters"],
+    );
+    assert.deepEqual(
+      [
+        ...panel.querySelectorAll(".repository-list")[2].querySelectorAll("a"),
+      ].map((link) => link.textContent),
+      repositories.slice(8).map(([name]) => name),
+    );
     const cards = [...panel.querySelectorAll(".repository-list li")];
     assert.equal(cards.length, repositories.length);
     cards.forEach((card, index) => {
-      const [name, repository, logo] = repositories[index];
+      const [name, repository, logo, packages] = repositories[index];
       const link = card.querySelector("a");
       assert.equal(link.textContent, name);
       assert.equal(link.href, `https://github.com/${repository}`);
       assert.ok(card.querySelector("p").textContent.trim().length > 20);
+      const specialization = card.querySelector(".repository-specialization");
+      assert.ok(specialization);
+      assert.equal(
+        specialization.querySelector("strong").textContent,
+        "Specialized for:",
+      );
+      for (const packageName of packages) {
+        assert.ok(
+          specialization.textContent.includes(packageName),
+          `${name} specialization should identify ${packageName}`,
+        );
+      }
       const icon = link.querySelector("svg, img");
       assert.ok(icon);
       assert.equal(icon.getAttribute("width"), "28");

@@ -3,6 +3,24 @@ Repository logos
 
 These upstream images identify the linked projects. All trademarks
 belong to their respective owners; their use does not imply endorsement.
+Exporter cards reuse ONNX or ONNX Runtime ecosystem branding where a
+dedicated project logo is not bundled.
+
+mbext.svg
+  Source: https://github.com/xadupre/mbext/blob/main/docs/_static/logo.svg
+  License: MIT, reproduced below.
+
+yet-another-onnx-builder.svg
+  Source: https://github.com/xadupre/yet-another-onnx-builder/blob/main/docs/_static/logo.svg
+  License: MIT, reproduced below.
+
+sklearn-onnx.png
+  Source: https://github.com/onnx/sklearn-onnx/blob/main/docs/logo_main.png
+  License: Apache-2.0 (see the root LICENSE).
+
+onnxmltools.png
+  Source: https://github.com/onnx/onnxmltools/blob/main/docs/ONNXMLTools_logo_main.png
+  License: Apache-2.0 (see the root LICENSE).
 
 onnx.png
   Source: https://github.com/onnx/onnx/blob/main/docs/onnx-horizontal-color.png
@@ -24,12 +42,13 @@ onnx-light-ort.svg
 
 onnxruntime.png
   Source: https://github.com/microsoft/onnxruntime-extensions/blob/main/docs/python/ONNX_Runtime_icon.png
-  Shared ONNX Runtime branding for Runtime, Extensions and GenAI.
+  Shared ONNX Runtime branding for Runtime, Extensions, GenAI and related builders.
   License: MIT, reproduced below.
 
 MIT License
 
 Copyright (c) Microsoft Corporation
+Copyright (c) 2026 Xavier Dupré
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
