@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1040 660" role="img" aria-labelledby="title description">
+  <title id="title">Native model and backing-storage ownership</title>
+  <desc id="description">Method closures and asynchronous workers retain a shared StoredModel. StoredModel owns its ModelProto and relevant byte-array, backend-case or previous-model backing owner. Workers also own a SharedCopy working snapshot. The parsed model is destroyed before its backing owners.</desc>
+  <style>
+    .background { fill: #f8fafc; }
+    .card { fill: #dcfce7; stroke: #15803d; stroke-width: 2; }
+    .owner { fill: #dbeafe; stroke: #2563eb; }
+    .text { fill: #0f172a; font-family: sans-serif; font-size: 18px; }
+    .heading { font-size: 23px; font-weight: bold; }
+    .code { font-family: monospace; font-size: 18px; font-weight: bold; }
+    .note { font-size: 17px; }
+    .arrow { fill: none; stroke: #475569; stroke-width: 2; }
+    .arrow-head { fill: #475569; }
+    @media (prefers-color-scheme: dark) {
+      .background { fill: #0f172a; }
+      .card { fill: #052e16; stroke: #4ade80; }
+      .owner { fill: #172554; stroke: #60a5fa; }
+      .text { fill: #e2e8f0; }
+      .arrow { stroke: #94a3b8; }
+      .arrow-head { fill: #94a3b8; }
+    }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 Z" class="arrow-head"/>
+    </marker>
+  </defs>
+  <rect width="1040" height="660" rx="16" class="background"/>
+  <g class="text">
+    <text x="40" y="42" class="heading">Retained owners outlive every model that borrows their data</text>
+    <text x="40" y="80" class="note">addon.cc registers exports; model.cc assembles methods from focused native modules.</text>
+
+    <rect x="40" y="145" width="420" height="210" rx="12" class="card"/>
+    <text x="65" y="185" class="code">StoredModel (model.h)</text>
+    <text x="65" y="225">Parsed ModelProto</text>
+    <text x="65" y="260">Source identity, omitted payload paths</text>
+    <text x="65" y="295">Retained external-weight references</text>
+    <text x="65" y="330" class="note">Shared by handles and workers</text>
+
+    <rect x="590" y="145" width="410" height="210" rx="12" class="card owner"/>
+    <text x="615" y="185" class="code">Backing owners (as needed)</text>
+    <text x="615" y="225">Virtual source: Uint8Array reference</text>
+    <text x="615" y="260">Backend source: native TestCase</text>
+    <text x="615" y="295">Clone/fusion: previous StoredModel</text>
+    <text x="615" y="330" class="note">Keep borrowed data alive</text>
+
+    <path d="M 460 245 H 590" class="arrow" marker-end="url(#arrow)"/>
+    <text x="525" y="228" text-anchor="middle" class="note">retains</text>
+    <text x="40" y="395" class="note">Destruction order: parsed model first, then backing owners and source buffer.</text>
+
+    <rect x="40" y="485" width="420" height="125" rx="12" class="card owner"/>
+    <text x="65" y="525" class="code">Method closures / async workers</text>
+    <text x="65" y="560">Each retains the shared source</text>
+    <text x="65" y="590" class="note">Detached methods remain valid</text>
+
+    <rect x="590" y="485" width="410" height="125" rx="12" class="card"/>
+    <text x="615" y="525" class="code">Worker snapshot (SharedCopy)</text>
+    <text x="615" y="560">Save or fusion working model</text>
+    <text x="615" y="590" class="note">Omitted payloads restored before use</text>
+
+    <path d="M 250 485 V 415 H 20 V 250 H 40" class="arrow" marker-end="url(#arrow)"/>
+    <text x="275" y="450" class="note">retains source</text>
+    <path d="M 460 550 H 590" class="arrow" marker-end="url(#arrow)"/>
+    <text x="525" y="520" text-anchor="middle" class="note">workers</text>
+    <text x="525" y="541" text-anchor="middle" class="note">also own</text>
+    <text x="40" y="643" class="note">Graph projection and analysis stay synchronous; only the relevant operations use workers.</text>
+  </g>
+</svg>

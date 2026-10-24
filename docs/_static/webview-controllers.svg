@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1040 680" role="img" aria-labelledby="title description">
+  <title id="title">Webview controllers and graph coordination</title>
+  <desc id="description">The static shell loads the Markdown renderer, panel factories and viewer in order. The viewer owns graph lifecycle, message routing, camera, selection and rendering. Five private controllers receive data and use explicit callbacks: sidebar, file panels, inspector, metadata and fusion.</desc>
+  <style>
+    .background { fill: #f8fafc; }
+    .card { fill: #dbeafe; stroke: #2563eb; stroke-width: 2; }
+    .panel { fill: #f1f5f9; stroke: #64748b; stroke-width: 2; }
+    .text { fill: #0f172a; font-family: sans-serif; font-size: 18px; }
+    .heading { font-size: 23px; font-weight: bold; }
+    .code { font-family: monospace; font-size: 18px; font-weight: bold; }
+    .note { font-size: 17px; }
+    .arrow { fill: none; stroke: #475569; stroke-width: 2; }
+    .arrow-head { fill: #475569; }
+    @media (prefers-color-scheme: dark) {
+      .background { fill: #0f172a; }
+      .card { fill: #172554; stroke: #60a5fa; }
+      .panel { fill: #1e293b; stroke: #94a3b8; }
+      .text { fill: #e2e8f0; }
+      .arrow { stroke: #94a3b8; }
+      .arrow-head { fill: #94a3b8; }
+    }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 Z" class="arrow-head"/>
+    </marker>
+  </defs>
+  <rect width="1040" height="680" rx="16" class="background"/>
+  <g class="text">
+    <text x="40" y="40" class="heading">One graph coordinator, five private controllers</text>
+    <rect x="40" y="60" width="960" height="58" rx="12" class="panel"/>
+    <text x="60" y="95" class="note">src/webview.ts loads: Markdown renderer, panel factories, then viewer.js</text>
+
+    <rect x="40" y="240" width="410" height="230" rx="12" class="card"/>
+    <text x="65" y="280" class="code">viewer.js</text>
+    <text x="65" y="320">Graph lifecycle + message routing</text>
+    <text x="65" y="355">Camera, selection, SVG, search</text>
+    <text x="65" y="390">Metadata highlighting</text>
+    <text x="65" y="435" class="note">Creates controllers with callbacks</text>
+
+    <rect x="620" y="140" width="380" height="82" rx="12" class="panel"/>
+    <text x="640" y="172" class="code">sidebar.js</text>
+    <text x="640" y="200" class="note">Visibility, resizing, scroll</text>
+    <rect x="620" y="240" width="380" height="82" rx="12" class="panel"/>
+    <text x="640" y="272" class="code">file-panels.js</text>
+    <text x="640" y="300" class="note">Open/Save, listing request IDs</text>
+    <rect x="620" y="340" width="380" height="82" rx="12" class="panel"/>
+    <text x="640" y="372" class="code">inspector.js</text>
+    <text x="640" y="400" class="note">Node/tensor details, operator docs</text>
+    <rect x="620" y="440" width="380" height="82" rx="12" class="panel"/>
+    <text x="640" y="472" class="code">metadata-panel.js</text>
+    <text x="640" y="500" class="note">Presentation, not graph highlighting</text>
+    <rect x="620" y="540" width="380" height="82" rx="12" class="panel"/>
+    <text x="640" y="572" class="code">fusion-panel.js</text>
+    <text x="640" y="600" class="note">Patterns, candidates, preview IDs</text>
+
+    <path d="M 535 181 V 581" class="arrow"/>
+    <g class="arrow" marker-start="url(#arrow)" marker-end="url(#arrow)">
+      <path d="M 450 355 H 535"/>
+      <path d="M 535 181 H 620"/>
+      <path d="M 535 281 H 620"/>
+      <path d="M 535 381 H 620"/>
+      <path d="M 535 481 H 620"/>
+      <path d="M 535 581 H 620"/>
+    </g>
+    <text x="40" y="210" class="note">Connections carry data and explicit callbacks.</text>
+    <text x="40" y="655" class="note">Controllers keep panel state private; they do not own the native model or graph camera.</text>
+  </g>
+</svg>
