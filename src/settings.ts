@@ -45,7 +45,7 @@ export const pythonPackages = [
   "transformers",
   "diffusers",
   "modelbuilder",
-  "yobx",
+  "yet-another-onnx-builder",
   "skl2onnx",
   "tf2onnx",
   "onnxmltools",
@@ -80,7 +80,11 @@ import json
 import re
 import sys
 normalize = lambda name: re.sub(r"[-_.]+", "-", name).lower()
-installed = {normalize(d.metadata["Name"]): d.version for d in metadata.distributions() if d.metadata["Name"]}
+installed = {}
+for distribution in metadata.distributions():
+    name = distribution.metadata["Name"]
+    if name:
+        installed.setdefault(normalize(name), distribution.version)
 print(json.dumps({
     "executable": sys.executable,
     "version": sys.version.split()[0],

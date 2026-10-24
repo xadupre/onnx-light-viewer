@@ -4,8 +4,10 @@ function createSettingsPanel({ byId, postMessage, onViewerSettings }) {
   let nextRequestId = 0;
   let trusted = false;
   let pythonPath;
+  let sidebarWidth;
 
   function restoreViewer(settings) {
+    sidebarWidth = settings.width;
     byId("settings-width").value = settings.width ?? "";
     for (const name of panelNames)
       byId(`settings-${name}`).checked = settings.panels[name];
@@ -24,10 +26,13 @@ function createSettingsPanel({ byId, postMessage, onViewerSettings }) {
   });
   for (const id of ["width", ...panelNames])
     byId(`settings-${id}`).addEventListener("change", () => {
-      if (!byId("settings-width").checkValidity()) return;
-      const width = byId("settings-width").value;
+      if (id === "width") {
+        if (!byId("settings-width").checkValidity()) return;
+        const width = byId("settings-width").value;
+        sidebarWidth = width === "" ? undefined : Number(width);
+      }
       onViewerSettings({
-        ...(width === "" ? {} : { width: Number(width) }),
+        ...(sidebarWidth === undefined ? {} : { width: sidebarWidth }),
         panels: Object.fromEntries(
           panelNames.map((name) => [name, byId(`settings-${name}`).checked]),
         ),

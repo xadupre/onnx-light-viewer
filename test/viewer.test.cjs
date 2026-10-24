@@ -1883,6 +1883,45 @@ test("Settings edits saved paths and existing sidebar preferences and renders pa
   assert.equal(byId("settings-inspect-python").disabled, true);
 });
 
+test("Settings applies panel toggles while retaining the last valid sidebar width", (t) => {
+  const { document, window, messages } = openViewer(t);
+  const byId = (id) => document.getElementById(id);
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: {
+        type: "viewer-settings",
+        settings: {
+          width: 420,
+          panels: { operator: true, find: true, metadata: false },
+        },
+      },
+    }),
+  );
+  for (const invalid of ["199", "420.5"]) {
+    byId("settings-width").value = invalid;
+    const before = messages.length;
+    byId("settings-width").dispatchEvent(new window.Event("change"));
+    assert.equal(messages.length, before);
+    const wasHidden = byId("operator-panel").hidden;
+    byId("settings-operator").click();
+    assert.equal(byId("operator-panel").hidden, !wasHidden);
+    assert.equal(messages.at(-1).settings.width, 420);
+    assert.equal(messages.at(-1).settings.panels.operator, wasHidden);
+  }
+  byId("settings-width").value = "";
+  byId("settings-width").dispatchEvent(new window.Event("change"));
+  byId("settings-width").value = "199";
+  byId("settings-find").click();
+  assert.equal(byId("find-panel").hidden, true);
+  assert.equal("width" in messages.at(-1).settings, false);
+  assert.equal(
+    document
+      .querySelector(".graph-body")
+      .style.getPropertyValue("--sidebar-width"),
+    "",
+  );
+});
+
 test("Settings keeps inspections pending after save errors and rejects unrelated responses", (t) => {
   const { document, window, messages } = openViewer(t);
   const send = (data) =>
