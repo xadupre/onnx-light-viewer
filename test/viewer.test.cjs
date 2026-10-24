@@ -2895,6 +2895,65 @@ test("styles Data like the other panel toggles independently of metadata refresh
   assert.deepEqual(highlight(), active);
 });
 
+function assertMetadataTable(table, entries) {
+  assert.equal(table.tagName, "TABLE");
+  assert.ok(table.getAttribute("aria-label"));
+  assert.deepEqual(
+    Array.from(table.querySelectorAll("thead th"), (cell) => [
+      cell.scope,
+      cell.textContent,
+    ]),
+    [
+      ["col", "Key"],
+      ["col", "Value"],
+    ],
+  );
+  assert.deepEqual(
+    Array.from(table.tBodies[0].rows, (row) => {
+      assert.equal(row.cells[0].tagName, "TH");
+      assert.equal(row.cells[0].scope, "row");
+      assert.equal(row.cells[1].tagName, "TD");
+      return { key: row.cells[0].textContent, value: row.cells[1].textContent };
+    }),
+    entries,
+  );
+}
+
+test("metadata tables preserve duplicate keys, empty and multiline values, and literal markup on refresh", (t) => {
+  const { document, window, load } = openViewer(t);
+  const model = loadModel(
+    readFileSync(require.resolve("./models/analysis.onnx")),
+    "analysis.onnx",
+  );
+  load(model.graph());
+  document.getElementById("show-metadata").click();
+  const metadata = model.metadata();
+  metadata.model = [
+    { key: "<img src=x onerror=alert(1)>", value: "<script>alert(1)</script>" },
+    { key: "duplicate", value: "" },
+    { key: "duplicate", value: "first line\nsecond line" },
+    { key: "", value: "x".repeat(500) },
+  ];
+  const send = () =>
+    window.dispatchEvent(
+      new window.MessageEvent("message", {
+        data: { type: "metadata-info", metadata },
+      }),
+    );
+  send();
+  const table = document.getElementById("metadata-model");
+  assertMetadataTable(table, metadata.model);
+  assert.equal(table.querySelectorAll("img, script").length, 0);
+  metadata.model = [];
+  send();
+  assertMetadataTable(table, []);
+  assert.equal(table.parentElement.hidden, true);
+  metadata.model = [{ key: "updated", value: "new value" }];
+  send();
+  assertMetadataTable(table, metadata.model);
+  assert.equal(table.parentElement.hidden, false);
+});
+
 test("shows native metadata in the sidebar and marks released and never-used results without changing the layout", (t) => {
   const { document, window, messages, load, pointer } = openViewer(t);
   const model = loadModel(
@@ -2947,6 +3006,20 @@ test("shows native metadata in the sidebar and marks released and never-used res
     document.getElementById("metadata-model").textContent,
     /metadata <inspection>/,
   );
+  const metadata = model.metadata();
+  assertMetadataTable(
+    document.getElementById("metadata-model"),
+    metadata.model,
+  );
+  assertMetadataTable(
+    document.getElementById("metadata-graph"),
+    metadata.graph,
+  );
+  assertMetadataTable(document.getElementById("metadata-analysis"), [
+    { key: "Name", value: model.graph().nodes[0].name },
+    { key: "Tag", value: metadata.nodes[0].tag },
+    { key: "Constant", value: "Yes" },
+  ]);
   assert.equal(document.querySelectorAll(".unused-label").length, 2);
   assert.match(
     document.querySelector('[data-id="node-3"] .unused-label title')
@@ -3022,6 +3095,17 @@ test("shows native metadata in the sidebar and marks released and never-used res
     document.getElementById("metadata-values").textContent,
     /A result used by three nodes/,
   );
+  assertMetadataTable(
+    document.getElementById("metadata-node"),
+    metadata.nodes[5].entries,
+  );
+  for (const table of document.querySelectorAll("#metadata-values table")) {
+    const name = table.closest("li").querySelector("strong").textContent;
+    assertMetadataTable(
+      table,
+      metadata.values.find((value) => value.name === name).entries,
+    );
+  }
   select(1);
   assert.equal(document.querySelectorAll(".edge.released").length, 1);
   assert.equal(
