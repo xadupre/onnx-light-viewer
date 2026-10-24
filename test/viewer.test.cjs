@@ -116,6 +116,137 @@ function submitOpen(document, window) {
     .dispatchEvent(new window.Event("submit", { cancelable: true }));
 }
 
+test("pipeline navigation enables stage fusions and disables unsupported encrypted saves", (t) => {
+  const { document, window, messages } = openViewer(t);
+  const send = (graph, file) =>
+    window.dispatchEvent(
+      new window.MessageEvent("message", {
+        data: { type: "graph", graph, file },
+      }),
+    );
+  send(demoGraph, {
+    directory: "/models",
+    savePath: "/models/model-copy.onnx",
+  });
+  const encrypted = document.querySelector(
+    'input[name="save-format"][value="embedded-encrypted"]',
+  );
+  encrypted.checked = true;
+  encrypted.dispatchEvent(new window.Event("change", { bubbles: true }));
+  document.getElementById("save-password").value = "discard";
+  const pipeline = {
+    ...structuredClone(demoGraph),
+    pipeline: true,
+    canFuse: false,
+    nodes: [
+      {
+        ...structuredClone(demoGraph.nodes[0]),
+        attributes: [
+          {
+            name: "prefill",
+            type: "MODEL",
+            value: "Relu",
+            default: false,
+            graphs: [
+              {
+                name: "prefill",
+                path: [{ pipeline: "prefill" }],
+                nodeCount: 1,
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+  send(pipeline, {
+    directory: "/models",
+    savePath: "/models/copy.pipe-onnx",
+    pipeline: true,
+  });
+  assert.equal(document.getElementById("fuse-pattern").disabled, true);
+  assert.equal(encrypted.disabled, true);
+  assert.equal(encrypted.checked, false);
+  assert.equal(
+    document.getElementById("save-file").value,
+    "/models/copy.pipe-onnx",
+  );
+  assert.equal(document.getElementById("save-password").value, "");
+  document
+    .querySelector(".subgraph-link")
+    .dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  assert.equal(messages.at(-1).type, "navigate");
+  assert.deepEqual(JSON.parse(JSON.stringify(messages.at(-1).path)), [
+    { pipeline: "prefill" },
+  ]);
+  send(
+    {
+      ...structuredClone(demoGraph),
+      pipeline: true,
+      canFuse: true,
+      breadcrumbs: [
+        { name: "Pipeline", path: [] },
+        { name: "prefill", path: [{ pipeline: "prefill" }] },
+      ],
+    },
+    {
+      directory: "/models",
+      savePath: "/models/copy.pipe-onnx",
+      pipeline: true,
+    },
+  );
+  assert.equal(document.getElementById("fuse-pattern").disabled, false);
+  document.getElementById("fuse-pattern").click();
+  assert.equal(messages.at(-1).type, "fusion-patterns");
+  send(demoGraph, {
+    directory: "/models",
+    savePath: "/models/model-copy.onnx",
+  });
+  assert.equal(encrypted.disabled, false);
+});
+
+test("keeps all pipeline models accessible from the permanent navigation bar", (t) => {
+  const { document, messages, load } = openViewer(t);
+  const model = loadModel(
+    readFileSync(require.resolve("./models/tiny.pipe-onnx")),
+    "tiny.pipe-onnx",
+  );
+  load(model.graph());
+  const buttons = () => [
+    ...document.querySelectorAll("#graph-navigation button"),
+  ];
+  assert.deepEqual(
+    buttons().map((button) => button.textContent),
+    ["Three-token cycle", "embedding", "prefill", "decode"],
+  );
+  for (const role of ["prefill", "decode", "embedding"]) {
+    buttons()
+      .find((button) => button.textContent === role)
+      .click();
+    const request = messages.at(-1);
+    assert.equal(request.type, "navigate");
+    assert.deepEqual(JSON.parse(JSON.stringify(request.path)), [
+      { pipeline: role },
+    ]);
+    load(model.graph(false, request.path));
+    assert.equal(buttons().length, 4);
+    assert.equal(
+      document.querySelector("#graph-navigation [aria-current]").textContent,
+      role,
+    );
+    assert.equal(
+      buttons().find((button) => button.textContent === role).disabled,
+      true,
+    );
+  }
+  buttons()[0].click();
+  load(model.graph(false, messages.at(-1).path));
+  assert.equal(
+    document.querySelector("#graph-navigation [aria-current]").textContent,
+    "Three-token cycle",
+  );
+});
+
 test("resets sidebar controllers together when the viewer replaces the graph", (t) => {
   const { document, window, messages, load } = openViewer(t);
   const send = (data) =>
@@ -2291,6 +2422,12 @@ test("opens graph attributes and nested breadcrumbs, including empty graphs and 
   );
   const root = model.graph();
   load(root);
+  assert.equal(document.getElementById("graph-navigation").hidden, false);
+  assert.equal(document.querySelectorAll("#graph-navigation button").length, 1);
+  assert.equal(
+    document.querySelector("#graph-navigation [aria-current]").textContent,
+    root.name,
+  );
   const buttons = document.querySelectorAll("#node-attributes button");
   assert.equal(buttons.length, 2);
   assert.match(
@@ -2348,7 +2485,12 @@ test("opens graph attributes and nested breadcrumbs, including empty graphs and 
     "No operator",
   );
   load(demoGraph);
-  assert.equal(document.getElementById("graph-navigation").hidden, true);
+  assert.equal(document.getElementById("graph-navigation").hidden, false);
+  assert.equal(document.querySelectorAll("#graph-navigation button").length, 1);
+  assert.equal(
+    document.querySelector("#graph-navigation [aria-current]").textContent,
+    demoGraph.name,
+  );
   assert.equal(document.querySelectorAll("#node-attributes button").length, 0);
   assert.equal(document.getElementById("navigation-status").textContent, "");
 });
@@ -3053,7 +3195,7 @@ test("renders the demo, inspects its operator and requests a real file", (t) => 
   load(demoGraph);
   assert.doesNotMatch(
     document.body.textContent,
-    /A LITTLE CLARITY|Your model, connected|Explore the graph|A first ONNX graph|ONNX MODEL|All connected initializers are listed|Attribute arrays show up to 8 elements/,
+    /A LITTLE CLARITY|Your model, connected|Explore the graph|ONNX MODEL|All connected initializers are listed|Attribute arrays show up to 8 elements/,
   );
   assert.equal(document.querySelectorAll(".graph-node").length, 1);
   assert.equal(document.querySelectorAll(".port").length, 2);

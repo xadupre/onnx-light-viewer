@@ -171,9 +171,9 @@ export function webviewHtml(
               <label for="save-file">Destination path</label><input id="save-file" type="text" value="model-copy.onnx" required autocomplete="off" list="save-file-history"><datalist id="save-file-history"></datalist>
               <fieldset class="save-grid">
                 <legend>Weight storage and encryption</legend>
-                <label><input type="radio" name="save-format" value="embedded-plain" checked>Single .onnx file</label>
+                <label><input type="radio" name="save-format" value="embedded-plain" checked>Single model or pipeline file</label>
                 <label><input type="radio" name="save-format" value="embedded-encrypted">Encrypted .onnx.enc file, including all weights</label>
-                <label><input type="radio" name="save-format" value="external-plain">.onnx model and separate weight files</label>
+                <label><input type="radio" name="save-format" value="external-plain">Model or pipeline and separate weight files</label>
                 <label class="unavailable"><input type="radio" name="save-format" value="external-encrypted" disabled aria-describedby="external-encryption-note">Separate encrypted weight files (unavailable)</label>
                 <p id="external-encryption-note">Unavailable in onnx-light. <a href="https://github.com/xadupre/onnx-light/issues/5533">Track native support</a>.</p>
                 <label><input type="radio" name="save-format" value="reuse-plain">Reuse unchanged external files</label>

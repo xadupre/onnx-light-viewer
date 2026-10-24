@@ -19,7 +19,7 @@ underlying onnx-light libraries. Start with the worked example in
      - Implemented
      - Guide / boundary
    * - Opening models
-     - Local ``.onnx`` files, bundled demos, public Hugging Face downloads and
+     - Local ``.onnx`` and ``.pipe-onnx`` files, bundled demos, public Hugging Face downloads and
        persistent caching.
      - :doc:`features/opening_models`. No authentication or automatic external
        weight downloads.
@@ -41,6 +41,10 @@ underlying onnx-light libraries. Start with the worked example in
        nested navigation and breadcrumbs.
      - :doc:`features/subgraphs`. Function bodies are definitions, not specialized
        executions of the selected call.
+   * - PipelineProto
+     - Stage navigation, generation-settings previews, per-stage inference and
+       fusion, and whole-container saving with embedded or external weights.
+     - :doc:`features/opening_models`. No pipeline execution or encryption.
    * - Shape/type inference
      - Explicit **Refresh shapes**, visible update counts and refreshed labels
        without resetting the camera or selection.

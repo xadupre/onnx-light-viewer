@@ -91,6 +91,11 @@ interface LoadedModel {
   fileName?: string;
 }
 
+function copyFileName(model: LoadedModel, encrypted = false): string {
+  const extension = model.graph.pipeline ? "pipe-onnx" : "onnx";
+  return `${(model.fileName ?? `model.${extension}`).replace(/\.(?:onnx(?:\.enc)?|pipe-onnx)$/i, "")}-copy.${extension}${encrypted ? ".enc" : ""}`;
+}
+
 /**
  * Returns the retained handle, logging a reload if a previous refresh invalidated
  * it. The changed callback publishes status only after successful recreation.
@@ -334,20 +339,25 @@ async function writeModelFile(
 function isGraphPath(path: unknown): path is GraphPath {
   return (
     Array.isArray(path) &&
-    path.every(
-      (step: unknown) =>
-        typeof step === "object" &&
-        step !== null &&
-        (Reflect.has(step, "function")
+    path.every((step: unknown) => {
+      if (typeof step !== "object" || step === null) return false;
+      if ("pipeline" in step)
+        return (
+          typeof step.pipeline === "string" &&
+          ["embedding", "prefill", "decode"].includes(step.pipeline) &&
+          Object.keys(step).length === 1
+        );
+      return (
+        Reflect.has(step, "function")
           ? ["node", "function"]
           : ["node", "attribute", "graph"]
-        ).every((key) => {
-          const index: unknown = Reflect.get(step, key);
-          return (
-            typeof index === "number" && Number.isInteger(index) && index >= 0
-          );
-        }),
-    )
+      ).every((key) => {
+        const index: unknown = Reflect.get(step, key);
+        return (
+          typeof index === "number" && Number.isInteger(index) && index >= 0
+        );
+      });
+    })
   );
 }
 
@@ -491,12 +501,10 @@ async function configurePanel(
       type: "graph",
       graph: current.graph,
       file: {
+        ...(current.graph.pipeline ? { pipeline: true } : {}),
         directory: locationText(directoryUri()),
         savePath: locationText(
-          vscode.Uri.joinPath(
-            directoryUri(),
-            `${(current.fileName ?? "model.onnx").replace(/\.onnx(?:\.enc)?$/i, "")}-copy.onnx`,
-          ),
+          vscode.Uri.joinPath(directoryUri(), copyFileName(current)),
         ),
       },
       ...(current.metadata ? { metadata: current.metadata } : {}),
@@ -761,7 +769,7 @@ async function configurePanel(
               .filter(
                 ([name, type]) =>
                   type & vscode.FileType.Directory ||
-                  /\.(?:onnx|enc)$/i.test(name),
+                  /\.(?:onnx|enc|pipe-onnx)$/i.test(name),
               )
               .map(([name, type]) => ({
                 name,
@@ -839,7 +847,13 @@ async function configurePanel(
                   ? [locationUri(message.location)]
                   : await vscode.window.showOpenDialog({
                       canSelectMany: false,
-                      filters: { "ONNX models": ["onnx", "enc"] },
+                      filters: {
+                        "ONNX models and pipelines": [
+                          "onnx",
+                          "enc",
+                          "pipe-onnx",
+                        ],
+                      },
                       openLabel: "Open ONNX graph",
                     });
                 if (!selection?.[0]) {
@@ -1091,10 +1105,13 @@ async function configurePanel(
                 : "List fusion patterns",
             async () => {
               const current = requireModel();
-              if (current.graph.breadcrumbs.length !== 1)
+              if (!(
+                current.graph.canFuse ?? current.graph.breadcrumbs.length === 1
+              ))
                 throw new Error(
-                  "Return to the main graph to apply fusion patterns.",
+                  "Return to a model's main graph to apply fusion patterns.",
                 );
+              const path = current.graph.breadcrumbs.at(-1)?.path ?? [];
               const isCurrent = () =>
                 active &&
                 model === owner &&
@@ -1144,10 +1161,11 @@ async function configurePanel(
                     ? selectedMatches.map((match) => match.pattern)
                     : preview.pattern,
                   anchors,
+                  path,
                 );
                 if (!isCurrent()) return;
                 const retained = edited.clone();
-                const graph = edited.graph();
+                const graph = edited.graph(false, path);
                 const replacement: LoadedModel = {
                   ...current,
                   native: edited,
@@ -1176,7 +1194,7 @@ async function configurePanel(
                 () => void sendStatus(),
               );
               if (!isCurrent()) return;
-              const patterns = native.fusionPatterns();
+              const patterns = native.fusionPatterns(path);
               if (message.type === "fusion-patterns") {
                 await postMessage({
                   type: "fusion-patterns",
@@ -1204,6 +1222,7 @@ async function configurePanel(
                   current.source?.uri.scheme === "file"
                     ? current.source.uri.fsPath
                     : undefined,
+                  path,
                 );
                 if (!isCurrent()) return;
                 snapshot ??= preview.model;
@@ -1271,6 +1290,10 @@ async function configurePanel(
                 reuse: message.storage === "reuse",
                 encrypted: message.encrypted === true,
               };
+              if (current.graph.pipeline && format.encrypted)
+                throw new Error(
+                  "PipelineProto encryption is not supported by onnx-light.",
+                );
               if (format.external && format.encrypted)
                 throw new Error(
                   "Encrypted external weights await onnx-light support: https://github.com/xadupre/onnx-light/issues/5533",
@@ -1326,7 +1349,7 @@ async function configurePanel(
                 if (confirmation !== password)
                   throw new Error("Passwords do not match.");
               }
-              const fileName = `${(current.fileName ?? "model.onnx").replace(/\.onnx(?:\.enc)?$/i, "")}-copy.onnx${format.encrypted ? ".enc" : ""}`;
+              const fileName = copyFileName(current, format.encrypted);
               if (inline && typeof message.overwrite !== "boolean")
                 throw new Error("Invalid overwrite choice.");
               const destination = inline
@@ -1336,7 +1359,9 @@ async function configurePanel(
                     saveLabel: "Save model copy",
                     filters: format.encrypted
                       ? { "Encrypted ONNX models": ["enc"] }
-                      : { "ONNX models": ["onnx"] },
+                      : current.graph.pipeline
+                        ? { "ONNX pipelines": ["pipe-onnx"] }
+                        : { "ONNX models": ["onnx"] },
                     ...(current.source
                       ? {
                           defaultUri: vscode.Uri.joinPath(

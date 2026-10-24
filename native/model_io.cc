@@ -2,6 +2,7 @@
 #include "model_io.h"
 #include "addon.h"
 #include "graph.h"
+#include "pipeline.h"
 #include "tensor_preview.h"
 #include <algorithm>
 #include <array>
@@ -12,6 +13,7 @@
 #include <onnx_core/backend_test/test_case.h>
 #include <stdexcept>
 #include <system_error>
+#include <tuple>
 
 #ifdef ONNX_LIGHT_HAS_OPENSSL
 #include <openssl/evp.h>
@@ -30,7 +32,17 @@ namespace {
 
 constexpr int64_t previewPayloadThreshold = 256; // Retain up to 15 complex128 elements.
 
-enum class ProtoKind { Model, Graph, Node, Attribute, SparseTensor, Function, Tensor, Opaque };
+enum class ProtoKind {
+  Pipeline,
+  Model,
+  Graph,
+  Node,
+  Attribute,
+  SparseTensor,
+  Function,
+  Tensor,
+  Opaque
+};
 
 struct ProtoFrame {
   ProtoKind kind;
@@ -56,6 +68,10 @@ struct LimitScope {
 
 std::optional<ChildProto> ChildMessage(ProtoKind parent, uint32_t field) {
   switch (parent) {
+  case ProtoKind::Pipeline:
+    if (field >= 7 && field <= 9)
+      return ChildProto{ProtoKind::Model, false};
+    break;
   case ProtoKind::Model:
     if (field == 7)
       return ChildProto{ProtoKind::Graph, false};
@@ -116,10 +132,11 @@ bool IsPackedTensorField(uint32_t field) {
 /** Adapts a buffered descriptor stream to omit large TensorProto payloads. */
 class PayloadSkippingStream : public ol::utils::BinaryStream {
 public:
-  PayloadSkippingStream(ol::utils::BinaryStream &stream, uint64_t threshold)
+  PayloadSkippingStream(ol::utils::BinaryStream &stream, uint64_t threshold,
+                        ProtoKind kind = ProtoKind::Model)
       : stream_(stream), threshold_(threshold) {
     ProtoFrame root;
-    root.kind = ProtoKind::Model;
+    root.kind = kind;
     frames_.push_back(std::move(root));
   }
 
@@ -487,6 +504,8 @@ ol::TensorProto *FindTensor(ol::ModelProto &model, const SkippedTensorPayload &p
 
   for (const auto &step : payload.path) {
     switch (kind) {
+    case ProtoKind::Pipeline:
+      return nullptr;
     case ProtoKind::Model:
       if (step.field == 7)
         graph = &model.ref_graph();
@@ -604,7 +623,62 @@ void RestoreModelPayloads(ol::ModelProto &snapshot, const StoredModel &source,
     throw std::system_error(errno, std::generic_category(), "Could not reopen source model");
   ol::utils::FdReadStream stream(file.get());
   ol::ModelProto original;
-  ReadModel(original, stream, ol::ParseOptions{});
+  if (source.pipeline_stage.empty()) {
+    ReadModel(original, stream, ol::ParseOptions{});
+  } else {
+    const uint64_t stage = source.pipeline_stage == "embedding" ? 7
+                           : source.pipeline_stage == "prefill" ? 8
+                           : source.pipeline_stage == "decode"  ? 9
+                                                                : 0;
+    if (!stage)
+      throw std::runtime_error("Unknown source pipeline stage: " + source.pipeline_stage);
+    bool found = false;
+    std::vector<uint64_t> groups;
+    const auto skip = [&](uint64_t size) {
+      stream.CanRead(size, "Truncated source pipeline field.");
+      stream.skip_bytes(static_cast<ol::utils::offset_t>(size));
+    };
+    while (stream.NotEnd()) {
+      const auto field = stream.next_field();
+      if (groups.empty() && field.field_number == stage && field.wire_type == 2) {
+        const auto size = stream.next_uint64();
+        stream.CanRead(size, "Truncated source pipeline stage.");
+        stream.LimitToNext(size);
+        ReadModel(original, stream, ol::ParseOptions{});
+        stream.Restore();
+        found = true;
+        break;
+      }
+      switch (field.wire_type) {
+      case 0:
+        stream.next_uint64();
+        break;
+      case 1:
+        skip(8);
+        break;
+      case 2:
+        skip(stream.next_uint64());
+        break;
+      case 3:
+        if (groups.size() >= static_cast<size_t>(ol::ParseOptions{}.max_recursion_depth))
+          throw std::runtime_error("Protobuf group nesting exceeds the pipeline parser limit.");
+        groups.push_back(field.field_number);
+        break;
+      case 4:
+        if (groups.empty() || groups.back() != field.field_number)
+          throw std::runtime_error("Invalid protobuf group in source pipeline.");
+        groups.pop_back();
+        break;
+      case 5:
+        skip(4);
+        break;
+      default:
+        throw std::runtime_error("Invalid protobuf wire type in source pipeline.");
+      }
+    }
+    if (!found)
+      throw std::runtime_error("Could not reopen the source pipeline stage.");
+  }
   check_source();
   for (const auto &payload : source.skipped) {
     auto *target = FindTensor(snapshot, payload);
@@ -616,6 +690,57 @@ void RestoreModelPayloads(ol::ModelProto &snapshot, const StoredModel &source,
       throw std::runtime_error("Could not restore an omitted tensor payload.");
     *target = tensor->SharedCopy();
   }
+}
+
+std::shared_ptr<StoredPipeline> ReadPipeline(ol::utils::BinaryStream &source,
+                                             const std::string &file_name,
+                                             const std::string &file_path) {
+  auto pipeline = std::make_shared<StoredPipeline>();
+  const bool local = !file_path.empty();
+  const auto path = ModelFilePath(file_path);
+  const auto size = local ? std::filesystem::file_size(path) : 0;
+  const auto time =
+      local ? std::filesystem::last_write_time(path) : std::filesystem::file_time_type{};
+  ol::ParseOptions options;
+  PayloadSkippingStream stream(
+      source, local ? previewPayloadThreshold : std::numeric_limits<uint64_t>::max(),
+      ProtoKind::Pipeline);
+  if (!pipeline->proto.ParseFromStream(stream, options) || !pipeline->proto.has_prefill())
+    throw std::runtime_error("This file does not contain a PipelineProto with a prefill model.");
+  for (const auto &[role, field, present] :
+       {std::tuple{"embedding", 7u, pipeline->proto.has_embedding()},
+        std::tuple{"prefill", 8u, pipeline->proto.has_prefill()},
+        std::tuple{"decode", 9u, pipeline->proto.has_decode()}}) {
+    if (!present)
+      continue;
+    auto stored = std::make_shared<StoredModel>();
+    auto &model = PipelineStage(pipeline->proto, role);
+    if (!model.has_graph() || !model.has_ir_version() || model.ir_version() <= 0)
+      throw std::runtime_error(std::string("Invalid pipeline model: ") + role);
+    stored->model = std::make_shared<ol::ModelProto>(std::move(model));
+    stored->file_name = file_name + ": " + role;
+    stored->file_path = file_path;
+    stored->pipeline_stage = role;
+    stored->source_size = size;
+    stored->source_time = time;
+    // An unsupported training_info anywhere makes every pipeline export unsafe.
+    stored->has_training_info = stream.has_training_info();
+    for (const auto &payload : stream.skipped())
+      if (!payload.path.empty() && payload.path.front().field == field) {
+        auto relative = payload;
+        relative.path.erase(relative.path.begin());
+        stored->skipped.push_back(std::move(relative));
+      }
+    ApplySkippedPayloads(*stored->model, stored->skipped);
+    pipeline->models.emplace(role, std::move(stored));
+  }
+  pipeline->proto.clear_embedding();
+  pipeline->proto.clear_prefill();
+  pipeline->proto.clear_decode();
+  if (local &&
+      (std::filesystem::file_size(path) != size || std::filesystem::last_write_time(path) != time))
+    throw std::runtime_error("The source pipeline changed while loading. Reopen it.");
+  return pipeline;
 }
 
 Napi::Value DecodeGraph(const Napi::CallbackInfo &info) {

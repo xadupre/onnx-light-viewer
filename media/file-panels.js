@@ -8,6 +8,7 @@ function createFilePanels({
   const fileRequests = { open: 0, save: 0 };
   const fileParents = {};
   let openSource = "local";
+  let pipelineFile = false;
   function fileSize(bytes) {
     const units = ["B", "KiB", "MiB", "GiB", "TiB"];
     const unit =
@@ -226,7 +227,7 @@ function createFilePanels({
     byId("save-encryption").hidden = !encrypted;
     byId("save-password").required = encrypted;
     byId("save-confirmation").required = encrypted;
-    if (event.target.name === "save-format")
+    if (event.target.name === "save-format" && !pipelineFile)
       byId("save-file").value = byId("save-file").value.replace(
         /\.onnx(?:\.enc)?$/i,
         `.onnx${encrypted ? ".enc" : ""}`,
@@ -455,6 +456,23 @@ function createFilePanels({
   }
   function setFile(file) {
     if (file) {
+      pipelineFile = file.pipeline === true;
+      const encrypted = document.querySelector(
+        'input[name="save-format"][value="embedded-encrypted"]',
+      );
+      encrypted.disabled = pipelineFile;
+      encrypted.title = pipelineFile
+        ? "PipelineProto encryption is not supported by onnx-light."
+        : "";
+      if (pipelineFile && encrypted.checked) {
+        const plain = document.querySelector(
+          'input[name="save-format"][value="embedded-plain"]',
+        );
+        plain.checked = true;
+        plain.dispatchEvent(new Event("change", { bubbles: true }));
+        byId("save-password").value = "";
+        byId("save-confirmation").value = "";
+      }
       if (openSource === "local") byId("open-location").value = file.directory;
       byId("save-location").value = file.directory;
       byId("save-file").value =

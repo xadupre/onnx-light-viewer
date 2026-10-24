@@ -1053,6 +1053,93 @@ test("lists and opens backend models in the embedded selector without a quick pi
   assert.equal(extension.messages.at(-1).type, "file-list-error");
 });
 
+test("opens pipeline files, navigates stages, applies stage fusions and saves the entire container", async (t) => {
+  const directory = await mkdtemp(
+    path.join(tmpdir(), "onnx-light-pipeline-host-"),
+  );
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const field = (number, bytes) => {
+    let length = bytes.length;
+    const prefix = [number * 8 + 2];
+    do {
+      prefix.push((length % 128) | (length >= 128 ? 128 : 0));
+      length = Math.floor(length / 128);
+    } while (length);
+    return Buffer.concat([Buffer.from(prefix), bytes]);
+  };
+  const bytes = Buffer.concat([
+    field(1, Buffer.from("Pipeline")),
+    field(8, await readFile(require.resolve("./models/fusion.onnx"))),
+    field(9, await readFile(require.resolve("./models/relu.onnx"))),
+  ]);
+  const source = path.join(directory, "source.pipe-onnx");
+  await writeFile(source, bytes);
+  const extension = await openExtension(undefined, undefined, true);
+  t.after(() => extension.dispose());
+  await extension.openFile(source);
+  const latestGraph = () =>
+    extension.messages.findLast(({ type }) => type === "graph");
+  assert.equal(latestGraph().graph.pipeline, true);
+  assert.match(latestGraph().file.savePath, /source-copy\.pipe-onnx$/);
+  await extension.receive({
+    type: "browse-files",
+    target: "open",
+    source: "local",
+    location: directory,
+    requestId: 1,
+  });
+  assert.ok(
+    extension.messages
+      .at(-1)
+      .entries.some(({ name }) => name === "source.pipe-onnx"),
+  );
+  await extension.receive({ type: "fusion-patterns", requestId: 2 });
+  assert.equal(extension.messages.at(-1).type, "fusion-error");
+  const stagePath = [{ pipeline: "prefill" }];
+  await extension.receive({ type: "navigate", path: stagePath });
+  assert.equal(latestGraph().graph.breadcrumbs[1].name, "prefill");
+  await extension.receive({ type: "refresh-shapes" });
+  assert.equal(extension.messages.at(-1).type, "shape-info");
+  await extension.receive({ type: "metadata" });
+  assert.equal(extension.messages.at(-1).type, "metadata-info");
+  await extension.receive({
+    type: "preview-fusion",
+    pattern: "TransposeTranspose",
+    requestId: 3,
+  });
+  const preview = extension.messages.at(-1);
+  assert.equal(preview.type, "fusion-preview");
+  await extension.receive({
+    type: "apply-fusion",
+    previewId: preview.previewId,
+    anchors: [0],
+    requestId: 4,
+  });
+  const stage = latestGraph().graph;
+  assert.equal(stage.nodes[0].opType, "Identity");
+  assert.deepEqual(stage.breadcrumbs.at(-1).path, stagePath);
+  const destination = path.join(directory, "copy.pipe-onnx");
+  await extension.save(destination);
+  assert.deepEqual(extension.saveDialogs.at(-1).filters, {
+    "ONNX pipelines": ["pipe-onnx"],
+  });
+  const { loadModelFile } = require("../dist/graph");
+  const restored = await loadModelFile(destination, "copy.pipe-onnx");
+  assert.equal(restored.graph().nodes.length, 2);
+  assert.equal(restored.graph(false, stagePath).nodes[0].opType, "Identity");
+  assert.equal(
+    restored.graph(false, [{ pipeline: "decode" }]).nodes[0].opType,
+    "Relu",
+  );
+  assert.deepEqual(await readFile(source), bytes);
+  await extension.receive({ type: "navigate", path: [] });
+  assert.equal(latestGraph().graph.canFuse, false);
+  const encrypted = path.join(directory, "copy.pipe-onnx.enc");
+  await extension.save(encrypted, true, ["secret", "secret"]);
+  assert.match(extension.errors.at(-1), /PipelineProto encryption/);
+  await assert.rejects(readFile(encrypted), { code: "ENOENT" });
+});
+
 test("previews and applies selected native fusions, rejects stale previews and saves edited copies", async (t) => {
   const directory = await mkdtemp(
     path.join(tmpdir(), "onnx-light-fusion-host-"),
