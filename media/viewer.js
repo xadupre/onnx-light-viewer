@@ -16,6 +16,7 @@ let renderedSelection = new Set();
 let connectionsByPosition = new Map();
 let connections = [];
 let camera;
+let panFrame;
 let virtualized = false;
 let overviewVisible = false;
 let overviewDirty = true;
@@ -645,8 +646,10 @@ function updateConnection(connection) {
 }
 
 function setVisible(view, group, visible) {
+  if (virtualized) visible &&= !overviewVisible;
+  if (view.visible === visible) return;
+  view.visible = visible;
   if (virtualized) {
-    visible &&= !overviewVisible;
     if (visible) {
       if (!view.group) {
         if (view.node || view.port) mountNode(view);
@@ -657,11 +660,8 @@ function setVisible(view, group, visible) {
     } else {
       view.group?.remove();
     }
-    view.visible = visible;
     return;
   }
-  if (view.visible === visible) return;
-  view.visible = visible;
   group.setAttribute("display", visible ? "inline" : "none");
 }
 
@@ -780,6 +780,7 @@ function endGesture(cancel = false) {
 
 function graphPoint(event, viewport) {
   if (!viewport.width || !viewport.height) return;
+  if (panFrame !== undefined) fit();
   const [x, y, width, height] = svg
     .getAttribute("viewBox")
     .split(" ")
@@ -852,6 +853,10 @@ function reframe() {
 }
 
 function fit() {
+  if (panFrame !== undefined) {
+    window.cancelAnimationFrame(panFrame);
+    panFrame = undefined;
+  }
   const viewport = byId("canvas").getBoundingClientRect();
   if (viewport.width === 0 || viewport.height === 0) return;
   if (readablePending) {
@@ -880,6 +885,14 @@ function fit() {
   for (const connection of connections) updateConnectionVisibility(connection);
   drawCrossingConnections();
   svg.setAttribute("viewBox", `${camera.x} ${camera.y} ${width} ${height}`);
+}
+
+function schedulePan() {
+  if (panFrame !== undefined) return;
+  panFrame = window.requestAnimationFrame(() => {
+    panFrame = undefined;
+    fit();
+  });
 }
 
 function setZoomAreaMode(active) {
@@ -1103,7 +1116,7 @@ function render(graph, metadata) {
   connections = [];
   camera = undefined;
   virtualized =
-    graph.nodes.length + graph.inputs.length + graph.outputs.length > 1000;
+    graph.nodes.length + graph.inputs.length + graph.outputs.length > 500;
   overviewVisible = false;
   overviewDirty = true;
   crossingConnections = new Set();
@@ -1612,7 +1625,8 @@ svg.addEventListener(
     if (!event.shiftKey) {
       pan.y += (event.deltaY * unitY * height) / viewport.height;
     }
-    fit();
+    if (virtualized) schedulePan();
+    else fit();
   },
   { passive: false },
 );

@@ -21,7 +21,7 @@ function openViewer(t, initialTab = "model", setup = () => {}) {
       onnxLightVersion,
       initialTab,
     ),
-    { runScripts: "outside-only" },
+    { runScripts: "outside-only", pretendToBeVisual: true },
   );
   t.after(() => dom.window.close());
   dom.window.HTMLCanvasElement.prototype.getContext = () => ({
@@ -4470,7 +4470,7 @@ test("virtualizes thousands of nodes, finds distant operators and uses a batched
   );
 });
 
-test("batches high-fanout connections without creating thousands of offscreen labels", (t) => {
+test("batches high-fanout connections without creating thousands of offscreen labels", async (t) => {
   const { document, window, load } = openViewer(t);
   const model = chainGraph(2000);
   for (const node of model.nodes.slice(1)) node.inputs.push("input");
@@ -4484,6 +4484,7 @@ test("batches high-fanout connections without creating thousands of offscreen la
     .dispatchEvent(
       new window.WheelEvent("wheel", { deltaY: 40000, cancelable: true }),
     );
+  await new Promise(window.requestAnimationFrame);
   assert.ok(document.querySelectorAll(".edge").length < 40);
   assert.ok(crossing.getAttribute("d").length > 0);
   document.getElementById("zoom-fit").click();
@@ -4538,6 +4539,107 @@ test("defers readable framing until a large model loaded in a hidden tab has a v
   assert.equal(
     document.querySelector(".graph-node.selected").getAttribute("data-id"),
     "node-0",
+  );
+});
+
+test("virtualizes models above 500 nodes while preserving navigation and cached elements", (t) => {
+  const { document, load } = openViewer(t);
+  load(chainGraph(600));
+  const graph = document.getElementById("graph");
+  const mounted = () => document.querySelectorAll(".graph-node").length;
+  assert.ok(mounted() > 0 && mounted() < 20);
+  assert.equal(Number(graph.getAttribute("viewBox").split(" ")[3]), 350);
+  const first = document.querySelector(".graph-node");
+  document.getElementById("go-bottom").click();
+  assert.equal(first.isConnected, false);
+  assert.ok(mounted() > 0 && mounted() < 20);
+  document.getElementById("go-top").click();
+  assert.equal(first.isConnected, true);
+  document.getElementById("zoom-fit").click();
+  assert.equal(mounted(), 0);
+  assert.equal(
+    document.getElementById("overview-nodes").getAttribute("d").match(/M/g)
+      .length,
+    602,
+  );
+  document.getElementById("zoom-readable").click();
+  assert.ok(mounted() > 0 && mounted() < 20);
+});
+
+test("coalesces large-model wheel events without losing motion or leaving stale frames", (t) => {
+  const frames = new Map();
+  let nextFrame = 0;
+  const { document, window, load } = openViewer(t, "model", (window) => {
+    window.requestAnimationFrame = (callback) => {
+      const id = nextFrame++;
+      frames.set(id, callback);
+      return id;
+    };
+    window.cancelAnimationFrame = (id) => frames.delete(id);
+  });
+  const flushFrame = () => {
+    const callbacks = [...frames.values()];
+    frames.clear();
+    for (const callback of callbacks) callback();
+  };
+  load(chainGraph(2000));
+  const graph = document.getElementById("graph");
+  const view = () => graph.getAttribute("viewBox").split(" ").map(Number);
+  const wheel = (options) =>
+    graph.dispatchEvent(
+      new window.WheelEvent("wheel", { cancelable: true, ...options }),
+    );
+  const before = view();
+  const observer = new window.MutationObserver(() => {});
+  observer.observe(graph, { attributes: true, attributeFilter: ["viewBox"] });
+  for (const options of [
+    { deltaY: 20 },
+    { deltaY: 2, deltaMode: 1 },
+    { deltaY: 5, shiftKey: true },
+    { deltaX: 7 },
+  ]) {
+    wheel(options);
+  }
+  assert.equal(frames.size, 1);
+  assert.deepEqual(view(), before);
+  flushFrame();
+  assert.equal(observer.takeRecords().length, 1);
+  observer.disconnect();
+  const after = view();
+  assert.ok(Math.abs(after[0] - before[0] - 12) < 1e-9);
+  assert.ok(Math.abs(after[1] - before[1] - 52) < 1e-9);
+  assert.deepEqual(after.slice(2), before.slice(2));
+  assert.equal(
+    document.getElementById("node-name").textContent,
+    "activation_0",
+  );
+
+  wheel({ deltaY: 40 });
+  assert.equal(frames.size, 1);
+  wheel({ ctrlKey: true, deltaY: -100, clientX: 530, clientY: 175 });
+  assert.equal(frames.size, 0);
+  const zoomed = view();
+  assert.ok(Math.abs(zoomed[2] - after[2] / 1.25) < 1e-9);
+  assert.ok(
+    Math.abs(zoomed[0] + zoomed[2] / 2 - after[0] - after[2] / 2) < 1e-9,
+  );
+  assert.ok(
+    Math.abs(zoomed[1] + zoomed[3] / 2 - after[1] - after[3] / 2 - 40) < 1e-9,
+  );
+  wheel({ deltaY: 30 });
+  document.getElementById("zoom-fit").click();
+  assert.equal(frames.size, 0);
+  assert.equal(document.querySelectorAll(".graph-node").length, 0);
+  wheel({ deltaY: 30 });
+  assert.equal(frames.size, 1);
+  load(demoGraph);
+  assert.equal(frames.size, 0);
+  const replacement = view();
+  flushFrame();
+  assert.deepEqual(view(), replacement);
+  assert.equal(
+    document.querySelectorAll(".graph-node").length,
+    demoGraph.nodes.length,
   );
 });
 
