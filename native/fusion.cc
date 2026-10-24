@@ -11,9 +11,23 @@
 #include <onnx_extensions/shapes/dispatch_table.h>
 #include <onnx_proto/onnx_verify.h>
 #include <stdexcept>
+#include <tuple>
 
 namespace onnx_light_viewer {
 namespace {
+
+using FusionNodeKey = std::tuple<std::string, std::string, std::string, std::string,
+                                 std::vector<std::string>, std::vector<std::string>>;
+
+FusionNodeKey NodeOrderKey(const ol::NodeProto &node) {
+  std::vector<std::string> inputs, outputs;
+  for (const auto &value : node.input())
+    inputs.push_back(value.value());
+  for (const auto &value : node.output())
+    outputs.push_back(value.value());
+  return {node.domain().value(), node.op_type().value(), node.overload().value(),
+          node.name().value(),   std::move(inputs),      std::move(outputs)};
+}
 
 Napi::Object FusionNode(Napi::Env env, const ol::NodeProto &node) {
   auto result = Napi::Object::New(env);
@@ -166,15 +180,19 @@ public:
           insertions[position].emplace_back(node.SharedCopy(), match_id);
       }
       std::vector<std::vector<size_t>> destinations(graph.Nodes().size());
+      std::vector<FusionNodeKey> inserted_order;
       size_t output_position = 0;
       for (size_t i = 0; i <= graph.Nodes().size(); ++i) {
         for (const auto &[node, match_id] : insertions[i]) {
           operation[match_id].nodes.push_back(output_position);
+          inserted_order.push_back(NodeOrderKey(node));
           *edit->add_added_nodes() = node.SharedCopy();
           edit->add_added_nodes_positions(output_position++);
         }
-        if (i < graph.Nodes().size() && !removed.contains(i))
+        if (i < graph.Nodes().size() && !removed.contains(i)) {
+          inserted_order.push_back(NodeOrderKey(graph.Nodes()[i]));
           destinations[i].push_back(output_position++);
+        }
       }
       for (size_t i = 0; i < accepted.size(); ++i)
         for (const auto *node : accepted[i].second.nodes)
@@ -199,6 +217,39 @@ public:
       auto rewritten = original.ApplyRewritings(plan);
       snapshot_ = rewritten.ToModel(snapshot_.ir_version());
       ol::VerifyModel(snapshot_);
+      const auto &final_nodes = snapshot_.graph().node();
+      if (final_nodes.size() != inserted_order.size())
+        throw std::runtime_error("Model finalization changed the fusion node count.");
+      std::map<FusionNodeKey, std::vector<size_t>> final_positions;
+      for (size_t i = final_nodes.size(); i-- > 0;)
+        final_positions[NodeOrderKey(final_nodes[i])].push_back(i);
+      std::vector<size_t> permutation;
+      bool reordered = false;
+      for (size_t i = 0; i < inserted_order.size(); ++i) {
+        auto found = final_positions.find(inserted_order[i]);
+        if (found == final_positions.end() || found->second.empty())
+          throw std::runtime_error("Model finalization changed fusion node identities.");
+        const auto position = found->second.back();
+        found->second.pop_back();
+        permutation.push_back(position);
+        reordered |= position != i;
+      }
+      if (reordered) {
+        for (auto &previous : history_)
+          for (auto &match : previous) {
+            for (auto &node : match.nodes)
+              node = permutation.at(node);
+            std::sort(match.nodes.begin(), match.nodes.end());
+          }
+        // Replay must establish the same finalized order before the next Fuse edit.
+        auto *reorder = plan.add_rewrites();
+        reorder->set_pattern_name("Finalize fusion node order");
+        for (size_t i = 0; i < final_nodes.size(); ++i) {
+          reorder->add_matched_nodes(i);
+          *reorder->add_added_nodes() = final_nodes[i].SharedCopy();
+          reorder->add_added_nodes_positions(i);
+        }
+      }
       plan_ = std::move(plan);
     } catch (const std::exception &error) {
       SetError(error.what());

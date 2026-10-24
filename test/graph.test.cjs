@@ -54,6 +54,85 @@ function bytesField(number, value) {
   return Buffer.concat([varint(number * 8 + 2), varint(bytes.length), bytes]);
 }
 
+function fusionWithLateMetadata(opType) {
+  const tensorType = bytesField(
+    1,
+    Buffer.concat([
+      varintField(1, 1),
+      bytesField(
+        2,
+        Buffer.concat(
+          [2, 2].map((size) => bytesField(1, varintField(1, size))),
+        ),
+      ),
+    ]),
+  );
+  const valueInfo = (name) =>
+    Buffer.concat([bytesField(1, name), bytesField(2, tensorType)]);
+  const perm = bytesField(
+    5,
+    Buffer.concat([
+      bytesField(1, "perm"),
+      varintField(8, 1),
+      varintField(8, 0),
+      varintField(20, 7),
+    ]),
+  );
+  const node = (name, op, input, output, attributes = []) =>
+    bytesField(
+      1,
+      Buffer.concat([
+        bytesField(1, input),
+        bytesField(2, output),
+        bytesField(3, name),
+        bytesField(4, op),
+        ...attributes,
+      ]),
+    );
+  return Buffer.concat([
+    varintField(1, 9),
+    bytesField(8, varintField(2, 18)),
+    bytesField(
+      7,
+      Buffer.concat([
+        node("first", "Transpose", "x", "xt", [perm]),
+        node("second", "Transpose", "xt", "a", [perm]),
+        node("third", "Transpose", "x", "yt", [perm]),
+        node("fourth", "Transpose", "yt", "b", [perm]),
+        node("fifth", "Transpose", "x", "zt", [perm]),
+        node("sixth", "Transpose", "zt", "c", [perm]),
+        node("metadata", opType, "a", "metadata"),
+        bytesField(2, "late-metadata"),
+        bytesField(11, valueInfo("x")),
+        bytesField(12, valueInfo("a")),
+        bytesField(12, valueInfo("b")),
+        bytesField(12, valueInfo("c")),
+        bytesField(
+          12,
+          Buffer.concat([
+            bytesField(1, "metadata"),
+            bytesField(
+              2,
+              bytesField(
+                1,
+                Buffer.concat([
+                  varintField(1, 7),
+                  bytesField(
+                    2,
+                    opType === "Shape"
+                      ? bytesField(1, varintField(1, 2))
+                      : Buffer.alloc(0),
+                  ),
+                ]),
+              ),
+            ),
+          ]),
+        ),
+      ]),
+    ),
+  ]);
+}
+
 function pipelineBytes({
   embedding,
   prefill = modelBytes("relu.onnx"),
@@ -1418,6 +1497,53 @@ test("remaps fused pattern selections when earlier nodes are replaced", async ()
   ]);
   assert.deepEqual(first.fusionHistory()[0].matches[0].nodes, [2]);
   assert.deepEqual(second.undoFusion().fusionHistory(), first.fusionHistory());
+});
+
+test("keeps fused match selections in finalized Shape/Size order across fusion and undo", async () => {
+  for (const opType of ["Shape", "Size"]) {
+    const original = loadModel(fusionWithLateMetadata(opType), "late-metadata");
+    const first = await original.applyFusion("TransposeTranspose", [2]);
+    assert.deepEqual(
+      first.graph().nodes.map((node) => node.opType),
+      ["Transpose", "Transpose", opType, "Identity", "Transpose", "Transpose"],
+    );
+    assert.deepEqual(first.fusionHistory(), [
+      { matches: [{ pattern: "TransposeTranspose", nodes: [3] }] },
+    ]);
+    const second = await first.applyFusion("TransposeTranspose", [4]);
+    assert.deepEqual(second.fusionHistory(), [
+      { matches: [{ pattern: "TransposeTranspose", nodes: [3] }] },
+      { matches: [{ pattern: "TransposeTranspose", nodes: [4] }] },
+    ]);
+    assert.deepEqual(
+      second.undoFusion().fusionHistory(),
+      first.fusionHistory(),
+    );
+    assert.deepEqual(
+      second.undoFusion().undoFusion().graph(),
+      original.graph(),
+    );
+  }
+});
+
+test("replays successive fusion plans through intervening Shape/Size materialization", async () => {
+  for (const opType of ["Shape", "Size"]) {
+    const original = loadModel(fusionWithLateMetadata(opType), "late-metadata");
+    const first = await original.applyFusion("TransposeTranspose", [2]);
+    const second = await first.applyFusion("TransposeTranspose", [4]);
+    const saved = Buffer.from(
+      await second.serialize(undefined, undefined, true),
+    );
+    assert.deepEqual(
+      loadModel(saved, "late-metadata").graph(),
+      original.graph(),
+    );
+    const [plan] = rewritingPlans(saved);
+    assert.deepEqual(
+      loadModel(plan.bytes, "late-metadata").graph(),
+      second.graph(),
+    );
+  }
 });
 
 test("tracks fused pattern descendants when a later fusion consumes them", async () => {
