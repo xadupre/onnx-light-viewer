@@ -39,7 +39,11 @@ before a model is loaded.
   Horizontal trackpad scrolling is supported.
 * Drag an operator, input or output to move it. Connections and tensor labels
   follow, including while zoomed. Drag a selected node to move the selection.
-* Ctrl, Cmd or Shift+click toggles node selection. Drag a rectangle on the
+* Selected operators, inputs and outputs have a blue fill and a thick gold
+  border, distinct from the mint hover outline. The selection border keeps its
+  screen width while zooming; high-contrast mode uses system selection colors.
+* Ctrl, Cmd or Shift+click adds an unselected node or removes a selected one
+  without changing the other selected nodes. Drag a rectangle on the
   background to select a group; hold a selection modifier to add to it.
   Click the background to clear selection.
 * Ctrl+A (Cmd+A on macOS) selects all nodes when the graph has focus.
