@@ -1,7 +1,7 @@
 Links
 =====
 
-Related repositories in the ONNX ecosystem.
+Related projects and export tools in the ONNX ecosystem.
 
 onnx-light projects
 -------------------
@@ -46,3 +46,38 @@ ONNX and ONNX Runtime
   runtime for machine learning models.
 * `onnxruntime-genai <https://github.com/microsoft/onnxruntime-genai>`_:
   generative AI model inference with ONNX Runtime.
+
+ONNX exporters
+---------------
+
+Create an ONNX model with an external exporter, then open its ``.onnx`` file
+in the viewer. Supported models, operators and target runtimes vary by tool.
+
+.. figure:: _static/onnx-exporters.svg
+   :alt: External exporters write an ONNX model and optional external weight
+         files. ONNX Light Viewer opens the resulting model for inspection.
+   :width: 100%
+
+   Export happens outside the viewer; opening a model does not execute it.
+
+* `PyTorch ONNX <https://docs.pytorch.org/docs/stable/onnx.html>`_:
+  ``torch.onnx.export`` exports supported PyTorch models to ONNX.
+* `Optimum ONNX <https://github.com/huggingface/optimum-onnx>`_:
+  exports supported Hugging Face models for ONNX Runtime.
+* `ONNX Runtime GenAI model builder
+  <https://github.com/microsoft/onnxruntime-genai/tree/main/src/python/py/models>`_:
+  builds ONNX graphs for supported generative AI architectures.
+* `mbext <https://github.com/xadupre/mbext>`_:
+  extends the GenAI model builder with additional architectures and fast,
+  offline export-validation tests.
+* `Mobius <https://github.com/onnxruntime/mobius>`_:
+  builds ONNX graphs with ONNX Script and pretrained weights rather than
+  tracing a PyTorch model.
+* `skl2onnx <https://github.com/onnx/sklearn-onnx>`_:
+  converts supported scikit-learn estimators and pipelines to ONNX.
+* `tf2onnx <https://github.com/onnx/tensorflow-onnx>`_:
+  converts TensorFlow and Keras models to ONNX.
+
+These links do not imply built-in export commands. Viewer-side exporter
+integration is planned in `issue #131
+<https://github.com/xadupre/onnx-light-viewer/issues/131>`_.
