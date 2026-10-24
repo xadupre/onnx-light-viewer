@@ -15,6 +15,17 @@
 namespace onnx_light_viewer {
 namespace {
 
+Napi::Array OpsetImports(Napi::Env env, const auto &imports) {
+  auto result = Napi::Array::New(env);
+  for (const auto &opset : imports) {
+    auto entry = Napi::Object::New(env);
+    entry.Set("domain", Domain(opset.domain()));
+    entry.Set("version", Text(env, std::to_string(opset.version())));
+    result.Set(result.Length(), entry);
+  }
+  return result;
+}
+
 Napi::Array Dimensions(Napi::Env env, const ol::TensorShapeProto &shape) {
   auto result = Napi::Array::New(env);
   uint32_t index = 0;
@@ -261,6 +272,7 @@ Napi::Object ModelSummary(Napi::Env env, const ol::ModelProto &model,
   auto result = Napi::Object::New(env);
   result.Set("name", graph.name().empty() ? Text(env, file_name) : Text(env, graph.name()));
   result.Set("nodeCount", graph.node_size());
+  result.Set("opsets", OpsetImports(env, model.opset_import()));
   result.Set("initializerCount", Napi::Number::New(env, initializers.size()));
   result.Set("inputs", ValueNames(env, graph.input(), initializers));
   result.Set("outputs", ValueNames(env, graph.output()));
@@ -518,6 +530,8 @@ Napi::Object ModelGraph(Napi::Env env, const ol::ModelProto &model, const std::s
       prefix.push_back(path[depth]);
   }
   result.Set("breadcrumbs", breadcrumbs);
+  result.Set("opsets", OpsetImports(env, selection.function ? selection.function->opset_import()
+                                                            : model.opset_import()));
   result.Set("nodes", nodes);
   result.Set("inputs", inputs);
   result.Set("outputs", ValueNames(env, graph.output()));

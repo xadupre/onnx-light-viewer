@@ -179,6 +179,51 @@ test("opens PipelineProto stages, rebases nested links and preserves settings on
   assert.deepEqual(decodeGraph(bytes, "test.pipe-onnx"), overview);
 });
 
+test("projects all declared opsets, including unused domains and function-specific imports", () => {
+  const bytes = Buffer.concat([
+    modelBytes("custom.onnx"),
+    bytesField(
+      8,
+      Buffer.concat([bytesField(1, "unused.domain"), varintField(2, 7)]),
+    ),
+  ]);
+  const model = loadModel(bytes, "imports.onnx");
+  const expected = [
+    { domain: "ai.onnx", version: "13" },
+    { domain: "example", version: "1" },
+    { domain: "unused.domain", version: "7" },
+  ];
+  assert.deepEqual(model.graph().opsets, expected);
+  assert.deepEqual(model.summary().opsets, expected);
+  const functions = loadModel(modelBytes("functions.onnx"), "functions.onnx");
+  const root = functions.graph();
+  assert.deepEqual(root.opsets, [{ domain: "example", version: "1" }]);
+  assert.deepEqual(functions.graph(false, root.nodes[0].function.path).opsets, [
+    { domain: "ai.onnx", version: "11" },
+    { domain: "example", version: "1" },
+  ]);
+  const pipeline = loadModel(
+    pipelineBytes({
+      embedding: modelBytes("softmax-11.onnx"),
+      prefill: bytes,
+      decode: modelBytes("relu.onnx"),
+    }),
+    "imports.pipe-onnx",
+  );
+  assert.deepEqual(pipeline.graph().opsets, [
+    { domain: "ai.onnx", version: "11" },
+    ...expected,
+  ]);
+  assert.deepEqual(pipeline.graph().nodes[0].pipelineModel.opsets, [
+    { domain: "ai.onnx", version: "11" },
+  ]);
+  assert.deepEqual(pipeline.graph().nodes[1].pipelineModel.opsets, expected);
+  assert.deepEqual(
+    pipeline.graph(false, [{ pipeline: "prefill" }]).opsets,
+    expected,
+  );
+});
+
 test("projects stage summaries without inspecting stage operators", () => {
   for (const bytes of [
     modelBytes("relu.onnx"),
@@ -191,6 +236,7 @@ test("projects stage summaries without inspecting stage operators", () => {
     const ports = new Set([...graph.inputs, ...graph.outputs]);
     assert.deepEqual(model.summary(), {
       name: graph.name,
+      opsets: graph.opsets,
       inputs: graph.inputs,
       outputs: graph.outputs,
       initializerCount: graph.initializerCount,
@@ -2130,11 +2176,37 @@ test("allows shape and metadata analysis after omitting raw or typed initializer
   }
 });
 
+test("verifies retained models and every pipeline stage without inference or edits", async () => {
+  for (const name of [
+    "inference.onnx",
+    "nested-if.onnx",
+    "functions.onnx",
+    "tiny.pipe-onnx",
+  ]) {
+    const model = loadModel(modelBytes(name), name);
+    const before = model.graph();
+    const bytes = await model.serialize();
+    model.verify();
+    assert.deepEqual(model.graph(), before);
+    assert.deepEqual(await model.serialize(), bytes);
+  }
+  for (const role of ["embedding", "prefill", "decode"]) {
+    const model = loadModel(
+      pipelineBytes({ [role]: modelBytes("invalid-graph.onnx") }),
+      "invalid.pipe-onnx",
+    );
+    const before = model.graph();
+    assert.throws(() => model.verify(), /VerifyModel:/);
+    assert.deepEqual(model.graph(), before);
+  }
+});
+
 test("verifies invalid graph connectivity before inference and metadata without changing the model", () => {
   const bytes = modelBytes("invalid-graph.onnx");
   const model = loadModel(bytes, "invalid-graph.onnx");
   const before = model.graph();
   for (const action of [
+    () => model.verify(),
     () => model.graph(true),
     () => model.metadata(),
     () => decodeGraph(bytes, "invalid-graph.onnx", true),

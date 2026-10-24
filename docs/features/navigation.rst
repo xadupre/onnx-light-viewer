@@ -9,6 +9,10 @@ The **Controls** tab groups keyboard shortcuts, mouse gestures and navigation
 buttons into two-column tables: **Control** and **Action**. It is available even
 before a model is loaded.
 
+Graph navigation buttons are stacked in the bottom-left corner in paired rows:
+**Top** / **Bottom**, **+** / **-**, then **Fit** / **Zoom to readable size**.
+**Zoom area** spans the final row.
+
 * **+**, **-** or Ctrl+wheel zoom without rearranging nodes. Ctrl+wheel zooms
   around the pointer, both in and out. **Fit** recenters the view and includes
   nodes moved outside the original layout.

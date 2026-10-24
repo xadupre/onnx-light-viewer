@@ -87,11 +87,16 @@ function createSettingsPanel({ byId, postMessage, onViewerSettings }) {
       byId("settings-python-status").textContent =
         `Python ${message.python.version} — ${message.python.executable}`;
       byId("settings-packages").replaceChildren();
-      for (const pkg of message.python.packages) {
+      for (const pkg of [...message.python.packages].sort((a, b) =>
+        a.name.localeCompare(b.name),
+      )) {
         const name = document.createElement("dt");
         name.textContent = pkg.name;
         const version = document.createElement("dd");
-        version.textContent = pkg.version ?? "Not installed";
+        version.textContent = pkg.source
+          ? `${pkg.version ?? "Version unavailable"} (PYTHONPATH)`
+          : (pkg.version ?? "Not installed");
+        if (pkg.source) version.title = pkg.source;
         byId("settings-packages").append(name, version);
       }
     } else if (message.type === "settings-error") {

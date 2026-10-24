@@ -116,6 +116,47 @@ function submitOpen(document, window) {
     .dispatchEvent(new window.Event("submit", { cancelable: true }));
 }
 
+test("Verify reports success and errors, prevents duplicate requests and resets on navigation", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const button = document.getElementById("verify-model");
+  const status = document.getElementById("verify-status");
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  assert.equal(button.disabled, true);
+  assert.ok(button.closest(".graph-toolbar"));
+  load(demoGraph);
+  const graph = document.getElementById("nodes").innerHTML;
+  button.click();
+  button.click();
+  assert.equal(messages.filter(({ type }) => type === "verify").length, 1);
+  assert.equal(button.disabled, true);
+  assert.equal(button.getAttribute("aria-busy"), "true");
+  assert.equal(button.dataset.refreshStatus, "pending");
+  send({ type: "verify-info" });
+  assert.equal(status.textContent, "Model is valid");
+  assert.equal(button.disabled, false);
+  assert.equal(button.getAttribute("aria-busy"), "false");
+  button.click();
+  send({ type: "verify-error", error: "VerifyModel: invalid graph" });
+  assert.match(
+    status.textContent,
+    /Verification failed: VerifyModel: invalid graph/,
+  );
+  assert.equal(button.dataset.refreshStatus, "failed");
+  assert.equal(button.disabled, false);
+  assert.equal(document.getElementById("nodes").innerHTML, graph);
+  load({ ...demoGraph, pipeline: true });
+  assert.equal(status.textContent, "");
+  assert.equal(button.dataset.refreshStatus, "idle");
+  button.click();
+  send({ type: "verify-info" });
+  assert.equal(status.textContent, "Pipeline is valid");
+  send({ type: "load-state", pending: true });
+  assert.equal(button.disabled, true);
+  send({ type: "load-state", pending: false });
+  assert.equal(button.disabled, false);
+});
+
 test("pipeline navigation enables stage fusions and disables unsupported encrypted saves", (t) => {
   const { document, window, messages } = openViewer(t);
   const send = (graph, file) =>
@@ -1801,13 +1842,18 @@ test("shows loading progress until success, failure or cancellation, including i
   );
   state({ type: "load-error", error: "Invalid model" });
   assert.equal(progress.hidden, true);
+  const error = document.getElementById("model-error");
+  assert.equal(error.hidden, false);
+  assert.match(error.textContent, /Invalid model/);
   assert.match(
     document.getElementById("load-status").textContent,
     /Invalid model/,
   );
   assert.equal(document.getElementById("open-model").disabled, false);
   state({ type: "load-state", pending: true });
+  assert.equal(error.hidden, true);
   load(demoGraph);
+  assert.equal(error.hidden, true);
   assert.equal(progress.hidden, true);
   assert.equal(
     document.getElementById("model-view").getAttribute("aria-busy"),
@@ -1968,14 +2014,33 @@ test("Settings edits saved paths and existing sidebar preferences and renders pa
       executable: "/usr/bin/python3",
       version: "3.12.3",
       packages: [
-        { name: "onnx", version: null },
+        {
+          name: "transformers",
+          version: null,
+          source: "/sources/transformers",
+        },
         { name: "torch", version: "<img src=x onerror=alert(1)>" },
+        { name: "onnx", version: null },
       ],
     },
   });
   assert.equal(byId("settings-inspect-python").disabled, false);
   assert.match(byId("settings-packages").textContent, /Not installed/);
   assert.equal(byId("settings-packages").querySelector("img"), null);
+  assert.deepEqual(
+    [...byId("settings-packages").querySelectorAll("dt")].map(
+      (name) => name.textContent,
+    ),
+    ["onnx", "torch", "transformers"],
+  );
+  assert.match(
+    byId("settings-packages").textContent,
+    /Version unavailable \(PYTHONPATH\)/,
+  );
+  assert.equal(
+    byId("settings-packages").querySelector("dd:last-child").title,
+    "/sources/transformers",
+  );
   byId("settings-inspect-python").click();
   send({
     ...messages.at(-1),
@@ -2702,10 +2767,7 @@ test("opens graph attributes and nested breadcrumbs, including empty graphs and 
   document.querySelector("#node-attributes button").click();
   load(model.graph(false, messages.at(-1).path));
   assert.equal(document.querySelectorAll(".graph-node").length, 0);
-  assert.equal(
-    document.getElementById("node-title").textContent,
-    "No operator",
-  );
+  assert.equal(document.getElementById("node-title").textContent, "Graph");
   load(demoGraph);
   assert.equal(document.getElementById("graph-navigation").hidden, false);
   assert.equal(document.querySelectorAll("#graph-navigation button").length, 1);
@@ -2739,7 +2801,8 @@ test("opens every subgraph from its operator rectangle with pointer and keyboard
     const body = group.querySelector("rect");
     const row = link.querySelector("rect");
     assert.ok(
-      Number(row.getAttribute("y")) >= Number(body.getAttribute("y")) + 94,
+      Number(row.getAttribute("y")) >=
+        Number(group.querySelector(".node-tensor-info").getAttribute("y")) + 8,
     );
     assert.ok(
       Number(row.getAttribute("y")) + Number(row.getAttribute("height")) <=
@@ -3213,7 +3276,7 @@ test("shows native metadata in the sidebar and marks released and never-used res
     true,
   );
   assert.equal(
-    document.getElementById("metadata-values").parentElement.open,
+    document.getElementById("metadata-values").parentElement.hidden,
     false,
   );
   assert.doesNotMatch(
@@ -3295,10 +3358,14 @@ test("shows native metadata in the sidebar and marks released and never-used res
     "3",
   );
   assert.equal(
-    document.getElementById("metadata-node").parentElement.open,
+    document.getElementById("metadata-node").parentElement.hidden,
     false,
   );
   assert.ok(document.querySelector("#metadata-values .metadata-badges"));
+  assert.equal(
+    document.querySelector("#metadata-panel details, #metadata-panel summary"),
+    null,
+  );
   assert.equal(document.querySelectorAll(".edge.released").length, 4);
   assert.equal(document.querySelectorAll(".tensor-label.released").length, 4);
   assert.deepEqual(
@@ -3671,7 +3738,7 @@ test("shows at most two short attributes and initializers inside operators", (t)
     const body = group.querySelector("rect");
     assert.equal(
       Number(body.getAttribute("height")),
-      112 + expected.length * 18,
+      88 + expected.length * 16,
     );
     const bottom =
       Number(body.getAttribute("y")) + Number(body.getAttribute("height"));
@@ -3697,7 +3764,7 @@ test("shows at most two short attributes and initializers inside operators", (t)
   assert.equal(document.querySelector(".node-initializer"), null);
   assert.equal(
     document.querySelector(".graph-node > rect").getAttribute("height"),
-    "112",
+    "88",
   );
 });
 
@@ -3736,7 +3803,7 @@ test("summarizes numerous or long parameters while preserving inspector details"
       group.querySelectorAll(".node-attribute, .node-initializer").length,
       0,
     );
-    assert.equal(group.querySelector("rect").getAttribute("height"), "130");
+    assert.equal(group.querySelector("rect").getAttribute("height"), "104");
     assert.equal(
       document.querySelectorAll("#node-initializers li").length,
       parameters.length,
@@ -3811,7 +3878,7 @@ test("fits initializer previews safely above subgraph links and preserves layout
   );
   assert.equal(group.querySelector("img"), null);
   const width = Number(body.getAttribute("width"));
-  assert.ok(width >= 160 && width <= 280);
+  assert.ok(width >= 140 && width <= 280);
   assert.ok(
     row.firstChild.textContent.length * parseFloat(row.style.fontSize) * 0.6 <=
       width - 24,
@@ -4356,7 +4423,7 @@ test("loads a connected graph, selects with the keyboard and treats model text a
   );
 });
 
-test("replaces the demo with a no-operator graph without stale nodes or inspector values", (t) => {
+test("replaces the demo with a no-operator graph and inspects its scope", (t) => {
   const { document, load } = openViewer(t);
   load(demoGraph);
   load({
@@ -4368,12 +4435,172 @@ test("replaces the demo with a no-operator graph without stale nodes or inspecto
   });
   assert.equal(document.querySelectorAll(".graph-node").length, 0);
   assert.equal(document.querySelectorAll(".edge").length, 1);
-  assert.equal(
-    document.getElementById("node-title").textContent,
-    "No operator",
+  assert.equal(document.getElementById("node-title").textContent, "Model");
+  assert.equal(document.getElementById("node-inputs").children.length, 1);
+  assert.equal(document.getElementById("node-name").textContent, "passthrough");
+});
+
+test("background selection inspects the current model, subgraph, function or pipeline", (t) => {
+  const { document, window, load, pointer } = openViewer(t);
+  const nested = loadModel(
+    readFileSync(require.resolve("./models/subgraphs.onnx")),
+    "subgraphs.onnx",
   );
-  assert.equal(document.getElementById("node-inputs").children.length, 0);
-  assert.equal(document.getElementById("node-name").textContent, "—");
+  const nestedPath = nested
+    .graph()
+    .nodes[0].attributes.find((attribute) => attribute.graphs?.length)
+    .graphs[0].path;
+  const functions = loadModel(
+    readFileSync(require.resolve("./models/functions.onnx")),
+    "functions.onnx",
+  );
+  const functionPath = functions.graph().nodes.find((node) => node.function)
+    .function.path;
+  const pipeline = loadModel(
+    readFileSync(require.resolve("./models/tiny.pipe-onnx")),
+    "tiny.pipe-onnx",
+  );
+  for (const [graph, kind] of [
+    [demoGraph, "Model"],
+    [functions.graph(), "Model"],
+    [nested.graph(false, nestedPath), "Graph"],
+    [functions.graph(false, functionPath), "Function"],
+    [pipeline.graph(), "Pipeline"],
+    [pipeline.graph(false, [{ pipeline: "prefill" }]), "Model"],
+  ]) {
+    load(graph);
+    const svg = document.getElementById("graph");
+    pointer(svg, "pointerdown", 0, 0);
+    pointer(svg, "pointerup", 0, 0);
+    assert.equal(document.querySelectorAll(".graph-node.selected").length, 0);
+    assert.equal(document.getElementById("node-title").textContent, kind);
+    assert.equal(document.getElementById("node-name").textContent, graph.name);
+    assert.equal(
+      document.getElementById("node-domain").textContent,
+      [...new Set(graph.opsets.map(({ domain }) => domain))].join(", "),
+    );
+    assert.deepEqual(
+      [...document.getElementById("node-opset").children].map(
+        (entry) => entry.textContent,
+      ),
+      graph.opsets.map(({ domain, version }) => `${domain}: ${version}`),
+    );
+    assert.equal(
+      document.getElementById("node-name-label").textContent,
+      `${kind.toUpperCase()} NAME`,
+    );
+    assert.deepEqual(
+      [...document.querySelectorAll("#node-inputs .tensor-name")].map(
+        (value) => value.textContent,
+      ),
+      graph.inputs,
+    );
+    if (document.getElementById("metadata-panel").hidden)
+      document.getElementById("show-metadata").click();
+    window.dispatchEvent(
+      new window.MessageEvent("message", {
+        data: {
+          type: "metadata-info",
+          metadata: {
+            model: [{ key: "description", value: "Visible metadata" }],
+            graph: [],
+            nodes: [],
+            values: [],
+          },
+        },
+      }),
+    );
+    assertMetadataTable(document.getElementById("metadata-analysis"), [
+      { key: kind, value: graph.name },
+    ]);
+    assert.equal(
+      document.querySelector(
+        "#metadata-panel details, #metadata-panel summary",
+      ),
+      null,
+    );
+    assert.equal(
+      document.getElementById("metadata-model").parentElement.hidden,
+      false,
+    );
+  }
+});
+
+test("pipeline model boxes show the stage identity and imports rather than operator placeholders", (t) => {
+  const { document, load, pointer, messages } = openViewer(t);
+  const pipeline = loadModel(
+    readFileSync(require.resolve("./models/tiny.pipe-onnx")),
+    "tiny.pipe-onnx",
+  );
+  const overview = pipeline.graph();
+  load(overview);
+  assert.match(
+    document.getElementById("graph-summary").textContent,
+    /^3 models /,
+  );
+  const boxes = [...document.querySelectorAll(".graph-node")];
+  const positions = nodePositions(document);
+  for (const [index, node] of overview.nodes.entries()) {
+    const { x, y } = positions[index];
+    pointer(boxes[index], "pointerdown", x, y);
+    pointer(boxes[index], "pointerup", x, y);
+    const model = node.pipelineModel;
+    assert.equal(document.getElementById("node-title").textContent, "Model");
+    assert.equal(
+      document.getElementById("node-name-label").textContent,
+      "MODEL NAME",
+    );
+    assert.equal(document.getElementById("node-name").textContent, model.name);
+    assert.ok(
+      document
+        .getElementById("node-description")
+        .textContent.includes(
+          `${node.name} model in pipeline ${overview.name}`,
+        ),
+    );
+    assert.ok(
+      document
+        .getElementById("node-description")
+        .textContent.includes(`Contains ${model.nodeCount} operator`),
+    );
+    assert.equal(
+      document.getElementById("node-domain").textContent,
+      [...new Set(model.opsets.map(({ domain }) => domain))].join(", "),
+    );
+    assert.deepEqual(
+      [...document.getElementById("node-opset").children].map(
+        (entry) => entry.textContent,
+      ),
+      model.opsets.map(({ domain, version }) => `${domain}: ${version}`),
+    );
+  }
+  const svg = document.getElementById("graph");
+  pointer(svg, "pointerdown", 0, 0);
+  pointer(svg, "pointerup", 0, 0);
+  assert.equal(document.getElementById("node-title").textContent, "Pipeline");
+  assert.match(
+    document.getElementById("node-description").textContent,
+    /each box is a contained model, not an operator/,
+  );
+  pointer(boxes[1], "pointerdown", positions[1].x, positions[1].y);
+  pointer(boxes[1], "pointerup", positions[1].x, positions[1].y);
+  document.querySelector("#node-attributes button").click();
+  const path = [{ pipeline: "prefill" }];
+  assert.deepEqual(JSON.parse(JSON.stringify(messages.at(-1).path)), path);
+  const stage = pipeline.graph(false, path);
+  load(stage);
+  assert.match(
+    document.getElementById("graph-summary").textContent,
+    /^\d+ nodes? /,
+  );
+  assert.equal(
+    document.getElementById("node-name-label").textContent,
+    "NODE NAME",
+  );
+  assert.equal(
+    document.getElementById("node-opset").textContent,
+    stage.nodes[0].opset,
+  );
 });
 
 function chainGraph(length = 6) {
@@ -4495,7 +4722,7 @@ test("fits complete operator types and names without redundant node or port badg
       nodes[index].name,
     );
     const width = Number(group.querySelector("rect").getAttribute("width"));
-    assert.ok(width > 160 && width <= 280);
+    assert.ok(width > 140 && width <= 280);
     const body = group.querySelector("rect");
     const name = group.querySelector(".operator-name");
     assert.equal(name.getAttribute("text-anchor"), "end");
@@ -4505,7 +4732,7 @@ test("fits complete operator types and names without redundant node or port badg
     );
     assert.equal(
       Number(name.getAttribute("y")),
-      Number(body.getAttribute("y")) + 18,
+      Number(body.getAttribute("y")) + 15,
     );
     assert.ok(
       Number(name.getAttribute("y")) <
@@ -4514,10 +4741,10 @@ test("fits complete operator types and names without redundant node or port badg
   }
   assert.equal(
     groups[0].querySelector(".operator-label").style.fontSize,
-    "19px",
+    "16px",
   );
   assert.ok(
-    parseFloat(groups[1].querySelector(".operator-label").style.fontSize) < 19,
+    parseFloat(groups[1].querySelector(".operator-label").style.fontSize) < 16,
   );
   assert.ok(
     parseFloat(groups[2].querySelector(".operator-name").style.fontSize) < 10,
@@ -4664,8 +4891,16 @@ test("assigns random horizontal positions and node-index rows on each model load
   load(model);
   const positions = nodePositions(document);
   positions.forEach((position, index) => {
-    assert.equal(position.y, 189 + index * 163);
-    assert.ok(position.x >= 100 && position.x < 400);
+    assert.equal(position.y, 177 + index * 124);
+    const margin =
+      Number(
+        document
+          .querySelector(`[data-id="node-${index}"] > rect`)
+          .getAttribute("width"),
+      ) /
+        2 +
+      20;
+    assert.ok(position.x >= margin && position.x < 500 - margin);
   });
   assert.ok(new Set(positions.map((position) => position.x)).size > 1);
   assert.equal(document.querySelectorAll(".edge").length, 7);
@@ -5087,6 +5322,26 @@ test("keyboard zoom shortcuts match controls and stay scoped to the graph canvas
 
 test("Top/Bottom buttons align model boundaries without changing zoom or node positions", (t) => {
   const { document, window, load, resize } = openViewer(t);
+  const controls = document.querySelector(".zoom-controls");
+  const style = window.getComputedStyle(controls);
+  assert.equal(style.left, "18px");
+  assert.equal(style.bottom, "18px");
+  assert.equal(style.display, "grid");
+  assert.deepEqual(
+    [...controls.children].map((button) => [
+      button.id,
+      window.getComputedStyle(button).gridColumn,
+    ]),
+    [
+      ["go-top", "1"],
+      ["go-bottom", "2"],
+      ["zoom-in", "1"],
+      ["zoom-out", "2"],
+      ["zoom-fit", "1"],
+      ["zoom-readable", "2"],
+      ["zoom-area", "1 / -1"],
+    ],
+  );
   const graph = document.getElementById("graph");
   const top = document.getElementById("go-top");
   const bottom = document.getElementById("go-bottom");
@@ -6121,7 +6376,9 @@ test("rectangle selection supports reverse and additive gestures and moves toget
   const { document, load, pointer, window } = openViewer(t);
   load(chainGraph());
   const graph = document.getElementById("graph");
-  pointer(graph, "pointerdown", 500, 400);
+  const positions = nodePositions(document);
+  const selectionBottom = (positions[1].y + positions[2].y) / 2;
+  pointer(graph, "pointerdown", 500, selectionBottom);
   pointer(graph, "pointermove", -10, 110);
   assert.equal(document.querySelectorAll(".graph-node.selected").length, 2);
   assert.ok(document.querySelector(".selection-rectangle"));

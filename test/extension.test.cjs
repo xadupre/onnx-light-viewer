@@ -15,7 +15,7 @@ const {
 } = require("node:fs/promises");
 const { createCipheriv, createHash, pbkdf2Sync } = require("node:crypto");
 const { createServer } = require("node:http");
-const { tmpdir } = require("node:os");
+const { homedir, tmpdir } = require("node:os");
 const { createRequire } = require("node:module");
 const path = require("node:path");
 const vm = require("node:vm");
@@ -544,7 +544,7 @@ test("Settings reports defaults, versions and persisted paths without running Py
   assert.equal(info.type, "settings-info");
   assert.equal(
     info.application.downloadDirectory,
-    path.join(storage, "huggingface"),
+    path.join(homedir(), ".cache", "onnx-light-viewer", "downloads"),
   );
   assert.equal(info.appVersion, require("../package.json").version);
   assert.equal(info.nativeVersion, require("../dist/graph").onnxLightVersion);
@@ -1959,7 +1959,7 @@ test("streams local custom-editor files and replacements without reading whole f
 });
 
 test("ignores stale recovery results and errors after replacing a local model", async () => {
-  for (const type of ["navigate", "metadata", "refresh-shapes"]) {
+  for (const type of ["navigate", "metadata", "refresh-shapes", "verify"]) {
     const extension = await openExtension("inference.onnx", undefined, true);
     for (const path of [[], [{ node: 9999, attribute: 0, graph: 0 }]]) {
       await extension.open("invalid-graph.onnx");
@@ -2028,6 +2028,7 @@ test("ignores delayed recovery results and errors after disposing the panel", as
     { type: "navigate", path: [{ node: 9999, attribute: 0, graph: 0 }] },
     { type: "metadata" },
     { type: "refresh-shapes" },
+    { type: "verify" },
   ]) {
     const extension = await openExtension(
       "invalid-graph.onnx",
@@ -2048,7 +2049,7 @@ test("ignores delayed recovery results and errors after disposing the panel", as
 });
 
 test("discards analysis from the previous graph when navigation shares delayed recovery", async () => {
-  for (const type of ["refresh-shapes", "metadata"]) {
+  for (const type of ["refresh-shapes", "metadata", "verify"]) {
     const extension = await openExtension("nested-if.onnx", undefined, true);
     const native = extension.nativeModels.at(-1);
     const graph = native.graph;
@@ -2078,7 +2079,8 @@ test("discards analysis from the previous graph when navigation shares delayed r
       extension.messages.some(({ type: messageType }) =>
         type === "refresh-shapes"
           ? messageType === "shape-info"
-          : messageType === "metadata-info",
+          : messageType ===
+            (type === "verify" ? "verify-info" : "metadata-info"),
       ),
       false,
     );
@@ -2091,6 +2093,8 @@ test("discards analysis from the previous graph when navigation shares delayed r
           .shape,
         ["N", "3"],
       );
+    } else if (type === "verify") {
+      assert.equal(extension.messages.at(-1).type, "verify-info");
     } else {
       assert.equal(extension.messages.at(-1).type, "metadata-info");
       assert.equal(extension.messages.at(-1).metadata.nodes.length, 2);
@@ -2203,6 +2207,16 @@ test("opens a cached Hugging Face model and preserves the display on invalid inp
     "onnxLightViewer.open",
     false,
     storage,
+    undefined,
+    new Map([
+      [
+        "applicationSettings",
+        {
+          downloadDirectory: path.join(storage, "huggingface"),
+          pythonPath: process.platform === "win32" ? "python" : "python3",
+        },
+      ],
+    ]),
   );
   await extension.openHuggingFace(url.replace("/resolve/", "/blob/"));
   assert.deepEqual(extension.preferences.get("pathHistory").open, [
@@ -2295,6 +2309,15 @@ test("recovers a downloaded model from its published cache path after the tempor
     true,
     storage,
     `http://127.0.0.1:${server.address().port}/custom.onnx`,
+    new Map([
+      [
+        "applicationSettings",
+        {
+          downloadDirectory: path.join(storage, "huggingface"),
+          pythonPath: process.platform === "win32" ? "python" : "python3",
+        },
+      ],
+    ]),
   );
   await extension.openHuggingFace(
     "https://huggingface.co/viewer-tests/fixtures/resolve/main/custom.onnx",
@@ -2540,6 +2563,44 @@ test("keeps operation logs quiet and exposes real native exception recovery in S
   assert.equal(new Set(replay.map(({ id }) => id)).size, replay.length);
 });
 
+test("shows missing-graph loading errors in the canvas even before the webview is ready", async (t) => {
+  const extension = await openExtension("missing-graph.onnx");
+  const dom = new JSDOM(extension.webview.html, { runScripts: "outside-only" });
+  t.after(() => dom.window.close());
+  const { window } = dom;
+  const { document } = window;
+  const requests = [];
+  window.HTMLCanvasElement.prototype.getContext = () => ({
+    font: "",
+    measureText: (text) => ({ width: text.length * 8 }),
+  });
+  document.getElementById("canvas").getBoundingClientRect = () =>
+    new window.DOMRect(0, 0, 1060, 350);
+  window.acquireVsCodeApi = () => ({
+    postMessage: (message) => requests.push(extension.receive(message)),
+  });
+  extension.connect((data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data })),
+  );
+  for (const script of document.querySelectorAll("script[src]"))
+    window.eval(readFileSync(new URL(script.src), "utf8"));
+  while (requests.length) await Promise.all(requests.splice(0));
+  const error = document.getElementById("model-error");
+  assert.equal(error.hidden, false);
+  assert.equal(document.getElementById("model-view").hidden, false);
+  assert.match(error.textContent, /does not contain an ONNX model graph/);
+  assert.equal(document.getElementById("load-progress").hidden, true);
+  assert.equal(document.getElementById("open-model").disabled, false);
+  await extension.open("relu.onnx");
+  while (requests.length) await Promise.all(requests.splice(0));
+  assert.equal(error.hidden, true);
+  const graph = document.getElementById("nodes").innerHTML;
+  await extension.open("missing-graph.onnx");
+  while (requests.length) await Promise.all(requests.splice(0));
+  assert.equal(error.hidden, false);
+  assert.equal(document.getElementById("nodes").innerHTML, graph);
+});
+
 test("keeps failed initial loading inspectable and can open Logs before any model", async () => {
   const failed = await openExtension("missing-ir.onnx");
   await failed.receive({ type: "ready" });
@@ -2580,6 +2641,36 @@ test("keeps failed initial loading inspectable and can open Logs before any mode
         entry.status === "CANCELLED",
     ),
   );
+});
+
+test("verifies the current model, reports errors and preserves native and display state", async () => {
+  const extension = await openExtension("inference.onnx");
+  const native = extension.nativeModels.at(-1);
+  const before = native.graph();
+  await extension.receive({ type: "verify", actionId: "ui:verify" });
+  assert.equal(extension.messages.at(-1).type, "verify-info");
+  assert.deepEqual(native.graph(), before);
+  assert.ok(
+    extension.events.some(
+      ({ type, entry }) =>
+        type === "log-entry" &&
+        entry.id === "ui:verify" &&
+        entry.status === "SUCCEEDED",
+    ),
+  );
+  await extension.open("invalid-graph.onnx");
+  const invalid = extension.nativeModels.at(-1);
+  await extension.receive({ type: "verify" });
+  assert.equal(extension.messages.at(-1).type, "verify-error");
+  assert.match(extension.messages.at(-1).error, /^VerifyModel:/);
+  assert.match(extension.errors.at(-1), /ONNX verification failed/);
+  const count = extension.nativeModels.length;
+  await extension.receive({ type: "verify" });
+  assert.equal(extension.nativeModels.length, count);
+  assert.equal(extension.nativeModels.at(-1), invalid);
+  await extension.open("tiny.pipe-onnx");
+  await extension.receive({ type: "verify" });
+  assert.equal(extension.messages.at(-1).type, "verify-info");
 });
 
 test("keeps timestamped action history, verifies invalid graphs and reloads before retrying", async () => {

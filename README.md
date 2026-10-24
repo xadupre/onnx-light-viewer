@@ -30,10 +30,12 @@ files.
   preferences, or check the app and compiled onnx-light versions. Python is
   optional: save its executable path, then choose **Refresh package versions**
   in a trusted workspace to inspect installed ecosystem/exporter packages.
-  Inspection uses an isolated interpreter (excluding user-site and `PYTHONPATH`
-  packages), disables startup hooks (`sitecustomize` and executable `.pth` lines),
-  imports no model libraries, and installs nothing. Virtualenv metadata and
-  path-only `.pth` entries remain discoverable.
+  Downloads default to `~/.cache/onnx-light-viewer/downloads`.
+  Inspection excludes user-site packages and disables startup hooks
+  (`sitecustomize` and executable `.pth` lines). It reads virtualenv metadata,
+  path-only `.pth` entries, and `PYTHONPATH` sources without importing model
+  libraries or installing anything. Source versions are read statically; dynamic
+  versions are shown as unavailable rather than executing package code.
 
 See the [feature guide](docs/features.rst) for controls, examples and limitations.
 Model saving and encrypted I/O are under review in [#115](https://github.com/xadupre/onnx-light-viewer/pull/115),

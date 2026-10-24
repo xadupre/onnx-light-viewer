@@ -1,7 +1,7 @@
 function createMetadataPanel({ byId, tensorDescription }) {
   function metadataEntries(parent, entries) {
     parent.replaceChildren();
-    if (parent.parentElement.tagName === "DETAILS")
+    if (parent.parentElement.tagName === "SECTION")
       parent.parentElement.hidden = entries.length === 0;
     const head = parent.createTHead();
     const header = head.insertRow();
@@ -34,21 +34,29 @@ function createMetadataPanel({ byId, tensorDescription }) {
     );
   }
 
-  function render(view, { visible, metadata, nodeMetadata, valueMetadata }) {
+  function render(
+    view,
+    { visible, metadata, nodeMetadata, valueMetadata, scope },
+  ) {
     if (!visible || !metadata) return;
     const node = view?.node;
     const port = view?.port;
     const info = node
       ? nodeMetadata.get(node.id)
       : valueMetadata.get(port?.name);
-    metadataEntries(byId("metadata-analysis"), [
-      { key: "Name", value: node?.name ?? port?.name ?? "No selection" },
-      { key: "Tag", value: info?.tag ?? "Unknown" },
-      {
-        key: "Constant",
-        value: info ? (info.constant ? "Yes" : "No") : "Unknown",
-      },
-    ]);
+    metadataEntries(
+      byId("metadata-analysis"),
+      node || port
+        ? [
+            { key: "Name", value: node?.name ?? port?.name },
+            { key: "Tag", value: info?.tag ?? "Unknown" },
+            {
+              key: "Constant",
+              value: info ? (info.constant ? "Yes" : "No") : "Unknown",
+            },
+          ]
+        : [{ key: scope.kind, value: scope.name }],
+    );
     metadataNames("metadata-releases", node ? info.releaseAfter : []);
     metadataNames("metadata-last-use", node ? info.lastUse : []);
     metadataNames("metadata-unused", node ? info.unusedOutputs : []);
@@ -58,7 +66,7 @@ function createMetadataPanel({ byId, tensorDescription }) {
         ? [...node.inputs, ...(node.captures ?? []), ...node.outputs]
         : port
           ? [port.name]
-          : [],
+          : [...scope.inputs, ...scope.outputs],
     );
     byId("metadata-value-count").textContent = names.size;
     byId("metadata-values").parentElement.hidden = names.size === 0;
@@ -82,14 +90,12 @@ function createMetadataPanel({ byId, tensorDescription }) {
         description.textContent = tensorDescription(name);
         item.append(heading, badges, description);
         if (value?.entries.length) {
-          const details = document.createElement("details");
-          const summary = document.createElement("summary");
-          summary.textContent = "Stored metadata";
+          const heading = document.createElement("strong");
+          heading.textContent = "Stored metadata";
           const entries = document.createElement("table");
           entries.setAttribute("aria-label", "Stored tensor metadata");
-          details.append(summary, entries);
+          item.append(heading, entries);
           metadataEntries(entries, value.entries);
-          item.append(details);
         }
         return item;
       }),

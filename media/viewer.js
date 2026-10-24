@@ -22,7 +22,6 @@ let overviewVisible = false;
 let overviewDirty = true;
 let crossingConnections = new Set();
 let readablePending = false;
-let hasOperators = false;
 let gesture;
 let zoomAreaMode = false;
 let inspectedView;
@@ -208,10 +207,16 @@ function requestAction(type, action, parameters = {}) {
 }
 
 function setLoading(pending, message = "") {
+  if (pending) byId("model-error").hidden = true;
   byId("load-progress").hidden = !pending;
   byId("model-view").setAttribute("aria-busy", String(pending));
   filePanels.setLoading(pending, hasModel);
-  for (const id of ["refresh-shapes", "refresh-metadata", "refresh-positions"])
+  for (const id of [
+    "refresh-shapes",
+    "refresh-metadata",
+    "refresh-positions",
+    "verify-model",
+  ])
     byId(id).disabled =
       pending || !hasModel || byId(id).getAttribute("aria-busy") === "true";
   byId("load-status").textContent =
@@ -221,6 +226,17 @@ function setLoading(pending, message = "") {
       hasModel &&
       (displayedGraph?.canFuse ?? displayedGraph?.breadcrumbs?.length === 1),
   );
+}
+
+function showLoadError(error) {
+  replacementPending = false;
+  for (const [id, type] of pendingActions) {
+    if (type === "open") pendingActions.delete(id);
+  }
+  setLoading(false, `Could not open model: ${error}`);
+  byId("model-error-details").textContent = error;
+  byId("model-error").hidden = false;
+  filePanels.showOpenError(error);
 }
 
 window.addEventListener("error", (event) => {
@@ -308,7 +324,7 @@ function operatorSizes(nodes) {
   const context = document.createElement("canvas").getContext("2d");
   const family = getComputedStyle(svg).fontFamily;
   const widths = new Map();
-  context.font = `600 19px ${family}`;
+  context.font = `600 16px ${family}`;
   for (const { opType } of nodes) {
     if (!widths.has(opType)) {
       widths.set(opType, context.measureText(opType).width);
@@ -371,8 +387,8 @@ function operatorSizes(nodes) {
       const width = Math.min(
         280,
         Math.max(
-          160,
-          Math.ceil(Math.max(typeWidth, nameWidth) + 32),
+          140,
+          Math.ceil(Math.max(typeWidth, nameWidth) + 24),
           ...parameterRows.map((parameter) =>
             Math.ceil(parameter.textWidth + 24),
           ),
@@ -383,11 +399,11 @@ function operatorSizes(nodes) {
         node.id,
         {
           width,
-          height: 112 + parameterRows.length * 18 + subgraphs.length * 22,
+          height: 88 + parameterRows.length * 16 + subgraphs.length * 20,
           parameterRows,
           subgraphs,
-          typeFontSize: Math.min(19, (19 * (width - 32)) / (typeWidth || 1)),
-          nameFontSize: Math.min(10, (10 * (width - 32)) / (nameWidth || 1)),
+          typeFontSize: Math.min(16, (16 * (width - 24)) / (typeWidth || 1)),
+          nameFontSize: Math.min(10, (10 * (width - 24)) / (nameWidth || 1)),
         },
       ];
     }),
@@ -493,6 +509,19 @@ function refreshStatus(
   if (svg.hasAttribute("viewBox")) fit();
 }
 
+function verificationStatus(
+  pending,
+  message = "",
+  status = pending ? RefreshStatus.PENDING : RefreshStatus.IDLE,
+) {
+  byId("verify-model").setAttribute("aria-busy", String(pending));
+  byId("verify-model").disabled = pending || replacementPending || !hasModel;
+  refreshButtonStatus("verify-model", status, message);
+  byId("verify-status").textContent = message;
+  if (gesture) gesture.viewport = undefined;
+  if (svg.hasAttribute("viewBox")) fit();
+}
+
 function updateReleases() {
   const next = new Set(
     metadataVisible
@@ -526,6 +555,7 @@ function inspectMetadata() {
     metadata: graphMetadata,
     nodeMetadata,
     valueMetadata,
+    scope: inspectionScope(),
   });
 }
 
@@ -573,7 +603,7 @@ function addUnusedLabel(view, unusedOutputs = []) {
   const text = label(
     view.group,
     view.initial.x,
-    view.initial.y - view.halfHeight + 34,
+    view.initial.y - view.halfHeight + 29,
     `Unused: ${unusedOutputs.length}`,
     "unused-label",
   );
@@ -600,9 +630,30 @@ function requestMetadata() {
   requestAction("metadata", "Refresh metadata");
 }
 
+function inspectionScope() {
+  if (!displayedGraph) return;
+  const step = displayedGraph.breadcrumbs?.at(-1)?.path.at(-1);
+  const kind = step
+    ? "function" in step
+      ? "Function"
+      : "pipeline" in step
+        ? "Model"
+        : "Graph"
+    : displayedGraph.pipeline
+      ? "Pipeline"
+      : "Model";
+  return {
+    kind,
+    name: displayedGraph.name,
+    opsets: displayedGraph.opsets,
+    inputs: displayedGraph.inputs,
+    outputs: displayedGraph.outputs,
+  };
+}
+
 function inspect(view) {
   inspectedView = view;
-  inspector.inspect(view, hasOperators);
+  inspector.inspect(view, inspectionScope());
   inspectMetadata();
 }
 
@@ -1122,6 +1173,7 @@ function navigate(path) {
 }
 
 function render(graph, metadata) {
+  byId("model-error").hidden = true;
   hasModel = true;
   byId("go-top").disabled = false;
   byId("go-bottom").disabled = false;
@@ -1133,6 +1185,7 @@ function render(graph, metadata) {
   if (!replacementPending) setLoading(false);
   endGesture();
   refreshStatus(false);
+  verificationStatus(false);
   svg.setAttribute("aria-busy", "false");
   byId("navigation-status").textContent = "";
   const breadcrumbs = graph.breadcrumbs ?? [];
@@ -1173,7 +1226,6 @@ function render(graph, metadata) {
   byId("graph-overview").setAttribute("display", "none");
   byId("overview-edges").removeAttribute("d");
   byId("overview-nodes").removeAttribute("d");
-  hasOperators = graph.nodes.length > 0;
   graphMetadata = undefined;
   nodeMetadata = new Map();
   valueMetadata = new Map();
@@ -1187,8 +1239,10 @@ function render(graph, metadata) {
     ...graph.outputs,
     ...graph.nodes.flatMap((node) => [...node.inputs, ...node.outputs]),
   ]);
+  const unit =
+    graph.pipeline && graph.breadcrumbs.length === 1 ? "model" : "node";
   byId("graph-summary").textContent =
-    `${graph.nodes.length} node${graph.nodes.length === 1 ? "" : "s"} / ${tensors.size} tensors`;
+    `${graph.nodes.length} ${unit}${graph.nodes.length === 1 ? "" : "s"} / ${tensors.size} tensors`;
   byId("initializer-count").textContent =
     `${graph.initializerCount} initializer${graph.initializerCount === 1 ? "" : "s"}`;
 
@@ -1212,7 +1266,7 @@ function render(graph, metadata) {
     height: Math.max(
       650,
       250 +
-        [...sizes.values()].reduce((sum, size) => sum + size.height + 51, 0),
+        [...sizes.values()].reduce((sum, size) => sum + size.height + 36, 0),
     ),
   };
   layoutBounds = bounds;
@@ -1223,7 +1277,7 @@ function render(graph, metadata) {
       x: randomNodeX(size.width / 2),
       y: rowTop + size.height / 2,
     });
-    rowTop += size.height + 51;
+    rowTop += size.height + 36;
   });
   const addPort = (name, index, output) => {
     const count = output ? graph.outputs.length : graph.inputs.length;
@@ -1341,7 +1395,7 @@ function render(graph, metadata) {
       const typeLabel = label(
         group,
         position.x,
-        top + 59,
+        top + 52,
         node.opType,
         "operator-label",
       );
@@ -1349,7 +1403,7 @@ function render(graph, metadata) {
       const nameLabel = label(
         group,
         position.x + size.width / 2 - 12,
-        top + 18,
+        top + 15,
         node.name,
         "operator-name",
         "end",
@@ -1359,7 +1413,7 @@ function render(graph, metadata) {
         const information = tensorLabel(
           group,
           position.x,
-          top + 99 + size.parameterRows.length * 18,
+          top + 78 + size.parameterRows.length * 16,
           node.outputs,
           26,
         );
@@ -1369,7 +1423,7 @@ function render(graph, metadata) {
         const text = label(
           group,
           position.x,
-          top + 79 + index * 18,
+          top + 68 + index * 16,
           parameter.description,
           `tensor-info node-parameter ${parameter.className}`,
         );
@@ -1378,7 +1432,7 @@ function render(graph, metadata) {
         text.append(element("title", {}, parameter.description));
       });
       size.subgraphs.forEach((graph, index) => {
-        const y = top + 112 + size.parameterRows.length * 18 + index * 22;
+        const y = top + 88 + size.parameterRows.length * 16 + index * 20;
         const link = element("g", {
           class: "subgraph-link",
           role: "button",
@@ -1391,14 +1445,14 @@ function render(graph, metadata) {
             x: position.x - size.width / 2 + 3,
             y,
             width: size.width - 6,
-            height: 21,
+            height: 19,
             rx: 4,
           }),
         );
         const text = label(
           link,
           position.x - size.width / 2 + 12,
-          y + 15,
+          y + 14,
           graph.label,
           "subgraph-label",
           "start",
@@ -1407,7 +1461,7 @@ function render(graph, metadata) {
         label(
           link,
           position.x + size.width / 2 - 12,
-          y + 15,
+          y + 14,
           ">",
           "subgraph-label",
           "end",
@@ -1604,6 +1658,10 @@ byId("canvas").addEventListener("keydown", (event) => {
 });
 window.addEventListener("blur", () => endGesture(true));
 byId("refresh-metadata").addEventListener("click", requestMetadata);
+byId("verify-model").addEventListener("click", () => {
+  verificationStatus(true, "Verifying model…");
+  requestAction("verify", "Verify model");
+});
 byId("refresh-shapes").addEventListener("click", () => {
   refreshStatus(true, "Inferring shapes/types…");
   requestAction("refresh-shapes", "Refresh shapes");
@@ -1716,17 +1774,10 @@ window.addEventListener("message", (event) => {
   } else if (event.data?.type === "show-logs") {
     showTab("logs", true);
   } else if (event.data?.type === "load-state") {
-    setLoading(
-      event.data.pending,
-      event.data.error ? `Could not open model: ${event.data.error}` : "",
-    );
+    if (event.data.error) showLoadError(event.data.error);
+    else setLoading(event.data.pending);
   } else if (event.data?.type === "load-error") {
-    replacementPending = false;
-    for (const [id, type] of pendingActions) {
-      if (type === "open") pendingActions.delete(id);
-    }
-    setLoading(false, `Could not open model: ${event.data.error}`);
-    filePanels.showOpenError(event.data.error);
+    showLoadError(event.data.error);
   } else if (event.data?.type === "graph") {
     filePanels.reset();
     displayedGraph = event.data.graph;
@@ -1739,6 +1790,18 @@ window.addEventListener("message", (event) => {
     byId("navigation-status").textContent =
       `Could not open graph: ${event.data.error}`;
     fit();
+  } else if (event.data?.type === "verify-info") {
+    verificationStatus(
+      false,
+      displayedGraph.pipeline ? "Pipeline is valid" : "Model is valid",
+      RefreshStatus.UNCHANGED,
+    );
+  } else if (event.data?.type === "verify-error") {
+    verificationStatus(
+      false,
+      `Verification failed: ${event.data.error}`,
+      RefreshStatus.FAILED,
+    );
   } else if (event.data?.type === "metadata-info") {
     acceptMetadata(event.data.metadata);
   } else if (event.data?.type === "metadata-error") {
