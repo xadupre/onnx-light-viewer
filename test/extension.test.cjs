@@ -83,7 +83,11 @@ async function openExtension(
         ? path.normalize(filePath.replace(/^\/(?=[a-z]:\/)/i, ""))
         : filePath,
     scheme,
-    toString: () => `${scheme}://${filePath}`,
+    toString: () => {
+      const url = new URL(`${scheme}:///`);
+      url.pathname = filePath.replaceAll("\\", "/");
+      return url.href;
+    },
   });
   const webview = {
     postMessage: async (message) => {
@@ -694,6 +698,70 @@ test("publishes repository file sizes after search results without downloading m
   extension.dispose();
 });
 
+test("remembers only successful Open and Save paths and supports persistent removal and clearing", async (t) => {
+  const directory = await mkdtemp(
+    path.join(tmpdir(), "onnx-viewer-path-history-"),
+  );
+  t.after(() => rm(directory, { recursive: true }));
+  const preferences = new Map();
+  const extension = await openExtension(
+    undefined,
+    undefined,
+    true,
+    undefined,
+    undefined,
+    preferences,
+  );
+  const source = require.resolve("./models/relu.onnx");
+  await extension.openFile(source);
+  const opened = preferences.get("pathHistory");
+  assert.deepEqual(
+    opened.open.map(({ path: location }) => location),
+    [source, path.dirname(source)],
+  );
+  await extension.openFile(source);
+  assert.deepEqual(preferences.get("pathHistory"), opened);
+  await extension.openFile(path.join(directory, "missing.onnx"));
+  await extension.cancelOpen();
+  assert.deepEqual(preferences.get("pathHistory"), opened);
+  const destination = path.join(directory, "copy.onnx");
+  await extension.save(destination);
+  assert.equal(preferences.get("pathHistory").save[0].path, destination);
+  const saved = structuredClone(preferences.get("pathHistory"));
+  await extension.save(undefined);
+  await extension.save(source);
+  assert.deepEqual(preferences.get("pathHistory"), saved);
+  extension.dispose();
+  const reopened = await openExtension(
+    undefined,
+    undefined,
+    true,
+    undefined,
+    undefined,
+    preferences,
+  );
+  await reopened.receive({ type: "ready" });
+  assert.deepEqual(
+    reopened.events.find(({ type }) => type === "path-history").history,
+    saved,
+  );
+  await reopened.receive({
+    type: "path-history-edit",
+    target: "open",
+    historyAction: "remove",
+    historyEntry: saved.open[0],
+  });
+  assert.deepEqual(preferences.get("pathHistory").open, saved.open.slice(1));
+  await reopened.receive({
+    type: "path-history-edit",
+    target: "save",
+    historyAction: "clear",
+  });
+  assert.deepEqual(preferences.get("pathHistory").save, []);
+  assert.deepEqual(preferences.get("pathHistory").open, saved.open.slice(1));
+  reopened.dispose();
+});
+
 test("opens, browses and saves encrypted copies through embedded selectors without popup pickers", async (t) => {
   const directory = await mkdtemp(
     path.join(tmpdir(), "onnx-light-inline-files-"),
@@ -719,69 +787,6 @@ test("opens, browses and saves encrypted copies through embedded selectors witho
     measureText: (text) => ({ width: text.length * 8 }),
   });
 
-  test("remembers only successful Open and Save paths and supports persistent removal and clearing", async (t) => {
-    const directory = await mkdtemp(
-      path.join(tmpdir(), "onnx-viewer-path-history-"),
-    );
-    t.after(() => rm(directory, { recursive: true }));
-    const preferences = new Map();
-    const extension = await openExtension(
-      undefined,
-      undefined,
-      true,
-      undefined,
-      undefined,
-      preferences,
-    );
-    const source = require.resolve("./models/relu.onnx");
-    await extension.openFile(source);
-    const opened = preferences.get("pathHistory");
-    assert.deepEqual(
-      opened.open.map(({ path: location }) => location),
-      [source, path.dirname(source)],
-    );
-    await extension.openFile(source);
-    assert.deepEqual(preferences.get("pathHistory"), opened);
-    await extension.openFile(path.join(directory, "missing.onnx"));
-    await extension.cancelOpen();
-    assert.deepEqual(preferences.get("pathHistory"), opened);
-    const destination = path.join(directory, "copy.onnx");
-    await extension.save(destination);
-    assert.equal(preferences.get("pathHistory").save[0].path, destination);
-    const saved = structuredClone(preferences.get("pathHistory"));
-    await extension.save(undefined);
-    await extension.save(source);
-    assert.deepEqual(preferences.get("pathHistory"), saved);
-    extension.dispose();
-    const reopened = await openExtension(
-      undefined,
-      undefined,
-      true,
-      undefined,
-      undefined,
-      preferences,
-    );
-    await reopened.receive({ type: "ready" });
-    assert.deepEqual(
-      reopened.events.find(({ type }) => type === "path-history").history,
-      saved,
-    );
-    await reopened.receive({
-      type: "path-history-edit",
-      target: "open",
-      historyAction: "remove",
-      historyEntry: saved.open[0],
-    });
-    assert.deepEqual(preferences.get("pathHistory").open, saved.open.slice(1));
-    await reopened.receive({
-      type: "path-history-edit",
-      target: "save",
-      historyAction: "clear",
-    });
-    assert.deepEqual(preferences.get("pathHistory").save, []);
-    assert.deepEqual(preferences.get("pathHistory").open, saved.open.slice(1));
-    reopened.dispose();
-  });
   document.getElementById("canvas").getBoundingClientRect = () =>
     new window.DOMRect(0, 0, 1060, 350);
   window.acquireVsCodeApi = () => ({

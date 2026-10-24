@@ -259,47 +259,6 @@ test("does not cache HTTP failures or unparseable models and allows a later retr
     } else response.end(valid ? bytes : "<html>Not an ONNX model</html>");
   });
 
-  test("reports streamed bytes with and without a known total and skips download progress for cache hits", async (t) => {
-    const bytes = await readFile(join(__dirname, "models/relu.onnx"));
-    const server = await fixture(t, (request, response) => {
-      if (request.url === "/known.onnx")
-        response.setHeader("Content-Length", bytes.length);
-      response.write(bytes.subarray(0, 8));
-      setImmediate(() => response.end(bytes.subarray(8)));
-    });
-    for (const path of ["/known.onnx", "/chunked.onnx"]) {
-      const updates = [];
-      const source = server.source(path);
-      await cachedHuggingFaceModel(
-        source,
-        server.root,
-        load,
-        undefined,
-        (progress) => updates.push(progress),
-      );
-      assert.equal(updates[0].received, 0);
-      assert.equal(updates.at(-1).received, bytes.length);
-      assert.equal(
-        updates.at(-1).total,
-        path === "/known.onnx" ? bytes.length : undefined,
-      );
-      assert.ok(
-        updates.every(
-          (update, index) =>
-            index === 0 || update.received >= updates[index - 1].received,
-        ),
-      );
-      const count = updates.length;
-      await cachedHuggingFaceModel(
-        source,
-        server.root,
-        load,
-        undefined,
-        (progress) => updates.push(progress),
-      );
-      assert.equal(updates.length, count);
-    }
-  });
   await assert.rejects(
     cachedHuggingFaceModel(
       server.source("/private/model.onnx"),
@@ -319,6 +278,48 @@ test("does not cache HTTP failures or unparseable models and allows a later retr
   const downloaded = await cachedHuggingFaceModel(source, server.root, load);
   assert.equal(downloaded.cached, false);
   assert.equal(downloaded.value.nodes[0].opType, "Relu");
+});
+
+test("reports streamed bytes with and without a known total and skips download progress for cache hits", async (t) => {
+  const bytes = await readFile(join(__dirname, "models/relu.onnx"));
+  const server = await fixture(t, (request, response) => {
+    if (request.url === "/known.onnx")
+      response.setHeader("Content-Length", bytes.length);
+    response.write(bytes.subarray(0, 8));
+    setImmediate(() => response.end(bytes.subarray(8)));
+  });
+  for (const path of ["/known.onnx", "/chunked.onnx"]) {
+    const updates = [];
+    const source = server.source(path);
+    await cachedHuggingFaceModel(
+      source,
+      server.root,
+      load,
+      undefined,
+      (progress) => updates.push(progress),
+    );
+    assert.equal(updates[0].received, 0);
+    assert.equal(updates.at(-1).received, bytes.length);
+    assert.equal(
+      updates.at(-1).total,
+      path === "/known.onnx" ? bytes.length : undefined,
+    );
+    assert.ok(
+      updates.every(
+        (update, index) =>
+          index === 0 || update.received >= updates[index - 1].received,
+      ),
+    );
+    const count = updates.length;
+    await cachedHuggingFaceModel(
+      source,
+      server.root,
+      load,
+      undefined,
+      (progress) => updates.push(progress),
+    );
+    assert.equal(updates.length, count);
+  }
 });
 
 test("cancels an unfinished HTTP transfer without retaining a partial model", async (t) => {
