@@ -1613,12 +1613,16 @@ void LoadExternalTensor(ol::TensorProto &tensor, const std::filesystem::path &di
   if (file.get() < 0)
     throw std::system_error(errno, std::generic_category(), "Could not open external weights");
   ol::utils::FdReadStream stream(file.get());
+  const auto file_size = std::filesystem::file_size(path);
   offset = std::max<int64_t>(0, offset);
-  if (offset > stream.size())
+  if (static_cast<uint64_t>(offset) > file_size)
     throw std::runtime_error("External weight offset is past the end of the file.");
+  const auto available = file_size - static_cast<uint64_t>(offset);
+  if (available > static_cast<uint64_t>(std::numeric_limits<int64_t>::max()))
+    throw std::runtime_error("External weight length exceeds the available data.");
   if (length < 0)
-    length = stream.size() - offset;
-  if (length > stream.size() - offset ||
+    length = static_cast<int64_t>(available);
+  if (static_cast<uint64_t>(length) > available ||
       static_cast<uint64_t>(length) > std::numeric_limits<size_t>::max())
     throw std::runtime_error("External weight length exceeds the available data.");
   stream.skip_bytes(offset);
@@ -2001,7 +2005,10 @@ public:
         throw std::system_error(errno, std::generic_category(), "Could not open model file");
       ol::utils::FdReadStream source(file.get());
       if (password_) {
-        std::string bytes(source.size(), '\0');
+        const auto size = std::filesystem::file_size(ModelFilePath(path_));
+        if (size > std::string{}.max_size())
+          throw std::runtime_error("Encrypted ONNX model exceeds the maximum supported size.");
+        std::string bytes(static_cast<size_t>(size), '\0');
         source.read_bytes(bytes.size(), reinterpret_cast<uint8_t *>(bytes.data()));
         ReadEncryptedModel(*model_->model, bytes, *password_, model_->has_training_info);
         return;

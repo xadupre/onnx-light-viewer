@@ -72,10 +72,14 @@ async function openExtension(
   const listedRepositories = [];
   const disposable = () => ({ dispose() {} });
   const root = path.resolve(__dirname, "..");
-  const uri = (filePath) => ({
-    path: filePath,
-    fsPath: filePath,
-    scheme: localFiles ? "file" : "virtual",
+  const uri = (filePath, scheme = localFiles ? "file" : "virtual") => ({
+    path: filePath.replaceAll("\\", "/"),
+    fsPath:
+      process.platform === "win32"
+        ? path.normalize(filePath.replace(/^\/(?=[a-z]:\/)/i, ""))
+        : filePath,
+    scheme,
+    toString: () => `${scheme}://${filePath}`,
   });
   const webview = {
     postMessage: async (message) => {
@@ -113,11 +117,7 @@ async function openExtension(
   const vscode = {
     FileSystemError,
     Uri: {
-      file: (filePath) => ({
-        path: filePath,
-        fsPath: filePath,
-        scheme: "file",
-      }),
+      file: (filePath) => uri(filePath, "file"),
       joinPath: (base, ...parts) => uri(path.posix.join(base.path, ...parts)),
     },
     ViewColumn: { One: 1 },
