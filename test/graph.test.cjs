@@ -20,6 +20,7 @@ const { test } = require("node:test");
 const { withCommaLocale } = require("../build/native/Release/test_locale.node");
 const {
   layoutTensors,
+  rewritingPlans,
 } = require("../build/native/Release/test_model_storage.node");
 const {
   decodeGraph,
@@ -1321,6 +1322,248 @@ test("previews native fusion matches and applies only selected disjoint matches 
   await assert.rejects(model.previewFusion("not-a-pattern"), /pattern/i);
   assert.deepEqual(Buffer.from(await model.serialize()), original);
   assert.deepEqual(Buffer.from(await preview.model.serialize()), original);
+});
+
+test("undoes successive fusions and saves concatenated replayable rewritings without mutating history", async () => {
+  const original = loadModel(modelBytes("fusion.onnx"), "fusion");
+  const initial = original.graph();
+  assert.equal(original.fusionCount(), 0);
+  assert.throws(() => original.undoFusion(), /No fusion operation/);
+  const firstPreview = await original.previewFusion("TransposeTranspose");
+  const first = await firstPreview.model.applyFusion("TransposeTranspose", [0]);
+  const secondPreview = await first.clone().previewFusion("TransposeTranspose");
+  const second = await secondPreview.model.applyFusion(
+    "TransposeTranspose",
+    [1],
+  );
+  assert.equal(first.fusionCount(), 1);
+  assert.equal(second.fusionCount(), 2);
+  assert.deepEqual(first.fusionHistory(), [
+    { matches: [{ pattern: "TransposeTranspose", nodes: [0] }] },
+  ]);
+  assert.deepEqual(second.fusionHistory(), [
+    { matches: [{ pattern: "TransposeTranspose", nodes: [0] }] },
+    { matches: [{ pattern: "TransposeTranspose", nodes: [1] }] },
+  ]);
+  const fused = second.graph();
+  const plain = Buffer.from(await second.serialize());
+  assert.deepEqual(rewritingPlans(plain), []);
+  assert.deepEqual(loadModel(plain, "fusion").graph(), fused);
+  const withPlans = Buffer.from(
+    await second.serialize(undefined, undefined, true),
+  );
+  assert.deepEqual(loadModel(withPlans, "fusion").graph(), initial);
+  const [plan] = rewritingPlans(withPlans);
+  assert.equal(plan.name, "onnx-light-viewer.fusions");
+  assert.equal(plan.count, 2);
+  assert.deepEqual(loadModel(plan.bytes, "fusion").graph(), fused);
+  const undone = second.clone().undoFusion();
+  assert.equal(undone.fusionCount(), 1);
+  assert.deepEqual(undone.graph(), first.graph());
+  assert.deepEqual(undone.fusionHistory(), first.fusionHistory());
+  const [remaining] = rewritingPlans(
+    Buffer.from(await undone.serialize(undefined, undefined, true)),
+  );
+  assert.equal(remaining.count, 1);
+  assert.deepEqual(loadModel(remaining.bytes, "fusion").graph(), first.graph());
+  assert.deepEqual(undone.undoFusion().graph(), initial);
+  assert.equal(undone.undoFusion().fusionCount(), 0);
+  assert.equal(second.fusionCount(), 2);
+  assert.deepEqual(second.graph(), fused);
+  const loaded = loadModel(withPlans, "fusion");
+  assert.equal(rewritingPlans(Buffer.from(await loaded.serialize())).length, 0);
+  const variantPreview = await loaded.previewFusion("TransposeTranspose");
+  const variant = await variantPreview.model.applyFusion(
+    "TransposeTranspose",
+    [0],
+  );
+  const variants = rewritingPlans(
+    Buffer.from(await variant.serialize(undefined, undefined, true)),
+  );
+  assert.deepEqual(variants.map(({ name }) => name).sort(), [
+    "onnx-light-viewer.fusions",
+    "onnx-light-viewer.fusions.2",
+  ]);
+  assert.deepEqual(variants.map(({ count }) => count).sort(), [1, 2]);
+  const clone = second.clone();
+  const encrypted = await clone.serialize("rewrites", undefined, true);
+  const decrypted = loadModel(encrypted, "fusion", "rewrites");
+  assert.equal(
+    rewritingPlans(
+      Buffer.from(await decrypted.serialize(undefined, undefined, true)),
+    )[0].count,
+    2,
+  );
+  const external = await second.serializeFiles(
+    1024 * 1024,
+    "rewrites",
+    undefined,
+    false,
+    true,
+  );
+  assert.equal(rewritingPlans(Buffer.from(external.model))[0].count, 2);
+});
+
+test("remaps fused pattern selections when earlier nodes are replaced", async () => {
+  const original = loadModel(modelBytes("fusion.onnx"), "fusion");
+  const first = await original.applyFusion("TransposeTranspose", [2]);
+  assert.deepEqual(first.fusionHistory(), [
+    { matches: [{ pattern: "TransposeTranspose", nodes: [2] }] },
+  ]);
+  const preview = await first.clone().previewFusion("TransposeTranspose");
+  const second = await preview.model.applyFusion("TransposeTranspose", [0]);
+  assert.deepEqual(second.fusionHistory(), [
+    { matches: [{ pattern: "TransposeTranspose", nodes: [1] }] },
+    { matches: [{ pattern: "TransposeTranspose", nodes: [0] }] },
+  ]);
+  assert.deepEqual(first.fusionHistory()[0].matches[0].nodes, [2]);
+  assert.deepEqual(second.undoFusion().fusionHistory(), first.fusionHistory());
+});
+
+test("tracks fused pattern descendants when a later fusion consumes them", async () => {
+  const tensorType = bytesField(
+    1,
+    Buffer.concat([
+      varintField(1, 1),
+      bytesField(
+        2,
+        Buffer.concat(
+          [2, 2, 2].map((size) => bytesField(1, varintField(1, size))),
+        ),
+      ),
+    ]),
+  );
+  const valueInfo = (name) =>
+    Buffer.concat([bytesField(1, name), bytesField(2, tensorType)]);
+  const nodes = ["x", "t1", "t2"].map((input, index) =>
+    bytesField(
+      1,
+      Buffer.concat([
+        bytesField(1, input),
+        bytesField(2, index === 2 ? "y" : `t${index + 1}`),
+        bytesField(3, `transpose${index}`),
+        bytesField(4, "Transpose"),
+        bytesField(
+          5,
+          Buffer.concat([
+            bytesField(1, "perm"),
+            varintField(8, 1),
+            varintField(8, 2),
+            varintField(8, 0),
+            varintField(20, 7),
+          ]),
+        ),
+      ]),
+    ),
+  );
+  const original = loadModel(
+    Buffer.concat([
+      varintField(1, 9),
+      bytesField(8, varintField(2, 18)),
+      bytesField(
+        7,
+        Buffer.concat([
+          ...nodes,
+          bytesField(2, "chain"),
+          bytesField(11, valueInfo("x")),
+          bytesField(12, valueInfo("y")),
+        ]),
+      ),
+    ]),
+    "chain",
+  );
+  const first = await original.applyFusion("TransposeTranspose", [0]);
+  assert.equal(first.graph().nodes[0].opType, "Transpose");
+  const second = await first.applyFusion("TransposeTranspose", [0]);
+  assert.deepEqual(
+    second.graph().nodes.map((node) => node.opType),
+    ["Identity"],
+  );
+  assert.deepEqual(second.fusionHistory(), [
+    { matches: [{ pattern: "TransposeTranspose", nodes: [0] }] },
+    { matches: [{ pattern: "TransposeTranspose", nodes: [0] }] },
+  ]);
+});
+
+test("replays concatenated fusions that materialize new weights and restores them on undo", async () => {
+  const model = loadModel(modelBytes("fusion-scaled.onnx"), "scaled");
+  const scalePreview = await model.previewFusion("MatMulScaleFusion");
+  const scaled = await scalePreview.model.applyFusion("MatMulScaleFusion", [
+    scalePreview.matches[0].anchor,
+  ]);
+  const transposePreview = await scaled.previewFusion("TransposeTranspose");
+  const fused = await transposePreview.model.applyFusion("TransposeTranspose", [
+    transposePreview.matches[0].anchor,
+  ]);
+  const [plan] = rewritingPlans(
+    Buffer.from(await fused.serialize(undefined, undefined, true)),
+  );
+  assert.equal(plan.count, 2);
+  assert.deepEqual(loadModel(plan.bytes, "scaled").graph(), fused.graph());
+  assert.deepEqual(fused.undoFusion().graph(), scaled.graph());
+  assert.deepEqual(fused.undoFusion().undoFusion().graph(), model.graph());
+});
+
+test("undoes pipeline stage fusions in global application order", async () => {
+  const model = loadModel(
+    pipelineBytes({
+      embedding: modelBytes("fusion.onnx"),
+      prefill: modelBytes("fusion.onnx"),
+    }),
+    "history.pipe-onnx",
+  );
+  const embedding = [{ pipeline: "embedding" }];
+  const prefill = [{ pipeline: "prefill" }];
+  const firstPreview = await model.previewFusion(
+    "TransposeTranspose",
+    undefined,
+    embedding,
+  );
+  const first = await firstPreview.model.applyFusion(
+    "TransposeTranspose",
+    [0],
+    embedding,
+  );
+  const secondPreview = await first
+    .clone()
+    .previewFusion("TransposeTranspose", undefined, prefill);
+  const second = await secondPreview.model.applyFusion(
+    "TransposeTranspose",
+    [0],
+    prefill,
+  );
+  assert.equal(second.fusionCount(), 2);
+  assert.deepEqual(second.fusionHistory(), [
+    {
+      matches: [{ pattern: "TransposeTranspose", nodes: [0] }],
+      stage: "embedding",
+    },
+    {
+      matches: [{ pattern: "TransposeTranspose", nodes: [0] }],
+      stage: "prefill",
+    },
+  ]);
+  const restored = second.clone().undoFusion();
+  assert.equal(restored.fusionCount(), 1);
+  assert.deepEqual(restored.fusionHistory(), first.fusionHistory());
+  assert.deepEqual(
+    restored.graph(false, embedding),
+    first.graph(false, embedding),
+  );
+  assert.deepEqual(restored.graph(false, prefill), model.graph(false, prefill));
+  assert.deepEqual(
+    restored.undoFusion().graph(false, embedding),
+    model.graph(false, embedding),
+  );
+  const saved = loadModel(
+    await second.serialize(undefined, undefined, true),
+    "history.pipe-onnx",
+  );
+  assert.deepEqual(
+    saved.graph(false, embedding),
+    model.graph(false, embedding),
+  );
+  assert.deepEqual(saved.graph(false, prefill), model.graph(false, prefill));
 });
 
 test("applies disjoint candidates from different patterns atomically on original node indices", async () => {

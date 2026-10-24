@@ -1,5 +1,6 @@
 import type {
   FusionMatch,
+  FusionOperation,
   Graph,
   GraphMetadata,
   GraphPath,
@@ -25,6 +26,8 @@ export class PipelineModel implements NativeModel {
     private readonly data: PipelineData,
     private readonly fileName: string,
     private readonly models = data.models,
+    private readonly previous?: PipelineModel,
+    private readonly fusionOrder: PipelineRole[] = [],
   ) {}
 
   private stages(): [PipelineRole, NativeModel][] {
@@ -58,6 +61,8 @@ export class PipelineModel implements NativeModel {
           name === role ? model : current.clone(),
         ]),
       ),
+      this.previous,
+      this.fusionOrder,
     );
   }
 
@@ -68,7 +73,31 @@ export class PipelineModel implements NativeModel {
       Object.fromEntries(
         this.stages().map(([role, model]) => [role, model.clone()]),
       ),
+      this.previous,
+      this.fusionOrder,
     );
+  };
+
+  fusionCount = (): number =>
+    this.stages().reduce((count, [, model]) => count + model.fusionCount(), 0);
+
+  fusionHistory = (): FusionOperation[] => {
+    const stages = new Map(
+      this.stages().map(([role, model]) => [role, model.fusionHistory()]),
+    );
+    const counts = new Map<PipelineRole, number>();
+    return this.fusionOrder.map((stage) => {
+      const index = counts.get(stage) ?? 0;
+      counts.set(stage, index + 1);
+      const operation = stages.get(stage)?.[index];
+      if (!operation) throw new Error("Invalid pipeline fusion history.");
+      return { ...operation, stage };
+    });
+  };
+
+  undoFusion = (): PipelineModel => {
+    if (!this.previous) throw new Error("No fusion operation to undo.");
+    return this.previous.clone();
   };
 
   summary = (inferShapes = false): GraphSummary => {
@@ -234,9 +263,14 @@ export class PipelineModel implements NativeModel {
   ): Promise<NativeModel> => {
     const stage = this.select(path);
     this.fusionPatterns(path);
-    return this.replace(
-      stage.role,
-      await stage.model.applyFusion(pattern, anchors),
+    const edited = await stage.model.applyFusion(pattern, anchors);
+    const replacement = this.replace(stage.role, edited);
+    return new PipelineModel(
+      this.data,
+      this.fileName,
+      replacement.models,
+      this,
+      [...this.fusionOrder, stage.role],
     );
   };
 
@@ -251,6 +285,7 @@ export class PipelineModel implements NativeModel {
   serialize = async (
     password?: string,
     sourceFilePath?: string,
+    includeRewritings = false,
   ): Promise<Uint8Array> => {
     if (password !== undefined)
       throw new Error(
@@ -258,7 +293,11 @@ export class PipelineModel implements NativeModel {
       );
     const models: Partial<Record<PipelineRole, Uint8Array>> = {};
     for (const [role, model] of this.stages())
-      models[role] = await model.serialize(undefined, sourceFilePath);
+      models[role] = await model.serialize(
+        undefined,
+        sourceFilePath,
+        includeRewritings,
+      );
     return this.data.assemble(models);
   };
 
@@ -267,6 +306,7 @@ export class PipelineModel implements NativeModel {
     prefix: string,
     sourceFilePath?: string,
     reuseExternalWeights = false,
+    includeRewritings = false,
   ): Promise<{
     model: Uint8Array;
     weights: { name: string; bytes: Uint8Array }[];
@@ -279,6 +319,7 @@ export class PipelineModel implements NativeModel {
         `${prefix}.${role}`,
         sourceFilePath,
         reuseExternalWeights,
+        includeRewritings,
       );
       models[role] = saved.model;
       weights.push(...saved.weights);

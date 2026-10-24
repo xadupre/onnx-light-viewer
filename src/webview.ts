@@ -65,9 +65,17 @@ export function webviewHtml(
             <button id="save-model" class="icon-button" disabled title="Show or hide model save options" aria-expanded="false" aria-controls="save-options" aria-describedby="save-status">Save</button>
             <button id="show-find" class="icon-button" aria-expanded="true" aria-controls="find-panel" title="Show or hide node search">Find</button>
             <button id="fuse-pattern" class="icon-button" disabled title="Show or hide fusion patterns and select candidates to fuse on the main graph" aria-expanded="false" aria-controls="fusion-panel">Fuse</button>
+            <button id="undo-fusion" class="icon-button" disabled title="Choose whether to unfuse the last operation or all operations" aria-expanded="false" aria-controls="unfuse-panel" aria-describedby="fusion-status">Unfuse</button>
             <button id="show-operator" class="icon-button" aria-expanded="true" aria-controls="operator-panel" title="Show or hide operator and tensor details">Op</button>
             <button id="show-metadata" class="icon-button" aria-expanded="false" aria-controls="metadata-panel" title="Show or hide native constants, tags, lifetimes and stored metadata">Data</button>
           </nav>
+          <section id="unfuse-panel" class="inspector-panel" aria-labelledby="unfuse-title" hidden>
+            <h2 id="unfuse-title" class="eyebrow panel-title">Unfuse</h2>
+            <p id="unfuse-count" role="status"></p>
+            <p>Unfuse last reverses one Fuse selected operation. Repeat to go back further, or unfuse all operations in this session.</p>
+            <div class="fusion-selection-controls"><button id="unfuse-last" disabled>Unfuse last</button><button id="unfuse-all" disabled>Unfuse all</button><button id="close-unfuse">Close</button></div>
+            <ol id="unfuse-history" reversed aria-label="Applied fusion operations, most recent first"></ol>
+          </section>
           <section id="find-panel" class="inspector-panel" aria-labelledby="find-title">
             <h2 id="find-title" class="eyebrow panel-title">Find</h2>
             <form id="find-node" role="search"><label for="node-search">Find node or operator</label><div class="node-search-controls"><input id="node-search" type="search" placeholder="Name or operator" aria-controls="node-search-suggestions" autocomplete="off"><button type="submit" title="Go to the next matching node" aria-label="Go to the next matching node">Go</button></div><span id="node-search-result" role="status"></span><ul id="node-search-suggestions" aria-label="Matching nodes" hidden></ul></form>
@@ -190,6 +198,8 @@ export function webviewHtml(
                 <label for="save-password">Password</label><input id="save-password" type="password" autocomplete="new-password">
                 <label for="save-confirmation">Confirm password</label><input id="save-confirmation" type="password" autocomplete="new-password">
               </div>
+              <label><input id="save-rewritings" type="checkbox" aria-describedby="save-rewritings-note">Include fusion rewritings</label>
+              <p id="save-rewritings-note">Unchecked: save the fused graph without rewriting plans. Checked: save the original graph and one concatenated RewritingProto plan per modified model. Undo history is session-local.</p>
               <label><input id="save-overwrite" type="checkbox">Replace an existing destination copy</label>
               <progress id="save-progress" aria-label="Saving ONNX model" aria-describedby="save-progress-status" hidden></progress><p id="save-progress-status" role="status" hidden></p>
               <p id="save-options-error" role="alert"></p>

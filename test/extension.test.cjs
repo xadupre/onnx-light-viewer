@@ -1267,10 +1267,19 @@ test("opens pipeline files, navigates stages, applies stage fusions and saves th
   await extension.receive({
     type: "apply-fusion",
     previewId: preview.previewId,
-    anchors: [0],
+    anchors: [0, 2],
     requestId: 4,
   });
   const stage = latestGraph().graph;
+  assert.deepEqual(latestGraph().file.fusionHistory, [
+    {
+      matches: [
+        { pattern: "TransposeTranspose", nodes: [0] },
+        { pattern: "TransposeTranspose", nodes: [1] },
+      ],
+      stage: "prefill",
+    },
+  ]);
   assert.equal(stage.nodes[0].opType, "Identity");
   assert.deepEqual(stage.breadcrumbs.at(-1).path, stagePath);
   const destination = path.join(directory, "copy.pipe-onnx");
@@ -1289,10 +1298,79 @@ test("opens pipeline files, navigates stages, applies stage fusions and saves th
   assert.deepEqual(await readFile(source), bytes);
   await extension.receive({ type: "navigate", path: [] });
   assert.equal(latestGraph().graph.canFuse, false);
+  await extension.receive({
+    type: "select-fusion",
+    operation: 0,
+    match: 1,
+    pattern: "TransposeTranspose",
+  });
+  assert.deepEqual(latestGraph().graph.breadcrumbs.at(-1).path, stagePath);
+  assert.deepEqual(latestGraph().selectedNodes, [1]);
+  assert.equal(latestGraph().file.fusionCount, 1);
   const encrypted = path.join(directory, "copy.pipe-onnx.enc");
   await extension.save(encrypted, true, ["secret", "secret"]);
   assert.match(extension.errors.at(-1), /PipelineProto encryption/);
   await assert.rejects(readFile(encrypted), { code: "ENOENT" });
+});
+
+test("unfuses the last operation or all successive native fusions atomically", async () => {
+  const extension = await openExtension(
+    undefined,
+    "onnxLightViewer.open",
+    true,
+  );
+  await extension.openFile(require.resolve("./models/fusion.onnx"));
+  const latestGraph = () =>
+    extension.messages.findLast((message) => message.type === "graph");
+  const original = latestGraph().graph.nodes;
+  let requestId = 0;
+  const fuseNext = async () => {
+    await extension.receive({
+      type: "preview-fusion",
+      pattern: "TransposeTranspose",
+      requestId: ++requestId,
+    });
+    const preview = extension.messages.at(-1);
+    assert.equal(preview.type, "fusion-preview");
+    await extension.receive({
+      type: "apply-fusion",
+      previewId: preview.previewId,
+      candidates: [0],
+      requestId: ++requestId,
+    });
+    assert.equal(extension.messages.at(-1).type, "fusion-info");
+  };
+  await fuseNext();
+  await fuseNext();
+  assert.equal(latestGraph().file.fusionCount, 2);
+  assert.deepEqual(latestGraph().file.fusionHistory, [
+    { matches: [{ pattern: "TransposeTranspose", nodes: [0] }] },
+    { matches: [{ pattern: "TransposeTranspose", nodes: [1] }] },
+  ]);
+  await extension.receive({ type: "undo-fusion", all: "all" });
+  assert.equal(extension.messages.at(-1).type, "undo-fusion-error");
+  assert.match(extension.messages.at(-1).error, /boolean/);
+  assert.equal(latestGraph().file.fusionCount, 2);
+  await extension.receive({ type: "undo-fusion", all: false });
+  assert.equal(latestGraph().file.fusionCount, 1);
+  assert.deepEqual(latestGraph().file.fusionHistory, [
+    { matches: [{ pattern: "TransposeTranspose", nodes: [0] }] },
+  ]);
+  assert.equal(latestGraph().graph.nodes.length, original.length - 1);
+  await fuseNext();
+  assert.equal(latestGraph().file.fusionCount, 2);
+  const beforeUnfuse = extension.messages.filter(
+    (message) => message.type === "graph",
+  ).length;
+  await extension.receive({ type: "undo-fusion", all: true });
+  assert.equal(extension.messages.at(-1).type, "graph");
+  assert.equal(latestGraph().file.fusionCount, 0);
+  assert.deepEqual(latestGraph().file.fusionHistory, []);
+  assert.deepEqual(latestGraph().graph.nodes, original);
+  assert.equal(
+    extension.messages.filter((message) => message.type === "graph").length,
+    beforeUnfuse + 1,
+  );
 });
 
 test("previews and applies selected native fusions, rejects stale previews and saves edited copies", async (t) => {
@@ -1353,6 +1431,20 @@ test("previews and applies selected native fusions, rejects stale previews and s
       .nodes.map((node) => node.opType),
     graph.nodes.map((node) => node.opType),
   );
+  const historyFile = path.join(directory, "history.onnx");
+  await extension.receive({
+    type: "save",
+    location: historyFile,
+    overwrite: false,
+    storage: "embedded",
+    encrypted: false,
+    includeRewritings: true,
+  });
+  assert.equal(extension.messages.at(-1).type, "save-info");
+  assert.equal(
+    (await loadModelFile(historyFile, "history")).graph().nodes.length,
+    5,
+  );
   await extension.receive({
     type: "apply-fusion",
     previewId: preview.previewId,
@@ -1366,6 +1458,15 @@ test("previews and applies selected native fusions, rejects stale previews and s
   };
   await extension.receive({ type: "metadata" });
   assert.equal(extension.messages.at(-1).type, "metadata-error");
+  await extension.receive({
+    type: "select-fusion",
+    operation: 0,
+    match: 0,
+    pattern: "TransposeTranspose",
+  });
+  assert.equal(extension.messages.at(-1).type, "graph");
+  assert.deepEqual(extension.messages.at(-1).selectedNodes, [0]);
+  assert.equal(extension.messages.at(-1).file.fusionCount, 1);
   await extension.save(destination);
   assert.equal(extension.messages.at(-1).type, "save-info");
   assert.deepEqual(
@@ -1374,6 +1475,13 @@ test("previews and applies selected native fusions, rejects stale previews and s
       .nodes.map((node) => node.opType),
     graph.nodes.map((node) => node.opType),
   );
+  await extension.receive({ type: "undo-fusion" });
+  assert.equal(extension.messages.at(-1).type, "graph");
+  assert.equal(extension.messages.at(-1).graph.nodes.length, 5);
+  assert.equal(extension.messages.at(-1).file.fusionCount, 0);
+  assert.deepEqual(extension.messages.at(-1).file.fusionHistory, []);
+  await extension.receive({ type: "undo-fusion" });
+  assert.equal(extension.messages.at(-1).type, "undo-fusion-error");
   await extension.receive({
     type: "preview-fusion",
     pattern: "TransposeTranspose",
@@ -1959,7 +2067,13 @@ test("streams local custom-editor files and replacements without reading whole f
 });
 
 test("ignores stale recovery results and errors after replacing a local model", async () => {
-  for (const type of ["navigate", "metadata", "refresh-shapes", "verify"]) {
+  for (const type of [
+    "navigate",
+    "metadata",
+    "refresh-shapes",
+    "verify",
+    "undo-fusion",
+  ]) {
     const extension = await openExtension("inference.onnx", undefined, true);
     for (const path of [[], [{ node: 9999, attribute: 0, graph: 0 }]]) {
       await extension.open("invalid-graph.onnx");
@@ -2029,6 +2143,7 @@ test("ignores delayed recovery results and errors after disposing the panel", as
     { type: "metadata" },
     { type: "refresh-shapes" },
     { type: "verify" },
+    { type: "undo-fusion" },
   ]) {
     const extension = await openExtension(
       "invalid-graph.onnx",
@@ -2366,6 +2481,8 @@ test("matches multiple patterns and fuses checked candidates through the real we
     while (requests.length) await Promise.all(requests.splice(0));
   };
   await flush();
+  const originalNodeCount = document.querySelectorAll(".graph-node").length;
+  assert.equal(document.getElementById("undo-fusion").disabled, true);
   document.getElementById("fuse-pattern").click();
   await flush();
   const list = document.getElementById("fusion-pattern");
@@ -2421,6 +2538,39 @@ test("matches multiple patterns and fuses checked candidates through the real we
   assert.match(
     document.getElementById("fusion-status").textContent,
     /Applied 2 fusion/,
+  );
+  const undo = document.getElementById("undo-fusion");
+  assert.equal(undo.disabled, false);
+  undo.click();
+  const history = document.getElementById("unfuse-history");
+  assert.equal(history.children.length, 1);
+  for (const match of current.matches.slice(0, 2))
+    assert.ok(history.textContent.includes(match.pattern));
+  const operation = extension.messages.findLast(
+    (message) => message.type === "graph",
+  ).file.fusionHistory[0];
+  const pattern = operation.matches[0].pattern;
+  [...history.querySelectorAll("button")]
+    .find((button) => button.textContent.startsWith(`${pattern} (`))
+    .click();
+  await flush();
+  assert.deepEqual(
+    [...document.querySelectorAll(".graph-node.selected")]
+      .map((node) => node.dataset.id)
+      .sort(),
+    operation.matches[0].nodes.map((node) => `node-${node}`).sort(),
+  );
+  document.getElementById("unfuse-last").click();
+  assert.equal(undo.disabled, true);
+  await flush();
+  assert.equal(history.children.length, 0);
+  assert.equal(
+    document.querySelectorAll(".graph-node").length,
+    originalNodeCount,
+  );
+  assert.equal(undo.disabled, true);
+  assert.ok(
+    extension.logs.some((line) => line.includes("[SUCCEEDED] Undo fusion")),
   );
   assert.deepEqual(extension.errors, []);
 });

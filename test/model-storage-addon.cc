@@ -1,6 +1,10 @@
 #include "../native/model_storage.h"
 
 #include <map>
+#include <onnx_core/builder/graph_builder.h>
+#include <onnx_extensions/shapes/dispatch_table.h>
+#include <onnx_proto/onnx_verify.h>
+#include <stdexcept>
 
 namespace {
 
@@ -109,7 +113,37 @@ Napi::Value EncodedVisits(const Napi::CallbackInfo &info) {
   return result;
 }
 
+Napi::Value RewritingPlans(const Napi::CallbackInfo &info) {
+  try {
+    const auto bytes = info[0].As<Napi::Buffer<uint8_t>>();
+    ol::ModelProto model;
+    if (!model.ParseFromString(
+            std::string(reinterpret_cast<const char *>(bytes.Data()), bytes.Length())))
+      throw std::runtime_error("Could not parse test model.");
+    ol::onnx_shapes::RegisterShapeFunctions();
+    auto result = Napi::Array::New(info.Env());
+    for (const auto &[name, plan] : model.rewritings()) {
+      auto replayed =
+          ol::core::builder::GraphBuilder(model).ApplyRewritings(plan).ToModel(model.ir_version());
+      ol::VerifyModel(replayed);
+      std::string serialized;
+      if (!replayed.SerializeToString(serialized))
+        throw std::runtime_error("Could not serialize replayed rewritings.");
+      auto item = Napi::Object::New(info.Env());
+      item.Set("name", name);
+      item.Set("count", plan.rewrites_size());
+      item.Set("bytes", Napi::Buffer<char>::Copy(info.Env(), serialized.data(), serialized.size()));
+      result.Set(result.Length(), item);
+    }
+    return result;
+  } catch (const std::exception &error) {
+    Napi::Error::New(info.Env(), error.what()).ThrowAsJavaScriptException();
+    return info.Env().Undefined();
+  }
+}
+
 Napi::Object Init(Napi::Env env, Napi::Object exports) {
+  exports.Set("rewritingPlans", Napi::Function::New(env, RewritingPlans));
   exports.Set("tensorVisits", Napi::Function::New(env, TensorVisits));
   exports.Set("layoutTensors", Napi::Function::New(env, LayoutTensors));
   exports.Set("encodedVisits", Napi::Function::New(env, EncodedVisits));

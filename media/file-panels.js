@@ -278,6 +278,7 @@ function createFilePanels({
       password: byId("save-password").value,
       confirmation: byId("save-confirmation").value,
       overwrite: byId("save-overwrite").checked,
+      includeRewritings: byId("save-rewritings").checked,
       storage:
         format === "reuse-plain" ? "reuse" : external ? "external" : "embedded",
       encrypted: format === "embedded-encrypted",

@@ -36,12 +36,29 @@ public:
   SerializeModelWorker(Napi::Env env, std::shared_ptr<StoredModel> source,
                        std::optional<std::string> password, std::string file_path,
                        size_t max_external_file_size = 0, std::string external_file_prefix = "",
-                       bool reuse_weights = false)
+                       bool reuse_weights = false, bool include_rewritings = false)
       : Napi::AsyncWorker(env), deferred_(Napi::Promise::Deferred::New(env)),
-        source_(std::move(source)), snapshot_(source_->model->SharedCopy()),
-        password_(std::move(password)), file_path_(std::move(file_path)),
-        max_external_file_size_(max_external_file_size),
-        external_file_prefix_(std::move(external_file_prefix)), reuse_weights_(reuse_weights) {}
+        source_(include_rewritings && source->fusion_base ? source->fusion_base : source),
+        snapshot_(source_->model->SharedCopy()), password_(std::move(password)),
+        file_path_(std::move(file_path)), max_external_file_size_(max_external_file_size),
+        external_file_prefix_(std::move(external_file_prefix)), reuse_weights_(reuse_weights) {
+    if (!include_rewritings) {
+      snapshot_.clear_rewritings();
+    } else if (!source->fusion_plans.empty()) {
+      ol::RewritingProto combined;
+      for (const auto &plan : source->fusion_plans) {
+        for (const auto &edit : plan.rewrites())
+          *combined.add_rewrites() = edit.SharedCopy();
+        // Each captured plan contains the complete declarations at that step.
+        combined.ref_required_opset_imports() = plan.required_opset_imports();
+        combined.ref_added_functions() = plan.added_functions();
+      }
+      std::string name = "onnx-light-viewer.fusions";
+      for (size_t suffix = 2; snapshot_.rewritings().contains(name); ++suffix)
+        name = "onnx-light-viewer.fusions." + std::to_string(suffix);
+      snapshot_.ref_rewritings().emplace(name, std::move(combined));
+    }
+  }
 
   Napi::Promise Promise() const { return deferred_.Promise(); }
 
@@ -251,9 +268,10 @@ void AddSerializationMethods(Napi::Env env, Napi::Object result,
       "serializeFiles",
       Napi::Function::New(env, [model](const Napi::CallbackInfo &call) -> Napi::Value {
         try {
-          if (call.Length() < 2 || call.Length() > 4 || !call[0].IsNumber() ||
+          if (call.Length() < 2 || call.Length() > 5 || !call[0].IsNumber() ||
               !call[1].IsString() || (!call[2].IsUndefined() && !call[2].IsString()) ||
-              (!call[3].IsUndefined() && !call[3].IsBoolean()))
+              (!call[3].IsUndefined() && !call[3].IsBoolean()) ||
+              (!call[4].IsUndefined() && !call[4].IsBoolean()))
             throw std::runtime_error(
                 "Expected a maximum external file size, a prefix and an optional source path.");
           const double maximum = call[0].As<Napi::Number>().DoubleValue();
@@ -272,7 +290,8 @@ void AddSerializationMethods(Napi::Env env, Napi::Object result,
             throw std::runtime_error("Invalid source model file path.");
           auto worker = std::make_unique<SerializeModelWorker>(
               call.Env(), model, std::nullopt, file_path, static_cast<size_t>(maximum), prefix,
-              call[3].IsBoolean() && call[3].As<Napi::Boolean>().Value());
+              call[3].IsBoolean() && call[3].As<Napi::Boolean>().Value(),
+              call[4].IsBoolean() && call[4].As<Napi::Boolean>().Value());
           const auto promise = worker->Promise();
           worker->Queue();
           worker.release();
@@ -285,14 +304,16 @@ void AddSerializationMethods(Napi::Env env, Napi::Object result,
   result.Set("serialize",
              Napi::Function::New(env, [model](const Napi::CallbackInfo &call) -> Napi::Value {
                try {
-                 if (call.Length() > 2 || (!call[1].IsUndefined() && !call[1].IsString()))
+                 if (call.Length() > 3 || (!call[1].IsUndefined() && !call[1].IsString()) ||
+                     (!call[2].IsUndefined() && !call[2].IsBoolean()))
                    throw std::runtime_error("Expected an optional password and source file path.");
                  const auto file_path =
                      call[1].IsString() ? call[1].As<Napi::String>().Utf8Value() : model->file_path;
                  if (file_path.find('\0') != std::string::npos)
                    throw std::runtime_error("Invalid source model file path.");
                  auto worker = std::make_unique<SerializeModelWorker>(
-                     call.Env(), model, ReadPassword(call[0]), file_path);
+                     call.Env(), model, ReadPassword(call[0]), file_path, 0, "", false,
+                     call[2].IsBoolean() && call[2].As<Napi::Boolean>().Value());
                  const auto promise = worker->Promise();
                  worker->Queue();
                  worker.release();
