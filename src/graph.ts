@@ -61,11 +61,13 @@ export interface InitializerStorage {
   location: string | null;
 }
 
-/** Dense or sparse weight metadata with bounded previews of tiny inline tensors. */
+/** Dense, sparse or encoded weight metadata with bounded previews. */
 export interface GraphInitializer {
   name: string;
   type: string;
-  shape: string[];
+  shape?: string[] | null;
+  /** EncodedValueProto layout description, resolving model-scoped struct references. */
+  encoding?: string;
   storage: InitializerStorage;
   /** Present for sparse initializers, describing their indices tensor. */
   indicesStorage?: InitializerStorage;

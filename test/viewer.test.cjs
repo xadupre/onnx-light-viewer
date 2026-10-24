@@ -2234,6 +2234,34 @@ test("renders the demo, inspects its operator and requests a real file", (t) => 
   assert.equal(graph.getAttribute("viewBox"), initialViewBox);
 });
 
+test("shows encoded initializer layouts without interpreting packed bytes as tensor values", (t) => {
+  const { document, load } = openViewer(t);
+  const graph = decodeGraph(
+    readFileSync(require.resolve("../examples/quantized-3bit.onnx")),
+    "quantized-3bit.onnx",
+  );
+  load(graph);
+  const parameters = document.getElementById("node-initializers");
+  assert.match(parameters.textContent, /weight \(FLOAT\).*Shape: \[8, 4\]/s);
+  assert.match(
+    parameters.textContent,
+    /Encoding: STRUCT .*quantization.v1\/q3_k/s,
+  );
+  assert.match(parameters.textContent, /Storage: embedded/);
+  assert.doesNotMatch(parameters.textContent, /Values:|raw_data:/);
+  assert.equal(document.getElementById("parameter-count").textContent, "1");
+  const [parameter] = graph.nodes[0].parameters;
+  parameter.encoding = '<img src=x onerror="alert(1)">';
+  parameter.shape = null;
+  load(graph);
+  assert.match(parameters.textContent, /Shape: \[\?\]/);
+  assert.match(parameters.textContent, /Encoding: <img/);
+  assert.equal(parameters.querySelector("img"), null);
+  delete parameter.shape;
+  load(graph);
+  assert.doesNotMatch(parameters.textContent, /Shape:/);
+});
+
 test("shows actual attributes, connected initializer parameters and versioned defaults", (t) => {
   const { document, load, window } = openViewer(t);
   const graph = decodeGraph(

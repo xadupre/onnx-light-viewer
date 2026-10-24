@@ -722,8 +722,17 @@ Napi::Array Dimensions(Napi::Env env, const ol::TensorShapeProto &shape) {
   return result;
 }
 
+std::string StructPreview(const ol::StructTypeProto &type, const ol::ModelProto *model = nullptr) {
+  if (model && type.has_type_ref())
+    for (const auto &declaration : model->struct_types())
+      if (declaration.type_id() == type.type_ref())
+        return Preview(declaration);
+  return Preview(type);
+}
+
 Napi::Object TensorInformation(Napi::Env env, std::string_view name,
-                               const ol::TypeProto *type = nullptr) {
+                               const ol::TypeProto *type = nullptr,
+                               const ol::ModelProto *model = nullptr) {
   auto result = Napi::Object::New(env);
   result.Set("name", Text(env, name));
   if (type && (type->has_tensor_type() || type->has_sparse_tensor_type())) {
@@ -740,6 +749,10 @@ Napi::Object TensorInformation(Napi::Env env, std::string_view name,
                has_shape ? Napi::Value(Dimensions(env, sparse ? type->sparse_tensor_type().shape()
                                                               : type->tensor_type().shape()))
                          : Napi::Value(env.Null()));
+  } else if (type && type->has_opaque_type()) {
+    result.Set("type", "OPAQUE " + Preview(type->opaque_type()));
+  } else if (type && type->has_struct_type()) {
+    result.Set("type", "STRUCT " + StructPreview(type->struct_type(), model));
   } else if (type && type->has_type()) {
     result.Set("type", Preview(*type));
   } else {
@@ -866,9 +879,13 @@ Napi::Array ValueNames(Napi::Env env, const Values &values,
   return result;
 }
 
-Napi::Object StorageInformation(Napi::Env env, const ol::TensorProto &tensor) {
+template <typename Proto> Napi::Object StorageInformation(Napi::Env env, const Proto &tensor) {
   auto result = Napi::Object::New(env);
-  const bool payload_omitted = IsPayloadOmitted(tensor);
+  const bool payload_omitted = [&] {
+    if constexpr (std::is_same_v<Proto, ol::TensorProto>)
+      return IsPayloadOmitted(tensor);
+    return false;
+  }();
   result.Set("external", !payload_omitted && (tensor.data_location() == ol::TensorProto::EXTERNAL ||
                                               !tensor.external_data().empty()));
   result.Set("location", env.Null());
@@ -1098,6 +1115,9 @@ Napi::Object ModelMetadata(Napi::Env env, const ol::ModelProto &model, const Gra
     add_entries(value);
   for (const auto &value : graph.sparse_initializer())
     add_entries(value.values());
+  for (const auto &value : graph.extended_initializer())
+    if (value.has_encoded_value())
+      add_value(value.encoded_value().name());
   auto nodes = Napi::Array::New(env);
   uint32_t index = 0;
   for (const auto &node : graph.node()) {
@@ -1168,6 +1188,9 @@ Napi::Object ModelGraph(Napi::Env env, const ol::ModelProto &model, const std::s
       local_names.emplace(value.name());
     for (const auto &value : scope->sparse_initializer())
       local_names.emplace(value.values().name());
+    for (const auto &value : scope->extended_initializer())
+      if (value.has_encoded_value())
+        local_names.emplace(value.encoded_value().name());
     for (const auto &node : scope->node())
       for (const auto &name : node.output())
         local_names.emplace(name);
@@ -1181,7 +1204,8 @@ Napi::Object ModelGraph(Napi::Env env, const ol::ModelProto &model, const std::s
         if (!value.name().empty())
           tensor_information.insert_or_assign(
               std::string(value.name()),
-              TensorInformation(env, value.name(), value.has_type() ? &value.type() : nullptr));
+              TensorInformation(env, value.name(), value.has_type() ? &value.type() : nullptr,
+                                &model));
     const auto &graph = *scope;
     for (const auto &tensor : graph.initializer()) {
       if (!tensor.name().empty()) {
@@ -1213,6 +1237,27 @@ Napi::Object ModelGraph(Napi::Env env, const ol::ModelProto &model, const std::s
           parameter.Set("value", "values: " + *values + "; indices: " + *indices);
         parameters.emplace(name, parameter);
       }
+    }
+    for (const auto &initializer : graph.extended_initializer()) {
+      if (!initializer.has_encoded_value() || initializer.encoded_value().name().empty())
+        continue;
+      const auto &value = initializer.encoded_value();
+      const std::string name(value.name());
+      initializers.emplace(name);
+      auto information = TensorInformation(
+          env, name, value.has_logical_type() ? &value.logical_type() : nullptr, &model);
+      if (information.Get("type").IsNull())
+        information.Set("type", "ENCODED");
+      tensor_information.insert_or_assign(name, information);
+      auto parameter = TensorInformation(
+          env, name, value.has_logical_type() ? &value.logical_type() : nullptr, &model);
+      parameter.Set("type", information.Get("type"));
+      parameter.Set("storage", StorageInformation(env, value));
+      if (value.has_affine())
+        parameter.Set("encoding", "AFFINE " + Preview(value.affine()));
+      else if (value.has_struct_type())
+        parameter.Set("encoding", "STRUCT " + StructPreview(value.struct_type(), &model));
+      parameters.emplace(name, parameter);
     }
   }
 
@@ -1566,7 +1611,7 @@ void ReadEncryptedModel(ol::ModelProto &model, const std::string &bytes,
 #endif
 }
 
-std::string ExternalDataLocation(const ol::TensorProto &tensor) {
+template <typename Proto> std::string ExternalDataLocation(const Proto &tensor) {
   std::string location;
   for (const auto &entry : tensor.external_data())
     if (entry.key() == "location")
@@ -1574,7 +1619,8 @@ std::string ExternalDataLocation(const ol::TensorProto &tensor) {
   return location;
 }
 
-void LoadExternalTensor(ol::TensorProto &tensor, const std::filesystem::path &directory) {
+template <typename Proto>
+void LoadExternalTensor(Proto &tensor, const std::filesystem::path &directory) {
   const auto location = ExternalDataLocation(tensor);
   int64_t offset = 0;
   int64_t length = -1;
@@ -1647,8 +1693,15 @@ std::optional<std::string> ReadPassword(const Napi::Value &value) {
 }
 
 /** Includes sparse components, which the native generic tensor iterator omits. */
-std::vector<ol::TensorProto *> ModelSaveTensors(ol::ModelProto &model) {
+std::vector<ol::TensorProto *>
+ModelSaveTensors(ol::ModelProto &model, std::vector<ol::EncodedValueProto *> *encoded = nullptr,
+                 std::set<const ol::TensorProto *> *layout_tensors = nullptr) {
   std::vector<ol::TensorProto *> tensors;
+  const auto layout_tensor = [&](ol::TensorProto &value) {
+    tensors.push_back(&value);
+    if (layout_tensors)
+      layout_tensors->insert(&value);
+  };
   const auto sparse = [&](ol::SparseTensorProto &value) {
     if (value.has_values())
       tensors.push_back(&value.ref_values());
@@ -1656,19 +1709,43 @@ std::vector<ol::TensorProto *> ModelSaveTensors(ol::ModelProto &model) {
       tensors.push_back(&value.ref_indices());
   };
   std::function<void(ol::AttributeProto &)> attribute;
+  std::function<void(ol::TypeProto &)> type;
+  std::function<void(ol::StructTypeProto &)> structure;
   const auto nodes = [&](auto &values) {
     for (auto &node : values)
       for (auto &value : node.ref_attribute())
         attribute(value);
   };
   const auto graph = [&](auto &value) {
+    for (auto *values : {&value.ref_input(), &value.ref_output(), &value.ref_value_info()})
+      for (auto &item : *values)
+        if (item.has_type())
+          type(item.ref_type());
     for (auto &tensor : value.ref_initializer())
       tensors.push_back(&tensor);
     for (auto &tensor : value.ref_sparse_initializer())
       sparse(tensor);
+    for (auto &initializer : value.ref_extended_initializer())
+      if (initializer.has_encoded_value()) {
+        auto &item = initializer.ref_encoded_value();
+        if (encoded)
+          encoded->push_back(&item);
+        if (item.has_affine()) {
+          if (item.affine().has_scale())
+            layout_tensor(item.ref_affine().ref_scale());
+          if (item.affine().has_zero_point())
+            layout_tensor(item.ref_affine().ref_zero_point());
+        }
+        if (item.has_struct_type())
+          structure(item.ref_struct_type());
+      }
     nodes(value.ref_node());
   };
   attribute = [&](ol::AttributeProto &value) {
+    if (value.has_tp())
+      type(value.ref_tp());
+    for (auto &item : value.ref_type_protos())
+      type(item);
     if (value.has_t())
       tensors.push_back(&value.ref_t());
     for (auto &tensor : value.ref_tensors())
@@ -1689,6 +1766,36 @@ std::vector<ol::TensorProto *> ModelSaveTensors(ol::ModelProto &model) {
         attribute(value);
     }
   };
+  type = [&](ol::TypeProto &value) {
+    if (value.has_struct_type())
+      structure(value.ref_struct_type());
+    if (value.has_sequence_type() && value.sequence_type().has_elem_type())
+      type(value.ref_sequence_type().ref_elem_type());
+    if (value.has_optional_type() && value.optional_type().has_elem_type())
+      type(value.ref_optional_type().ref_elem_type());
+    if (value.has_map_type() && value.map_type().has_value_type())
+      type(value.ref_map_type().ref_value_type());
+  };
+  structure = [&](ol::StructTypeProto &value) {
+    if (value.has_array() && value.array().has_element_type())
+      type(value.ref_array().ref_element_type());
+    if (value.has_structure())
+      for (auto &field : value.ref_structure().ref_field()) {
+        if (field.has_constant())
+          layout_tensor(field.ref_constant());
+        if (field.has_type())
+          type(field.ref_type());
+      }
+    for (auto *codec : {value.has_encoder() ? &value.ref_encoder() : nullptr,
+                        value.has_decoder() ? &value.ref_decoder() : nullptr})
+      if (codec) {
+        nodes(codec->ref_node());
+        for (auto &item : codec->ref_attribute_proto())
+          attribute(item);
+      }
+  };
+  for (auto &value : model.ref_struct_types())
+    structure(value);
   if (model.has_graph())
     graph(model.ref_graph());
   functions(model.ref_functions());
@@ -1770,10 +1877,20 @@ public:
   void Execute() override {
     try {
       RestoreModelPayloads(snapshot_, *source_, file_path_);
-      const auto tensors = ModelSaveTensors(snapshot_);
+      std::vector<ol::EncodedValueProto *> encoded;
+      std::set<const ol::TensorProto *> layout_tensors;
+      const auto tensors = ModelSaveTensors(snapshot_, &encoded, &layout_tensors);
+      for (auto *value : encoded)
+        if (value->has_data_location() && value->data_location() == ol::TensorProto::EXTERNAL) {
+          if (file_path_.empty())
+            throw std::runtime_error(
+                "External weights require a local source model path when saving.");
+          LoadExternalTensor(*value, ModelFilePath(file_path_).parent_path());
+        }
       auto external_weights = source_->external_weights;
       for (auto *tensor : tensors)
-        if (tensor->data_location() == ol::TensorProto::EXTERNAL) {
+        if ((!layout_tensors.contains(tensor) || tensor->has_data_location()) &&
+            tensor->data_location() == ol::TensorProto::EXTERNAL) {
           if (file_path_.empty())
             throw std::runtime_error(
                 "External weights require a local source model path when saving.");
@@ -1793,6 +1910,8 @@ public:
         for (const auto &weight : external_weights)
           weights_by_key[weight_key(weight.value)].push_back(&weight);
         for (auto *tensor : tensors) {
+          if (layout_tensors.contains(tensor))
+            continue;
           const auto candidates = weights_by_key.find(weight_key(*tensor));
           if (candidates == weights_by_key.end())
             continue;
@@ -1820,7 +1939,8 @@ public:
         const ol::SerializeOptions options;
         for (auto *value : tensors) {
           auto &tensor = *value;
-          if (reused.contains(value) || tensor.has_raw_data() ||
+          // Layout constants are part of versioned codec descriptors, not ordinary weights.
+          if (layout_tensors.contains(value) || reused.contains(value) || tensor.has_raw_data() ||
               tensor.data_type() == ol::TensorProto::STRING ||
               (tensor.float_data().empty() && tensor.double_data().empty() &&
                tensor.int32_data().empty() && tensor.int64_data().empty() &&
@@ -1958,8 +2078,18 @@ public:
   void Execute() override {
     try {
       RestoreModelPayloads(snapshot_, *source_, path_);
-      for (auto *tensor : ModelSaveTensors(snapshot_))
-        if (tensor->data_location() == ol::TensorProto::EXTERNAL) {
+      std::vector<ol::EncodedValueProto *> encoded;
+      std::set<const ol::TensorProto *> layout_tensors;
+      const auto tensors = ModelSaveTensors(snapshot_, &encoded, &layout_tensors);
+      for (auto *value : encoded)
+        if (value->has_data_location() && value->data_location() == ol::TensorProto::EXTERNAL) {
+          if (path_.empty())
+            throw std::runtime_error("Fusion needs a local source path for external weights.");
+          LoadExternalTensor(*value, ModelFilePath(path_).parent_path());
+        }
+      for (auto *tensor : tensors)
+        if ((!layout_tensors.contains(tensor) || tensor->has_data_location()) &&
+            tensor->data_location() == ol::TensorProto::EXTERNAL) {
           if (path_.empty())
             throw std::runtime_error("Fusion needs a local source path for external weights.");
           auto reference = tensor->SharedCopy();
@@ -2244,10 +2374,14 @@ Napi::Object ModelHandle(Napi::Env env, std::shared_ptr<StoredModel> model) {
                  std::set<std::string> locations;
                  for (const auto &weight : model->external_weights)
                    locations.insert(ExternalDataLocation(weight.reference));
-                 for (const auto *tensor : ModelSaveTensors(*model->model))
+                 std::vector<ol::EncodedValueProto *> encoded;
+                 for (const auto *tensor : ModelSaveTensors(*model->model, &encoded))
                    if (tensor->data_location() == ol::TensorProto::EXTERNAL &&
                        !omitted.contains(tensor))
                      locations.insert(ExternalDataLocation(*tensor));
+                 for (const auto *value : encoded)
+                   if (value->data_location() == ol::TensorProto::EXTERNAL)
+                     locations.insert(ExternalDataLocation(*value));
                  auto values = Napi::Array::New(call.Env(), locations.size());
                  uint32_t index = 0;
                  for (const auto &location : locations)
