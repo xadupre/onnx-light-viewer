@@ -1268,6 +1268,9 @@ for (const initialTab of ["model", "logs"]) {
       "Escape",
       "Drag the background",
       "Home / End",
+      "Ctrl/Cmd + Home",
+      "Ctrl/Cmd + End",
+      "Top / Bottom",
     ])
       assert.ok(panel.textContent.includes(control), control);
     tab.focus();
@@ -3664,6 +3667,153 @@ test("keyboard zoom shortcuts match controls and stay scoped to the graph canvas
   ]) {
     assert.equal(key(graph, "f", modifiers).defaultPrevented, false);
     assert.equal(graph.getAttribute("viewBox"), readable);
+  }
+});
+
+test("Top/Bottom buttons align model boundaries without changing zoom or node positions", (t) => {
+  const { document, window, load, resize } = openViewer(t);
+  const graph = document.getElementById("graph");
+  const top = document.getElementById("go-top");
+  const bottom = document.getElementById("go-bottom");
+  assert.equal(top.disabled, true);
+  assert.equal(bottom.disabled, true);
+  top.click();
+  bottom.click();
+  assert.equal(graph.hasAttribute("viewBox"), false);
+  load(chainGraph(40));
+  assert.equal(top.disabled, false);
+  assert.equal(bottom.disabled, false);
+  assert.equal(top.getAttribute("aria-keyshortcuts"), "Control+Home Meta+Home");
+  assert.equal(
+    bottom.getAttribute("aria-keyshortcuts"),
+    "Control+End Meta+End",
+  );
+  const view = () => graph.getAttribute("viewBox").split(" ").map(Number);
+  document.getElementById("zoom-fit").click();
+  const [, modelTop, , modelHeight] = view();
+  const positions = nodePositions(document);
+  document.getElementById("zoom-readable").click();
+  const size = view().slice(2);
+  const observer = new window.MutationObserver(() => {});
+  observer.observe(graph, { attributes: true, attributeFilter: ["viewBox"] });
+  t.after(() => observer.disconnect());
+  for (const width of [1060, 600]) {
+    resize(width, 350);
+    observer.takeRecords();
+    const currentSize = view().slice(2);
+    top.click();
+    assert.equal(observer.takeRecords().length, 1);
+    assert.ok(Math.abs(view()[1] - modelTop) < 1e-8);
+    assert.deepEqual(view().slice(2), currentSize);
+    bottom.click();
+    assert.equal(observer.takeRecords().length, 1);
+    assert.ok(Math.abs(view()[1] + view()[3] - modelTop - modelHeight) < 1e-8);
+    assert.deepEqual(view().slice(2), currentSize);
+  }
+  assert.equal(view()[3], size[1]);
+  assert.deepEqual(nodePositions(document), positions);
+  document.getElementById("zoom-fit").click();
+  const fitted = graph.getAttribute("viewBox");
+  top.click();
+  assert.equal(graph.getAttribute("viewBox"), fitted);
+  bottom.click();
+  assert.equal(graph.getAttribute("viewBox"), fitted);
+});
+
+test("model boundary shortcuts match buttons and do not intercept editing or other tabs", (t) => {
+  const { document, window, load } = openViewer(t);
+  const graph = document.getElementById("graph");
+  const key = (target, value, modifiers = {}) => {
+    const event = new window.KeyboardEvent("keydown", {
+      key: value,
+      bubbles: true,
+      cancelable: true,
+      ...modifiers,
+    });
+    target.dispatchEvent(event);
+    return event;
+  };
+  assert.equal(key(graph, "Home", { ctrlKey: true }).defaultPrevented, false);
+  load(chainGraph(40));
+  document.getElementById("zoom-readable").click();
+  document.getElementById("go-top").click();
+  const top = graph.getAttribute("viewBox");
+  document.getElementById("go-bottom").click();
+  const bottom = graph.getAttribute("viewBox");
+  assert.notEqual(top, bottom);
+  const editable = document.createElement("div");
+  const child = document.createElement("span");
+  editable.append(child);
+  document.getElementById("canvas").append(editable);
+  for (const value of ["true", "", "plaintext-only"]) {
+    editable.setAttribute("contenteditable", value);
+    assert.equal(key(child, "Home", { ctrlKey: true }).defaultPrevented, false);
+    assert.equal(graph.getAttribute("viewBox"), bottom);
+  }
+  editable.setAttribute("contenteditable", "false");
+  assert.equal(key(child, "Home", { ctrlKey: true }).defaultPrevented, true);
+  assert.equal(graph.getAttribute("viewBox"), top);
+  document.getElementById("go-bottom").click();
+  for (const modifiers of [{ ctrlKey: true }, { metaKey: true }]) {
+    for (const target of [
+      graph,
+      document.querySelector(".graph-node"),
+      document.getElementById("zoom-fit"),
+    ]) {
+      assert.equal(key(target, "Home", modifiers).defaultPrevented, true);
+      assert.equal(graph.getAttribute("viewBox"), top);
+      assert.equal(key(target, "End", modifiers).defaultPrevented, true);
+      assert.equal(graph.getAttribute("viewBox"), bottom);
+    }
+    for (const target of [
+      document.getElementById("node-search"),
+      document.getElementById("open-file"),
+      document.getElementById("operator-doc"),
+      document.getElementById("controls-view"),
+    ]) {
+      for (const shortcut of ["Home", "End"]) {
+        assert.equal(key(target, shortcut, modifiers).defaultPrevented, false);
+        assert.equal(graph.getAttribute("viewBox"), bottom);
+      }
+    }
+  }
+  for (const modifiers of [
+    {},
+    { altKey: true },
+    { ctrlKey: true, altKey: true },
+  ]) {
+    for (const shortcut of ["Home", "End"]) {
+      assert.equal(key(graph, shortcut, modifiers).defaultPrevented, false);
+      assert.equal(graph.getAttribute("viewBox"), bottom);
+    }
+  }
+});
+
+test("model boundary navigation includes nodes moved outside the layout at the same zoom", (t) => {
+  const { document, load, pointer } = openViewer(t);
+  load(chainGraph());
+  const graph = document.getElementById("graph");
+  document.getElementById("zoom-readable").click();
+  const view = () => graph.getAttribute("viewBox").split(" ").map(Number);
+  const size = view().slice(2);
+  const node = document.querySelector(".graph-node");
+  const start = nodePositions(document)[0];
+  for (const y of [-900, 3000]) {
+    const current = nodePositions(document)[0];
+    pointer(node, "pointerdown", current.x, current.y);
+    pointer(graph, "pointermove", start.x, y);
+    pointer(graph, "pointerup", start.x, y);
+    document.getElementById(y < 0 ? "go-top" : "go-bottom").click();
+    const [, top, , height] = view();
+    const rect = node.querySelector("rect");
+    const halfHeight = Number(rect.getAttribute("height")) / 2;
+    const edge = y + (y < 0 ? -halfHeight - 20 : halfHeight + 20);
+    assert.ok(Math.abs((y < 0 ? top : top + height) - edge) < 1e-8);
+    view()
+      .slice(2)
+      .forEach((value, index) =>
+        assert.ok(Math.abs(value - size[index]) < 1e-8),
+      );
   }
 });
 

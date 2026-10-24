@@ -1301,6 +1301,27 @@ function readableZoom() {
   fit();
 }
 
+function goToBoundary(bottom) {
+  if (!hasModel) return;
+  const viewport = byId("canvas").getBoundingClientRect();
+  if (!viewport.width || !viewport.height) return;
+  endGesture();
+  const scale = readablePending
+    ? 1
+    : Math.max(bounds.width / viewport.width, bounds.height / viewport.height) /
+      zoom;
+  readablePending = false;
+  const width = viewport.width * scale;
+  const height = viewport.height * scale;
+  reframe();
+  zoom = Math.max(bounds.width / width, bounds.height / height);
+  pan = {
+    x: 0,
+    y: (bottom ? 1 : -1) * Math.max(0, (bounds.height - height) / 2),
+  };
+  fit();
+}
+
 function matchingNodes() {
   const query = byId("node-search").value.trim().toLowerCase();
   if (query !== searchQuery) {
@@ -1368,6 +1389,8 @@ function navigate(path) {
 
 function render(graph, metadata) {
   hasModel = true;
+  byId("go-top").disabled = false;
+  byId("go-bottom").disabled = false;
   searchQuery = undefined;
   searchMatches = [];
   byId("node-search-result").textContent = "";
@@ -1806,15 +1829,23 @@ svg.addEventListener("keydown", (event) => {
   }
 });
 byId("canvas").addEventListener("keydown", (event) => {
+  const editable = event.target.closest("[contenteditable]");
   if (
     event.defaultPrevented ||
-    event.ctrlKey ||
-    event.metaKey ||
     event.altKey ||
-    event.target.closest("#find-node") ||
+    event.target.closest("#find-node, input, textarea, select") ||
+    (editable &&
+      editable.getAttribute("contenteditable").toLowerCase() !== "false") ||
     !hasModel
   )
     return;
+  if (event.ctrlKey || event.metaKey) {
+    if (event.key === "Home" || event.key === "End") {
+      event.preventDefault();
+      goToBoundary(event.key === "End");
+    }
+    return;
+  }
   switch (event.key.toLowerCase()) {
     case "f":
       resetZoom();
@@ -2111,6 +2142,8 @@ byId("zoom-out").addEventListener("click", () => {
   changeZoom(1 / 1.25);
 });
 byId("zoom-readable").addEventListener("click", readableZoom);
+byId("go-top").addEventListener("click", () => goToBoundary(false));
+byId("go-bottom").addEventListener("click", () => goToBoundary(true));
 byId("find-node").addEventListener("submit", findNode);
 byId("node-search").addEventListener("input", suggestNodes);
 byId("node-search").addEventListener("click", suggestNodes);
