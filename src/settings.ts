@@ -149,7 +149,11 @@ def source_version(package):
     for candidate in candidates:
         if not candidate.is_file():
             continue
-        for statement in ast.parse(candidate.read_bytes(), filename=str(candidate)).body:
+        try:
+            statements = ast.parse(candidate.read_bytes(), filename=str(candidate)).body
+        except (OSError, SyntaxError, UnicodeError):
+            continue
+        for statement in statements:
             if isinstance(statement, ast.Assign):
                 targets = statement.targets
             elif isinstance(statement, ast.AnnAssign):
