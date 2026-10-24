@@ -64,6 +64,8 @@ const sidebar = createSidebar({
   fit,
   endGesture,
   onMetadataToggle: setMetadataVisible,
+  onSettingsChange: (settings) =>
+    vscode.postMessage({ type: "viewer-settings", settings }),
 });
 const inspector = createInspector({
   byId,
@@ -156,6 +158,7 @@ function displayLog(entry) {
         (pending) => pending === "open",
       );
       setLoading(replacementPending);
+      filePanels.finishOpening(entry.status);
     } else if (type === "save") {
       filePanels.finishSaving(entry.status, replacementPending || !hasModel);
     }
@@ -296,15 +299,37 @@ function operatorSizes(nodes) {
     nodes.map((node) => {
       const typeWidth = widths.get(node.opType);
       const nameWidth = context.measureText(node.name).width;
-      const initializers = (node.parameters ?? []).map((parameter) => {
-        const description = `${parameter.name}: ${parameter.type}${parameter.shape === undefined ? "" : ` [${parameter.shape?.join(", ") ?? "?"}]`}${parameter.value === undefined ? "" : ` = ${parameter.value}`}`;
-        const text = shortName(description, 38);
-        return {
-          description,
-          text,
-          textWidth: context.measureText(text).width,
-        };
-      });
+      const parameters = [
+        ...(node.attributes ?? [])
+          .filter((attribute) => !attribute.graphs?.length)
+          .map((attribute) => ({
+            description: `${attribute.name} = ${attribute.value}`,
+            className: "node-attribute",
+          })),
+        ...(node.parameters ?? []).map((parameter) => ({
+          description: `${parameter.name}: ${parameter.type}${parameter.shape === undefined ? "" : ` [${parameter.shape?.join(", ") ?? "?"}]`}${parameter.value === undefined ? "" : ` = ${parameter.value}`}`,
+          className: "node-initializer",
+        })),
+      ];
+      const compact =
+        parameters.length <= 2 &&
+        parameters.every(
+          ({ description }) =>
+            description.length <= 38 && !/[\r\n]/.test(description),
+        );
+      const parameterRows = (
+        compact
+          ? parameters
+          : [
+              {
+                description: `${parameters.length} parameter${parameters.length === 1 ? "" : "s"} (see inspector)`,
+                className: "node-parameter-summary",
+              },
+            ]
+      ).map((parameter) => ({
+        ...parameter,
+        textWidth: context.measureText(parameter.description).width,
+      }));
       const subgraphs = (node.attributes ?? []).flatMap((attribute) =>
         (attribute.graphs ?? []).map((graph, index) => {
           const text = subgraphLabel(attribute, index);
@@ -328,7 +353,7 @@ function operatorSizes(nodes) {
         Math.max(
           160,
           Math.ceil(Math.max(typeWidth, nameWidth) + 32),
-          ...initializers.map((parameter) =>
+          ...parameterRows.map((parameter) =>
             Math.ceil(parameter.textWidth + 24),
           ),
           ...subgraphs.map((graph) => Math.ceil(graph.textWidth + 48)),
@@ -338,8 +363,8 @@ function operatorSizes(nodes) {
         node.id,
         {
           width,
-          height: 94 + initializers.length * 18 + subgraphs.length * 22,
-          initializers,
+          height: 112 + parameterRows.length * 18 + subgraphs.length * 22,
+          parameterRows,
           subgraphs,
           typeFontSize: Math.min(19, (19 * (width - 32)) / (typeWidth || 1)),
           nameFontSize: Math.min(10, (10 * (width - 32)) / (nameWidth || 1)),
@@ -528,7 +553,7 @@ function addUnusedLabel(view, unusedOutputs = []) {
   const text = label(
     view.group,
     view.initial.x,
-    view.initial.y - view.halfHeight + 17,
+    view.initial.y - view.halfHeight + 34,
     `Unused: ${unusedOutputs.length}`,
     "unused-label",
   );
@@ -1292,44 +1317,44 @@ function render(graph, metadata) {
       const typeLabel = label(
         group,
         position.x,
-        top + 41,
+        top + 59,
         node.opType,
         "operator-label",
       );
       typeLabel.style.fontSize = `${size.typeFontSize}px`;
       const nameLabel = label(
         group,
-        position.x,
-        top + 61,
+        position.x + size.width / 2 - 12,
+        top + 18,
         node.name,
         "operator-name",
+        "end",
       );
       nameLabel.style.fontSize = `${size.nameFontSize}px`;
       if (node.outputs.length) {
         const information = tensorLabel(
           group,
           position.x,
-          top + 81,
+          top + 99 + size.parameterRows.length * 18,
           node.outputs,
           26,
         );
         information.classList.add("node-tensor-info");
       }
-      size.initializers.forEach((parameter, index) => {
+      size.parameterRows.forEach((parameter, index) => {
         const text = label(
           group,
-          position.x - size.width / 2 + 12,
-          top + 99 + index * 18,
-          parameter.text,
-          "tensor-info node-initializer",
-          "start",
+          position.x,
+          top + 79 + index * 18,
+          parameter.description,
+          `tensor-info node-parameter ${parameter.className}`,
         );
         text.style.fontSize = `${Math.min(9, (10 * (size.width - 24)) / (parameter.textWidth || 1))}px`;
         text.setAttribute("aria-label", parameter.description);
         text.append(element("title", {}, parameter.description));
       });
       size.subgraphs.forEach((graph, index) => {
-        const y = top + 94 + size.initializers.length * 18 + index * 22;
+        const y = top + 112 + size.parameterRows.length * 18 + index * 22;
         const link = element("g", {
           class: "subgraph-link",
           role: "button",
@@ -1631,6 +1656,15 @@ svg.addEventListener(
   { passive: false },
 );
 window.addEventListener("message", (event) => {
+  if (event.data?.type === "model-progress") {
+    if (
+      event.data.actionId !== undefined &&
+      pendingActions.get(event.data.actionId) !== event.data.target
+    )
+      return;
+    filePanels.setProgress(event.data);
+    return;
+  }
   if (
     filePanels.handleMessage(event.data) ||
     fusionPanel.handleMessage(event.data)
@@ -1638,6 +1672,8 @@ window.addEventListener("message", (event) => {
     return;
   if (event.data?.type === "application-status") {
     displayStatus(event.data);
+  } else if (event.data?.type === "viewer-settings") {
+    sidebar.restoreSettings(event.data.settings);
   } else if (event.data?.type === "log-entry") {
     displayLog(event.data.entry);
   } else if (event.data?.type === "log-history") {

@@ -9,7 +9,8 @@ Opening models
   **Local file**, **Hugging Face** or **Backend test**. Browse folders, enter a
   directory or repository, select a model, then click **Open model**.
   **Parent folder** navigates up a local directory. You can also enter a model
-  path or file URL directly. Errors remain visible in the panel.
+  path or file URL directly. The panel closes after a successful opening;
+  **Open** can show it again. Errors and cancellations keep the panel open.
   Opening an ``.onnx`` file in VS Code
   also uses the viewer; use **Reopen Editor With...** if another editor handles it.
 * **ONNX Light Viewer: Open Graph** opens the bundled Relu demo.
@@ -17,6 +18,30 @@ Opening models
   randomly initialized transformer graph with symbolic batch/sequence dimensions.
 * The toolbar shows the native onnx-light C++ release, graph counts, refresh
   progress and errors. Its logo links to the GitHub repository.
+
+Recent paths and progress
+-------------------------
+
+Successful opens and saves remember their model paths and containing folders;
+Hugging Face opens remember the public model URL and repository instead of a
+cache filename. **Open** and **Save** keep separate, deduplicated histories,
+with the most recent entries first (up to 50 entries each). They persist in
+VS Code's user storage across viewer reloads and application restarts.
+Failed or cancelled operations and browsing alone do not add entries.
+
+Type in a model-path or location field to filter its native suggestions; use
+the arrow keys and Enter to select one, or keep typing any new path. Open
+suggestions follow the selected source. **Recent paths** also offers buttons
+to fill either field, **Remove** for individual entries and **Clear Open/Save
+history**. Selecting history never opens, browses or saves automatically.
+Paths are still validated when used, even if remembered. Passwords and URL
+credentials, query strings and fragments are not stored in history.
+
+The Open and Save panels show progress bars during their operations. Native
+loading and serialization use indeterminate progress rather than an estimated
+percentage. Downloads show received bytes and a determinate bar when the server
+supplies a usable total size; otherwise the bar stays indeterminate. Progress
+ends on success, failure or cancellation.
 
 Plain and encrypted ModelProto files
 -------------------------------------
@@ -102,8 +127,25 @@ cannot expose decrypted bytes in Logs.
 Hugging Face models
 -------------------
 
-Choose **Open**, then **Hugging Face**, and enter a public repository
-ID such as ``onnx-community/Kokoro-82M-v1.0-ONNX``, its URL
+Choose **Open**, then use the **Local file**, **Hugging Face** or **Backend tests**
+source buttons. **Hugging Face** initially shows popular public ONNX repositories,
+ranked by download count. Under **1. Find an ONNX model**, choose a **Task**
+(embeddings, generation, classification, vision, speech, etc.), enter a model
+name or author and click **Search** or press Enter. An empty search shows popular
+models for that task.
+Search results progressively show the smallest/largest known ONNX file sizes
+and the number of variants with size metadata, without downloading any model.
+Select a repository to browse its ONNX variants, then double-click a file to
+download and open it. A single click only selects a file; the **Open model**
+button remains available for keyboard and manual-path entry.
+Under **2. Choose an ONNX file**, file sizes appear in KiB/MiB/GiB when supplied
+by the Hub; they do not include separately stored external weights. No size is
+invented when metadata is missing; missing sizes and metadata errors are explicit.
+Results are repositories tagged ``onnx`` on the Hub, not a guarantee that every
+variant is supported by the native viewer.
+
+Expand **Or enter a repository / URL** to browse a known public repository ID such as
+``onnx-community/Kokoro-82M-v1.0-ONNX``, its URL
 (``https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX``), or the URL of an
 ``.onnx`` file. For a repository, the extension lists its ONNX files and lets you
 choose a variant; a single ONNX file is selected automatically.

@@ -23,13 +23,57 @@ import {
 import { webviewHtml } from "./webview";
 import { ActionLog, LogEntry } from "./log";
 import {
+  PathHistory,
+  historyEntries,
+  isHistoryEntry,
+  HistoryTarget,
+} from "./pathHistory";
+import {
   cachedHuggingFaceModel,
   listHuggingFaceModels,
   parseHuggingFaceInput,
+  searchHuggingFaceModels,
+  HuggingFaceSource,
 } from "./huggingface";
 
 const viewType = "onnxLightViewer.graph";
 const panelSessions = new WeakMap<vscode.WebviewPanel, () => void>();
+
+interface ViewerSettings {
+  width?: number;
+  panels: { operator: boolean; find: boolean; metadata: boolean };
+}
+
+function viewerSettings(value: unknown): ViewerSettings {
+  if (!value || typeof value !== "object")
+    throw new Error("Invalid viewer settings.");
+  const width = "width" in value ? value.width : undefined;
+  if (
+    width !== undefined &&
+    (typeof width !== "number" || !Number.isInteger(width) || width < 200)
+  )
+    throw new Error("Invalid sidebar width.");
+  const panels = "panels" in value ? value.panels : undefined;
+  if (
+    !panels ||
+    typeof panels !== "object" ||
+    !("operator" in panels) ||
+    typeof panels.operator !== "boolean" ||
+    !("find" in panels) ||
+    typeof panels.find !== "boolean" ||
+    !("metadata" in panels) ||
+    typeof panels.metadata !== "boolean"
+  )
+    throw new Error("Invalid sidebar panel settings.");
+  return {
+    ...(width === undefined ? {} : { width }),
+    panels: {
+      operator: panels.operator,
+      find: panels.find,
+      metadata: panels.metadata,
+    },
+  };
+}
 
 /**
  * Panel-local display state, independent of the recoverable native handle.
@@ -94,6 +138,9 @@ function invalidateModel(model: LoadedModel, log: ActionLog): void {
  * @param context Extension resources and subscription lifetime supplied by VS Code.
  */
 export function activate(context: vscode.ExtensionContext): void {
+  const pathHistory = new PathHistory(context.globalState, (message) => {
+    void vscode.window.showErrorMessage(message);
+  });
   let current: { panel: vscode.WebviewPanel; showLogs: () => void } | undefined;
   const openViewer = async (
     uri?: vscode.Uri,
@@ -105,10 +152,17 @@ export function activate(context: vscode.ExtensionContext): void {
       vscode.ViewColumn.One,
       { enableScripts: true },
     );
-    return configurePanel(context, panel, uri, initialTab, (showLogs) => {
-      if (showLogs) current = { panel, showLogs };
-      else if (current?.panel === panel) current = undefined;
-    });
+    return configurePanel(
+      context,
+      panel,
+      uri,
+      initialTab,
+      pathHistory,
+      (showLogs) => {
+        if (showLogs) current = { panel, showLogs };
+        else if (current?.panel === panel) current = undefined;
+      },
+    );
   };
   context.subscriptions.push(
     vscode.commands.registerCommand("onnxLightViewer.showLogs", () => {
@@ -141,6 +195,7 @@ export function activate(context: vscode.ExtensionContext): void {
           panel,
           document.uri,
           "model",
+          pathHistory,
           (showLogs) => {
             if (showLogs) current = { panel, showLogs };
             else if (current?.panel === panel) current = undefined;
@@ -310,6 +365,7 @@ function isGraphPath(path: unknown): path is GraphPath {
  * @param panel Panel whose message and view-state subscriptions are disposed on close.
  * @param uri Optional model to load initially; omitted leaves the viewer empty.
  * @param initialTab Tab selected in the initial HTML shell.
+ * @param pathHistory Shared persistent history of successful Open/Save paths.
  * @param activatePanel Registers this panel's Show Logs callback, or clears it on disposal.
  */
 async function configurePanel(
@@ -317,6 +373,7 @@ async function configurePanel(
   panel: vscode.WebviewPanel,
   uri: vscode.Uri | undefined,
   initialTab: "model" | "logs",
+  pathHistory: PathHistory,
   activatePanel: (showLogs: (() => void) | undefined) => void,
 ): Promise<void> {
   panelSessions.get(panel)?.();
@@ -346,6 +403,7 @@ async function configurePanel(
       }
     | undefined;
   let ready = false;
+  let hubSearch: AbortController | undefined;
   let showLogsRequested = false;
   let initialLoading = !!uri;
   let initialError: string | undefined;
@@ -369,6 +427,23 @@ async function configurePanel(
     void postMessage({ type: "log-entry", entry });
     void sendStatus();
   });
+  const stopHistory = pathHistory.subscribe((history) => {
+    void postMessage({ type: "path-history", history });
+  });
+  const updateHistory = async (
+    target: HistoryTarget,
+    change: Parameters<PathHistory["update"]>[1],
+  ) => {
+    try {
+      await pathHistory.update(target, change);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      log.record("FAILED", `Update path history: ${detail}`);
+      await vscode.window.showErrorMessage(
+        `Could not update path history: ${detail}`,
+      );
+    }
+  };
   const showLogs = () => {
     showLogsRequested = true;
     if (ready) {
@@ -400,6 +475,13 @@ async function configurePanel(
         ? vscode.Uri.file(value)
         : vscode.Uri.joinPath(directoryUri(), value);
   };
+  const hubFileEntries = (files: (HuggingFaceSource & { path?: string })[]) =>
+    files.map((file) => ({
+      name: file.path ?? file.fileName,
+      path: file.url,
+      directory: false,
+      ...(file.size === undefined ? {} : { size: file.size }),
+    }));
   const sendGraph = () => {
     fusionPreview = undefined;
     fusionRequest++;
@@ -449,7 +531,11 @@ async function configurePanel(
       const native = reload();
       return { graph: native.graph(), native, reload };
     });
-    return { model: loadedModel, name };
+    return {
+      model: loadedModel,
+      name,
+      history: historyEntries("backend", String(selection.id)),
+    };
   };
   const messages = panel.webview.onDidReceiveMessage(
     async (
@@ -473,6 +559,11 @@ async function configurePanel(
         password?: unknown;
         confirmation?: unknown;
         overwrite?: unknown;
+        settings?: unknown;
+        historyAction?: unknown;
+        historyEntry?: unknown;
+        query?: unknown;
+        task?: unknown;
       } | null,
     ) => {
       if (!active) return;
@@ -480,8 +571,59 @@ async function configurePanel(
         showLogs();
       } else if (message?.type === "interaction") {
         log.interaction(message.entry);
+      } else if (message?.type === "path-history-edit") {
+        if (
+          (message.target === "open" || message.target === "save") &&
+          message.historyAction === "clear"
+        ) {
+          await updateHistory(message.target, { action: "clear" });
+        } else if (
+          (message.target === "open" || message.target === "save") &&
+          message.historyAction === "remove" &&
+          isHistoryEntry(message.historyEntry)
+        ) {
+          await updateHistory(message.target, {
+            action: "remove",
+            entry: message.historyEntry,
+          });
+        } else {
+          log.record("FAILED", "Invalid path history edit.");
+          await vscode.window.showErrorMessage("Invalid path history edit.");
+        }
+      } else if (message?.type === "viewer-settings") {
+        try {
+          await context.globalState.update(
+            "viewerSettings",
+            viewerSettings(message.settings),
+          );
+        } catch (error) {
+          const description =
+            error instanceof Error ? error.message : String(error);
+          log.record("FAILED", `Save viewer settings: ${description}`);
+          await vscode.window.showErrorMessage(
+            `Could not save viewer settings: ${description}`,
+          );
+        }
       } else if (message?.type === "ready") {
         ready = true;
+        const history = pathHistory.snapshot();
+        if (history.open.length || history.save.length)
+          await postMessage({ type: "path-history", history });
+        const storedSettings =
+          context.globalState.get<unknown>("viewerSettings");
+        if (storedSettings !== undefined) {
+          try {
+            const settings = viewerSettings(storedSettings);
+            await postMessage({ type: "viewer-settings", settings });
+          } catch (error) {
+            const detail =
+              error instanceof Error ? error.message : String(error);
+            log.record("FAILED", `Restore viewer settings: ${detail}`);
+            void vscode.window.showErrorMessage(
+              `Could not restore viewer settings: ${detail}`,
+            );
+          }
+        }
         await postMessage({
           type: "log-history",
           entries: log.snapshot(),
@@ -498,6 +640,83 @@ async function configurePanel(
           await postMessage({ type: "show-logs" });
           showLogsRequested = false;
         }
+      } else if (message?.type === "search-huggingface") {
+        hubSearch?.abort();
+        const controller = new AbortController();
+        hubSearch = controller;
+        try {
+          if (
+            typeof message.query !== "string" ||
+            typeof message.task !== "string"
+          )
+            throw new Error("Enter a model search and choose a task.");
+          const models = await searchHuggingFaceModels(
+            message.query,
+            message.task,
+            controller.signal,
+          );
+          if (!active || hubSearch !== controller) return;
+          await postMessage({
+            type: "huggingface-search-results",
+            requestId: message.requestId,
+            models,
+          });
+          let next = 0;
+          await Promise.all(
+            Array.from({ length: Math.min(3, models.length) }, async () => {
+              while (
+                active &&
+                hubSearch === controller &&
+                !controller.signal.aborted
+              ) {
+                const model = models[next++];
+                if (!model) return;
+                try {
+                  const files = await listHuggingFaceModels(
+                    model,
+                    controller.signal,
+                  );
+                  if (
+                    !active ||
+                    hubSearch !== controller ||
+                    controller.signal.aborted
+                  )
+                    return;
+                  await postMessage({
+                    type: "huggingface-model-files",
+                    requestId: message.requestId,
+                    id: model.id,
+                    entries: hubFileEntries(files),
+                  });
+                } catch (error) {
+                  if (
+                    !active ||
+                    hubSearch !== controller ||
+                    controller.signal.aborted
+                  )
+                    return;
+                  await postMessage({
+                    type: "huggingface-model-files",
+                    requestId: message.requestId,
+                    id: model.id,
+                    error:
+                      error instanceof Error ? error.message : String(error),
+                  });
+                }
+              }
+            }),
+          );
+        } catch (error) {
+          if (!active || controller.signal.aborted || hubSearch !== controller)
+            return;
+          await postMessage({
+            type: "huggingface-search-error",
+            requestId: message.requestId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        } finally {
+          if (hubSearch === controller) hubSearch = undefined;
+        }
       } else if (message?.type === "browse-files") {
         const target = message.target;
         try {
@@ -511,6 +730,7 @@ async function configurePanel(
             path: string;
             directory: boolean;
             description?: string;
+            size?: number;
           }[];
           if (source === "backend") {
             entries = listBackendTests().map((test) => ({
@@ -530,11 +750,7 @@ async function configurePanel(
                 ? [parsed]
                 : await listHuggingFaceModels(parsed);
             location = message.location;
-            entries = files.map((file) => ({
-              name: "path" in file ? String(file.path) : file.fileName,
-              path: file.url,
-              directory: false,
-            }));
+            entries = hubFileEntries(files);
           } else if (source === "local") {
             const uri = message.location
               ? locationUri(message.location)
@@ -615,6 +831,7 @@ async function configurePanel(
                 return {
                   model: { graph: native.graph(), native, reload },
                   name: test.name,
+                  history: historyEntries("backend", String(test.id)),
                 };
               }
               if (location.id === "local") {
@@ -642,6 +859,11 @@ async function configurePanel(
                 return {
                   model: loadedModel,
                   name: posix.basename(selection[0].path),
+                  history: historyEntries(
+                    "local",
+                    locationText(selection[0]),
+                    locationText(vscode.Uri.joinPath(selection[0], "..")),
+                  ),
                 };
               }
               const input = inline
@@ -680,13 +902,14 @@ async function configurePanel(
                   title: `Hugging Face: ${"fileName" in target ? target.fileName : target.url}`,
                   cancellable: true,
                 },
-                async (_progress, token) => {
+                async (progress, token) => {
                   const controller = new AbortController();
                   const cancellation = token.onCancellationRequested(() =>
                     controller.abort(),
                   );
                   if (token.isCancellationRequested) controller.abort();
                   try {
+                    let reported = 0;
                     let source;
                     if ("fileName" in target) source = target;
                     else {
@@ -720,6 +943,12 @@ async function configurePanel(
                       source,
                       join(context.globalStorageUri.fsPath, "huggingface"),
                       async (path) => {
+                        await postMessage({
+                          type: "model-progress",
+                          target: "open",
+                          actionId: message.actionId,
+                          stage: "Opening model",
+                        });
                         const loaded = await readGraph(
                           vscode.Uri.file(path),
                           log,
@@ -736,6 +965,27 @@ async function configurePanel(
                         return loaded;
                       },
                       controller.signal,
+                      ({ received, total }) => {
+                        if (controller.signal.aborted || !active) return;
+                        const percent = total
+                          ? Math.min(100, (received / total) * 100)
+                          : undefined;
+                        progress.report({
+                          message: `Downloaded ${received.toLocaleString()}${total ? ` / ${total.toLocaleString()}` : ""} bytes`,
+                          ...(percent === undefined
+                            ? {}
+                            : { increment: percent - reported }),
+                        });
+                        reported = percent ?? reported;
+                        void postMessage({
+                          type: "model-progress",
+                          target: "open",
+                          actionId: message.actionId,
+                          stage: "Downloading Hugging Face model",
+                          received,
+                          total,
+                        });
+                      },
                     );
                     if (result.value.source)
                       result.value.source.uri = vscode.Uri.file(
@@ -747,7 +997,16 @@ async function configurePanel(
                       undefined,
                       result.filePath,
                     );
-                    return { model: result.value, name: source.fileName };
+                    const url = new URL(source.url);
+                    return {
+                      model: result.value,
+                      name: source.fileName,
+                      history: historyEntries(
+                        "huggingface",
+                        source.url,
+                        `${url.origin}/${url.pathname.split("/").slice(1, 3).join("/")}`,
+                      ),
+                    };
                   } catch (error) {
                     if (
                       controller.signal.aborted &&
@@ -770,6 +1029,10 @@ async function configurePanel(
           model = loaded.model;
           panel.title = `ONNX: ${loaded.name}`;
           await sendGraph();
+          await updateHistory("open", {
+            action: "remember",
+            entries: loaded.history,
+          });
         } catch (error) {
           if (!active) return;
           const detail = error instanceof Error ? error.message : String(error);
@@ -782,7 +1045,7 @@ async function configurePanel(
           );
         }
       } else if (message?.type === "open-backend-test") {
-        let loaded: { model: LoadedModel; name: string } | undefined;
+        let loaded: Awaited<ReturnType<typeof chooseBackendTest>>;
         try {
           loaded = await log.run(
             "Open backend test",
@@ -804,6 +1067,10 @@ async function configurePanel(
         model = loaded.model;
         panel.title = `ONNX: ${loaded.name}`;
         await sendGraph();
+        await updateHistory("open", {
+          action: "remember",
+          entries: loaded.history,
+        });
       } else if (message?.type === "cancel-fusion") {
         fusionPreview = undefined;
         fusionRequest++;
@@ -1110,6 +1377,12 @@ async function configurePanel(
                 current.source?.uri.scheme === "file"
                   ? current.source.uri.fsPath
                   : undefined;
+              await postMessage({
+                type: "model-progress",
+                target: "save",
+                actionId: message.actionId,
+                stage: "Serializing model and weights",
+              });
               const serialized = format.external
                 ? await native.serializeFiles(
                     maxExternalFileSize,
@@ -1138,6 +1411,12 @@ async function configurePanel(
               let committed = false;
               try {
                 for (const file of serialized.weights) {
+                  await postMessage({
+                    type: "model-progress",
+                    target: "save",
+                    actionId: message.actionId,
+                    stage: `Writing weight file ${writtenWeights.length + 1} of ${serialized.weights.length}`,
+                  });
                   const uri = vscode.Uri.joinPath(destination, "..", file.name);
                   if (
                     !(await writeModelFile(uri, file.bytes, false, isCurrent))
@@ -1146,6 +1425,12 @@ async function configurePanel(
                   writtenWeights.push(uri);
                   if (!active || model !== current) return cancelled();
                 }
+                await postMessage({
+                  type: "model-progress",
+                  target: "save",
+                  actionId: message.actionId,
+                  stage: "Writing model file",
+                });
                 const published = await writeModelFile(
                   destination,
                   serialized.model,
@@ -1163,6 +1448,14 @@ async function configurePanel(
                   for (const uri of writtenWeights)
                     await vscode.workspace.fs.delete(uri);
               }
+              await updateHistory("save", {
+                action: "remember",
+                entries: historyEntries(
+                  "local",
+                  locationText(destination),
+                  locationText(vscode.Uri.joinPath(destination, "..")),
+                ),
+              });
               await postMessage({
                 type: "save-info",
                 name: posix.basename(destination.path),
@@ -1315,7 +1608,9 @@ async function configurePanel(
   );
   const dispose = () => {
     active = false;
+    hubSearch?.abort();
     model = undefined;
+    stopHistory();
     messages.dispose();
     viewState.dispose();
     disposal.dispose();
@@ -1343,6 +1638,16 @@ async function configurePanel(
       if (ready && model) await sendGraph();
       else if (ready) await postMessage({ type: "load-state", pending: false });
       else void sendStatus();
+      if (loaded && !uri.path.startsWith(`${mediaRoot.path}/`)) {
+        await updateHistory("open", {
+          action: "remember",
+          entries: historyEntries(
+            "local",
+            locationText(uri),
+            locationText(vscode.Uri.joinPath(uri, "..")),
+          ),
+        });
+      }
     } catch (error) {
       if (!active) return;
       initialLoading = false;

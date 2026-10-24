@@ -2,20 +2,112 @@ import { createHash, randomUUID } from "node:crypto";
 import { createWriteStream } from "node:fs";
 import { mkdir, rename, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
-import { Readable } from "node:stream";
+import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 
 export interface HuggingFaceSource {
   url: string;
   fileName: string;
+  size?: number;
 }
 
 export interface HuggingFaceRepository {
   url: string;
 }
 
+export interface DownloadProgress {
+  received: number;
+  total?: number;
+}
+
 export interface HuggingFaceModelFile extends HuggingFaceSource {
   path: string;
+}
+
+export const huggingFaceTasks = [
+  { value: "", label: "All tasks" },
+  { value: "feature-extraction", label: "Feature extraction / embeddings" },
+  { value: "sentence-similarity", label: "Sentence similarity" },
+  { value: "text-ranking", label: "Text ranking" },
+  { value: "text-generation", label: "Text generation" },
+  { value: "text-classification", label: "Text classification" },
+  { value: "token-classification", label: "Token classification" },
+  { value: "question-answering", label: "Question answering" },
+  { value: "summarization", label: "Summarization" },
+  { value: "translation", label: "Translation" },
+  { value: "image-classification", label: "Image classification" },
+  { value: "object-detection", label: "Object detection" },
+  { value: "image-segmentation", label: "Image segmentation" },
+  { value: "automatic-speech-recognition", label: "Speech recognition" },
+  { value: "text-to-speech", label: "Text to speech" },
+] as const;
+
+export interface HuggingFaceSearchResult extends HuggingFaceRepository {
+  id: string;
+  downloads: number;
+  task?: string;
+}
+
+export async function searchHuggingFaceModels(
+  query: string,
+  task = "",
+  signal?: AbortSignal,
+): Promise<HuggingFaceSearchResult[]> {
+  if (!huggingFaceTasks.some(({ value }) => value === task))
+    throw new Error("Choose a supported Hugging Face task.");
+  const url = new URL("https://huggingface.co/api/models");
+  url.searchParams.set("filter", "onnx");
+  url.searchParams.set("sort", "downloads");
+  url.searchParams.set("direction", "-1");
+  url.searchParams.set("limit", "12");
+  for (const field of ["downloads", "pipeline_tag", "gated", "private"])
+    url.searchParams.append("expand[]", field);
+  if (query.trim()) url.searchParams.set("search", query.trim());
+  if (task) url.searchParams.set("pipeline_tag", task);
+  const response = await fetch(url, { signal });
+  if (!response.ok) {
+    await response.body?.cancel();
+    throw new Error(
+      `Hugging Face search failed: HTTP ${response.status} ${response.statusText}.`,
+    );
+  }
+  const metadata: unknown = await response.json();
+  if (!Array.isArray(metadata))
+    throw new Error("Invalid Hugging Face search response.");
+  const models: HuggingFaceSearchResult[] = [];
+  const entries: unknown[] = metadata;
+  for (const entry of entries) {
+    if (
+      !entry ||
+      typeof entry !== "object" ||
+      !("id" in entry) ||
+      typeof entry.id !== "string" ||
+      !/^[\w.-]+\/[\w.-]+$/.test(entry.id) ||
+      entry.id.split("/").some((part) => /^\.+$/.test(part)) ||
+      !("downloads" in entry) ||
+      typeof entry.downloads !== "number" ||
+      !Number.isSafeInteger(entry.downloads) ||
+      entry.downloads < 0 ||
+      ("pipeline_tag" in entry &&
+        entry.pipeline_tag !== null &&
+        typeof entry.pipeline_tag !== "string")
+    )
+      throw new Error("Invalid Hugging Face model search result.");
+    if (
+      ("private" in entry && entry.private) ||
+      ("gated" in entry && entry.gated)
+    )
+      continue;
+    models.push({
+      id: entry.id,
+      url: `https://huggingface.co/${entry.id}`,
+      downloads: entry.downloads,
+      ...("pipeline_tag" in entry && typeof entry.pipeline_tag === "string"
+        ? { task: entry.pipeline_tag }
+        : {}),
+    });
+  }
+  return models;
 }
 
 export function parseHuggingFaceInput(
@@ -47,6 +139,8 @@ export async function listHuggingFaceModels(
 ): Promise<HuggingFaceModelFile[]> {
   const url = new URL(repository.url);
   url.pathname = `/api/models${url.pathname}`;
+  url.searchParams.set("blobs", "true");
+  url.searchParams.append("expand[]", "siblings");
   const response = await fetch(url, { signal });
   if (!response.ok) {
     await response.body?.cancel();
@@ -81,10 +175,25 @@ export async function listHuggingFaceModels(
       )
     )
       throw new Error(`Invalid Hugging Face model path: ${path}`);
+    const size =
+      "size" in entry && entry.size !== null
+        ? entry.size
+        : "lfs" in entry &&
+            entry.lfs !== null &&
+            typeof entry.lfs === "object" &&
+            "size" in entry.lfs
+          ? entry.lfs.size
+          : undefined;
+    if (
+      size !== undefined &&
+      (typeof size !== "number" || !Number.isSafeInteger(size) || size < 0)
+    )
+      throw new Error(`Invalid Hugging Face file size: ${path}`);
     files.push({
       path,
       fileName: parts[parts.length - 1],
       url: `${repository.url}/resolve/main/${parts.map(encodeURIComponent).join("/")}`,
+      ...(size === undefined ? {} : { size }),
     });
   }
   if (!files.length)
@@ -138,6 +247,7 @@ export async function cachedHuggingFaceModel<T>(
   cacheRoot: string,
   load: (filePath: string) => Promise<T>,
   signal?: AbortSignal,
+  onProgress?: (progress: DownloadProgress) => void,
 ): Promise<{ value: T; cached: boolean; filePath: string }> {
   signal?.throwIfAborted();
   const key = createHash("sha256").update(source.url).digest("hex");
@@ -167,11 +277,35 @@ export async function cachedHuggingFaceModel<T>(
       );
     }
     if (!response.body) throw new Error("Hugging Face returned no model data.");
+    const length = Number(response.headers.get("content-length"));
+    const encoding = response.headers.get("content-encoding");
+    const total =
+      Number.isSafeInteger(length) &&
+      length > 0 &&
+      (!encoding || encoding === "identity")
+        ? length
+        : undefined;
+    let received = 0;
+    let reportedAt = Date.now();
+    onProgress?.({ received, total });
+    const progress = new Transform({
+      transform(chunk: Buffer, _encoding, callback) {
+        received += chunk.length;
+        const now = Date.now();
+        if (now - reportedAt >= 100 || received === total) {
+          onProgress?.({ received, total });
+          reportedAt = now;
+        }
+        callback(null, chunk);
+      },
+    });
     await pipeline(
       Readable.fromWeb(response.body),
+      progress,
       createWriteStream(temporary, { flags: "wx" }),
       { signal },
     );
+    onProgress?.({ received, total });
     const value = await load(temporary);
     signal?.throwIfAborted();
     await rename(temporary, filePath);
