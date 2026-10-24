@@ -99,6 +99,58 @@ recreation. This recovers caught exceptions, not native process crashes.
 After fusion, recovery clones the retained edited model instead of reloading
 the original source, preserving applied rewrites.
 
+How do the panel modules cooperate?
+-----------------------------------
+
+``src/webview.ts`` loads the local Markdown renderer, the five panel factories,
+then ``media/viewer.js``, under the same CSP. The viewer creates the controllers
+with explicit callbacks; no framework or bundler is needed for these modules.
+
+.. figure:: _static/webview-controllers.svg
+   :alt: The viewer coordinates five private controllers: sidebar, file panels,
+         inspector, metadata panel and fusion panel. Data and explicit callbacks
+         connect them; graph state remains in the viewer.
+   :width: 100%
+
+   Extracting a panel does not transfer ownership of the graph or camera.
+
+The viewer routes file and fusion replies to their controllers, which reject
+superseded request IDs. A replacement graph resets inspector/metadata displays,
+clears operator documentation, and invalidates file listings and fusion previews.
+Metadata presentation belongs to its panel; tensor highlighting and selection
+remain in the viewer.
+See :doc:`features/inspection` and :doc:`features/navigation` for the user-facing
+behavior.
+
+How does the native split preserve ownership?
+---------------------------------------------
+
+``native/addon.cc`` only registers exports. ``model.cc`` assembles the retained
+handle from graph methods and the serialization/fusion method factories.
+The focused translation units share narrow declarations, not global model state;
+workers and implementation helpers remain private to their source file.
+
+.. figure:: _static/native-ownership.svg
+   :alt: Native method closures and asynchronous workers retain a shared
+         StoredModel. It owns the parsed model and the relevant backing owners.
+         Workers also own a working snapshot for serialization or fusion.
+   :width: 100%
+
+   Splitting source files does not shorten the lifetime of borrowed storage.
+
+Each method closure captures the shared ``StoredModel``, so even a detached
+method keeps its source alive. Clones and fusion results retain the previous
+``StoredModel`` as backing; virtual-file models retain their byte array and
+backend models retain their test case. Member declaration order ensures that
+the parsed model is destroyed before these backing owners.
+
+Save and fusion workers retain their source and operate on a ``SharedCopy``
+snapshot, restoring omitted payloads before use. This is not a promise of
+bounded-memory saving or fusion: those operations can materialize weights.
+Graph projection and analysis remain synchronous; splitting translation units
+does not move them onto workers. See :doc:`features/opening_models` and
+:doc:`features/fusion_patterns` for the action semantics.
+
 Contracts worth keeping
 ------------------------
 
@@ -175,14 +227,6 @@ Where to change things
      - Metadata presentation; graph highlighting stays in the viewer.
    * - :download:`media/fusion-panel.js <../media/fusion-panel.js>`
      - Pattern/candidate controls and stale preview guards.
-
-The shell loads local panel factories before the viewer, under the same CSP.
-Each factory creates private panel state and receives data or explicit viewer
-callbacks; panels do not own the model lifecycle, selection or camera.
-
-Native workers and implementation helpers stay private to their source file.
-Shared headers expose model/path data and narrow function entry points; method
-closures and workers retain the same backing owners across these boundaries.
 
 ``CMakeLists.txt`` pins and checksum-verifies the published onnx-light libraries;
 only the addon is compiled locally. Its platform must match the extension host.

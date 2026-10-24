@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 535" role="img" aria-labelledby="title description">
   <title id="title">Viewer ownership and message boundaries</title>
-  <desc id="description">The browser owns the SVG view. The VS Code host owns panel state, sources and recovery. The native addon owns the model and onnx-light analysis. Requests go down; lightweight snapshots and errors return up.</desc>
+  <desc id="description">The browser viewer coordinates private panel controllers and owns the SVG view. The VS Code host owns panel state, sources and recovery. Focused native modules retain the model and backing storage. Requests go down; lightweight snapshots and errors return up.</desc>
   <style>
     .background { fill: #f8fafc; }
     .card { fill: #dbeafe; stroke: #2563eb; stroke-width: 2; }
@@ -29,7 +29,7 @@
   <g class="text">
     <rect x="80" y="25" width="800" height="110" rx="12" class="card"/>
     <text x="110" y="65" class="heading">Webview</text>
-    <text x="110" y="100" class="code">media/viewer.js + viewer.css</text>
+    <text x="110" y="100" class="code">viewer.js + panel controllers</text>
     <text x="510" y="65">SVG, camera, selection</text>
     <text x="510" y="100">Lightweight snapshots only</text>
     <rect x="80" y="215" width="800" height="120" rx="12" class="card"/>
@@ -40,7 +40,7 @@
     <text x="110" y="312" class="note">Local-file parsing uses a worker; graph projection and analysis are synchronous.</text>
     <rect x="80" y="415" width="800" height="95" rx="12" class="card native"/>
     <text x="110" y="453" class="heading">Native addon</text>
-    <text x="110" y="485" class="code">native/*.cc</text>
+    <text x="110" y="485" class="code">addon.cc registers focused modules</text>
     <text x="510" y="453">Retained model + onnx-light</text>
     <text x="510" y="485">Parsing, inference, static analysis</text>
     <g class="arrow" marker-end="url(#arrow)">
