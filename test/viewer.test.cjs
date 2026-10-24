@@ -116,6 +116,75 @@ function submitOpen(document, window) {
     .dispatchEvent(new window.Event("submit", { cancelable: true }));
 }
 
+test("resets sidebar controllers together when the viewer replaces the graph", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  const first = structuredClone(demoGraph);
+  first.nodes[0].schema.doc = "First model documentation";
+  load(first);
+  document.getElementById("show-doc").click();
+  assert.equal(document.getElementById("operator-doc").open, true);
+  document.getElementById("open-model").click();
+  const browse = messages.at(-1);
+  assert.equal(browse.type, "browse-files");
+  document.getElementById("fuse-pattern").click();
+  const patterns = messages.at(-1);
+  assert.equal(patterns.type, "fusion-patterns");
+  send({
+    type: "fusion-patterns",
+    requestId: patterns.requestId,
+    patterns: ["TransposeTranspose"],
+  });
+  document.querySelector("#fusion-pattern input").click();
+  document.getElementById("preview-fusion").click();
+  const preview = messages.at(-1);
+  assert.equal(preview.type, "preview-fusion");
+
+  const replacement = structuredClone(demoGraph);
+  replacement.nodes[0].name = "Replacement node";
+  replacement.nodes[0].schema.doc = "Replacement documentation";
+  load(replacement);
+  send({
+    type: "file-list",
+    target: "open",
+    requestId: browse.requestId,
+    location: "/old",
+    parent: "/",
+    entries: [{ name: "old.onnx", path: "/old/old.onnx", directory: false }],
+  });
+  send({
+    type: "fusion-preview",
+    requestId: preview.requestId,
+    previewId: 1,
+    matches: [{ nodes: [0], replacement: [] }],
+  });
+  send({
+    type: "fusion-error",
+    requestId: preview.requestId,
+    error: "Old model fusion failed",
+  });
+  assert.equal(document.getElementById("open-files").children.length, 0);
+  assert.equal(
+    document.getElementById("open-files").getAttribute("aria-busy"),
+    "false",
+  );
+  assert.equal(document.getElementById("fusion-panel").hidden, true);
+  assert.equal(document.getElementById("fusion-matches").children.length, 0);
+  assert.equal(document.getElementById("fusion-status").textContent, "");
+  assert.equal(
+    document.getElementById("node-name").textContent,
+    "Replacement node",
+  );
+  assert.equal(document.getElementById("operator-doc").open, false);
+  assert.equal(document.getElementById("doc-body").textContent, "");
+  document.getElementById("show-doc").click();
+  assert.match(
+    document.getElementById("doc-body").textContent,
+    /Replacement documentation/,
+  );
+});
+
 test("resizes the sidebar with pointer and keyboard controls without rearranging nodes", (t) => {
   const { document, window, load } = openViewer(t);
   const sidebar = document.getElementById("graph-panels");

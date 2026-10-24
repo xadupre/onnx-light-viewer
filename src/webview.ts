@@ -3,7 +3,7 @@
  * The DOM IDs are the binding points used by media/viewer.js.
  * Inputs are trusted host-generated values interpolated without HTML escaping;
  * never supply model text here. The CSP blocks other content by default.
- * @param resource Resolves bundled filenames (viewer.css, viewer.js, logo.svg)
+ * @param resource Resolves bundled styles, scripts and images
  * to webview URI strings within the panel's allowed media resource root.
  * @param cspSource The panel webview's cspSource, allowing local images/styles.
  * @param nonce Fresh per-panel nonce authorizing only the bundled scripts.
@@ -299,6 +299,11 @@ export function webviewHtml(
     <p id="doc-version"></p><div id="doc-body"></div>
   </dialog>
   <script nonce="${nonce}" src="${resource("vendor/markdown-it.min.js")}"></script>
+  <script nonce="${nonce}" src="${resource("sidebar.js")}"></script>
+  <script nonce="${nonce}" src="${resource("file-panels.js")}"></script>
+  <script nonce="${nonce}" src="${resource("inspector.js")}"></script>
+  <script nonce="${nonce}" src="${resource("metadata-panel.js")}"></script>
+  <script nonce="${nonce}" src="${resource("fusion-panel.js")}"></script>
   <script nonce="${nonce}" src="${resource("viewer.js")}"></script>
 </body>
 </html>`;

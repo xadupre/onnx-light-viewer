@@ -455,10 +455,8 @@ test("opens, browses and saves encrypted copies through embedded selectors witho
   extension.connect((data) =>
     window.dispatchEvent(new window.MessageEvent("message", { data })),
   );
-  for (const name of ["vendor/markdown-it.min.js", "viewer.js"])
-    window.eval(
-      readFileSync(path.resolve(__dirname, "../media", name), "utf8"),
-    );
+  for (const script of document.querySelectorAll("script[src]"))
+    window.eval(readFileSync(new URL(script.src), "utf8"));
   const flush = async () => {
     while (requests.length) await Promise.all(requests.splice(0));
   };
@@ -1438,11 +1436,8 @@ for (const [type, buttonId, errorType, infoType] of [
     extension.connect((data) =>
       window.dispatchEvent(new window.MessageEvent("message", { data })),
     );
-    for (const name of ["vendor/markdown-it.min.js", "viewer.js"]) {
-      window.eval(
-        readFileSync(path.resolve(__dirname, "../media", name), "utf8"),
-      );
-    }
+    for (const script of document.querySelectorAll("script[src]"))
+      window.eval(readFileSync(new URL(script.src), "utf8"));
     const flush = async () => {
       while (requests.length) await Promise.all(requests.splice(0));
     };
@@ -1623,10 +1618,8 @@ test("matches multiple patterns and fuses checked candidates through the real we
   extension.connect((data) =>
     window.dispatchEvent(new window.MessageEvent("message", { data })),
   );
-  for (const name of ["vendor/markdown-it.min.js", "viewer.js"])
-    window.eval(
-      readFileSync(path.resolve(__dirname, "../media", name), "utf8"),
-    );
+  for (const script of document.querySelectorAll("script[src]"))
+    window.eval(readFileSync(new URL(script.src), "utf8"));
   const flush = async () => {
     while (requests.length) await Promise.all(requests.splice(0));
   };
@@ -1711,11 +1704,8 @@ test("keeps operation logs quiet and exposes real native exception recovery in S
   extension.connect((data) =>
     window.dispatchEvent(new window.MessageEvent("message", { data })),
   );
-  for (const name of ["vendor/markdown-it.min.js", "viewer.js"]) {
-    window.eval(
-      readFileSync(path.resolve(__dirname, "../media", name), "utf8"),
-    );
-  }
+  for (const script of document.querySelectorAll("script[src]"))
+    window.eval(readFileSync(new URL(script.src), "utf8"));
   const flush = async () => {
     while (requests.length) await Promise.all(requests.splice(0));
   };
