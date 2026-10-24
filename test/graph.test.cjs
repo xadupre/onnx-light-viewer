@@ -263,6 +263,23 @@ test("shows affine and shape-less bit-packed encoded initializers", async () => 
   );
 });
 
+test("keeps encoded parameter fields separate from common tensor metadata", () => {
+  for (const options of [{}, { structured: true, logical: false }]) {
+    const graph = loadModel(encodedModel(options), "encoded").graph();
+    const [parameter] = graph.nodes[0].parameters;
+    const tensor = graph.tensors.find((tensor) => tensor.name === "weight");
+    const { storage, encoding, ...metadata } = parameter;
+    assert.notStrictEqual(parameter, tensor);
+    assert.deepEqual(metadata, tensor);
+    assert.deepEqual(storage, { external: false, location: null });
+    assert.equal(typeof encoding, "string");
+    assert.equal(Object.hasOwn(tensor, "storage"), false);
+    assert.equal(Object.hasOwn(tensor, "encoding"), false);
+    parameter.type = "changed";
+    assert.notEqual(tensor.type, parameter.type);
+  }
+});
+
 test("lists and safely embeds external encoded payloads when saving", async (t) => {
   const directory = mkdtempSync(path.join(tmpdir(), "encoded-external-"));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
@@ -323,14 +340,12 @@ test("resolves model-scoped logical types of encoded initializers", () => {
     ]),
     "encoded-record",
   );
-  assert.match(
-    model.graph().nodes[0].parameters[0].type,
-    /^STRUCT .*handle.*Record/,
-  );
-  assert.match(
-    model.graph().tensors.find((tensor) => tensor.name === "weight").type,
-    /^STRUCT .*handle.*Record/,
-  );
+  const graph = model.graph();
+  const [parameter] = graph.nodes[0].parameters;
+  const tensor = graph.tensors.find((tensor) => tensor.name === "weight");
+  assert.match(parameter.type, /^STRUCT .*handle.*Record/);
+  const { storage, encoding, ...metadata } = parameter;
+  assert.deepEqual(metadata, tensor);
 });
 
 test("fusion embeds external encoded payloads and requires a safe local source", async (t) => {
