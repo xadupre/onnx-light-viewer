@@ -36,6 +36,7 @@ let connectionsByName = new Map();
 let releasedValues = new Set();
 let unusedLabels = [];
 let hasModel = false;
+let fusionUndoCount = 0;
 let displayedGraph;
 let replacementPending = false;
 let nextAction = 0;
@@ -111,12 +112,14 @@ const fusionPanel = createFusionPanel({
     selected = new Set();
     updateSelection();
   },
-  focusNodes: (nodes) => {
-    selected = new Set(nodes.map((index) => `node-${index}`));
-    updateSelection(`node-${nodes[0]}`);
-    readableZoom();
-  },
+  focusNodes,
 });
+
+function focusNodes(nodes) {
+  selected = new Set(nodes.map((index) => `node-${index}`));
+  updateSelection(nodes.length ? `node-${nodes[0]}` : undefined);
+  if (nodes.length) readableZoom();
+}
 
 function showTab(name, focus = false) {
   endGesture();
@@ -219,6 +222,17 @@ function setLoading(pending, message = "") {
   ])
     byId(id).disabled =
       pending || !hasModel || byId(id).getAttribute("aria-busy") === "true";
+  for (const id of ["undo-fusion", "unfuse-last", "unfuse-all"])
+    byId(id).disabled =
+      pending ||
+      !hasModel ||
+      !fusionUndoCount ||
+      byId("undo-fusion").getAttribute("aria-busy") === "true";
+  for (const button of byId("unfuse-history").querySelectorAll("button"))
+    button.disabled =
+      pending ||
+      byId("undo-fusion").getAttribute("aria-busy") === "true" ||
+      button.dataset.nodeCount === "0";
   byId("load-status").textContent =
     message || (pending ? "Loading model…" : "");
   fusionPanel.setEnabled(
@@ -1658,6 +1672,28 @@ byId("canvas").addEventListener("keydown", (event) => {
 });
 window.addEventListener("blur", () => endGesture(true));
 byId("refresh-metadata").addEventListener("click", requestMetadata);
+byId("undo-fusion").addEventListener("click", () => {
+  const panel = byId("unfuse-panel");
+  panel.hidden = !panel.hidden;
+  byId("undo-fusion").setAttribute("aria-expanded", String(!panel.hidden));
+  if (!panel.hidden) sidebar.revealPanel(panel);
+});
+byId("close-unfuse").addEventListener("click", () => {
+  byId("unfuse-panel").hidden = true;
+  byId("undo-fusion").setAttribute("aria-expanded", "false");
+});
+for (const [id, all] of [
+  ["unfuse-last", false],
+  ["unfuse-all", true],
+])
+  byId(id).addEventListener("click", () => {
+    byId("undo-fusion").setAttribute("aria-busy", "true");
+    setLoading(replacementPending);
+    byId("fusion-status").textContent = all
+      ? "Unfusing all operations…"
+      : "Unfusing the last operation…";
+    requestAction("undo-fusion", "Undo fusion", { all });
+  });
 byId("verify-model").addEventListener("click", () => {
   verificationStatus(true, "Verifying model…");
   requestAction("verify", "Verify model");
@@ -1779,12 +1815,71 @@ window.addEventListener("message", (event) => {
   } else if (event.data?.type === "load-error") {
     showLoadError(event.data.error);
   } else if (event.data?.type === "graph") {
+    fusionUndoCount = event.data.file?.fusionCount ?? 0;
+    byId("undo-fusion").setAttribute("aria-busy", "false");
+    byId("undo-fusion").title =
+      `Choose last or all (${fusionUndoCount} fusion operation${fusionUndoCount === 1 ? "" : "s"} available)`;
+    byId("unfuse-count").textContent =
+      `${fusionUndoCount} fusion operation${fusionUndoCount === 1 ? "" : "s"} available to unfuse.`;
+    const history = event.data.file?.fusionHistory ?? [];
+    const historyList = byId("unfuse-history");
+    historyList.replaceChildren();
+    historyList.start = history.length;
+    for (const [index, operation] of [...history].reverse().entries()) {
+      const item = document.createElement("li");
+      const heading = document.createElement("strong");
+      heading.textContent = `${index === 0 ? "Last operation" : "Earlier operation"}${operation.stage ? ` (${operation.stage})` : ""}`;
+      const list = document.createElement("ul");
+      for (const [matchIndex, match] of operation.matches.entries()) {
+        const entry = document.createElement("li");
+        const button = document.createElement("button");
+        button.textContent = `${match.pattern} (match ${matchIndex + 1})`;
+        button.disabled = !match.nodes.length;
+        button.dataset.nodeCount = String(match.nodes.length);
+        button.title = match.nodes.length
+          ? "Select the remaining nodes produced by this match."
+          : "No nodes remain from this match after later fusions.";
+        button.addEventListener("click", () => {
+          const path = displayedGraph.breadcrumbs.at(-1)?.path ?? [];
+          const sameGraph = operation.stage
+            ? path.length === 1 && path[0].pipeline === operation.stage
+            : path.length === 0;
+          if (sameGraph) {
+            focusNodes(match.nodes);
+            return;
+          }
+          requestAction(
+            "select-fusion",
+            `Select fused pattern: ${match.pattern}`,
+            {
+              operation: history.length - 1 - index,
+              match: matchIndex,
+              pattern: match.pattern,
+            },
+          );
+        });
+        entry.append(button);
+        list.append(entry);
+      }
+      item.append(heading, list);
+      historyList.append(item);
+    }
+    if (!fusionUndoCount) {
+      byId("unfuse-panel").hidden = true;
+      byId("undo-fusion").setAttribute("aria-expanded", "false");
+    }
     filePanels.reset();
     displayedGraph = event.data.graph;
     fusionPanel.reset(displayedGraph);
     render(event.data.graph, event.data.metadata);
     filePanels.setFile(event.data.file);
     fusionPanel.refresh();
+    if (event.data.selectedNodes) focusNodes(event.data.selectedNodes);
+  } else if (event.data?.type === "undo-fusion-error") {
+    byId("undo-fusion").setAttribute("aria-busy", "false");
+    setLoading(replacementPending);
+    byId("fusion-status").textContent =
+      `Could not undo fusion: ${event.data.error}`;
   } else if (event.data?.type === "navigation-error") {
     svg.setAttribute("aria-busy", "false");
     byId("navigation-status").textContent =

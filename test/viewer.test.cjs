@@ -1200,12 +1200,196 @@ test("shows matching adjacent Open/Save sidebar buttons and an explicit storage/
       password: "",
       confirmation: "",
       overwrite: false,
+      includeRewritings: false,
       actionId: undefined,
     },
   );
   open.click();
   submitOpen(document, window);
   assert.equal(messages.at(-1).type, "open");
+});
+
+test("offers last and all Unfuse actions beside Fuse and preserves repeated undo", (t) => {
+  const { document, window, messages } = openViewer(t);
+  const selectionGraph = loadModel(
+    readFileSync(require.resolve("./models/fusion.onnx")),
+    "fusion",
+  ).graph();
+  const history = [
+    {
+      matches: [
+        { pattern: "TransposeTranspose", nodes: [2] },
+        { pattern: "TransposeTranspose", nodes: [0] },
+      ],
+    },
+    {
+      matches: [
+        { pattern: "SameChildrenFromInput", nodes: [0] },
+        { pattern: "MatMulScaleFusion", nodes: [] },
+      ],
+      stage: "prefill",
+    },
+  ];
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  const graph = (fusionCount) =>
+    send({
+      type: "graph",
+      graph: selectionGraph,
+      file: {
+        fusionCount,
+        fusionHistory: history.slice(0, fusionCount),
+        directory: "/models",
+        savePath: "/models/copy.onnx",
+      },
+    });
+  const undo = document.getElementById("undo-fusion");
+  const last = document.getElementById("unfuse-last");
+  const all = document.getElementById("unfuse-all");
+  const options = document.getElementById("unfuse-panel");
+  const historyList = document.getElementById("unfuse-history");
+  assert.equal(undo.textContent, "Unfuse");
+  assert.equal(
+    document.getElementById("fuse-pattern").nextElementSibling,
+    undo,
+  );
+  assert.equal(undo.parentElement.id, "sidebar-controls");
+  graph(2);
+  assert.equal(undo.disabled, false);
+  undo.click();
+  assert.equal(options.hidden, false);
+  assert.ok(
+    document
+      .getElementById("unfuse-all")
+      .parentElement.compareDocumentPosition(historyList) &
+      window.Node.DOCUMENT_POSITION_FOLLOWING,
+  );
+  assert.equal(historyList.children.length, 2);
+  assert.equal(historyList.start, 2);
+  assert.equal(
+    historyList.firstElementChild.querySelector("strong").textContent,
+    "Last operation (prefill)",
+  );
+  assert.deepEqual(
+    [...historyList.firstElementChild.querySelectorAll("li")].map(
+      (item) => item.textContent,
+    ),
+    ["SameChildrenFromInput (match 1)", "MatMulScaleFusion (match 2)"],
+  );
+  assert.deepEqual(
+    [...historyList.lastElementChild.querySelectorAll("button")].map(
+      (button) => button.textContent,
+    ),
+    ["TransposeTranspose (match 1)", "TransposeTranspose (match 2)"],
+  );
+  assert.equal(undo.getAttribute("aria-expanded"), "true");
+  assert.equal(
+    messages.some(({ type }) => type === "undo-fusion"),
+    false,
+  );
+  const patternButtons = historyList.querySelectorAll("button");
+  patternButtons[0].click();
+  assert.equal(messages.at(-1).type, "select-fusion");
+  assert.equal(messages.at(-1).operation, 1);
+  assert.equal(messages.at(-1).match, 0);
+  assert.equal(messages.at(-1).pattern, "SameChildrenFromInput");
+  assert.equal(patternButtons[1].disabled, true);
+  assert.match(patternButtons[1].title, /No nodes remain/);
+  const previous = messages.at(-1);
+  const graphMarkup = document
+    .querySelector(".graph-node")
+    .getAttribute("transform");
+  patternButtons[2].click();
+  assert.equal(messages.at(-1), previous);
+  assert.deepEqual(
+    [...document.querySelectorAll(".graph-node.selected")].map(
+      (node) => node.dataset.id,
+    ),
+    ["node-2"],
+  );
+  patternButtons[3].click();
+  assert.equal(messages.at(-1), previous);
+  assert.deepEqual(
+    [...document.querySelectorAll(".graph-node.selected")].map(
+      (node) => node.dataset.id,
+    ),
+    ["node-0"],
+  );
+  assert.equal(
+    document.querySelector(".graph-node").getAttribute("transform"),
+    graphMarkup,
+  );
+  send({
+    type: "graph",
+    graph: selectionGraph,
+    file: { fusionCount: 2, fusionHistory: history },
+    selectedNodes: [0],
+  });
+  assert.deepEqual(
+    [...document.querySelectorAll(".graph-node.selected")].map(
+      (node) => node.dataset.id,
+    ),
+    ["node-0"],
+  );
+  last.click();
+  last.click();
+  assert.equal(messages.filter(({ type }) => type === "undo-fusion").length, 1);
+  assert.equal(messages.at(-1).all, false);
+  assert.equal(undo.getAttribute("aria-busy"), "true");
+  assert.equal(all.disabled, true);
+  assert.ok(
+    [...historyList.querySelectorAll("button")].every(
+      (button) => button.disabled,
+    ),
+  );
+  graph(1);
+  assert.equal(historyList.children.length, 1);
+  assert.equal(historyList.start, 1);
+  assert.equal(
+    historyList.querySelector("strong").textContent,
+    "Last operation",
+  );
+  assert.match(historyList.textContent, /TransposeTranspose/);
+  assert.doesNotMatch(historyList.textContent, /SameChildrenFromInput/);
+  assert.equal(undo.disabled, false);
+  assert.equal(options.hidden, false);
+  assert.match(
+    document.getElementById("unfuse-count").textContent,
+    /^1 fusion operation /,
+  );
+  last.click();
+  send({ type: "undo-fusion-error", error: "Reload failed" });
+  assert.equal(historyList.children.length, 1);
+  assert.equal(undo.disabled, false);
+  assert.equal(last.disabled, false);
+  assert.equal(all.disabled, false);
+  assert.match(
+    document.getElementById("fusion-status").textContent,
+    /Reload failed/,
+  );
+  document.getElementById("close-unfuse").click();
+  assert.equal(options.hidden, true);
+  undo.click();
+  assert.equal(options.hidden, false);
+  graph(2);
+  all.click();
+  all.click();
+  assert.equal(messages.filter(({ type }) => type === "undo-fusion").length, 3);
+  assert.equal(messages.at(-1).all, true);
+  graph(0);
+  assert.equal(historyList.children.length, 0);
+  assert.equal(options.hidden, true);
+  assert.equal(undo.getAttribute("aria-expanded"), "false");
+  assert.equal(last.disabled, true);
+  assert.equal(all.disabled, true);
+  document.getElementById("save-model").click();
+  document.getElementById("save-rewritings").checked = true;
+  document
+    .getElementById("save-form")
+    .dispatchEvent(new window.Event("submit", { cancelable: true }));
+  assert.equal(messages.at(-1).includeRewritings, true);
+  graph(0);
+  assert.equal(undo.disabled, true);
 });
 
 test("makes Open and Save mutually exclusive while preserving other sidebar panels", (t) => {
@@ -1440,7 +1624,7 @@ test("toggles separated, stacked sidebar panels independently from Op Data Find 
   const allButtons = [...controls.querySelectorAll("button")];
   assert.deepEqual(
     allButtons.map((button) => button.lastChild.textContent.trim()),
-    ["Open", "Save", "Find", "Fuse", "Op", "Data"],
+    ["Open", "Save", "Find", "Fuse", "Unfuse", "Op", "Data"],
   );
   assert.match(
     window.getComputedStyle(controls).gridTemplateColumns,
@@ -1457,7 +1641,8 @@ test("toggles separated, stacked sidebar panels independently from Op Data Find 
   );
   assert.deepEqual(
     [...sidebar.querySelectorAll(":scope > section")].filter(
-      (panel) => !["open-panel", "save-options"].includes(panel.id),
+      (panel) =>
+        !["open-panel", "save-options", "unfuse-panel"].includes(panel.id),
     ),
     panels,
   );
@@ -1587,7 +1772,7 @@ test("runs matching explicitly, highlights candidates and fuses only checked mat
   assert.equal(matches.closest("details").open, true);
   assert.equal(matches.querySelector("button"), null);
   assert.equal(matches.children.length, 2);
-  assert.match(matches.textContent, /first.*second/);
+  assert.match(matches.textContent, /first:[\s\S]*second:/);
   assert.match(matches.textContent, /Identity\(x\) -> a/);
   assert.equal(document.getElementById("apply-fusion").disabled, true);
   assert.equal(document.querySelectorAll(".graph-node.selected").length, 1);
@@ -1748,6 +1933,119 @@ test("selects multiple patterns, reruns matching from scratch and ignores old pr
     messages.some((message) => message.type === "apply-fusion"),
     false,
   );
+});
+
+test("explains parallel transpose matching with explicit before and after operators", async (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const native = loadModel(
+    readFileSync(require.resolve("./models/fusion.onnx")),
+    "fusion",
+  );
+  load(native.graph());
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  document.getElementById("fuse-pattern").click();
+  send({
+    type: "fusion-patterns",
+    requestId: messages.at(-1).requestId,
+    patterns: ["SameChildrenFromInput"],
+  });
+  document.querySelector("#fusion-pattern label").click();
+  document.getElementById("preview-fusion").click();
+  const preview = await native.previewFusion("SameChildrenFromInput");
+  send({
+    type: "fusion-preview",
+    requestId: messages.at(-1).requestId,
+    previewId: 1,
+    matches: preview.matches.map((match) => ({
+      ...match,
+      pattern: "SameChildrenFromInput",
+    })),
+  });
+  const item = document.querySelector("#fusion-matches li");
+  assert.equal(
+    item.querySelector("label").textContent,
+    "SameChildrenFromInput",
+  );
+  assert.deepEqual(
+    [...item.querySelectorAll(".fusion-stage strong")].map(
+      (heading) => heading.textContent,
+    ),
+    ["Before", "After"],
+  );
+  const [before, after] = item.querySelectorAll("pre");
+  assert.equal(
+    before.textContent,
+    "first: Transpose(x, perm=[1, 0]) -> xt\nthird: Transpose(x, perm=[1, 0]) -> yt",
+  );
+  assert.equal(
+    after.textContent,
+    "Transpose(x, perm=[1, 0]) -> xt\nIdentity(xt) -> yt",
+  );
+  after.click();
+  assert.deepEqual(
+    [...document.querySelectorAll(".graph-node.selected")].map(
+      (node) => node.dataset.id,
+    ),
+    ["node-0", "node-2"],
+  );
+  assert.equal(item.querySelector("input").checked, false);
+});
+
+test("darkens matches intersecting any earlier candidate independently of selection", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const native = loadModel(
+    readFileSync(require.resolve("./models/fusion.onnx")),
+    "fusion",
+  );
+  load(native.graph());
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  document.getElementById("fuse-pattern").click();
+  send({
+    type: "fusion-patterns",
+    requestId: messages.at(-1).requestId,
+    patterns: ["TransposeTranspose"],
+  });
+  document.querySelector("#fusion-pattern label").click();
+  const matches = [[0], [0, 1], [1], [2]].map((nodes) => ({
+    pattern: "TransposeTranspose",
+    nodes,
+    replacement: [],
+  }));
+  const showMatches = (matches) => {
+    document.getElementById("preview-fusion").click();
+    send({
+      type: "fusion-preview",
+      requestId: messages.at(-1).requestId,
+      previewId: 1,
+      matches,
+    });
+    return [...document.querySelectorAll("#fusion-matches li")];
+  };
+  const overlaps = (items) =>
+    items.map((item) => item.classList.contains("fusion-match-overlap"));
+  const graph = document.getElementById("nodes").innerHTML;
+  const items = showMatches(matches);
+  assert.deepEqual(overlaps(items), [false, true, true, false]);
+  assert.equal(document.getElementById("nodes").innerHTML, graph);
+  assert.match(items[1].title, /earlier match/);
+  assert.equal(items[0].title, "");
+  document.getElementById("select-fusions").click();
+  assert.deepEqual(
+    items.map((item) => item.querySelector("input").checked),
+    [true, false, true, true],
+  );
+  assert.deepEqual(overlaps(items), [false, true, true, false]);
+  document.getElementById("clear-fusions").click();
+  assert.deepEqual(overlaps(items), [false, true, true, false]);
+  assert.deepEqual(overlaps(showMatches([...matches].reverse())), [
+    false,
+    false,
+    true,
+    true,
+  ]);
+  assert.deepEqual(overlaps(showMatches([matches[1]])), [false]);
 });
 
 test("selects only non-overlapping matches and sends the external-weight reuse choice", async (t) => {

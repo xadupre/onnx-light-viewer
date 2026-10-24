@@ -27,11 +27,16 @@ Click a pattern again to uncheck it. **Select all** checks every pattern;
                                         |
                                    Save a copy
 
-Each candidate lists its pattern, affected nodes and replacement operators,
-tensor names and attributes. Clicking a candidate selects its
+Each candidate shows its pattern followed by **Before** and **After** sections.
+Before lists the affected nodes by name; After lists their replacement operators.
+Both show input/output tensor names and inline attributes, so parallel nodes
+sharing an input are not mistaken for a chain. Clicking a candidate selects its
 nodes in the main graph for inspection. Check or uncheck candidates to choose
 which ones to fuse; inspecting or checking a candidate does not change the model.
 Both patterns and candidates use collapsible, scrollable lists with checkboxes.
+The list includes overlapping matches. A darker background marks each candidate
+sharing a node with any earlier candidate, regardless of which ones are checked.
+Hover over a darker entry for an explanation; graph highlighting is unchanged.
 
 Check individual candidates or choose **Select all compatible**, then click
 **Fuse selected**. Candidates from different patterns can be fused together.
@@ -43,6 +48,53 @@ Clicking **Fuse** again or **Close** hides the panel and discards the preview
 and selection without applying anything, including while matching is running.
 All fusions change only the in-memory model; use **Save** to keep the result.
 Graph replacement or navigation invalidates the preview.
+
+Undo and rewriting plans
+-------------------------
+
+**Unfuse**, beside **Fuse**, offers **Unfuse last** and **Unfuse all**.
+Unfuse last restores the model before the last **Fuse selected** operation:
+one step reverses all candidates applied together. The choices remain open so
+you can repeat Unfuse last to undo earlier operations, including operations on
+different pipeline stages. Unfuse all reverses every remaining operation at once.
+Below the buttons, each applied match is listed separately, even when several
+matches use the same pattern. Operation headings retain the undo order, newest
+first, with pipeline stage names. The first operation is the next one that
+Unfuse last will undo; each undo removes its entries.
+Click a match to select only its resulting nodes in the graph, opening the appropriate
+pipeline stage when necessary. After further fusions, selection follows the
+surviving replacement nodes rather than stale node positions. Patterns with no
+remaining nodes cannot be selected.
+Undo returns to the current model's root graph and clears cached metadata.
+Opening another file starts a new history; previewing and saving do not add steps.
+Native recovery preserves the history.
+
+.. figure:: ../_static/fusion-undo.svg
+   :alt: Successive Fuse operations can be undone in reverse order; saving chooses a fused graph or the original graph with a concatenated rewriting plan.
+   :width: 800px
+
+   Undo history is session-local. Rewriting plans are optional saved variants.
+
+In **Save**, **Include fusion rewritings** selects the saved representation:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 25 75
+
+   * - Choice
+     - Saved content
+   * - Unchecked (default)
+     - Current fused graph, without ``RewritingProto`` variants.
+   * - Checked
+     - Original graph plus one named ``onnx-light-viewer.fusions`` plan,
+       concatenating the remaining Fuse operations in application order.
+       Existing named variants are retained without overwriting their names.
+
+The checked form follows onnx-light's canonical-model/variant contract:
+reopening it displays the original graph; onnx-light can replay the saved plan
+to obtain the fused graph. It does not persist the viewer's Undo stack.
+For pipelines, each modified stage stores its own original graph and ordered
+plan. The choice also applies to encrypted saves and external-weight storage.
 
 For example, two inverse transposes can be replaced with an identity:
 

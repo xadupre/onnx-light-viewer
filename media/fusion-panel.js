@@ -99,15 +99,33 @@ function createFusionPanel({
     focusNodes(match.nodes);
   }
 
+  function formatFusionNode(node, showName = false) {
+    const args = [
+      ...node.inputs,
+      ...node.attributes.map(
+        (attribute) => `${attribute.name}=${attribute.value}`,
+      ),
+    ];
+    const domain =
+      node.domain && node.domain !== "ai.onnx" ? `${node.domain}::` : "";
+    return `${showName ? `${node.name || node.id}: ` : ""}${domain}${node.opType}(${args.join(", ")}) -> ${node.outputs.join(", ")}`;
+  }
+
   function showFusionMatches(data) {
     fusionPreview = {
       id: data.previewId,
       matches: data.matches.map((match, id) => ({ ...match, id })),
     };
     byId("fusion-matches").replaceChildren();
+    const precedingNodes = new Set();
     for (const match of fusionPreview.matches) {
       const item = document.createElement("li");
       item.className = "fusion-match";
+      if (match.nodes.some((node) => precedingNodes.has(node))) {
+        item.classList.add("fusion-match-overlap");
+        item.title = "Shares nodes with an earlier match in this list.";
+      }
+      for (const node of match.nodes) precedingNodes.add(node);
       item.dataset.candidate = String(match.id);
       const label = document.createElement("label");
       const checkbox = document.createElement("input");
@@ -117,26 +135,34 @@ function createFusionPanel({
         focusFusionMatch(match);
         updateFusionSelection();
       });
-      const names = match.nodes.map((index) => {
-        const node = fusionGraph.nodes[index];
-        return `${node.name || node.id} (${node.opType})`;
-      });
       label.append(
         checkbox,
-        document.createTextNode(
-          `${match.pattern ? `${match.pattern}: ` : ""}${names.join(" + ")}`,
-        ),
+        document.createTextNode(match.pattern || "Fusion candidate"),
       );
-      const replacement = document.createElement("pre");
-      replacement.textContent = match.replacement.length
-        ? match.replacement
-            .map(
-              (node) =>
-                `${node.domain ? `${node.domain}::` : ""}${node.opType}(${node.inputs.join(", ")}) -> ${node.outputs.join(", ")}${node.attributes.length ? `\n  ${node.attributes.map((attribute) => `${attribute.name}=${attribute.value}`).join(", ")}` : ""}`,
-            )
-            .join("\n")
-        : "Remove matched nodes (no replacement operators).";
-      item.append(label, replacement);
+      item.append(label);
+      for (const [title, text] of [
+        [
+          "Before",
+          match.nodes
+            .map((index) => formatFusionNode(fusionGraph.nodes[index], true))
+            .join("\n"),
+        ],
+        [
+          "After",
+          match.replacement.length
+            ? match.replacement.map((node) => formatFusionNode(node)).join("\n")
+            : "Remove matched nodes (no replacement operators).",
+        ],
+      ]) {
+        const section = document.createElement("div");
+        section.className = "fusion-stage";
+        const heading = document.createElement("strong");
+        heading.textContent = title;
+        const operators = document.createElement("pre");
+        operators.textContent = text;
+        section.append(heading, operators);
+        item.append(section);
+      }
       item.addEventListener("click", () => {
         if (!fusionBusy) focusFusionMatch(match);
       });

@@ -161,12 +161,23 @@ export interface FusionMatch {
   }[];
 }
 
+export interface FusionOperation {
+  matches: { pattern: string; nodes: number[] }[];
+  stage?: PipelineRole;
+}
+
 /**
  * Retained model or pipeline whose inferred information survives graph projections.
  * Methods do not execute the model or write files.
  */
 export interface NativeModel {
   clone(): NativeModel;
+  /** Number of applied Fuse operations available for session-local undo. */
+  fusionCount(): number;
+  /** Applied matches and their surviving descendants in the current root graph. */
+  fusionHistory(): FusionOperation[];
+  /** Returns an independent snapshot before the last Fuse operation. */
+  undoFusion(): NativeModel;
   summary(inferShapes?: boolean): GraphSummary;
   /** Pipeline fusions require the path of a stage root; ordinary models use []. */
   fusionPatterns(path?: GraphPath): string[];
@@ -188,14 +199,21 @@ export interface NativeModel {
    * A password produces authenticated ONNXCRY3 (AES-256-GCM), otherwise plain ONNX.
    * External weights are read relative to the source model and embedded before saving.
    * sourceFilePath supplies the new location after a source file is moved into a cache.
+   * includeRewritings saves the canonical pre-fusion model and a concatenated plan.
+   * Otherwise the materialized current graph is saved without rewriting variants.
    */
-  serialize(password?: string, sourceFilePath?: string): Promise<Uint8Array>;
+  serialize(
+    password?: string,
+    sourceFilePath?: string,
+    includeRewritings?: boolean,
+  ): Promise<Uint8Array>;
   /** Partitions a plain copy; optionally retains unchanged source external references. */
   serializeFiles(
     maxFileSize: number,
     prefix: string,
     sourceFilePath?: string,
     reuseExternalWeights?: boolean,
+    includeRewritings?: boolean,
   ): Promise<{
     model: Uint8Array;
     weights: { name: string; bytes: Uint8Array }[];

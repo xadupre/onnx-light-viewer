@@ -19,6 +19,7 @@ import {
   GraphMetadata,
   GraphPath,
   FusionMatch,
+  FusionOperation,
 } from "./graph";
 import { webviewHtml } from "./webview";
 import { applicationSettings, inspectPythonPackages } from "./settings";
@@ -88,6 +89,8 @@ interface LoadedModel {
   reload: () => NativeModel | Promise<NativeModel>;
   /** Cached for the current graph; cleared on navigation, not shape refresh. */
   metadata?: GraphMetadata;
+  fusionCount?: number;
+  fusionHistory?: FusionOperation[];
   source?: { uri: vscode.Uri };
   fileName?: string;
 }
@@ -401,6 +404,7 @@ async function configurePanel(
   let graphRevision = 0;
   let navigationRequest = 0;
   let fusionRequest = 0;
+  let undoRequest = 0;
   let fusionPreview:
     | {
         id: number;
@@ -520,7 +524,7 @@ async function configurePanel(
       directory: false,
       ...(file.size === undefined ? {} : { size: file.size }),
     }));
-  const sendGraph = () => {
+  const sendGraph = (selectedNodes?: number[]) => {
     fusionPreview = undefined;
     fusionRequest++;
     const current = requireModel();
@@ -528,7 +532,10 @@ async function configurePanel(
     return postMessage({
       type: "graph",
       graph: current.graph,
+      ...(selectedNodes ? { selectedNodes } : {}),
       file: {
+        fusionCount: current.fusionCount ?? 0,
+        fusionHistory: current.fusionHistory ?? [],
         ...(current.graph.pipeline ? { pipeline: true } : {}),
         directory: locationText(directoryUri()),
         savePath: locationText(
@@ -583,12 +590,16 @@ async function configurePanel(
         storage?: unknown;
         encrypted?: unknown;
         maxExternalFileSize?: unknown;
+        includeRewritings?: unknown;
         requestId?: unknown;
         previewId?: unknown;
         pattern?: unknown;
         patterns?: unknown;
         anchors?: unknown;
         candidates?: unknown;
+        operation?: unknown;
+        match?: unknown;
+        all?: unknown;
         location?: unknown;
         source?: unknown;
         target?: unknown;
@@ -1171,6 +1182,7 @@ async function configurePanel(
         fusionPreview = undefined;
         fusionRequest++;
       } else if (
+        message?.type === "undo-fusion" ||
         message?.type === "fusion-patterns" ||
         message?.type === "preview-fusion" ||
         message?.type === "apply-fusion"
@@ -1178,15 +1190,65 @@ async function configurePanel(
         const owner = model;
         const revision = graphRevision;
         const generation = ++fusionRequest;
+        const undoGeneration =
+          message.type === "undo-fusion" ? ++undoRequest : undoRequest;
+        const isCurrent = () =>
+          active &&
+          model === owner &&
+          graphRevision === revision &&
+          (message.type === "undo-fusion"
+            ? undoRequest === undoGeneration
+            : fusionRequest === generation);
         try {
           await log.run(
-            message.type === "apply-fusion"
-              ? "Apply fusion pattern"
-              : message.type === "preview-fusion"
-                ? "Preview fusion pattern"
-                : "List fusion patterns",
+            message.type === "undo-fusion"
+              ? "Undo fusion"
+              : message.type === "apply-fusion"
+                ? "Apply fusion pattern"
+                : message.type === "preview-fusion"
+                  ? "Preview fusion pattern"
+                  : "List fusion patterns",
             async () => {
               const current = requireModel();
+              if (message.type === "undo-fusion") {
+                if (
+                  message.all !== undefined &&
+                  typeof message.all !== "boolean"
+                )
+                  throw new Error("Expected a boolean unfuse-all option.");
+                const native = await nativeModel(
+                  current,
+                  log,
+                  () => void sendStatus(),
+                );
+                if (!isCurrent()) return;
+                let edited = native.undoFusion();
+                while (message.all === true && edited.fusionCount())
+                  edited = edited.undoFusion();
+                const currentPath =
+                  current.graph.breadcrumbs.at(-1)?.path ?? [];
+                const path =
+                  currentPath[0] && "pipeline" in currentPath[0]
+                    ? [currentPath[0]]
+                    : [];
+                const graph = edited.graph(false, path);
+                const retained = edited.clone();
+                model = {
+                  ...current,
+                  native: edited,
+                  nativeReload: undefined,
+                  graph,
+                  metadata: undefined,
+                  fusionCount: edited.fusionCount(),
+                  fusionHistory: edited.fusionHistory(),
+                  reload: () => retained.clone(),
+                };
+                graphRevision++;
+                navigationRequest++;
+                panel.title = `ONNX: ${current.fileName ?? graph.name}${edited.fusionCount() ? " (modified)" : ""}`;
+                await sendGraph();
+                return;
+              }
               if (!(
                 current.graph.canFuse ?? current.graph.breadcrumbs.length === 1
               ))
@@ -1194,11 +1256,6 @@ async function configurePanel(
                   "Return to a model's main graph to apply fusion patterns.",
                 );
               const path = current.graph.breadcrumbs.at(-1)?.path ?? [];
-              const isCurrent = () =>
-                active &&
-                model === owner &&
-                graphRevision === revision &&
-                fusionRequest === generation;
               if (message.type === "apply-fusion") {
                 const preview = fusionPreview;
                 const candidates: unknown = message.candidates;
@@ -1254,6 +1311,8 @@ async function configurePanel(
                   nativeReload: undefined,
                   graph,
                   metadata: undefined,
+                  fusionCount: edited.fusionCount(),
+                  fusionHistory: edited.fusionHistory(),
                   reload: () => retained.clone(),
                 };
                 model = replacement;
@@ -1333,21 +1392,18 @@ async function configurePanel(
             message.actionId,
           );
         } catch (error) {
-          if (
-            !active ||
-            model !== owner ||
-            graphRevision !== revision ||
-            fusionRequest !== generation
-          )
-            return;
+          if (!isCurrent()) return;
           const detail = error instanceof Error ? error.message : String(error);
           await postMessage({
-            type: "fusion-error",
+            type:
+              message.type === "undo-fusion"
+                ? "undo-fusion-error"
+                : "fusion-error",
             requestId: message.requestId,
             error: detail,
           });
           await vscode.window.showErrorMessage(
-            `Could not fuse ONNX model: ${detail}`,
+            `${message.type === "undo-fusion" ? "Could not undo fusion" : "Could not fuse ONNX model"}: ${detail}`,
           );
         }
       } else if (message?.type === "save") {
@@ -1381,6 +1437,11 @@ async function configurePanel(
                   "Encrypted external weights await onnx-light support: https://github.com/xadupre/onnx-light/issues/5533",
                 );
               const maxExternalFileSize = message.maxExternalFileSize ?? 0;
+              if (
+                message.includeRewritings !== undefined &&
+                typeof message.includeRewritings !== "boolean"
+              )
+                throw new Error("Invalid rewriting save choice.");
               if (
                 typeof maxExternalFileSize !== "number" ||
                 !Number.isSafeInteger(maxExternalFileSize) ||
@@ -1496,9 +1557,14 @@ async function configurePanel(
                     `${posix.basename(destination.path)}.${randomBytes(12).toString("hex")}.data`,
                     sourcePath,
                     format.reuse,
+                    message.includeRewritings ?? false,
                   )
                 : {
-                    model: await native.serialize(password, sourcePath),
+                    model: await native.serialize(
+                      password,
+                      sourcePath,
+                      message.includeRewritings ?? false,
+                    ),
                     weights: [],
                   };
               if (!active || model !== current) return cancelled();
@@ -1578,21 +1644,43 @@ async function configurePanel(
             `Could not save ONNX model: ${detail}`,
           );
         }
-      } else if (message?.type === "navigate") {
+      } else if (
+        message?.type === "navigate" ||
+        message?.type === "select-fusion"
+      ) {
         const requestedModel = model;
         const requestedNavigation = ++navigationRequest;
         let graph: Graph;
+        let selectedNodes: number[] | undefined;
         try {
           graph = await log.run(
             `Navigate graph: ${model?.graph.name ?? "no model loaded"}`,
             async () => {
-              if (!isGraphPath(message.path))
-                throw new Error("Invalid subgraph path.");
               const current = requireModel();
+              let path = message.path;
+              if (message.type === "select-fusion") {
+                const operation =
+                  typeof message.operation === "number" &&
+                  Number.isSafeInteger(message.operation) &&
+                  message.operation >= 0
+                    ? current.fusionHistory?.[message.operation]
+                    : undefined;
+                const match =
+                  typeof message.match === "number" &&
+                  Number.isSafeInteger(message.match) &&
+                  message.match >= 0
+                    ? operation?.matches[message.match]
+                    : undefined;
+                if (!operation || !match || match.pattern !== message.pattern)
+                  throw new Error("Invalid applied fusion match.");
+                path = operation.stage ? [{ pipeline: operation.stage }] : [];
+                selectedNodes = match.nodes;
+              }
+              if (!isGraphPath(path)) throw new Error("Invalid subgraph path.");
               const native = await nativeModel(current, log, () => {
                 void sendStatus();
               });
-              return native.graph(false, message.path);
+              return native.graph(false, path);
             },
             message.actionId,
           );
@@ -1622,7 +1710,7 @@ async function configurePanel(
         requireModel().graph = graph;
         requireModel().metadata = undefined;
         graphRevision++;
-        await sendGraph();
+        await sendGraph(selectedNodes);
       } else if (message?.type === "metadata") {
         const requestedModel = model;
         const requestedGraphRevision = graphRevision;

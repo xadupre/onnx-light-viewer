@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="330" viewBox="0 0 800 330" role="img" aria-labelledby="title description">
+  <title id="title">Fusion undo and save representations</title>
+  <desc id="description">Fuse operations advance from the original model to step one and step two. Undo reverses one operation at a time. Save either writes the current fused graph or the original graph with the concatenated rewriting plan.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 10 5 0 10Z" fill="#91d9c6"/></marker>
+  </defs>
+  <rect width="800" height="330" rx="12" fill="#101c2d"/>
+  <g fill="#1c3045" stroke="#7895b2" stroke-width="1.5">
+    <rect x="20" y="40" width="180" height="90" rx="8"/>
+    <rect x="310" y="40" width="180" height="90" rx="8"/>
+    <rect x="600" y="40" width="180" height="90" rx="8"/>
+    <rect x="35" y="220" width="330" height="85" rx="8"/>
+    <rect x="435" y="220" width="330" height="85" rx="8"/>
+  </g>
+  <g fill="none" stroke="#91d9c6" stroke-width="2" marker-end="url(#arrow)">
+    <path d="M205 65H303"/><path d="M305 108H207"/>
+    <path d="M495 65H593"/><path d="M595 108H497"/>
+    <path d="M690 135V180H200V213"/><path d="M690 180H600V213"/>
+  </g>
+  <g fill="#edf7ff" font-family="system-ui, sans-serif" font-size="15" text-anchor="middle">
+    <text x="110" y="79">Original model</text><text x="110" y="103">No fusions</text>
+    <text x="400" y="79">Fused model</text><text x="400" y="103">Step 1</text>
+    <text x="690" y="79">Fused model</text><text x="690" y="103">Step 2</text>
+    <text x="255" y="55">Fuse</text><text x="255" y="99">Undo</text>
+    <text x="545" y="55">Fuse</text><text x="545" y="99">Undo</text>
+    <text x="560" y="170">Save</text>
+    <text x="200" y="247">Without rewritings</text><text x="200" y="278">Current fused graph (step 2)</text>
+    <text x="600" y="247">With rewritings</text><text x="600" y="278">Original + plan: step 1, then step 2</text>
+  </g>
+</svg>
