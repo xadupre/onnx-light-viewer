@@ -147,7 +147,21 @@ Where to change things
      - HTML shell, local resources and content security policy.
    * - :download:`media/viewer.js <../media/viewer.js>` /
        :download:`viewer.css <../media/viewer.css>`
-     - SVG layout, gestures, search, inspector and presentation.
+     - Graph snapshots, selection, camera, SVG layout, gestures and search.
+   * - :download:`media/sidebar.js <../media/sidebar.js>`
+     - Panel visibility, scrolling and resizing.
+   * - :download:`media/file-panels.js <../media/file-panels.js>`
+     - Open/Save forms, file browsing and stale listing guards.
+   * - :download:`media/inspector.js <../media/inspector.js>`
+     - Node/tensor details and safe operator documentation rendering.
+   * - :download:`media/metadata-panel.js <../media/metadata-panel.js>`
+     - Metadata presentation; graph highlighting stays in the viewer.
+   * - :download:`media/fusion-panel.js <../media/fusion-panel.js>`
+     - Pattern/candidate controls and stale preview guards.
+
+The shell loads local panel factories before the viewer, under the same CSP.
+Each factory creates private panel state and receives data or explicit viewer
+callbacks; panels do not own the model lifecycle, selection or camera.
 
 ``CMakeLists.txt`` pins and checksum-verifies the published onnx-light libraries;
 only the addon is compiled locally. Its platform must match the extension host.

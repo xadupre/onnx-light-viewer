@@ -1,9 +1,6 @@
-/* global acquireVsCodeApi, markdownit */
+/* global acquireVsCodeApi, createSidebar, createFilePanels, createInspector,
+          createMetadataPanel, createFusionPanel */
 const vscode = acquireVsCodeApi();
-const documentationMarkdown = markdownit({ html: false });
-documentationMarkdown.validateLink = (url) => /^https?:\/\//i.test(url);
-documentationMarkdown.renderer.rules.image = (tokens, index) =>
-  documentationMarkdown.utils.escapeHtml(tokens[index].content);
 const svgNS = "http://www.w3.org/2000/svg";
 const byId = (id) => document.getElementById(id);
 const svg = byId("graph");
@@ -27,7 +24,6 @@ let readablePending = false;
 let hasOperators = false;
 let gesture;
 let zoomAreaMode = false;
-let inspectedNode;
 let inspectedView;
 let tensorInformation = new Map();
 let tensorLabels = [];
@@ -40,12 +36,7 @@ let connectionsByName = new Map();
 let releasedValues = new Set();
 let unusedLabels = [];
 let hasModel = false;
-let fusionGraph;
-let fusionRequest = 0;
-let fusionPreview;
-let fusionBusy = false;
-const fileRequests = { open: 0, save: 0 };
-const fileParents = {};
+let displayedGraph;
 let replacementPending = false;
 let nextAction = 0;
 const logSession = crypto.randomUUID();
@@ -66,6 +57,47 @@ const RefreshStatus = Object.freeze({
   FAILED: "failed",
 });
 const tabs = ["model", "logs", "status", "controls", "repositories"];
+
+const sidebar = createSidebar({
+  byId,
+  fit,
+  endGesture,
+  onMetadataToggle: setMetadataVisible,
+});
+const inspector = createInspector({
+  byId,
+  tensorDescription,
+  subgraphLabel,
+  navigate,
+});
+const metadataPanel = createMetadataPanel({ byId, tensorDescription });
+const filePanels = createFilePanels({
+  byId,
+  postMessage: (message) => vscode.postMessage(message),
+  requestAction,
+  revealPanel: sidebar.revealPanel,
+  isReplacing: () => replacementPending,
+});
+const fusionPanel = createFusionPanel({
+  byId,
+  postMessage: (message) => vscode.postMessage(message),
+  requestAction,
+  revealPanel: sidebar.revealPanel,
+  fit,
+  canFuse: () =>
+    !replacementPending &&
+    hasModel &&
+    displayedGraph?.breadcrumbs?.length === 1,
+  clearSelection: () => {
+    selected = new Set();
+    updateSelection();
+  },
+  focusNodes: (nodes) => {
+    selected = new Set(nodes.map((index) => `node-${index}`));
+    updateSelection(`node-${nodes[0]}`);
+    readableZoom();
+  },
+});
 
 function showTab(name, focus = false) {
   endGesture();
@@ -124,11 +156,7 @@ function displayLog(entry) {
       );
       setLoading(replacementPending);
     } else if (type === "save") {
-      byId("save-model").setAttribute("aria-busy", "false");
-      byId("save-model").disabled = replacementPending || !hasModel;
-      byId("save-submit").disabled = false;
-      if (entry.status === "CANCELLED")
-        byId("save-status").textContent = "Save cancelled.";
+      filePanels.finishSaving(entry.status, replacementPending || !hasModel);
     }
   }
 }
@@ -152,10 +180,7 @@ function requestAction(type, action, parameters = {}) {
     replacementPending = true;
     setLoading(true);
   } else if (type === "save") {
-    byId("save-model").disabled = true;
-    byId("save-model").setAttribute("aria-busy", "true");
-    byId("save-status").textContent = "Saving model…";
-    byId("save-submit").disabled = true;
+    filePanels.startSaving();
   }
   vscode.postMessage({ type, ...parameters, actionId: entry.id });
 }
@@ -163,158 +188,15 @@ function requestAction(type, action, parameters = {}) {
 function setLoading(pending, message = "") {
   byId("load-progress").hidden = !pending;
   byId("model-view").setAttribute("aria-busy", String(pending));
-  byId("open-model").disabled = pending;
-  byId("open-submit").disabled = pending;
-  for (const id of [
-    "refresh-shapes",
-    "refresh-metadata",
-    "refresh-positions",
-    "save-model",
-  ])
+  filePanels.setLoading(pending, hasModel);
+  for (const id of ["refresh-shapes", "refresh-metadata", "refresh-positions"])
     byId(id).disabled =
       pending || !hasModel || byId(id).getAttribute("aria-busy") === "true";
   byId("load-status").textContent =
     message || (pending ? "Loading model…" : "");
-  byId("fuse-pattern").disabled =
-    pending || !hasModel || fusionGraph?.breadcrumbs?.length !== 1;
-}
-
-function fusionControls(busy, message = "") {
-  fusionBusy = busy;
-  for (const control of byId("fusion-matches").querySelectorAll(
-    "input, button",
-  ))
-    control.disabled = busy;
-  byId("fusion-panel").setAttribute("aria-busy", String(busy));
-  const patterns = byId("fusion-pattern");
-  patterns.disabled = busy || !patterns.querySelector("input");
-  byId("select-patterns").disabled = patterns.disabled;
-  byId("clear-patterns").disabled =
-    busy || !patterns.querySelector("input:checked");
-  byId("preview-fusion").disabled =
-    busy || !patterns.querySelector("input:checked");
-  byId("select-fusions").disabled = busy || !fusionPreview?.matches.length;
-  byId("clear-fusions").disabled = busy || !fusionSelection().length;
-  byId("apply-fusion").disabled = busy || !fusionSelection().length;
-  byId("fuse-pattern").disabled =
-    replacementPending || !hasModel || fusionGraph?.breadcrumbs?.length !== 1;
-  if (message) byId("fusion-feedback").textContent = message;
-  else if (fusionPreview) updateFusionSelection();
-}
-
-function fusionSelection() {
-  return [...byId("fusion-matches").querySelectorAll("input:checked")].map(
-    (input) => Number(input.value),
+  fusionPanel.setEnabled(
+    !pending && hasModel && displayedGraph?.breadcrumbs?.length === 1,
   );
-}
-
-function updateFusionSelection() {
-  const candidates = new Set(fusionSelection());
-  const nodes = new Set();
-  let overlap = false;
-  for (const match of fusionPreview?.matches ?? []) {
-    if (!candidates.has(match.id)) continue;
-    for (const node of match.nodes) {
-      if (nodes.has(node)) overlap = true;
-      nodes.add(node);
-    }
-  }
-  byId("apply-fusion").disabled = fusionBusy || !candidates.size || overlap;
-  byId("clear-fusions").disabled = fusionBusy || !candidates.size;
-  byId("fusion-feedback").textContent = overlap
-    ? "Selected matches overlap. Select disjoint matches."
-    : `${candidates.size} selected / ${fusionPreview?.matches.length ?? 0} matches. Check candidates, then click Fuse selected.`;
-}
-
-function clearFusionPreview() {
-  if (fusionPreview) {
-    selected = new Set();
-    updateSelection();
-  }
-  fusionPreview = undefined;
-  byId("fusion-matches").replaceChildren();
-  fusionControls(false);
-}
-
-function previewFusion() {
-  clearFusionPreview();
-  byId("fusion-status").textContent = "";
-  fusionControls(true, "Matching patterns and building replacements…");
-  requestAction("preview-fusion", "Preview fusion pattern", {
-    requestId: ++fusionRequest,
-    patterns: [...byId("fusion-pattern").querySelectorAll("input:checked")].map(
-      (input) => input.value,
-    ),
-  });
-}
-
-function applyFusion(candidates) {
-  const message = `Applying ${candidates.length} fusion match${candidates.length === 1 ? "" : "es"}…`;
-  fusionControls(true, message);
-  byId("fusion-status").textContent = message;
-  requestAction("apply-fusion", "Apply fusion pattern", {
-    requestId: ++fusionRequest,
-    previewId: fusionPreview.id,
-    candidates,
-  });
-}
-
-function focusFusionMatch(match) {
-  for (const item of byId("fusion-matches").children)
-    item.setAttribute(
-      "aria-current",
-      String(Number(item.dataset.candidate) === match.id),
-    );
-  selected = new Set(match.nodes.map((index) => `node-${index}`));
-  updateSelection(`node-${match.nodes[0]}`);
-  readableZoom();
-}
-
-function showFusionMatches(data) {
-  fusionPreview = {
-    id: data.previewId,
-    matches: data.matches.map((match, id) => ({ ...match, id })),
-  };
-  byId("fusion-matches").replaceChildren();
-  for (const match of fusionPreview.matches) {
-    const item = document.createElement("li");
-    item.className = "fusion-match";
-    item.dataset.candidate = String(match.id);
-    const label = document.createElement("label");
-    const checkbox = document.createElement("input");
-    checkbox.type = "checkbox";
-    checkbox.value = String(match.id);
-    checkbox.addEventListener("change", () => {
-      focusFusionMatch(match);
-      updateFusionSelection();
-    });
-    const names = match.nodes.map((index) => {
-      const node = fusionGraph.nodes[index];
-      return `${node.name || node.id} (${node.opType})`;
-    });
-    label.append(
-      checkbox,
-      document.createTextNode(
-        `${match.pattern ? `${match.pattern}: ` : ""}${names.join(" + ")}`,
-      ),
-    );
-    const replacement = document.createElement("pre");
-    replacement.textContent = match.replacement.length
-      ? match.replacement
-          .map(
-            (node) =>
-              `${node.domain ? `${node.domain}::` : ""}${node.opType}(${node.inputs.join(", ")}) -> ${node.outputs.join(", ")}${node.attributes.length ? `\n  ${node.attributes.map((attribute) => `${attribute.name}=${attribute.value}`).join(", ")}` : ""}`,
-          )
-          .join("\n")
-      : "Remove matched nodes (no replacement operators).";
-    item.append(label, replacement);
-    item.addEventListener("click", () => {
-      if (!fusionBusy) focusFusionMatch(match);
-    });
-    byId("fusion-matches").append(item);
-  }
-  fusionControls(false);
-  updateFusionSelection();
 }
 
 window.addEventListener("error", (event) => {
@@ -565,114 +447,6 @@ function refreshStatus(
   if (svg.hasAttribute("viewBox")) fit();
 }
 
-function resetDocumentation() {
-  if (byId("operator-doc").open) byId("operator-doc").close();
-  byId("doc-title").textContent = "";
-  byId("doc-version").textContent = "";
-  byId("doc-body").textContent = "";
-}
-
-function inspect(view) {
-  inspectedView = view;
-  const node = view?.node;
-  const port = view?.port;
-  byId("node-title").textContent =
-    node?.opType ??
-    (port
-      ? port.output
-        ? "Graph output"
-        : "Graph input"
-      : hasOperators
-        ? "No selection"
-        : "No operator");
-  byId("node-description").textContent = node
-    ? `${node.opType} ${node.function ? "local function" : "operator"}`
-    : port
-      ? `Graph ${port.output ? "output" : "input"} tensor.`
-      : hasOperators
-        ? "Select a node to inspect its inputs and outputs."
-        : "This graph contains no operator nodes.";
-  byId("open-function").hidden = !node?.function;
-  byId("open-function").textContent = node?.function
-    ? `Open function: ${node.function.name}`
-    : "Open function";
-  byId("node-name").textContent = node?.name ?? port?.name ?? "—";
-  byId("node-domain").textContent = node?.domain ?? "—";
-  byId("node-opset").textContent = node?.opset ?? "—";
-  if (inspectedNode !== node) {
-    resetDocumentation();
-    inspectedNode = node;
-  }
-  byId("show-doc").disabled = !node?.schema?.doc;
-  byId("show-doc").title = node?.schema?.doc
-    ? "Documentation from onnx-light LightOpSchema"
-    : "No LightOpSchema documentation available for this selection.";
-  const attributes = node?.attributes ?? [];
-  const names = new Set(attributes.map((attribute) => attribute.name));
-  const defaults = (node?.schema?.defaults ?? []).filter(
-    (attribute) => !names.has(attribute.name),
-  );
-  parameterList("attributes", [...attributes, ...defaults], "attribute-count");
-  initializerList(node?.parameters ?? []);
-  byId("node-parameters").hidden = !node;
-  for (const direction of ["inputs", "outputs"]) {
-    const names =
-      node?.[direction] ??
-      (port && direction === (port.output ? "inputs" : "outputs")
-        ? [port.name]
-        : []);
-    byId(`${direction === "inputs" ? "input" : "output"}-count`).textContent =
-      names.length;
-    byId(`node-${direction}`).replaceChildren(
-      ...names.map((name) => {
-        const item = document.createElement("li");
-        const tensorName = document.createElement("span");
-        tensorName.className = "tensor-name";
-        tensorName.textContent = name;
-        const information = document.createElement("span");
-        information.className = "tensor-info";
-        information.textContent = tensorDescription(name);
-        item.append(tensorName, information);
-        return item;
-      }),
-    );
-  }
-  const captures = node?.captures ?? [];
-  byId("node-captures").hidden = captures.length === 0;
-  byId("captured-inputs").replaceChildren(
-    ...captures.map((name) => {
-      const item = document.createElement("li");
-      item.textContent = `${name}: ${tensorDescription(name)}`;
-      return item;
-    }),
-  );
-  inspectMetadata();
-}
-
-function metadataEntries(parent, entries) {
-  parent.replaceChildren();
-  if (parent.parentElement.tagName === "DETAILS")
-    parent.parentElement.hidden = entries.length === 0;
-  for (const { key, value } of entries) {
-    const term = document.createElement("dt");
-    const description = document.createElement("dd");
-    term.textContent = key;
-    description.textContent = value;
-    parent.append(term, description);
-  }
-}
-
-function metadataNames(id, names) {
-  byId(`${id}-section`).hidden = names.length === 0;
-  byId(id).replaceChildren(
-    ...names.map((name) => {
-      const item = document.createElement("li");
-      item.textContent = name;
-      return item;
-    }),
-  );
-}
-
 function updateReleases() {
   const next = new Set(
     metadataVisible
@@ -701,62 +475,12 @@ function markReleased({ path, text, name }, released) {
 
 function inspectMetadata() {
   updateReleases();
-  if (!metadataVisible || !graphMetadata) return;
-  const node = inspectedView?.node;
-  const port = inspectedView?.port;
-  const info = node ? nodeMetadata.get(node.id) : valueMetadata.get(port?.name);
-  metadataEntries(byId("metadata-analysis"), [
-    { key: "Name", value: node?.name ?? port?.name ?? "No selection" },
-    { key: "Tag", value: info?.tag ?? "Unknown" },
-    {
-      key: "Constant",
-      value: info ? (info.constant ? "Yes" : "No") : "Unknown",
-    },
-  ]);
-  metadataNames("metadata-releases", node ? info.releaseAfter : []);
-  metadataNames("metadata-last-use", node ? info.lastUse : []);
-  metadataNames("metadata-unused", node ? info.unusedOutputs : []);
-  metadataEntries(byId("metadata-node"), node ? info.entries : []);
-  const names = new Set(
-    node
-      ? [...node.inputs, ...(node.captures ?? []), ...node.outputs]
-      : port
-        ? [port.name]
-        : [],
-  );
-  byId("metadata-value-count").textContent = names.size;
-  byId("metadata-values").parentElement.hidden = names.size === 0;
-  byId("metadata-values").replaceChildren(
-    ...[...names].map((name) => {
-      const value = valueMetadata.get(name);
-      const item = document.createElement("li");
-      const heading = document.createElement("strong");
-      heading.className = "metadata-value-name";
-      heading.textContent = name;
-      const badges = document.createElement("div");
-      badges.className = "metadata-badges";
-      for (const text of [value?.tag, value?.constant ? "constant" : null]) {
-        if (!text) continue;
-        const badge = document.createElement("span");
-        badge.textContent = text;
-        badges.append(badge);
-      }
-      const description = document.createElement("div");
-      description.className = "metadata-value-type";
-      description.textContent = tensorDescription(name);
-      item.append(heading, badges, description);
-      if (value?.entries.length) {
-        const details = document.createElement("details");
-        const summary = document.createElement("summary");
-        summary.textContent = "Stored metadata";
-        const entries = document.createElement("dl");
-        details.append(summary, entries);
-        metadataEntries(entries, value.entries);
-        item.append(details);
-      }
-      return item;
-    }),
-  );
+  metadataPanel.render(inspectedView, {
+    visible: metadataVisible,
+    metadata: graphMetadata,
+    nodeMetadata,
+    valueMetadata,
+  });
 }
 
 function metadataStatus(
@@ -765,7 +489,7 @@ function metadataStatus(
   status = pending ? RefreshStatus.PENDING : RefreshStatus.IDLE,
 ) {
   metadataPending = pending;
-  byId("metadata-panel").setAttribute("aria-busy", String(pending));
+  metadataPanel.setPending(pending);
   byId("refresh-metadata").disabled = pending;
   byId("refresh-metadata").setAttribute("aria-busy", String(pending));
   refreshButtonStatus("refresh-metadata", status, message);
@@ -789,9 +513,7 @@ function acceptMetadata(metadata) {
     `Metadata refreshed: ${updates} update${updates === 1 ? "" : "s"}`,
     updates ? RefreshStatus.UPDATED : RefreshStatus.UNCHANGED,
   );
-  byId("metadata-content").hidden = false;
-  metadataEntries(byId("metadata-model"), metadata.model);
-  metadataEntries(byId("metadata-graph"), metadata.graph);
+  metadataPanel.accept(metadata);
   for (const label of unusedLabels) label.remove();
   unusedLabels = [];
   for (const { id, unusedOutputs } of metadata.nodes) {
@@ -816,6 +538,15 @@ function addUnusedLabel(view, unusedOutputs = []) {
   unusedLabels.push(text);
 }
 
+function setMetadataVisible(visible) {
+  metadataVisible = visible;
+  for (const label of unusedLabels)
+    label.setAttribute("visibility", metadataVisible ? "visible" : "hidden");
+  inspectMetadata();
+  if (metadataVisible && !graphMetadata && hasModel && !replacementPending)
+    requestMetadata();
+}
+
 function requestMetadata() {
   if (metadataPending) return;
   metadataStatus(true, "Analyzing metadata…");
@@ -823,65 +554,10 @@ function requestMetadata() {
   requestAction("metadata", "Refresh metadata");
 }
 
-function initializerList(parameters) {
-  byId("parameter-count").textContent = parameters.length;
-  byId("node-initializers").replaceChildren(
-    ...parameters.map((parameter) => {
-      const item = document.createElement("li");
-      const heading = document.createElement("strong");
-      heading.textContent = `${parameter.name} (${parameter.type})`;
-      const shape = document.createElement("div");
-      shape.className = "tensor-info";
-      shape.textContent = `Shape: [${parameter.shape?.join(", ") ?? "?"}]`;
-      item.append(heading);
-      if (parameter.shape !== undefined) item.append(shape);
-      if (parameter.encoding !== undefined) {
-        const encoding = document.createElement("pre");
-        encoding.className = "initializer-values";
-        encoding.textContent = `Encoding: ${parameter.encoding}`;
-        item.append(encoding);
-      }
-      if (parameter.value !== undefined) {
-        const values = document.createElement("pre");
-        values.className = "initializer-values";
-        values.textContent = `Values: ${parameter.value}`;
-        item.append(values);
-      }
-      for (const [label, storage] of [
-        [parameter.indicesStorage ? "Values" : "Storage", parameter.storage],
-        ["Indices", parameter.indicesStorage],
-      ]) {
-        if (!storage) continue;
-        const description = document.createElement("div");
-        description.className = "initializer-storage";
-        description.textContent = `${label}: ${storage.external ? `external file: ${storage.location || "not specified"}` : "embedded"}`;
-        item.append(description);
-      }
-      return item;
-    }),
-  );
-}
-
-function parameterList(id, parameters, countId) {
-  byId(countId).textContent = parameters.length;
-  byId(`node-${id}`).replaceChildren(
-    ...parameters.map((parameter) => {
-      const item = document.createElement("li");
-      const heading = document.createElement("strong");
-      heading.textContent = `${parameter.name} (${parameter.type})${parameter.default ? " [default]" : ""}`;
-      const value = document.createElement("pre");
-      value.textContent = parameter.value;
-      item.append(heading, value);
-      for (const [index, graph] of (parameter.graphs ?? []).entries()) {
-        const button = document.createElement("button");
-        button.className = "icon-button";
-        button.textContent = `Open ${subgraphLabel(parameter, index)}: ${graph.name} (${graph.nodeCount} nodes)`;
-        button.addEventListener("click", () => navigate(graph.path));
-        item.append(button);
-      }
-      return item;
-    }),
-  );
+function inspect(view) {
+  inspectedView = view;
+  inspector.inspect(view, hasOperators);
+  inspectMetadata();
 }
 
 function updateSelection(activeId, forceInspect = false) {
@@ -1417,8 +1093,7 @@ function render(graph, metadata) {
       return button;
     }),
   );
-  resetDocumentation();
-  inspectedNode = undefined;
+  inspector.reset();
   inspectedView = undefined;
   tensorLabels = [];
   nodeViews = new Map();
@@ -1443,7 +1118,7 @@ function render(graph, metadata) {
   connectionsByName = new Map();
   releasedValues = new Set();
   unusedLabels = [];
-  byId("metadata-content").hidden = true;
+  metadataPanel.reset();
   metadataStatus(false);
   const tensors = new Set([
     ...graph.inputs,
@@ -1866,257 +1541,6 @@ byId("canvas").addEventListener("keydown", (event) => {
   event.preventDefault();
 });
 window.addEventListener("blur", () => endGesture(true));
-byId("show-doc").addEventListener("click", () => {
-  if (!inspectedNode?.schema?.doc) return;
-  const { schema, opType, domain, opset } = inspectedNode;
-  byId("doc-title").textContent = `${opType} documentation`;
-  byId("doc-version").textContent =
-    `${domain} · model opset ${opset} · LightOpSchema since version ${schema.sinceVersion}`;
-  byId("doc-body").innerHTML = documentationMarkdown.render(schema.doc);
-  byId("operator-doc").showModal();
-});
-byId("close-doc").addEventListener("click", () => byId("operator-doc").close());
-byId("open-function").addEventListener("click", () => {
-  if (inspectedNode?.function) navigate(inspectedNode.function.path);
-});
-function browseFiles(target) {
-  byId(target === "open" ? "open-error" : "save-options-error").textContent =
-    "";
-  byId(`${target}-files`).setAttribute("aria-busy", "true");
-  vscode.postMessage({
-    type: "browse-files",
-    target,
-    source: target === "open" ? byId("open-source").value : "local",
-    location: byId(`${target}-location`).value,
-    requestId: ++fileRequests[target],
-  });
-}
-function toggleFilePanel(target, visible) {
-  if (visible) toggleFilePanel(target === "open" ? "save" : "open", false);
-  const panel = byId(target === "open" ? "open-panel" : "save-options");
-  panel.hidden = !visible;
-  byId(`${target}-model`).setAttribute("aria-expanded", String(visible));
-  if (visible) {
-    revealSidebarPanel(panel);
-    if (target === "save" || byId("open-source").value !== "huggingface")
-      browseFiles(target);
-  } else {
-    fileRequests[target]++;
-    byId(`${target}-files`).setAttribute("aria-busy", "false");
-    for (const input of panel.querySelectorAll('input[type="password"]'))
-      input.value = "";
-  }
-}
-for (const target of ["open", "save"]) {
-  byId(`${target}-model`).addEventListener("click", () =>
-    toggleFilePanel(
-      target,
-      byId(target === "open" ? "open-panel" : "save-options").hidden,
-    ),
-  );
-  byId(`cancel-${target}`).addEventListener("click", () =>
-    toggleFilePanel(target, false),
-  );
-  byId(`${target}-browse`).addEventListener("submit", (event) => {
-    event.preventDefault();
-    browseFiles(target);
-  });
-  byId(`${target}-parent`).addEventListener("click", () => {
-    byId(`${target}-location`).value = fileParents[target];
-    browseFiles(target);
-  });
-}
-byId("open-source").addEventListener("change", () => {
-  fileRequests.open++;
-  byId("open-error").textContent = "";
-  byId("open-location").value = "";
-  byId("open-file").value = "";
-  byId("open-filter").value = "";
-  byId("open-password").value = "";
-  byId("open-files").replaceChildren();
-  byId("open-files").setAttribute("aria-busy", "false");
-  byId("open-parent").disabled = true;
-  byId("open-browse").hidden = byId("open-source").value === "backend";
-  if (byId("open-source").value !== "huggingface") browseFiles("open");
-});
-function filterModelFiles() {
-  const filter = byId("open-filter").value.toLocaleLowerCase();
-  for (const item of byId("open-files").children)
-    item.hidden = !item.dataset.search.includes(filter);
-}
-byId("open-filter").addEventListener("input", filterModelFiles);
-byId("open-form").addEventListener("submit", (event) => {
-  event.preventDefault();
-  if (replacementPending) return;
-  if (!byId("open-file").value.trim()) {
-    byId("open-error").textContent = "Select a model or enter its path.";
-    return;
-  }
-  byId("open-error").textContent = "";
-  requestAction("open", "Open ONNX model", {
-    source: byId("open-source").value,
-    location: byId("open-file").value,
-    password: byId("open-password").value,
-  });
-  byId("open-password").value = "";
-});
-byId("fuse-pattern").addEventListener("click", () => {
-  if (!byId("fusion-panel").hidden) {
-    byId("close-fusion").click();
-    return;
-  }
-  byId("fusion-panel").hidden = false;
-  revealSidebarPanel(byId("fusion-panel"));
-  byId("fuse-pattern").setAttribute("aria-expanded", "true");
-  clearFusionPreview();
-  byId("fusion-pattern").replaceChildren();
-  fusionControls(true, "Listing applicable pattern anchors…");
-  fit();
-  requestAction("fusion-patterns", "List fusion patterns", {
-    requestId: ++fusionRequest,
-  });
-});
-byId("close-fusion").addEventListener("click", () => {
-  fusionRequest++;
-  byId("fusion-panel").hidden = true;
-  byId("fuse-pattern").setAttribute("aria-expanded", "false");
-  clearFusionPreview();
-  fit();
-  vscode.postMessage({ type: "cancel-fusion" });
-});
-function changeFusionPatterns() {
-  fusionRequest++;
-  clearFusionPreview();
-  byId("fusion-feedback").textContent =
-    "Click Run Matching to find candidates for the selected patterns.";
-  vscode.postMessage({ type: "cancel-fusion" });
-}
-byId("fusion-pattern").addEventListener("change", changeFusionPatterns);
-for (const [id, checked] of [
-  ["select-patterns", true],
-  ["clear-patterns", false],
-])
-  byId(id).addEventListener("click", () => {
-    for (const input of byId("fusion-pattern").querySelectorAll("input"))
-      input.checked = checked;
-    changeFusionPatterns();
-  });
-byId("preview-fusion").addEventListener("click", previewFusion);
-byId("select-fusions").addEventListener("click", () => {
-  const used = new Set();
-  for (const input of byId("fusion-matches").querySelectorAll("input")) {
-    const match = fusionPreview.matches.find(
-      (candidate) => candidate.id === Number(input.value),
-    );
-    input.checked = !match.nodes.some((node) => used.has(node));
-    if (input.checked) for (const node of match.nodes) used.add(node);
-  }
-  updateFusionSelection();
-});
-byId("clear-fusions").addEventListener("click", () => {
-  for (const input of byId("fusion-matches").querySelectorAll("input"))
-    input.checked = false;
-  updateFusionSelection();
-});
-byId("apply-fusion").addEventListener("click", () => {
-  applyFusion(fusionSelection());
-});
-byId("save-form").addEventListener("change", (event) => {
-  const external = ["external-plain", "reuse-plain"].includes(
-    document.querySelector('input[name="save-format"]:checked').value,
-  );
-  byId("external-size").hidden = !external;
-  byId("weight-file-size").disabled = !external;
-  const encrypted =
-    document.querySelector('input[name="save-format"]:checked').value ===
-    "embedded-encrypted";
-  byId("save-encryption").hidden = !encrypted;
-  byId("save-password").required = encrypted;
-  byId("save-confirmation").required = encrypted;
-  if (event.target.name === "save-format")
-    byId("save-file").value = byId("save-file").value.replace(
-      /\.onnx(?:\.enc)?$/i,
-      `.onnx${encrypted ? ".enc" : ""}`,
-    );
-  byId("save-options-error").textContent = "";
-});
-byId("save-form").addEventListener("submit", (event) => {
-  event.preventDefault();
-  if (byId("save-submit").disabled) return;
-  const format = document.querySelector(
-    'input[name="save-format"]:checked',
-  ).value;
-  const external = format === "external-plain" || format === "reuse-plain";
-  const maxExternalFileSize =
-    Number(byId("weight-file-size").value) * 1024 * 1024;
-  if (
-    ![
-      "embedded-plain",
-      "embedded-encrypted",
-      "external-plain",
-      "reuse-plain",
-    ].includes(format) ||
-    (external &&
-      (!Number.isSafeInteger(maxExternalFileSize) ||
-        maxExternalFileSize < 1024 * 1024 ||
-        !byId("weight-file-size").checkValidity()))
-  ) {
-    byId("save-options-error").textContent =
-      "Choose a supported format and a positive whole-number file size in MiB.";
-    return;
-  }
-  if (!byId("save-file").value.trim()) {
-    byId("save-options-error").textContent = "Enter a destination path.";
-    return;
-  }
-  if (
-    format === "embedded-encrypted" &&
-    (!byId("save-password").value ||
-      byId("save-password").value !== byId("save-confirmation").value)
-  ) {
-    byId("save-options-error").textContent =
-      "Enter and confirm the same non-empty password.";
-    return;
-  }
-  byId("save-options-error").textContent = "";
-  requestAction("save", "Save ONNX model", {
-    location: byId("save-file").value,
-    password: byId("save-password").value,
-    confirmation: byId("save-confirmation").value,
-    overwrite: byId("save-overwrite").checked,
-    storage:
-      format === "reuse-plain" ? "reuse" : external ? "external" : "embedded",
-    encrypted: format === "embedded-encrypted",
-    ...(external ? { maxExternalFileSize } : {}),
-  });
-  byId("save-password").value = "";
-  byId("save-confirmation").value = "";
-});
-function revealSidebarPanel(panel) {
-  panel.parentElement.scrollTop = Math.max(
-    0,
-    panel.offsetTop - byId("sidebar-controls").offsetHeight - 12,
-  );
-}
-for (const id of ["show-operator", "show-find", "show-metadata"])
-  byId(id).addEventListener("click", () => {
-    const button = byId(id);
-    const panel = byId(button.getAttribute("aria-controls"));
-    panel.hidden = !panel.hidden;
-    button.setAttribute("aria-expanded", String(!panel.hidden));
-    if (!panel.hidden) revealSidebarPanel(panel);
-    if (id === "show-metadata") {
-      metadataVisible = !panel.hidden;
-      for (const label of unusedLabels)
-        label.setAttribute(
-          "visibility",
-          metadataVisible ? "visible" : "hidden",
-        );
-      inspectMetadata();
-      if (metadataVisible && !graphMetadata && hasModel && !replacementPending)
-        requestMetadata();
-    }
-  });
 byId("refresh-metadata").addEventListener("click", requestMetadata);
 byId("refresh-shapes").addEventListener("click", () => {
   refreshStatus(true, "Inferring shapes/types…");
@@ -2192,115 +1616,12 @@ svg.addEventListener(
   },
   { passive: false },
 );
-const sidebar = byId("graph-panels");
-const sidebarResizer = byId("sidebar-resizer");
-const graphBody = sidebar.parentElement;
-const sidebarStyle = getComputedStyle(graphBody);
-const sidebarMinimumWidth = parseFloat(
-  sidebarStyle.getPropertyValue("--sidebar-min-width"),
-);
-const graphMinimumWidth = parseFloat(
-  sidebarStyle.getPropertyValue("--graph-min-width"),
-);
-const sidebarResizerWidth = parseFloat(
-  sidebarStyle.getPropertyValue("--sidebar-resizer-width"),
-);
-const sidebarKeyboardStep = 20;
-let sidebarDrag;
-let sidebarFitPending = false;
-
-function maximumSidebarWidth() {
-  return Math.max(
-    sidebarMinimumWidth,
-    graphBody.getBoundingClientRect().width -
-      graphMinimumWidth -
-      sidebarResizerWidth,
-  );
-}
-
-function updateSidebarSize() {
-  const width = Math.round(sidebar.getBoundingClientRect().width);
-  if (!width) return;
-  sidebarResizer.setAttribute("aria-valuemin", String(sidebarMinimumWidth));
-  sidebarResizer.setAttribute("aria-valuemax", String(maximumSidebarWidth()));
-  sidebarResizer.setAttribute("aria-valuenow", String(width));
-  sidebarResizer.setAttribute("aria-valuetext", `${width} pixels`);
-}
-
-function scheduleSidebarFit() {
-  if (sidebarFitPending) return;
-  sidebarFitPending = true;
-  window.requestAnimationFrame(() => {
-    sidebarFitPending = false;
-    fit();
-  });
-}
-
-function resizeSidebar(width) {
-  graphBody.style.setProperty(
-    "--sidebar-width",
-    `${Math.round(Math.max(sidebarMinimumWidth, Math.min(maximumSidebarWidth(), width)))}px`,
-  );
-  updateSidebarSize();
-  scheduleSidebarFit();
-}
-
-function endSidebarDrag(event) {
-  if (sidebarDrag?.pointerId !== event.pointerId) return;
-  sidebarDrag = undefined;
-  document.body.classList.remove("resizing-sidebar");
-  if (sidebarResizer.hasPointerCapture(event.pointerId)) {
-    sidebarResizer.releasePointerCapture(event.pointerId);
-  }
-}
-
-sidebarResizer.addEventListener("pointerdown", (event) => {
-  if (event.button !== 0 || sidebarDrag) return;
-  event.preventDefault();
-  endGesture();
-  sidebarDrag = {
-    pointerId: event.pointerId,
-    x: event.clientX,
-    width: sidebar.getBoundingClientRect().width,
-  };
-  sidebarResizer.setPointerCapture(event.pointerId);
-  sidebarResizer.focus();
-  document.body.classList.add("resizing-sidebar");
-});
-sidebarResizer.addEventListener("pointermove", (event) => {
-  if (sidebarDrag?.pointerId !== event.pointerId) return;
-  resizeSidebar(sidebarDrag.width + sidebarDrag.x - event.clientX);
-});
-for (const type of ["pointerup", "pointercancel", "lostpointercapture"]) {
-  sidebarResizer.addEventListener(type, endSidebarDrag);
-}
-sidebarResizer.addEventListener("keydown", (event) => {
-  const width = sidebar.getBoundingClientRect().width;
-  const widths = {
-    ArrowLeft: width + sidebarKeyboardStep,
-    ArrowRight: width - sidebarKeyboardStep,
-    Home: sidebarMinimumWidth,
-    End: graphBody.getBoundingClientRect().width,
-  };
-  if (!Object.prototype.hasOwnProperty.call(widths, event.key)) return;
-  event.preventDefault();
-  endGesture();
-  resizeSidebar(widths[event.key]);
-});
-if (typeof ResizeObserver !== "undefined") {
-  new ResizeObserver(() => {
-    updateSidebarSize();
-    scheduleSidebarFit();
-  }).observe(sidebar);
-}
-updateSidebarSize();
-window.addEventListener("resize", () => {
-  if (sidebarDrag) endSidebarDrag(sidebarDrag);
-  endGesture();
-  updateSidebarSize();
-  fit();
-});
 window.addEventListener("message", (event) => {
+  if (
+    filePanels.handleMessage(event.data) ||
+    fusionPanel.handleMessage(event.data)
+  )
+    return;
   if (event.data?.type === "application-status") {
     displayStatus(event.data);
   } else if (event.data?.type === "log-entry") {
@@ -2322,121 +1643,14 @@ window.addEventListener("message", (event) => {
       if (type === "open") pendingActions.delete(id);
     }
     setLoading(false, `Could not open model: ${event.data.error}`);
-    byId("open-error").textContent = event.data.error;
-  } else if (
-    event.data?.type === "file-list" ||
-    event.data?.type === "file-list-error"
-  ) {
-    const data = event.data;
-    if (
-      !["open", "save"].includes(data.target) ||
-      data.requestId !== fileRequests[data.target]
-    )
-      return;
-    const target = data.target;
-    const list = byId(`${target}-files`);
-    list.setAttribute("aria-busy", "false");
-    if (data.type === "file-list-error") {
-      list.replaceChildren();
-      byId(`${target}-parent`).disabled = true;
-      byId(
-        target === "open" ? "open-error" : "save-options-error",
-      ).textContent = data.error;
-      return;
-    }
-    byId(`${target}-location`).value = data.location;
-    fileParents[target] = data.parent;
-    byId(`${target}-parent`).disabled =
-      !data.parent || data.parent === data.location;
-    if (target === "save" && data.location) {
-      const name =
-        byId("save-file").value.split(/[\\/]/).pop() || "model-copy.onnx";
-      const separator = /^(?:[a-z]:\\|\\\\)/i.test(data.location) ? "\\" : "/";
-      byId("save-file").value =
-        `${data.location.replace(/[\\/]$/, "")}${separator}${name}`;
-    }
-    list.replaceChildren(
-      ...data.entries.map((entry) => {
-        const item = document.createElement("li");
-        item.dataset.search =
-          `${entry.name} ${entry.description ?? ""}`.toLocaleLowerCase();
-        const button = document.createElement("button");
-        button.type = "button";
-        button.textContent = `${entry.directory ? "[Folder] " : ""}${entry.name}`;
-        button.title = entry.path;
-        button.addEventListener("click", () => {
-          if (entry.directory) {
-            byId(`${target}-location`).value = entry.path;
-            browseFiles(target);
-          } else {
-            byId(`${target}-file`).value = entry.path;
-            for (const row of list.children)
-              row.removeAttribute("aria-current");
-            item.setAttribute("aria-current", "true");
-          }
-        });
-        item.append(button);
-        return item;
-      }),
-    );
-    if (target === "open") filterModelFiles();
+    filePanels.showOpenError(event.data.error);
   } else if (event.data?.type === "graph") {
-    for (const target of ["open", "save"]) {
-      fileRequests[target]++;
-      byId(`${target}-files`).setAttribute("aria-busy", "false");
-    }
-    fusionGraph = event.data.graph;
-    fusionRequest++;
-    byId("fusion-panel").hidden = true;
-    byId("fuse-pattern").setAttribute("aria-expanded", "false");
-    clearFusionPreview();
-    byId("save-status").textContent = "";
-    byId("fusion-status").textContent = "";
+    filePanels.reset();
+    displayedGraph = event.data.graph;
+    fusionPanel.reset(displayedGraph);
     render(event.data.graph, event.data.metadata);
-    if (event.data.file) {
-      if (byId("open-source").value === "local")
-        byId("open-location").value = event.data.file.directory;
-      byId("save-location").value = event.data.file.directory;
-      byId("save-file").value =
-        event.data.file.savePath +
-        (document.querySelector('input[name="save-format"]:checked').value ===
-        "embedded-encrypted"
-          ? ".enc"
-          : "");
-    }
-    fusionControls(false);
-  } else if (event.data?.type === "fusion-patterns") {
-    if (event.data.requestId !== fusionRequest) return;
-    byId("fusion-pattern").replaceChildren();
-    for (const pattern of [...event.data.patterns].sort()) {
-      const label = document.createElement("label");
-      const checkbox = document.createElement("input");
-      checkbox.type = "checkbox";
-      checkbox.value = pattern;
-      label.append(checkbox, document.createTextNode(pattern));
-      byId("fusion-pattern").append(label);
-    }
-    fusionControls(
-      false,
-      event.data.patterns.length
-        ? `${event.data.patterns.length} native patterns available. Select patterns, then click Run Matching.`
-        : "No native patterns have compatible anchors in this graph.",
-    );
-  } else if (event.data?.type === "fusion-preview") {
-    if (event.data.requestId === fusionRequest) showFusionMatches(event.data);
-  } else if (event.data?.type === "fusion-error") {
-    if (event.data.requestId !== fusionRequest) return;
-    fusionControls(false, event.data.error);
-    byId("fusion-status").textContent = `Fusion failed: ${event.data.error}`;
-  } else if (event.data?.type === "fusion-info") {
-    byId("fusion-status").textContent =
-      `Applied ${event.data.count} fusion matches. Save a copy to keep changes.`;
-  } else if (event.data?.type === "save-info") {
-    byId("save-status").textContent = `Saved ${event.data.name}`;
-  } else if (event.data?.type === "save-error") {
-    byId("save-options-error").textContent = event.data.error;
-    byId("save-status").textContent =
-      `Could not save model: ${event.data.error}`;
+    filePanels.setFile(event.data.file);
+    fusionPanel.refresh();
   } else if (event.data?.type === "navigation-error") {
     svg.setAttribute("aria-busy", "false");
     byId("navigation-status").textContent =
