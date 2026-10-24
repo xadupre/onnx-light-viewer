@@ -794,6 +794,14 @@ test("suggests remembered paths without submitting forms and supports per-entry 
       path,
     );
   }
+  history.open = [remote];
+  send();
+  assert.equal(document.getElementById("open-history").hidden, true);
+  document.getElementById("open-source-huggingface").click();
+  assert.equal(document.getElementById("open-history").hidden, false);
+  document.getElementById("open-source-local").click();
+  assert.equal(document.getElementById("open-history").hidden, true);
+  assert.equal(document.getElementById("save-history").hidden, false);
   document.getElementById("save-clear-history").click();
   assert.deepEqual(JSON.parse(JSON.stringify(messages.at(-1))), {
     type: "path-history-edit",

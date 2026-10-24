@@ -585,6 +585,49 @@ test("rejects invalid preferences and reports storage failures", async () => {
   failing.dispose();
 });
 
+test("ignores invalid stored preferences and histories without blocking viewer startup", async (t) => {
+  for (const settings of [null, { width: 300 }, { panels: false }]) {
+    const preferences = new Map([
+      ["viewerSettings", settings],
+      ["pathHistory", { open: [null, {}], save: "old-format" }],
+    ]);
+    const extension = await openExtension(
+      undefined,
+      undefined,
+      false,
+      undefined,
+      undefined,
+      preferences,
+    );
+    t.after(() => extension.dispose());
+    await extension.receive({ type: "ready" });
+    assert.equal(
+      extension.messages.some(({ type }) => type === "viewer-settings"),
+      false,
+    );
+    assert.equal(
+      extension.events.some(({ type }) => type === "path-history"),
+      false,
+    );
+    assert.ok(extension.messages.some(({ type }) => type === "graph"));
+    assert.ok(
+      extension.errors.some((message) =>
+        /invalid saved path history/i.test(message),
+      ),
+    );
+    assert.ok(
+      extension.errors.some((message) =>
+        message.startsWith("Could not restore viewer settings:"),
+      ),
+    );
+    assert.ok(
+      extension.logs.some((entry) =>
+        entry.includes("[FAILED] Restore viewer settings"),
+      ),
+    );
+  }
+});
+
 test("routes task-filtered Hub searches and drops superseded or disposed search results", async () => {
   const extension = await openExtension();
   const first = {

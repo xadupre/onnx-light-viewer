@@ -97,3 +97,35 @@ test("sanitizes authority-less URIs without treating Windows drive paths as sche
     ["provider:/models/a.onnx", "provider:/models"],
   );
 });
+
+test("filters malformed stored histories and isolates returned entry objects", async () => {
+  let stored;
+  const errors = [];
+  const history = new PathHistory(
+    {
+      get: () => stored,
+      update: async (_key, value) => {
+        stored = value;
+      },
+    },
+    (message) => errors.push(message),
+  );
+  for (const value of [null, "old-format", { open: {}, save: false }]) {
+    stored = value;
+    assert.deepEqual(history.snapshot(), { open: [], save: [] });
+  }
+  assert.equal(errors.length, 3);
+  const entry = { source: "local", kind: "file", path: "/models/valid.onnx" };
+  stored = {
+    open: [null, {}, { ...entry, path: 42 }, entry],
+    save: [entry, { ...entry, source: "unknown" }],
+  };
+  const snapshot = history.snapshot();
+  assert.deepEqual(snapshot, { open: [entry], save: [entry] });
+  assert.equal(errors.length, 4);
+  snapshot.open[0].path = "/changed.onnx";
+  assert.equal(stored.open.at(-1).path, "/models/valid.onnx");
+  assert.equal(history.snapshot().open[0].path, "/models/valid.onnx");
+  await history.update("open", { action: "remove", entry });
+  assert.deepEqual(stored, { open: [], save: [entry] });
+});

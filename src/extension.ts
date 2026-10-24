@@ -138,7 +138,9 @@ function invalidateModel(model: LoadedModel, log: ActionLog): void {
  * @param context Extension resources and subscription lifetime supplied by VS Code.
  */
 export function activate(context: vscode.ExtensionContext): void {
-  const pathHistory = new PathHistory(context.globalState);
+  const pathHistory = new PathHistory(context.globalState, (message) => {
+    void vscode.window.showErrorMessage(message);
+  });
   let current: { panel: vscode.WebviewPanel; showLogs: () => void } | undefined;
   const openViewer = async (
     uri?: vscode.Uri,
@@ -607,9 +609,21 @@ async function configurePanel(
         const history = pathHistory.snapshot();
         if (history.open.length || history.save.length)
           await postMessage({ type: "path-history", history });
-        const settings =
-          context.globalState.get<ViewerSettings>("viewerSettings");
-        if (settings) await postMessage({ type: "viewer-settings", settings });
+        const storedSettings =
+          context.globalState.get<unknown>("viewerSettings");
+        if (storedSettings !== undefined) {
+          try {
+            const settings = viewerSettings(storedSettings);
+            await postMessage({ type: "viewer-settings", settings });
+          } catch (error) {
+            const detail =
+              error instanceof Error ? error.message : String(error);
+            log.record("FAILED", `Restore viewer settings: ${detail}`);
+            void vscode.window.showErrorMessage(
+              `Could not restore viewer settings: ${detail}`,
+            );
+          }
+        }
         await postMessage({
           type: "log-history",
           entries: log.snapshot(),

@@ -68,14 +68,32 @@ export class PathHistory {
   private pending: Promise<void> = Promise.resolve();
   private listeners = new Set<(history: HistorySnapshot) => void>();
 
-  constructor(private readonly storage: Pick<Memento, "get" | "update">) {}
+  constructor(
+    private readonly storage: Pick<Memento, "get" | "update">,
+    private readonly reportInvalid: (message: string) => void = console.warn,
+  ) {}
 
   snapshot(): HistorySnapshot {
-    const history = this.storage.get<HistorySnapshot>("pathHistory");
-    return {
-      open: [...(history?.open ?? [])],
-      save: [...(history?.save ?? [])],
+    const stored = this.storage.get<unknown>("pathHistory");
+    if (stored === undefined) return { open: [], save: [] };
+    const history = stored && typeof stored === "object" ? stored : {};
+    let invalid = false;
+    const entries = (value: unknown): HistoryEntry[] => {
+      if (!Array.isArray(value)) {
+        invalid = true;
+        return [];
+      }
+      const valid = value.filter(isHistoryEntry);
+      if (valid.length !== value.length) invalid = true;
+      return valid.map(({ source, kind, path }) => ({ source, kind, path }));
     };
+    const snapshot = {
+      open: entries("open" in history ? history.open : undefined),
+      save: entries("save" in history ? history.save : undefined),
+    };
+    if (invalid)
+      this.reportInvalid("Ignoring invalid saved path history entries.");
+    return snapshot;
   }
 
   subscribe(listener: (history: HistorySnapshot) => void): () => void {

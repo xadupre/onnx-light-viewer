@@ -67,7 +67,7 @@ function createFilePanels({
             }),
         );
       }
-      byId(`${target}-history`).hidden = pathHistory[target].length === 0;
+      byId(`${target}-history`).hidden = entries.length === 0;
       byId(`${target}-history-entries`).replaceChildren(
         ...entries.map((entry) => {
           const item = document.createElement("li");
