@@ -9,6 +9,7 @@
 #include <stdexcept>
 #include <tuple>
 #include <type_traits>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace onnx_light_viewer {
@@ -27,17 +28,20 @@ Napi::Array Dimensions(Napi::Env env, const ol::TensorShapeProto &shape) {
   return result;
 }
 
-std::string StructPreview(const ol::StructTypeProto &type, const ol::ModelProto *model = nullptr) {
-  if (model && type.has_type_ref())
-    for (const auto &declaration : model->struct_types())
-      if (declaration.type_id() == type.type_ref())
-        return Preview(declaration);
+using StructDeclarations = std::unordered_map<uint64_t, const ol::StructTypeProto *>;
+
+std::string StructPreview(const ol::StructTypeProto &type, const StructDeclarations *declarations) {
+  if (declarations && type.has_type_ref()) {
+    const auto declaration = declarations->find(type.type_ref());
+    if (declaration != declarations->end())
+      return Preview(*declaration->second);
+  }
   return Preview(type);
 }
 
 Napi::Object TensorInformation(Napi::Env env, std::string_view name,
                                const ol::TypeProto *type = nullptr,
-                               const ol::ModelProto *model = nullptr) {
+                               const StructDeclarations *declarations = nullptr) {
   auto result = Napi::Object::New(env);
   result.Set("name", Text(env, name));
   if (type && (type->has_tensor_type() || type->has_sparse_tensor_type())) {
@@ -57,7 +61,7 @@ Napi::Object TensorInformation(Napi::Env env, std::string_view name,
   } else if (type && type->has_opaque_type()) {
     result.Set("type", "OPAQUE " + Preview(type->opaque_type()));
   } else if (type && type->has_struct_type()) {
-    result.Set("type", "STRUCT " + StructPreview(type->struct_type(), model));
+    result.Set("type", "STRUCT " + StructPreview(type->struct_type(), declarations));
   } else if (type && type->has_type()) {
     result.Set("type", Preview(*type));
   } else {
@@ -204,6 +208,10 @@ Napi::Object ModelGraph(Napi::Env env, const ol::ModelProto &model, const std::s
   const auto selection = GraphScopes(model, path);
   const auto &scopes = selection.scopes;
   const auto &graph = *scopes.back();
+  StructDeclarations struct_declarations;
+  struct_declarations.reserve(model.struct_types().size());
+  for (const auto &declaration : model.struct_types())
+    struct_declarations.emplace(declaration.type_id(), &declaration);
   std::map<std::string, Napi::Object> tensor_information;
   std::map<std::string, int64_t> opsets;
   for (const auto &opset :
@@ -247,7 +255,7 @@ Napi::Object ModelGraph(Napi::Env env, const ol::ModelProto &model, const std::s
           tensor_information.insert_or_assign(
               std::string(value.name()),
               TensorInformation(env, value.name(), value.has_type() ? &value.type() : nullptr,
-                                &model));
+                                &struct_declarations));
     const auto &graph = *scope;
     for (const auto &tensor : graph.initializer()) {
       if (!tensor.name().empty()) {
@@ -286,8 +294,9 @@ Napi::Object ModelGraph(Napi::Env env, const ol::ModelProto &model, const std::s
       const auto &value = initializer.encoded_value();
       const std::string name(value.name());
       initializers.emplace(name);
-      auto information = TensorInformation(
-          env, name, value.has_logical_type() ? &value.logical_type() : nullptr, &model);
+      auto information =
+          TensorInformation(env, name, value.has_logical_type() ? &value.logical_type() : nullptr,
+                            &struct_declarations);
       if (information.Get("type").IsNull())
         information.Set("type", "ENCODED");
       tensor_information.insert_or_assign(name, information);
@@ -301,7 +310,8 @@ Napi::Object ModelGraph(Napi::Env env, const ol::ModelProto &model, const std::s
       if (value.has_affine())
         parameter.Set("encoding", "AFFINE " + Preview(value.affine()));
       else if (value.has_struct_type())
-        parameter.Set("encoding", "STRUCT " + StructPreview(value.struct_type(), &model));
+        parameter.Set("encoding",
+                      "STRUCT " + StructPreview(value.struct_type(), &struct_declarations));
       parameters.emplace(name, parameter);
     }
   }

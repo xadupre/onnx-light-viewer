@@ -188,6 +188,117 @@ test("displays opaque and structured ports, resolving model-scoped struct types"
   );
 });
 
+test("reuses model-scoped struct declarations for repeated and missing references", () => {
+  const reference = (id) => varintField(4, id);
+  const logicalType = (id) => bytesField(1000, reference(id));
+  const declaration = (id, name) =>
+    bytesField(1000, Buffer.concat([bytesField(7, name), varintField(10, id)]));
+  const snapshots = [];
+  for (const name of ["FirstModel", "SecondModel"]) {
+    const ids = [7, 99, 7, 99, 7];
+    const model = loadModel(
+      Buffer.concat([
+        varintField(1, 10),
+        ...Array.from({ length: 64 }, (_, i) => declaration(i + 100, "Unused")),
+        declaration(7, name),
+        declaration(7, "Duplicate"),
+        bytesField(
+          7,
+          Buffer.concat([
+            ...ids.map((id, index) =>
+              bytesField(
+                11,
+                Buffer.concat([
+                  bytesField(1, `input${index}`),
+                  bytesField(2, logicalType(id)),
+                ]),
+              ),
+            ),
+            bytesField(
+              1,
+              Buffer.concat([
+                ...ids.map((_, index) => bytesField(1, `weight${index}`)),
+                bytesField(4, "Inspect"),
+              ]),
+            ),
+            ...ids.map((id, index) =>
+              bytesField(
+                1000,
+                bytesField(
+                  1,
+                  Buffer.concat([
+                    bytesField(2, reference(id)),
+                    bytesField(3, logicalType(id)),
+                    bytesField(7, `weight${index}`),
+                  ]),
+                ),
+              ),
+            ),
+          ]),
+        ),
+      ]),
+      "references",
+    );
+    const graph = model.graph();
+    snapshots.push({ model, graph });
+    for (const [index, id] of ids.entries()) {
+      const type = graph.tensors.find((v) => v.name === `input${index}`).type;
+      const parameter = graph.nodes[0].parameters[index];
+      assert.equal(parameter.type, type);
+      assert.equal(parameter.encoding, type);
+      if (id === 7) {
+        assert.match(
+          type,
+          new RegExp(`^STRUCT .*name: "${name}".*type_id: 7`, "s"),
+        );
+        assert.doesNotMatch(type, /Duplicate|Unused/);
+      } else {
+        assert.match(type, /^STRUCT .*type_ref: 99/s);
+        assert.doesNotMatch(type, /type_id/);
+      }
+    }
+    assert.equal(graph.tensors[0].type, graph.tensors[2].type);
+  }
+  for (const { model, graph } of snapshots)
+    assert.deepEqual(model.graph(), graph);
+});
+
+test("keeps recursive struct references bounded when resolving declarations", () => {
+  const reference = bytesField(1000, varintField(4, 7));
+  const model = loadModel(
+    Buffer.concat([
+      varintField(1, 10),
+      bytesField(
+        1000,
+        Buffer.concat([
+          bytesField(
+            2,
+            bytesField(
+              1,
+              Buffer.concat([bytesField(1, "self"), bytesField(2, reference)]),
+            ),
+          ),
+          bytesField(7, "Recursive"),
+          varintField(10, 7),
+        ]),
+      ),
+      bytesField(
+        7,
+        bytesField(
+          11,
+          Buffer.concat([bytesField(1, "record"), bytesField(2, reference)]),
+        ),
+      ),
+    ]),
+    "recursive",
+  );
+  const { type } = model.graph().tensors[0];
+  assert.match(type, /^STRUCT .*self.*type_ref: 7.*Recursive.*type_id: 7/s);
+  // Preview() in native/tensor_preview.h limits the body, excluding this prefix.
+  const maxPreviewLength = 4096;
+  assert.ok(type.length <= "STRUCT ".length + maxPreviewLength);
+});
+
 for (const bits of [2, 3]) {
   test(`inspects and round-trips the ${bits}-bit quantized example`, async (t) => {
     const file = path.resolve(
