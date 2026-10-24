@@ -73,8 +73,11 @@ async function openExtension(
   const disposable = () => ({ dispose() {} });
   const root = path.resolve(__dirname, "..");
   const uri = (filePath, scheme = localFiles ? "file" : "virtual") => ({
-    path: filePath,
-    fsPath: filePath,
+    path: filePath.replaceAll("\\", "/"),
+    fsPath:
+      process.platform === "win32"
+        ? path.normalize(filePath.replace(/^\/(?=[a-z]:\/)/i, ""))
+        : filePath,
     scheme,
     toString: () => `${scheme}://${filePath}`,
   });
