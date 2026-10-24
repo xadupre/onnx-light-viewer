@@ -1,4 +1,15 @@
-function createSidebar({ byId, fit, endGesture, onMetadataToggle }) {
+function createSidebar({
+  byId,
+  fit,
+  endGesture,
+  onMetadataToggle,
+  onSettingsChange,
+}) {
+  const panels = {
+    operator: "show-operator",
+    find: "show-find",
+    metadata: "show-metadata",
+  };
   function revealSidebarPanel(panel) {
     panel.parentElement.scrollTop = Math.max(
       0,
@@ -13,6 +24,7 @@ function createSidebar({ byId, fit, endGesture, onMetadataToggle }) {
       button.setAttribute("aria-expanded", String(!panel.hidden));
       if (!panel.hidden) revealSidebarPanel(panel);
       if (id === "show-metadata") onMetadataToggle(!panel.hidden);
+      saveSettings();
     });
   const sidebar = byId("graph-panels");
   const sidebarResizer = byId("sidebar-resizer");
@@ -30,6 +42,35 @@ function createSidebar({ byId, fit, endGesture, onMetadataToggle }) {
   const sidebarKeyboardStep = 20;
   let sidebarDrag;
   let sidebarFitPending = false;
+
+  function saveSettings() {
+    const width = parseFloat(
+      graphBody.style.getPropertyValue("--sidebar-width"),
+    );
+    onSettingsChange({
+      ...(Number.isFinite(width) ? { width } : {}),
+      panels: Object.fromEntries(
+        Object.entries(panels).map(([name, id]) => [
+          name,
+          byId(id).getAttribute("aria-expanded") === "true",
+        ]),
+      ),
+    });
+  }
+
+  function restoreSettings(settings) {
+    if (settings.width !== undefined)
+      graphBody.style.setProperty("--sidebar-width", `${settings.width}px`);
+    for (const [name, id] of Object.entries(panels)) {
+      const visible = settings.panels[name];
+      const button = byId(id);
+      byId(button.getAttribute("aria-controls")).hidden = !visible;
+      button.setAttribute("aria-expanded", String(visible));
+    }
+    onMetadataToggle(settings.panels.metadata);
+    updateSidebarSize();
+    scheduleSidebarFit();
+  }
 
   function maximumSidebarWidth() {
     return Math.max(
@@ -58,13 +99,14 @@ function createSidebar({ byId, fit, endGesture, onMetadataToggle }) {
     });
   }
 
-  function resizeSidebar(width) {
+  function resizeSidebar(width, persist = true) {
     graphBody.style.setProperty(
       "--sidebar-width",
       `${Math.round(Math.max(sidebarMinimumWidth, Math.min(maximumSidebarWidth(), width)))}px`,
     );
     updateSidebarSize();
     scheduleSidebarFit();
+    if (persist) saveSettings();
   }
 
   function endSidebarDrag(event) {
@@ -74,6 +116,7 @@ function createSidebar({ byId, fit, endGesture, onMetadataToggle }) {
     if (sidebarResizer.hasPointerCapture(event.pointerId)) {
       sidebarResizer.releasePointerCapture(event.pointerId);
     }
+    saveSettings();
   }
 
   sidebarResizer.addEventListener("pointerdown", (event) => {
@@ -91,7 +134,7 @@ function createSidebar({ byId, fit, endGesture, onMetadataToggle }) {
   });
   sidebarResizer.addEventListener("pointermove", (event) => {
     if (sidebarDrag?.pointerId !== event.pointerId) return;
-    resizeSidebar(sidebarDrag.width + sidebarDrag.x - event.clientX);
+    resizeSidebar(sidebarDrag.width + sidebarDrag.x - event.clientX, false);
   });
   for (const type of ["pointerup", "pointercancel", "lostpointercapture"]) {
     sidebarResizer.addEventListener(type, endSidebarDrag);
@@ -123,5 +166,5 @@ function createSidebar({ byId, fit, endGesture, onMetadataToggle }) {
     fit();
   });
 
-  return { revealPanel: revealSidebarPanel };
+  return { revealPanel: revealSidebarPanel, restoreSettings };
 }

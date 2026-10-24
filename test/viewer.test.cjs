@@ -21,7 +21,7 @@ function openViewer(t, initialTab = "model", setup = () => {}) {
       onnxLightVersion,
       initialTab,
     ),
-    { runScripts: "outside-only" },
+    { runScripts: "outside-only", pretendToBeVisual: true },
   );
   t.after(() => dom.window.close());
   dom.window.HTMLCanvasElement.prototype.getContext = () => ({
@@ -186,7 +186,7 @@ test("resets sidebar controllers together when the viewer replaces the graph", (
 });
 
 test("resizes the sidebar with pointer and keyboard controls without rearranging nodes", (t) => {
-  const { document, window, load } = openViewer(t);
+  const { document, window, load, messages } = openViewer(t);
   const sidebar = document.getElementById("graph-panels");
   const resizer = document.getElementById("sidebar-resizer");
   const body = sidebar.parentElement;
@@ -205,7 +205,7 @@ test("resizes the sidebar with pointer and keyboard controls without rearranging
   const width = () =>
     Math.min(
       bodyWidth - graphMinimum - resizerWidth,
-      parseFloat(body.style.getPropertyValue("--sidebar-width")) || 245,
+      parseFloat(body.style.getPropertyValue("--sidebar-width")) || 300,
     );
   body.getBoundingClientRect = () => new window.DOMRect(0, 0, bodyWidth, 600);
   sidebar.getBoundingClientRect = () =>
@@ -243,12 +243,12 @@ test("resizes the sidebar with pointer and keyboard controls without rearranging
   pointer("pointerdown", 955, 1, 2);
   pointer("pointermove", 800);
   assert.equal(body.style.getPropertyValue("--sidebar-width"), "");
-  pointer("pointerdown", 955);
+  pointer("pointerdown", 900);
   assert.equal(captured, 1);
   assert.equal(document.activeElement, resizer);
   assert.equal(document.body.classList.contains("resizing-sidebar"), true);
   pointer("pointermove", 700, 2);
-  assert.equal(width(), 245);
+  assert.equal(width(), 300);
   pointer("pointermove", 750);
   pointer("pointermove", 700);
   assert.equal(width(), 500);
@@ -261,6 +261,13 @@ test("resizes the sidebar with pointer and keyboard controls without rearranging
   flushFrame();
   assert.notEqual(graph.getAttribute("viewBox"), viewBox);
   pointer("pointerup", 700);
+  assert.deepEqual(JSON.parse(JSON.stringify(messages.at(-1))), {
+    type: "viewer-settings",
+    settings: {
+      width: 500,
+      panels: { operator: true, find: true, metadata: false },
+    },
+  });
   assert.equal(captured, undefined);
   assert.equal(document.body.classList.contains("resizing-sidebar"), false);
   pointer("pointermove", 600);
@@ -306,6 +313,69 @@ test("resizes the sidebar with pointer and keyboard controls without rearranging
   assert.equal(document.getElementById("nodes").innerHTML, nodes);
 });
 
+test("restores sidebar width and panel visibility without saving transient form fields", (t) => {
+  const first = openViewer(t);
+  const initial = {
+    width: 480,
+    panels: { operator: false, find: true, metadata: false },
+  };
+  const restore = (viewer, settings) =>
+    viewer.window.dispatchEvent(
+      new viewer.window.MessageEvent("message", {
+        data: { type: "viewer-settings", settings },
+      }),
+    );
+  restore(first, initial);
+  const body = first.document.getElementById("graph-panels").parentElement;
+  assert.equal(body.style.getPropertyValue("--sidebar-width"), "480px");
+  const operator = first.document.getElementById("show-operator");
+  assert.equal(operator.getAttribute("aria-expanded"), "false");
+  assert.equal(
+    first.document.getElementById(operator.getAttribute("aria-controls"))
+      .hidden,
+    true,
+  );
+  assert.equal(
+    first.messages.filter(({ type }) => type === "viewer-settings").length,
+    0,
+  );
+  first.document.getElementById("open-password").value = "not-a-preference";
+  first.document.getElementById("show-metadata").click();
+  const saved = first.messages.findLast(
+    ({ type }) => type === "viewer-settings",
+  ).settings;
+  assert.deepEqual(JSON.parse(JSON.stringify(saved)), {
+    ...initial,
+    panels: { ...initial.panels, metadata: true },
+  });
+  const second = openViewer(t);
+  restore(second, saved);
+  assert.equal(
+    second.document
+      .getElementById("graph-panels")
+      .parentElement.style.getPropertyValue("--sidebar-width"),
+    "480px",
+  );
+  assert.equal(
+    second.document
+      .getElementById("show-operator")
+      .getAttribute("aria-expanded"),
+    "false",
+  );
+  assert.equal(
+    second.document
+      .getElementById("show-metadata")
+      .getAttribute("aria-expanded"),
+    "true",
+  );
+  assert.equal(
+    second.document.getElementById("show-find").getAttribute("aria-expanded"),
+    "true",
+  );
+  second.load(demoGraph);
+  assert.ok(second.messages.some(({ type }) => type === "metadata"));
+});
+
 test("initializes sidebar announcements from layout and batches observer redraws", (t) => {
   let notifyResize;
   let sidebarWidth = 360;
@@ -344,6 +414,474 @@ test("initializes sidebar announcements from layout and batches observer redraws
   frames.shift()();
 });
 
+test("discovers popular ONNX repositories by task and searches before browsing model files", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  load(demoGraph);
+  document.getElementById("open-model").click();
+  document.getElementById("open-source-huggingface").click();
+  assert.equal(document.querySelector("select#open-source"), null);
+  assert.equal(document.querySelectorAll("#open-source button").length, 3);
+  assert.equal(
+    document
+      .getElementById("open-source-huggingface")
+      .getAttribute("aria-pressed"),
+    "true",
+  );
+  assert.equal(
+    document.getElementById("open-source-local").getAttribute("aria-pressed"),
+    "false",
+  );
+  assert.equal(document.getElementById("hf-discovery").hidden, false);
+  assert.equal(document.getElementById("hf-task").closest("[hidden]"), null);
+  assert.equal(document.getElementById("open-browser").open, false);
+  assert.equal(document.getElementById("open-file-list").hidden, true);
+  assert.match(
+    document.getElementById("hf-search-help").textContent,
+    /click Search \(or press Enter\)/,
+  );
+  assert.ok(document.querySelector("#hf-search-form label[for='hf-task']"));
+  assert.ok(
+    document
+      .getElementById("hf-task")
+      .compareDocumentPosition(document.getElementById("hf-query")) &
+      window.Node.DOCUMENT_POSITION_FOLLOWING,
+  );
+  const popular = messages.at(-1);
+  assert.equal(popular.type, "search-huggingface");
+  assert.equal(popular.query, "");
+  assert.equal(popular.task, "");
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  const repository = {
+    id: "author/popular",
+    url: "https://huggingface.co/author/popular",
+    downloads: 12500,
+    task: "feature-extraction",
+  };
+  send({
+    type: "huggingface-search-results",
+    requestId: popular.requestId,
+    models: [repository],
+  });
+  assert.match(
+    document.getElementById("hf-results-title").textContent,
+    /Popular/,
+  );
+  assert.match(
+    document.getElementById("hf-search-results").textContent,
+    /author\/popular/,
+  );
+  assert.match(
+    document.getElementById("hf-search-results").textContent,
+    /12,500 downloads/,
+  );
+  send({
+    type: "huggingface-model-files",
+    requestId: popular.requestId,
+    id: repository.id,
+    entries: [{ size: 22 * 1024 * 1024 }, { size: 90 * 1024 * 1024 }, {}],
+  });
+  assert.equal(
+    document.querySelector(".hub-model-size").textContent,
+    "ONNX files: 22 MiB - 90 MiB (2/3 sizes known)",
+  );
+  assert.equal(messages.filter(({ type }) => type === "open").length, 0);
+  document.getElementById("hf-task").value = "feature-extraction";
+  document.getElementById("hf-task").dispatchEvent(new window.Event("change"));
+  const task = messages.at(-1);
+  assert.equal(task.task, "feature-extraction");
+  document.getElementById("hf-query").value = "bert";
+  document
+    .getElementById("hf-search-form")
+    .dispatchEvent(new window.Event("submit", { cancelable: true }));
+  const search = messages.at(-1);
+  assert.equal(search.query, "bert");
+  assert.equal(search.task, "feature-extraction");
+  send({
+    type: "huggingface-search-results",
+    requestId: task.requestId,
+    models: [repository],
+  });
+  assert.equal(
+    document.querySelectorAll("#hf-search-results button").length,
+    0,
+  );
+  send({
+    type: "huggingface-search-results",
+    requestId: search.requestId,
+    models: [{ ...repository, id: "<img src=x onerror=alert(1)>" }],
+  });
+  assert.equal(document.querySelector("#hf-search-results img"), null);
+  document.getElementById("open-file").value = "/old/model.onnx";
+  document.querySelector("#hf-search-results button").click();
+  const browse = messages.at(-1);
+  assert.equal(browse.type, "browse-files");
+  assert.equal(browse.source, "huggingface");
+  assert.equal(browse.location, repository.url);
+  assert.equal(document.getElementById("open-file").value, "");
+  assert.equal(messages.filter(({ type }) => type === "open").length, 0);
+  const file = `${repository.url}/resolve/main/onnx/model.onnx`;
+  send({
+    type: "file-list",
+    target: "open",
+    requestId: browse.requestId,
+    location: repository.url,
+    entries: [
+      {
+        name: "onnx/model.onnx",
+        path: file,
+        directory: false,
+        size: 90 * 1024 * 1024,
+      },
+      { name: "onnx/unknown.onnx", path: `${file}-unknown`, directory: false },
+    ],
+  });
+  assert.equal(document.getElementById("open-file-list").hidden, false);
+  assert.equal(
+    document.querySelector("#open-files .file-size").textContent,
+    "File size: 90 MiB",
+  );
+  assert.equal(document.querySelectorAll("#open-files .file-size").length, 2);
+  assert.match(
+    document.querySelectorAll("#open-files .file-size")[1].textContent,
+    /unavailable/,
+  );
+  assert.doesNotMatch(
+    document.getElementById("hf-files-help").textContent,
+    /click Open/,
+  );
+  document.querySelector("#open-files button").click();
+  assert.equal(messages.filter(({ type }) => type === "open").length, 0);
+  document
+    .querySelector("#open-files button")
+    .dispatchEvent(new window.MouseEvent("dblclick", { bubbles: true }));
+  assert.equal(messages.at(-1).type, "open");
+  assert.equal(messages.at(-1).location, file);
+  assert.equal(document.getElementById("open-progress").hidden, false);
+  document
+    .querySelector("#open-files button")
+    .dispatchEvent(new window.MouseEvent("dblclick", { bubbles: true }));
+  assert.equal(messages.filter(({ type }) => type === "open").length, 1);
+});
+
+test("reports Hub search errors and ignores responses after closing or switching sources", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  load(demoGraph);
+  document.getElementById("open-source-huggingface").click();
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  let request = messages.at(-1).requestId;
+  send({
+    type: "huggingface-search-error",
+    requestId: request,
+    error: "Search unavailable: HTTP 503",
+  });
+
+  assert.match(
+    document.getElementById("hf-search-status").textContent,
+    /HTTP 503/,
+  );
+  assert.equal(
+    document.getElementById("hf-search-results").getAttribute("aria-busy"),
+    "false",
+  );
+  document.getElementById("hf-search-form").requestSubmit();
+  request = messages.at(-1).requestId;
+  send({ type: "huggingface-search-results", requestId: request, models: [] });
+  assert.match(
+    document.getElementById("hf-search-status").textContent,
+    /No public ONNX models/,
+  );
+  document.getElementById("hf-search-form").requestSubmit();
+  request = messages.at(-1).requestId;
+  document.getElementById("cancel-open").click();
+  send({
+    type: "huggingface-search-error",
+    requestId: request,
+    error: "Late error",
+  });
+  assert.equal(document.getElementById("hf-search-status").textContent, "");
+  document.getElementById("open-model").click();
+  request = messages.at(-1).requestId;
+  document.getElementById("open-source-local").click();
+  send({
+    type: "huggingface-search-results",
+    requestId: request,
+    models: [{ id: "old/result" }],
+  });
+  assert.equal(document.getElementById("hf-discovery").hidden, true);
+  assert.equal(
+    document.querySelectorAll("#hf-search-results button").length,
+    0,
+  );
+});
+
+test("reports missing or unavailable repository sizes without accepting stale metadata", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  load(demoGraph);
+  document.getElementById("open-source-huggingface").click();
+  const requestId = messages.at(-1).requestId;
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  send({
+    type: "huggingface-search-results",
+    requestId,
+    models: [
+      {
+        id: "author/model",
+        url: "https://huggingface.co/author/model",
+        downloads: 10,
+      },
+    ],
+  });
+  const label = document.querySelector(".hub-model-size");
+  send({
+    type: "huggingface-model-files",
+    requestId: requestId - 1,
+    id: "author/model",
+    entries: [{ size: 999 }],
+  });
+  assert.match(label.textContent, /loading/);
+  send({
+    type: "huggingface-model-files",
+    requestId,
+    id: "author/model",
+    entries: [{}],
+  });
+  assert.match(label.textContent, /not supplied/);
+  send({
+    type: "huggingface-model-files",
+    requestId,
+    id: "author/model",
+    error: "HTTP 429",
+  });
+  assert.match(label.textContent, /unavailable: HTTP 429/);
+});
+
+test("opens backend tests on double click while keeping single clicks and local files selection-only", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  load(demoGraph);
+  document.getElementById("open-model").click();
+  function list(value) {
+    document.getElementById(`open-source-${value}`).click();
+    const request = messages.at(-1);
+    window.dispatchEvent(
+      new window.MessageEvent("message", {
+        data: {
+          type: "file-list",
+          target: "open",
+          requestId: request.requestId,
+          location: "",
+          entries: [{ name: "Relu", path: "42", directory: false }],
+        },
+      }),
+    );
+    return document.querySelector("#open-files button");
+  }
+  const local = list("local");
+  local.click();
+  local.dispatchEvent(new window.MouseEvent("dblclick", { bubbles: true }));
+  assert.equal(messages.filter(({ type }) => type === "open").length, 0);
+  const backend = list("backend");
+  backend.click();
+  assert.equal(document.getElementById("open-file").value, "42");
+  assert.equal(messages.filter(({ type }) => type === "open").length, 0);
+  backend.dispatchEvent(new window.MouseEvent("dblclick", { bubbles: true }));
+  const requests = messages.filter(({ type }) => type === "open");
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].source, "backend");
+  assert.equal(requests[0].location, "42");
+  assert.equal(document.getElementById("open-progress").hidden, false);
+  backend.dispatchEvent(new window.MouseEvent("dblclick", { bubbles: true }));
+  assert.equal(messages.filter(({ type }) => type === "open").length, 1);
+});
+
+test("suggests remembered paths without submitting forms and supports per-entry removal and clearing", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  load(demoGraph);
+  const local = {
+    source: "local",
+    kind: "file",
+    path: "/models/<b>recent</b>.onnx",
+  };
+  const directory = { source: "local", kind: "directory", path: "/models" };
+  const remote = {
+    source: "huggingface",
+    kind: "file",
+    path: "https://huggingface.co/owner/repo/resolve/main/model.onnx",
+  };
+  const backend = { source: "backend", kind: "file", path: "42" };
+  const saved = { source: "local", kind: "file", path: "/copies/model.onnx" };
+  const history = {
+    open: [local, directory, remote, backend],
+    save: [saved, { ...directory, path: "/copies" }],
+  };
+  const send = () =>
+    window.dispatchEvent(
+      new window.MessageEvent("message", {
+        data: { type: "path-history", history },
+      }),
+    );
+  send();
+  for (const target of ["open", "save"])
+    for (const field of ["file", "location"])
+      assert.equal(
+        document.getElementById(`${target}-${field}`).list.id,
+        `${target}-${field}-history`,
+      );
+  assert.deepEqual(
+    [...document.querySelectorAll("#open-file-history option")].map(
+      (option) => option.value,
+    ),
+    [local.path],
+  );
+  assert.deepEqual(
+    [...document.querySelectorAll("#save-file-history option")].map(
+      (option) => option.value,
+    ),
+    [saved.path],
+  );
+  assert.equal(document.querySelector("#open-history b"), null);
+  document.getElementById("open-model").click();
+  document.getElementById("open-history").open = true;
+  const count = messages.length;
+  document.querySelector("#open-history-entries li button").click();
+  assert.equal(document.getElementById("open-file").value, local.path);
+  assert.equal(document.activeElement.id, "open-file");
+  document
+    .querySelectorAll("#open-history-entries li")[1]
+    .querySelector("button")
+    .click();
+  assert.equal(document.getElementById("open-location").value, "/models");
+  document.querySelector("#save-history-entries li button").click();
+  assert.equal(document.getElementById("save-file").value, saved.path);
+  assert.equal(messages.length, count);
+  const input = document.getElementById("open-file");
+  input.value = "/new/model.onnx";
+  for (const key of [
+    "ArrowLeft",
+    "ArrowRight",
+    "Home",
+    "End",
+    "ArrowDown",
+    "Escape",
+  ]) {
+    const event = new window.KeyboardEvent("keydown", {
+      key,
+      cancelable: true,
+    });
+    input.dispatchEvent(event);
+    assert.equal(event.defaultPrevented, false);
+    assert.equal(input.value, "/new/model.onnx");
+  }
+  document.querySelector("#open-history-entries li button:last-child").click();
+  assert.equal(messages.at(-1).type, "path-history-edit");
+  assert.equal(messages.at(-1).historyAction, "remove");
+  assert.equal(messages.at(-1).historyEntry.path, local.path);
+  history.open.shift();
+  send();
+  assert.equal(
+    document.querySelectorAll("#open-file-history option").length,
+    0,
+  );
+  for (const [value, path] of [
+    ["huggingface", remote.path],
+    ["backend", backend.path],
+  ]) {
+    document.getElementById(`open-source-${value}`).click();
+    assert.equal(
+      document.querySelector("#open-file-history option").value,
+      path,
+    );
+  }
+  document.getElementById("save-clear-history").click();
+  assert.deepEqual(JSON.parse(JSON.stringify(messages.at(-1))), {
+    type: "path-history-edit",
+    target: "save",
+    historyAction: "clear",
+  });
+  history.save = [];
+  send();
+  assert.equal(document.getElementById("save-history").hidden, true);
+  assert.equal(
+    document.querySelectorAll("#save-file-history option").length,
+    0,
+  );
+});
+
+test("shows real download progress, handles unknown totals and ignores stale operation updates", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  load(demoGraph);
+  submitOpen(document, window);
+  const actionId = messages.at(-1).actionId;
+  const progress = document.getElementById("open-progress");
+  const global = document.getElementById("load-progress");
+  assert.equal(progress.hidden, false);
+  assert.equal(progress.hasAttribute("value"), false);
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  send({
+    type: "model-progress",
+    target: "open",
+    actionId,
+    stage: "Downloading Hugging Face model",
+    received: 50,
+    total: 100,
+  });
+  for (const bar of [progress, global]) {
+    assert.equal(bar.value, 50);
+    assert.equal(bar.max, 100);
+  }
+  send({
+    type: "model-progress",
+    target: "open",
+    actionId: "obsolete",
+    stage: "Wrong download",
+    received: 99,
+    total: 100,
+  });
+  assert.equal(progress.value, 50);
+  send({
+    type: "model-progress",
+    target: "open",
+    actionId,
+    stage: "Downloading Hugging Face model",
+    received: 75,
+  });
+  assert.equal(progress.hasAttribute("value"), false);
+  assert.match(
+    document.getElementById("open-progress-status").textContent,
+    /75 bytes/,
+  );
+  send({
+    type: "model-progress",
+    target: "open",
+    actionId,
+    stage: "Opening downloaded model",
+  });
+  assert.equal(progress.hasAttribute("value"), false);
+  send({
+    type: "log-entry",
+    entry: {
+      id: actionId,
+      timestamp: new Date().toISOString(),
+      action: "Open ONNX model",
+      status: "CANCELLED",
+    },
+  });
+  assert.equal(progress.hidden, true);
+  send({
+    type: "model-progress",
+    target: "open",
+    actionId,
+    stage: "Late download",
+    received: 100,
+    total: 100,
+  });
+  assert.equal(progress.hidden, true);
+  assert.equal(progress.hasAttribute("value"), false);
+});
+
 test("saves without replacing the graph and reports success, cancellation and errors", (t) => {
   const { document, window, messages, load } = openViewer(t);
   const button = document.getElementById("save-model");
@@ -363,6 +901,25 @@ test("saves without replacing the graph and reports success, cancellation and er
     assert.equal(request.type, "save");
     assert.equal(button.disabled, true);
     assert.equal(button.getAttribute("aria-busy"), "true");
+    assert.equal(document.getElementById("save-progress").hidden, false);
+    assert.equal(
+      document.getElementById("save-progress").hasAttribute("value"),
+      false,
+    );
+    window.dispatchEvent(
+      new window.MessageEvent("message", {
+        data: {
+          type: "model-progress",
+          target: "save",
+          actionId: request.actionId,
+          stage: "Writing model file",
+        },
+      }),
+    );
+    assert.match(
+      document.getElementById("save-progress-status").textContent,
+      /Writing model file/,
+    );
     const count = messages.length;
     button.click();
     assert.equal(messages.length, count);
@@ -380,6 +937,7 @@ test("saves without replacing the graph and reports success, cancellation and er
     });
     assert.equal(button.disabled, false);
     assert.equal(button.getAttribute("aria-busy"), "false");
+    assert.equal(document.getElementById("save-progress").hidden, true);
     assert.match(
       status.textContent,
       result === "SUCCEEDED"
@@ -515,6 +1073,45 @@ test("makes Open and Save mutually exclusive while preserving other sidebar pane
   document.getElementById("open-model").click();
   assert.equal(document.getElementById("open-panel").hidden, true);
   assert.equal(document.getElementById("save-options").hidden, true);
+});
+
+test("closes Open only after a successful opening and allows reopening the selector", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const open = document.getElementById("open-model");
+  const panel = document.getElementById("open-panel");
+  const complete = (status) => {
+    window.dispatchEvent(
+      new window.MessageEvent("message", {
+        data: {
+          type: "log-entry",
+          entry: {
+            id: messages.at(-1).actionId,
+            action: "Open ONNX model",
+            timestamp: new Date().toISOString(),
+            status,
+          },
+        },
+      }),
+    );
+  };
+  load(demoGraph);
+  open.click();
+  for (const status of ["FAILED", "CANCELLED"]) {
+    submitOpen(document, window);
+    complete(status);
+    assert.equal(panel.hidden, false);
+    assert.equal(open.getAttribute("aria-expanded"), "true");
+  }
+  submitOpen(document, window);
+  assert.equal(panel.hidden, false);
+  complete("SUCCEEDED");
+  load(demoGraph);
+  assert.equal(panel.hidden, true);
+  assert.equal(open.getAttribute("aria-expanded"), "false");
+  assert.equal(open.disabled, false);
+  open.click();
+  assert.equal(panel.hidden, false);
+  assert.equal(open.getAttribute("aria-expanded"), "true");
 });
 
 test("browses folders inline, selects files without opening and ignores stale listings", (t) => {
@@ -1991,9 +2588,12 @@ test("refreshes whole-model metadata from the global toolbar with the inspector 
     .split(" ")
     .map(Number);
   assert.ok(Math.abs(width / height - 1060 / 300) < 1e-9);
-  const count = messages.length;
+  const count = messages.filter(({ type }) => type === "metadata").length;
   document.getElementById("show-metadata").click();
-  assert.equal(messages.length, count);
+  assert.equal(
+    messages.filter(({ type }) => type === "metadata").length,
+    count,
+  );
   document
     .querySelector('[data-id="node-5"]')
     .dispatchEvent(
@@ -2146,7 +2746,7 @@ test("shows native metadata in the sidebar and marks released and never-used res
   const viewBox = graph.getAttribute("viewBox");
   const toggle = document.getElementById("show-metadata");
   toggle.click();
-  assert.equal(messages.at(-1).type, "metadata");
+  assert.equal(messages.filter(({ type }) => type === "metadata").length, 1);
   assert.equal(toggle.getAttribute("aria-expanded"), "true");
   assert.equal(document.getElementById("metadata-panel").hidden, false);
   assert.equal(document.getElementById("node-details").hidden, false);
@@ -2261,9 +2861,12 @@ test("shows native metadata in the sidebar and marks released and never-used res
       (label) => label.getAttribute("visibility") === "hidden",
     ),
   );
-  const count = messages.length;
+  const count = messages.filter(({ type }) => type === "metadata").length;
   toggle.click();
-  assert.equal(messages.length, count);
+  assert.equal(
+    messages.filter(({ type }) => type === "metadata").length,
+    count,
+  );
   assert.equal(document.querySelectorAll(".edge.released").length, 1);
 });
 
@@ -2534,34 +3137,77 @@ test("shows actual attributes, connected initializer parameters and versioned de
   }
 });
 
-test("shows every connected initializer's name, type and shape inside its operator rectangle", (t) => {
+test("shows at most two short attributes and initializers inside operators", (t) => {
   const { document, load } = openViewer(t);
-  for (const file of ["parameters", "initializers"]) {
-    const graph = decodeGraph(
-      readFileSync(require.resolve(`./models/${file}.onnx`)),
-      `${file}.onnx`,
-    );
+  const attribute = { name: "axis", type: "INT", value: "-1" };
+  const parameter = {
+    name: "bias",
+    type: "FLOAT",
+    shape: [],
+    value: "[0.5]",
+  };
+  for (const [attributes, parameters, expected] of [
+    [[attribute], [], ["axis = -1"]],
+    [[], [parameter], ["bias: FLOAT [] = [0.5]"]],
+    [[attribute], [parameter], ["axis = -1", "bias: FLOAT [] = [0.5]"]],
+    [
+      [attribute, { ...attribute, name: "other" }],
+      [],
+      ["axis = -1", "other = -1"],
+    ],
+    [
+      [],
+      [parameter, parameter],
+      ["bias: FLOAT [] = [0.5]", "bias: FLOAT [] = [0.5]"],
+    ],
+    [
+      [{ ...attribute, value: "x".repeat(31) }],
+      [],
+      [`axis = ${"x".repeat(31)}`],
+    ],
+    [
+      [{ name: "<img>", type: "STRING", value: "<b>literal</b>" }],
+      [],
+      ["<img> = <b>literal</b>"],
+    ],
+  ]) {
+    const graph = structuredClone(demoGraph);
+    graph.nodes[0].attributes = attributes;
+    graph.nodes[0].parameters = parameters;
     load(graph);
-    for (const node of graph.nodes) {
-      const group = document.querySelector(`[data-id="${node.id}"]`);
-      const rows = group.querySelectorAll(".node-initializer");
-      assert.equal(rows.length, node.parameters.length);
-      const body = group.querySelector("rect");
-      const bottom =
-        Number(body.getAttribute("y")) + Number(body.getAttribute("height"));
-      for (const [index, row] of Array.from(rows).entries()) {
-        const parameter = node.parameters[index];
-        const description = `${parameter.name}: ${parameter.type} [${parameter.shape.join(", ")}]${parameter.value === undefined ? "" : ` = ${parameter.value}`}`;
-        assert.equal(row.getAttribute("aria-label"), description);
-        assert.equal(row.querySelector("title").textContent, description);
-        assert.equal(
-          row.firstChild.textContent,
-          description.length > 38
-            ? `${description.slice(0, 37)}…`
-            : description,
-        );
-        assert.ok(Number(row.getAttribute("y")) < bottom);
-      }
+    const group = document.querySelector(".graph-node");
+    const rows = Array.from(
+      group.querySelectorAll(".node-attribute, .node-initializer"),
+    );
+    assert.deepEqual(
+      rows.map((row) => row.firstChild.textContent),
+      expected,
+    );
+    assert.equal(group.querySelector(".node-parameter-summary"), null);
+    assert.equal(group.querySelector("img, b"), null);
+    const body = group.querySelector("rect");
+    assert.equal(
+      Number(body.getAttribute("height")),
+      94 + expected.length * 18,
+    );
+    const bottom =
+      Number(body.getAttribute("y")) + Number(body.getAttribute("height"));
+    const type = group.querySelector(".operator-label");
+    const information = group.querySelector(".node-tensor-info");
+    for (const [index, row] of rows.entries()) {
+      assert.equal(row.getAttribute("aria-label"), expected[index]);
+      assert.equal(row.querySelector("title").textContent, expected[index]);
+      assert.equal(row.getAttribute("text-anchor"), "middle");
+      assert.equal(row.getAttribute("x"), type.getAttribute("x"));
+      assert.notEqual(
+        document.defaultView.getComputedStyle(row).fill,
+        document.defaultView.getComputedStyle(type).fill,
+      );
+      assert.ok(Number(row.getAttribute("y")) > Number(type.getAttribute("y")));
+      assert.ok(
+        Number(row.getAttribute("y")) < Number(information.getAttribute("y")),
+      );
+      assert.ok(Number(row.getAttribute("y")) < bottom);
     }
   }
   load(demoGraph);
@@ -2570,6 +3216,61 @@ test("shows every connected initializer's name, type and shape inside its operat
     document.querySelector(".graph-node > rect").getAttribute("height"),
     "94",
   );
+});
+
+test("summarizes numerous or long parameters while preserving inspector details", (t) => {
+  const { document, load } = openViewer(t);
+  const parameter = { name: "bias", type: "FLOAT", shape: [], value: "[0.5]" };
+  for (const [attributes, parameters, count] of [
+    [[{ name: "axis", type: "INT", value: "-1" }], [parameter, parameter], 3],
+    [[], Array(12).fill(parameter), 12],
+    [[{ name: "text", type: "STRING", value: "x".repeat(32) }], [], 1],
+    [[{ name: "text", type: "STRING", value: "line\nbreak" }], [], 1],
+    [[], [{ ...parameter, value: "x".repeat(80) }], 1],
+    [
+      [
+        {
+          name: "<img>",
+          type: "STRING",
+          value: "<script>alert(1)</script>".repeat(2),
+        },
+      ],
+      [],
+      1,
+    ],
+  ]) {
+    const graph = structuredClone(demoGraph);
+    graph.nodes[0].attributes = attributes;
+    graph.nodes[0].parameters = parameters;
+    load(graph);
+    const group = document.querySelector(".graph-node");
+    const summary = group.querySelector(".node-parameter-summary");
+    assert.equal(
+      summary.firstChild.textContent,
+      `${count} parameter${count === 1 ? "" : "s"} (see inspector)`,
+    );
+    assert.equal(
+      group.querySelectorAll(".node-attribute, .node-initializer").length,
+      0,
+    );
+    assert.equal(group.querySelector("rect").getAttribute("height"), "112");
+    assert.equal(
+      document.querySelectorAll("#node-initializers li").length,
+      parameters.length,
+    );
+    assert.equal(
+      document.querySelectorAll("#node-attributes li").length,
+      attributes.length,
+    );
+    for (const attribute of attributes) {
+      assert.ok(
+        document
+          .getElementById("node-attributes")
+          .textContent.includes(attribute.value),
+      );
+    }
+    assert.equal(group.querySelector("img, script"), null);
+  }
 });
 
 test("shows tiny initializer values as safe text and omits large and external payloads", (t) => {
@@ -2596,10 +3297,11 @@ test("shows tiny initializer values as safe text and omits large and external pa
   assert.equal(item("strings").querySelector("img"), null);
   assert.equal(item("sixteen").querySelector("pre"), null);
   assert.equal(item("external").querySelector("pre"), null);
-  const row = Array.from(document.querySelectorAll(".node-initializer")).find(
-    (entry) => entry.getAttribute("aria-label").startsWith("raw_int64:"),
+  assert.equal(document.querySelector(".node-initializer"), null);
+  assert.match(
+    document.querySelector(".node-parameter-summary").firstChild.textContent,
+    /^\d+ parameters \(see inspector\)$/,
   );
-  assert.match(row.querySelector("title").textContent, /1152921504606846977/);
 });
 
 test("fits initializer previews safely above subgraph links and preserves layout and dragging", (t) => {
@@ -2617,14 +3319,12 @@ test("fits initializer previews safely above subgraph links and preserves layout
   load(graph);
   const group = document.querySelector('[data-id="node-0"]');
   const body = group.querySelector("rect");
-  const row = group.querySelector(".node-initializer");
-  assert.equal(
-    row.querySelector("title").textContent,
-    `${description}: FLOAT []`,
-  );
-  assert.equal(
-    row.firstChild.textContent,
-    `${description}: FLOAT []`.slice(0, 37) + "…",
+  const row = group.querySelector(".node-parameter-summary");
+  assert.equal(row.firstChild.textContent, "1 parameter (see inspector)");
+  assert.ok(
+    document
+      .getElementById("node-initializers")
+      .textContent.includes(description),
   );
   assert.equal(group.querySelector("img"), null);
   const width = Number(body.getAttribute("width"));
@@ -3313,6 +4013,21 @@ test("fits complete operator types and names without redundant node or port badg
     );
     const width = Number(group.querySelector("rect").getAttribute("width"));
     assert.ok(width > 160 && width <= 280);
+    const body = group.querySelector("rect");
+    const name = group.querySelector(".operator-name");
+    assert.equal(name.getAttribute("text-anchor"), "end");
+    assert.equal(
+      Number(name.getAttribute("x")),
+      Number(body.getAttribute("x")) + width - 12,
+    );
+    assert.equal(
+      Number(name.getAttribute("y")),
+      Number(body.getAttribute("y")) + 18,
+    );
+    assert.ok(
+      Number(name.getAttribute("y")) <
+        Number(group.querySelector(".operator-label").getAttribute("y")),
+    );
   }
   assert.equal(
     groups[0].querySelector(".operator-label").style.fontSize,

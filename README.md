@@ -20,6 +20,8 @@ files.
 - Inspect shapes, attributes, opaque/structured types, dense/sparse/encoded
   initializer metadata and small available tensor values; open operator
   documentation rendered as Markdown.
+- Show up to two short attributes/initializer previews inside each operator;
+  otherwise show their count, with full details in the inspector.
 - Refresh inferred shapes/types and static constant, tag and lifetime metadata,
   with visible update counts.
 - Use **Logs**, **Status** and **Controls** for diagnostics and shortcuts, and

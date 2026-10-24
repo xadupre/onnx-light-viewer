@@ -1,3 +1,5 @@
+import { huggingFaceTasks } from "./huggingface";
+
 /**
  * Builds the static shell; model-derived text arrives later through messages.
  * The DOM IDs are the binding points used by media/viewer.js.
@@ -18,6 +20,8 @@ export function webviewHtml(
   onnxLightVersion: string,
   initialTab: "model" | "logs" = "model",
 ): string {
+  const historyControls = (target: "open" | "save"): string =>
+    `<details id="${target}-history" class="path-history" hidden><summary>Recent paths</summary><p>Suggestions are history, not a guarantee that a path still exists or is writable. Selecting one only fills the field.</p><button id="${target}-clear-history" type="button">Clear ${target === "open" ? "Open" : "Save"} history</button><ul id="${target}-history-entries" aria-label="Recent ${target} paths"></ul></details>`;
   const documentationLink = (name: string, url: string): string =>
     `<a class="repository-documentation" href="${url}" aria-label="${name} documentation" title="${name} documentation"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path d="M12 5v16M12 5C9 3 5 3 2 4v15c3-1 7-1 10 2 3-3 7-3 10-2V4c-3-1-7-1-10 1Z"/></svg></a>`;
   return `<!doctype html>
@@ -112,35 +116,59 @@ export function webviewHtml(
           </section>
           <section id="open-panel" class="inspector-panel file-panel" aria-labelledby="open-title" hidden>
             <h2 id="open-title" class="eyebrow panel-title">Open model</h2>
-            <label for="open-source">Source</label>
-            <select id="open-source"><option value="local">Local file</option><option value="huggingface">Hugging Face</option><option value="backend">Backend test</option></select>
+            <div id="open-source" class="source-picker" role="group" aria-label="Model source">
+              <button id="open-source-local" type="button" data-source="local" aria-pressed="true">Local file</button>
+              <button id="open-source-huggingface" type="button" data-source="huggingface" aria-pressed="false">Hugging Face</button>
+              <button id="open-source-backend" type="button" data-source="backend" aria-pressed="false">Backend tests</button>
+            </div>
+            <section id="hf-discovery" aria-labelledby="hf-search-title" hidden>
+              <h3 id="hf-search-title">1. Find an ONNX model</h3>
+              <p id="hf-search-help">Choose a task, then enter a model name or author and click Search (or press Enter). Leave the name blank for popular models.</p>
+              <form id="hf-search-form">
+                <label for="hf-task">Task</label>
+                <select id="hf-task" aria-describedby="hf-search-help">${huggingFaceTasks.map(({ value, label }) => `<option value="${value}">${label}</option>`).join("")}</select>
+                <label for="hf-query">Model name or author</label>
+                <div class="hub-search-row"><input id="hf-query" type="search" placeholder="e.g. MiniLM, bert, whisper" autocomplete="off" aria-describedby="hf-search-help"><button class="primary" type="submit">Search</button></div>
+              </form>
+              <h3 id="hf-results-title">Popular ONNX models</h3>
+              <p id="hf-search-status" role="status"></p>
+              <ul id="hf-search-results" class="file-list" aria-label="Hugging Face ONNX repositories"></ul>
+            </section>
+            <details id="open-browser" open><summary id="open-browser-title">Browse folders</summary>
             <form id="open-browse" class="file-browse">
               <label for="open-location">Directory or Hugging Face repository / URL</label>
-              <input id="open-location" type="text" autocomplete="off">
+              <input id="open-location" type="text" autocomplete="off" list="open-location-history"><datalist id="open-location-history"></datalist>
               <div><button type="submit">Browse</button><button id="open-parent" type="button" disabled>Parent folder</button></div>
             </form>
+            </details>
+            <div id="open-file-list">
+            <h3 id="hf-files-title" tabindex="-1" hidden>2. Choose an ONNX file</h3>
+            <p id="hf-files-help" hidden>Double-click an ONNX file to download and open it. Sizes exclude external weights.</p>
             <label for="open-filter">Filter models and folders</label>
             <input id="open-filter" type="search" aria-controls="open-files">
             <ul id="open-files" class="file-list" aria-label="Models and folders"></ul>
+            </div>
             <form id="open-form">
               <label for="open-file">Model path, URL or backend test ID</label>
-              <input id="open-file" type="text" required autocomplete="off">
+              <input id="open-file" type="text" required autocomplete="off" list="open-file-history"><datalist id="open-file-history"></datalist>
               <label for="open-password">Password (encrypted models only)</label>
               <input id="open-password" type="password" autocomplete="off">
+              <progress id="open-progress" aria-label="Opening ONNX model" aria-describedby="open-progress-status" hidden></progress><p id="open-progress-status" role="status" hidden></p>
               <p id="open-error" role="alert"></p>
               <footer><button id="cancel-open" type="button">Close</button><button id="open-submit" class="primary" type="submit">Open model</button></footer>
             </form>
+            ${historyControls("open")}
           </section>
           <section id="save-options" class="inspector-panel file-panel" aria-labelledby="save-title" hidden>
             <h2 id="save-title" class="eyebrow panel-title">Save model copy</h2>
             <form id="save-browse" class="file-browse">
               <label for="save-location">Destination directory</label>
-              <input id="save-location" type="text" autocomplete="off">
+              <input id="save-location" type="text" autocomplete="off" list="save-location-history"><datalist id="save-location-history"></datalist>
               <div><button type="submit">Browse</button><button id="save-parent" type="button" disabled>Parent folder</button></div>
             </form>
             <ul id="save-files" class="file-list" aria-label="Destination folders and models"></ul>
             <form id="save-form">
-              <label for="save-file">Destination path</label><input id="save-file" type="text" value="model-copy.onnx" required autocomplete="off">
+              <label for="save-file">Destination path</label><input id="save-file" type="text" value="model-copy.onnx" required autocomplete="off" list="save-file-history"><datalist id="save-file-history"></datalist>
               <fieldset class="save-grid">
                 <legend>Weight storage and encryption</legend>
                 <label><input type="radio" name="save-format" value="embedded-plain" checked>Single .onnx file</label>
@@ -161,9 +189,11 @@ export function webviewHtml(
                 <label for="save-confirmation">Confirm password</label><input id="save-confirmation" type="password" autocomplete="new-password">
               </div>
               <label><input id="save-overwrite" type="checkbox">Replace an existing destination copy</label>
+              <progress id="save-progress" aria-label="Saving ONNX model" aria-describedby="save-progress-status" hidden></progress><p id="save-progress-status" role="status" hidden></p>
               <p id="save-options-error" role="alert"></p>
               <footer><button id="cancel-save" type="button">Close</button><button id="save-submit" class="primary" type="submit">Save copy</button></footer>
             </form>
+            ${historyControls("save")}
           </section>
         </aside>
       </div>

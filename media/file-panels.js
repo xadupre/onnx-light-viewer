@@ -7,14 +7,108 @@ function createFilePanels({
 }) {
   const fileRequests = { open: 0, save: 0 };
   const fileParents = {};
+  let openSource = "local";
+  function fileSize(bytes) {
+    const units = ["B", "KiB", "MiB", "GiB", "TiB"];
+    const unit =
+      bytes > 0
+        ? Math.min(
+            units.length - 1,
+            Math.floor(Math.log(bytes) / Math.log(1024)),
+          )
+        : 0;
+    return `${(bytes / 1024 ** unit).toLocaleString(undefined, { maximumFractionDigits: 1 })} ${units[unit]}`;
+  }
+  let hubRequest = 0;
+  const hubModelSizes = new Map();
+  function searchHub() {
+    hubModelSizes.clear();
+    byId("hf-search-results").replaceChildren();
+    byId("hf-search-results").setAttribute("aria-busy", "true");
+    byId("hf-search-status").textContent = "Searching Hugging Face…";
+    byId("hf-results-title").textContent = byId("hf-query").value.trim()
+      ? "ONNX search results"
+      : "Popular ONNX models";
+    postMessage({
+      type: "search-huggingface",
+      query: byId("hf-query").value,
+      task: byId("hf-task").value,
+      requestId: ++hubRequest,
+    });
+  }
+  function invalidateHubSearch() {
+    hubRequest++;
+    byId("hf-search-results").setAttribute("aria-busy", "false");
+    byId("hf-search-status").textContent = "";
+  }
+  byId("hf-search-form").addEventListener("submit", (event) => {
+    event.preventDefault();
+    searchHub();
+  });
+  byId("hf-task").addEventListener("change", searchHub);
+  let pathHistory = { open: [], save: [] };
+  function renderHistory() {
+    for (const target of ["open", "save"]) {
+      const source = target === "open" ? openSource : "local";
+      const entries = pathHistory[target].filter(
+        (entry) => entry.source === source,
+      );
+      for (const [field, kind] of [
+        ["file", "file"],
+        ["location", "directory"],
+      ]) {
+        byId(`${target}-${field}-history`).replaceChildren(
+          ...entries
+            .filter((entry) => entry.kind === kind)
+            .map((entry) => {
+              const option = document.createElement("option");
+              option.value = entry.path;
+              return option;
+            }),
+        );
+      }
+      byId(`${target}-history`).hidden = pathHistory[target].length === 0;
+      byId(`${target}-history-entries`).replaceChildren(
+        ...entries.map((entry) => {
+          const item = document.createElement("li");
+          const choose = document.createElement("button");
+          choose.type = "button";
+          choose.textContent = `${entry.kind === "directory" ? "[Folder] " : ""}${entry.path}`;
+          choose.addEventListener("click", () => {
+            const field = entry.kind === "directory" ? "location" : "file";
+            byId(`${target}-${field}`).value = entry.path;
+            byId(`${target}-${field}`).focus();
+          });
+          const remove = document.createElement("button");
+          remove.type = "button";
+          remove.textContent = "Remove";
+          remove.setAttribute(
+            "aria-label",
+            `Remove ${entry.path} from ${target} history`,
+          );
+          remove.addEventListener("click", () =>
+            postMessage({
+              type: "path-history-edit",
+              target,
+              historyAction: "remove",
+              historyEntry: entry,
+            }),
+          );
+          item.append(choose, remove);
+          return item;
+        }),
+      );
+    }
+  }
   function browseFiles(target) {
+    if (target === "open") byId("open-file-list").hidden = false;
     byId(target === "open" ? "open-error" : "save-options-error").textContent =
       "";
     byId(`${target}-files`).setAttribute("aria-busy", "true");
     postMessage({
       type: "browse-files",
       target,
-      source: target === "open" ? byId("open-source").value : "local",
+      source: target === "open" ? openSource : "local",
       location: byId(`${target}-location`).value,
       requestId: ++fileRequests[target],
     });
@@ -26,9 +120,11 @@ function createFilePanels({
     byId(`${target}-model`).setAttribute("aria-expanded", String(visible));
     if (visible) {
       revealPanel(panel);
-      if (target === "save" || byId("open-source").value !== "huggingface")
+      if (target === "save" || openSource !== "huggingface")
         browseFiles(target);
+      else searchHub();
     } else {
+      if (target === "open") invalidateHubSearch();
       fileRequests[target]++;
       byId(`${target}-files`).setAttribute("aria-busy", "false");
       for (const input of panel.querySelectorAll('input[type="password"]'))
@@ -36,6 +132,13 @@ function createFilePanels({
     }
   }
   for (const target of ["open", "save"]) {
+    byId(`${target}-clear-history`).addEventListener("click", () =>
+      postMessage({
+        type: "path-history-edit",
+        target,
+        historyAction: "clear",
+      }),
+    );
     byId(`${target}-model`).addEventListener("click", () =>
       toggleFilePanel(
         target,
@@ -54,7 +157,26 @@ function createFilePanels({
       browseFiles(target);
     });
   }
-  byId("open-source").addEventListener("change", () => {
+  function selectSource(source) {
+    if (openSource === source) return;
+    openSource = source;
+    for (const button of byId("open-source").querySelectorAll("button"))
+      button.setAttribute(
+        "aria-pressed",
+        String(button.dataset.source === source),
+      );
+    invalidateHubSearch();
+    byId("hf-search-results").replaceChildren();
+    const hub = source === "huggingface";
+    byId("hf-discovery").hidden = !hub;
+    byId("hf-files-title").hidden = !hub;
+    byId("hf-files-help").hidden = !hub;
+    byId("open-file-list").hidden = hub;
+    byId("open-browser").hidden = source === "backend";
+    byId("open-browser").open = !hub;
+    byId("open-browser-title").textContent = hub
+      ? "Or enter a repository / URL"
+      : "Browse folders";
     fileRequests.open++;
     byId("open-error").textContent = "";
     byId("open-location").value = "";
@@ -64,9 +186,13 @@ function createFilePanels({
     byId("open-files").replaceChildren();
     byId("open-files").setAttribute("aria-busy", "false");
     byId("open-parent").disabled = true;
-    byId("open-browse").hidden = byId("open-source").value === "backend";
-    if (byId("open-source").value !== "huggingface") browseFiles("open");
-  });
+    renderHistory();
+    byId("open-browse").hidden = source === "backend";
+    if (!hub) browseFiles("open");
+    else searchHub();
+  }
+  for (const button of byId("open-source").querySelectorAll("button"))
+    button.addEventListener("click", () => selectSource(button.dataset.source));
   function filterModelFiles() {
     const filter = byId("open-filter").value.toLocaleLowerCase();
     for (const item of byId("open-files").children)
@@ -82,7 +208,7 @@ function createFilePanels({
     }
     byId("open-error").textContent = "";
     requestAction("open", "Open ONNX model", {
-      source: byId("open-source").value,
+      source: openSource,
       location: byId("open-file").value,
       password: byId("open-password").value,
     });
@@ -161,7 +287,74 @@ function createFilePanels({
   });
 
   function handleMessage(data) {
-    if (data?.type === "file-list" || data?.type === "file-list-error") {
+    if (data?.type === "huggingface-model-files") {
+      if (data.requestId !== hubRequest || openSource !== "huggingface")
+        return true;
+      const label = hubModelSizes.get(data.id);
+      if (!label) return true;
+      if (data.error) {
+        label.textContent = `ONNX size unavailable: ${data.error}`;
+        return true;
+      }
+      const sizes = data.entries
+        .filter((entry) => entry.size !== undefined)
+        .map((entry) => entry.size);
+      if (!sizes.length) {
+        label.textContent = "ONNX size not supplied by the Hub";
+        return true;
+      }
+      const minimum = Math.min(...sizes);
+      const maximum = Math.max(...sizes);
+      label.textContent = `ONNX files: ${fileSize(minimum)}${minimum === maximum ? "" : ` - ${fileSize(maximum)}`} (${sizes.length}/${data.entries.length} sizes known)`;
+    } else if (
+      data?.type === "huggingface-search-results" ||
+      data?.type === "huggingface-search-error"
+    ) {
+      if (data.requestId !== hubRequest || openSource !== "huggingface")
+        return true;
+      byId("hf-search-results").setAttribute("aria-busy", "false");
+      if (data.type === "huggingface-search-error") {
+        byId("hf-search-status").textContent = data.error;
+        return true;
+      }
+      byId("hf-search-status").textContent = data.models.length
+        ? `${data.models.length} repositories, most downloaded first. Select one to browse its ONNX files.`
+        : "No public ONNX models found. Try another search or task.";
+      byId("hf-search-results").replaceChildren(
+        ...data.models.map((model) => {
+          const item = document.createElement("li");
+          const button = document.createElement("button");
+          button.type = "button";
+          button.append(document.createTextNode(model.id));
+          const detail = document.createElement("span");
+          detail.className = "hub-model-details";
+          const task = Array.from(byId("hf-task").options).find(
+            (option) => option.value === model.task,
+          );
+          detail.textContent = `Task: ${task?.textContent ?? model.task ?? "Unspecified"} · ${model.downloads.toLocaleString()} downloads`;
+          button.append(detail);
+          const size = document.createElement("span");
+          size.className = "hub-model-size";
+          size.textContent = "ONNX file sizes: loading…";
+          hubModelSizes.set(model.id, size);
+          button.append(size);
+          button.addEventListener("click", () => {
+            byId("hf-search-status").textContent =
+              `Loading ONNX files from ${model.id}…`;
+            byId("open-location").value = model.url;
+            byId("open-file").value = "";
+            byId("open-filter").value = "";
+            byId("open-files").replaceChildren();
+            browseFiles("open");
+          });
+          item.append(button);
+          return item;
+        }),
+      );
+    } else if (data?.type === "path-history") {
+      pathHistory = data.history;
+      renderHistory();
+    } else if (data?.type === "file-list" || data?.type === "file-list-error") {
       if (
         !["open", "save"].includes(data.target) ||
         data.requestId !== fileRequests[data.target]
@@ -199,6 +392,18 @@ function createFilePanels({
           const button = document.createElement("button");
           button.type = "button";
           button.textContent = `${entry.directory ? "[Folder] " : ""}${entry.name}`;
+          if (
+            entry.size !== undefined ||
+            (target === "open" && openSource === "huggingface")
+          ) {
+            const size = document.createElement("span");
+            size.className = "file-size";
+            size.textContent =
+              entry.size === undefined
+                ? "File size unavailable"
+                : `File size: ${fileSize(entry.size)}`;
+            button.append(size);
+          }
           button.title = entry.path;
           button.addEventListener("click", () => {
             if (entry.directory) {
@@ -211,22 +416,37 @@ function createFilePanels({
               item.setAttribute("aria-current", "true");
             }
           });
+          if (target === "open" && !entry.directory)
+            button.addEventListener("dblclick", () => {
+              if (openSource !== "backend" && openSource !== "huggingface")
+                return;
+              byId("open-file").value = entry.path;
+              byId("open-form").requestSubmit();
+            });
           item.append(button);
           return item;
         }),
       );
       if (target === "open") filterModelFiles();
+      if (target === "open" && openSource === "huggingface") {
+        byId("hf-search-status").textContent =
+          "Double-click an ONNX file to download and open it.";
+        byId("hf-files-title").focus();
+      }
     } else if (data?.type === "save-info") {
       byId("save-status").textContent = `Saved ${data.name}`;
+      showProgress("save", false);
     } else if (data?.type === "save-error") {
       byId("save-options-error").textContent = data.error;
       byId("save-status").textContent = `Could not save model: ${data.error}`;
+      showProgress("save", false);
     } else {
       return false;
     }
     return true;
   }
   function reset() {
+    invalidateHubSearch();
     for (const target of ["open", "save"]) {
       fileRequests[target]++;
       byId(`${target}-files`).setAttribute("aria-busy", "false");
@@ -235,8 +455,7 @@ function createFilePanels({
   }
   function setFile(file) {
     if (file) {
-      if (byId("open-source").value === "local")
-        byId("open-location").value = file.directory;
+      if (openSource === "local") byId("open-location").value = file.directory;
       byId("save-location").value = file.directory;
       byId("save-file").value =
         file.savePath +
@@ -247,12 +466,17 @@ function createFilePanels({
     }
   }
   function startSaving() {
+    showProgress("save", true);
     byId("save-model").disabled = true;
     byId("save-model").setAttribute("aria-busy", "true");
     byId("save-status").textContent = "Saving model…";
     byId("save-submit").disabled = true;
   }
+  function finishOpening(status) {
+    if (status === "SUCCEEDED") toggleFilePanel("open", false);
+  }
   function finishSaving(status, disabled) {
+    showProgress("save", false);
     byId("save-model").setAttribute("aria-busy", "false");
     byId("save-model").disabled = disabled;
     byId("save-submit").disabled = false;
@@ -260,6 +484,7 @@ function createFilePanels({
       byId("save-status").textContent = "Save cancelled.";
   }
   function setLoading(pending, hasModel) {
+    showProgress("open", pending);
     byId("open-model").disabled = pending;
     byId("open-submit").disabled = pending;
     byId("save-model").disabled =
@@ -271,13 +496,42 @@ function createFilePanels({
     byId("open-error").textContent = message;
   }
 
+  function showProgress(target, pending) {
+    byId(`${target}-progress`).hidden = !pending;
+    byId(`${target}-progress-status`).hidden = !pending;
+    if (pending)
+      setProgress({
+        target,
+        stage: target === "open" ? "Opening model" : "Saving model",
+      });
+  }
+
+  function setProgress({ target, stage, received, total }) {
+    const text = `${stage}${received === undefined ? "" : `: ${received.toLocaleString()}${total ? ` / ${total.toLocaleString()}` : ""} bytes`}`;
+    const bars = [byId(`${target}-progress`)];
+    if (target === "open") bars.push(byId("load-progress"));
+    for (const bar of bars) {
+      if (total > 0 && Number.isFinite(total) && Number.isFinite(received)) {
+        bar.max = total;
+        bar.value = received;
+      } else {
+        bar.removeAttribute("value");
+        bar.removeAttribute("max");
+      }
+      bar.setAttribute("aria-valuetext", text);
+    }
+    byId(`${target}-progress-status`).textContent = text;
+  }
+
   return {
     handleMessage,
     reset,
     setFile,
     startSaving,
+    finishOpening,
     finishSaving,
     setLoading,
     showOpenError,
+    setProgress,
   };
 }

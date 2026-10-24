@@ -345,7 +345,7 @@ a:focus-visible {
     minmax(0, 1fr) var(--sidebar-resizer-width)
     clamp(
       var(--sidebar-min-width),
-      var(--sidebar-width, var(--sidebar-default-width, 245px)),
+      var(--sidebar-width, 300px),
       calc(100% - var(--graph-min-width) - var(--sidebar-resizer-width))
     );
   min-height: 0;
@@ -481,6 +481,9 @@ li > .tensor-info {
 .graph-node .operator-name {
   fill: #98c1b7;
   font-size: 10px;
+}
+.graph-node .node-parameter {
+  fill: #e6c58f;
 }
 .graph-node .subgraph-link {
   cursor: pointer;
@@ -870,6 +873,7 @@ button:disabled {
 }
 .save-grid label,
 .file-panel form > label,
+.file-panel #open-file-list > label,
 .file-panel > label {
   display: block;
   margin-top: 8px;
@@ -880,6 +884,10 @@ button:disabled {
 }
 .file-panel p {
   line-height: 1.5;
+}
+.file-panel progress {
+  width: 100%;
+  margin-top: 12px;
 }
 .file-panel footer,
 .file-browse > div {
@@ -927,6 +935,68 @@ button:disabled {
 }
 .file-list [aria-current="true"] button {
   border-color: var(--mint);
+}
+.hub-model-details,
+.hub-model-size,
+.file-size {
+  display: block;
+  margin-top: 3px;
+  font-size: 10px;
+  color: var(--muted);
+}
+.source-picker {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+  margin: 12px 0;
+}
+.source-picker button {
+  min-width: 0;
+  padding: 6px 4px;
+  font-size: 11px;
+}
+.source-picker button[aria-pressed="true"] {
+  border-color: var(--mint);
+  color: var(--mint);
+}
+#hf-discovery {
+  margin: 12px 0;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+#hf-search-title {
+  margin-top: 0;
+}
+#hf-search-form > label {
+  font-weight: 600;
+}
+.hub-search-row {
+  display: flex;
+  gap: 6px;
+}
+.hub-search-row input {
+  flex: 1;
+}
+.hub-search-row button {
+  flex-shrink: 0;
+}
+.path-history ul {
+  max-height: 14rem;
+  overflow-y: auto;
+  padding: 0;
+  list-style: none;
+}
+.path-history li {
+  display: flex;
+  gap: 4px;
+  margin-top: 4px;
+}
+.path-history li button:first-child {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  overflow-wrap: anywhere;
 }
 #operator-doc h2 {
   font-size: 20px;
@@ -986,15 +1056,6 @@ button:disabled {
 #doc-body a {
   color: var(--mint);
 }
-@media (min-width: 761px) {
-  .graph-body:has(
-    #fusion-panel:not([hidden]),
-    #open-panel:not([hidden]),
-    #save-options:not([hidden])
-  ) {
-    --sidebar-default-width: 360px;
-  }
-}
 @media (max-width: 760px) {
   .graph-body {
     grid-template-columns: minmax(0, 1fr);
@@ -1029,6 +1090,7 @@ button:disabled {
     stroke: Highlight;
   }
   .graph-node text,
+  .graph-node .node-parameter,
   .port text,
   .tensor-label {
     fill: CanvasText;

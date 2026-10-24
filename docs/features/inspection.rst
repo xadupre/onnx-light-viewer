@@ -13,6 +13,12 @@ save options; opening either hides the other. Neither opens a popup file picker.
 All sidebar panels have an inverted-color title bar using the compact uppercase
 **INSPECTOR** typography.
 
+The right sidebar starts at 300 pixels wide and can be resized by dragging its
+divider. Its width and the visibility of **Op**, **Find** and **Data** are saved
+automatically in VS Code's user-directory extension storage and restored on
+reopening, including after closing the application. Passwords and model data are
+not included in these preferences.
+
 .. image:: ../_static/inspection.png
    :alt: Reshape inspector showing input and output tensor dimensions and an initializer.
    :width: 240px
@@ -22,12 +28,18 @@ attributes. Scalar and list values appear below the name/type heading without
 repeating the attribute name. Schema defaults are marked ``[default]``; long
 attribute arrays show a bounded preview.
 
+Operator names sit at the top right of each box. Attributes and connected
+initializer previews are centered below the type in a contrasting color when there are
+at most two and each fits on one line of up to 38 characters. Otherwise, a
+parameter count points to the inspector. Subgraph attributes keep their navigation
+links instead of appearing in this count. Schema defaults remain in the inspector.
+
 Graph labels and the inspector show declared tensor types and dimensions,
 including symbolic dimensions, scalars and unknown shapes. Dense and sparse
 initializers show type, shape and embedded/external storage information,
 including external filenames. Dense embedded initializers with fewer than 16
-elements also show their available values in the inspector and graph-label
-tooltip. Scalars count as one element; 64-bit integers retain their exact precision.
+elements also show their available values in the inspector and, when short enough,
+inside the operator box. Scalars count as one element; 64-bit integers retain their exact precision.
 Sparse previews label stored values and indices separately when each component
 has fewer than 16 elements, regardless of the logical dense shape. Individual
 strings are limited to 128 bytes, with an ellipsis for truncation. External files

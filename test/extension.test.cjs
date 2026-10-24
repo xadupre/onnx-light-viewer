@@ -35,6 +35,7 @@ async function openExtension(
   localFiles = false,
   storage,
   downloadUrl,
+  preferences = new Map(),
 ) {
   const messages = [];
   const errors = [];
@@ -70,6 +71,9 @@ async function openExtension(
   let saveDialogGate;
   let saveWriteGate;
   const listedRepositories = [];
+  const hubSearches = [];
+  const hubSearchGates = [];
+  let hubSearchResults = [];
   const disposable = () => ({ dispose() {} });
   const root = path.resolve(__dirname, "..");
   const uri = (filePath, scheme = localFiles ? "file" : "virtual") => ({
@@ -93,7 +97,12 @@ async function openExtension(
       } else if (message.type === "show-logs") {
         logViews.push(true);
       } else if (
-        !["log-history", "application-status"].includes(message.type)
+        ![
+          "log-history",
+          "application-status",
+          "path-history",
+          "model-progress",
+        ].includes(message.type)
       ) {
         messages.push(message);
       }
@@ -237,6 +246,14 @@ async function openExtension(
   const graph = { ...requireExtension("./graph") };
   const huggingface = {
     ...requireExtension("./huggingface"),
+    searchHuggingFaceModels: async (query, task, signal) => {
+      hubSearches.push({ query, task, signal });
+      const results = hubSearchResults;
+      const gate = hubSearchGates.shift();
+      if (gate) await gate;
+      signal.throwIfAborted();
+      return results;
+    },
     cachedHuggingFaceModel: (source, ...args) =>
       requireExtension("./huggingface").cachedHuggingFaceModel(
         downloadUrl ? { ...source, url: downloadUrl } : source,
@@ -285,6 +302,12 @@ async function openExtension(
   module.exports.activate({
     extensionUri: { path: root },
     globalStorageUri: { fsPath: storage },
+    globalState: {
+      get: (key) => structuredClone(preferences.get(key)),
+      update: async (key, value) => {
+        preferences.set(key, structuredClone(value));
+      },
+    },
     subscriptions: [],
   });
   if (customModel) {
@@ -303,6 +326,7 @@ async function openExtension(
     logs,
     logViews,
     events,
+    preferences,
     passwordPrompts,
     saveDialogs,
     writes,
@@ -341,6 +365,22 @@ async function openExtension(
       return resume;
     },
     listedRepositories,
+    setRepositoryFiles: (files) => {
+      repositoryFiles = files;
+    },
+    hubSearches,
+    setHubSearchResults: (models) => {
+      hubSearchResults = models;
+    },
+    pauseNextHubSearch: (error) => {
+      let resume;
+      hubSearchGates.push(
+        new Promise((resolve, reject) => {
+          resume = () => (error ? reject(error) : resolve());
+        }),
+      );
+      return resume;
+    },
     showLogs: () => commands.get("onnxLightViewer.showLogs")(),
     receive: (message) => receive(message),
     setPasswords: (...values) => {
@@ -426,6 +466,234 @@ async function openExtension(
   };
 }
 
+test("persists only viewer preferences across closed extension panels", async () => {
+  const preferences = new Map();
+  const first = await openExtension(
+    undefined,
+    undefined,
+    false,
+    undefined,
+    undefined,
+    preferences,
+  );
+  const settings = {
+    width: 480,
+    panels: { operator: false, find: true, metadata: true },
+  };
+  await first.receive({
+    type: "viewer-settings",
+    settings: { ...settings, password: "not-a-preference" },
+  });
+  assert.deepEqual(preferences.get("viewerSettings"), settings);
+  first.dispose();
+  const second = await openExtension(
+    undefined,
+    undefined,
+    false,
+    undefined,
+    undefined,
+    preferences,
+  );
+  await second.receive({ type: "ready" });
+  assert.deepEqual(
+    second.messages.find(({ type }) => type === "viewer-settings"),
+    {
+      type: "viewer-settings",
+      settings,
+    },
+  );
+  second.dispose();
+});
+
+test("rejects invalid preferences and reports storage failures", async () => {
+  const preferences = new Map();
+  const extension = await openExtension(
+    undefined,
+    undefined,
+    false,
+    undefined,
+    undefined,
+    preferences,
+  );
+  for (const settings of [
+    null,
+    { width: 199, panels: { operator: true, find: true, metadata: false } },
+    {
+      width: Infinity,
+      panels: { operator: true, find: true, metadata: false },
+    },
+    { width: 300, panels: { operator: "yes", find: true, metadata: false } },
+  ]) {
+    await extension.receive({ type: "viewer-settings", settings });
+  }
+  assert.equal(preferences.size, 0);
+  assert.equal(extension.errors.length, 4);
+  assert.ok(
+    extension.errors.every((message) =>
+      message.startsWith("Could not save viewer settings:"),
+    ),
+  );
+  extension.dispose();
+  const failing = await openExtension(
+    undefined,
+    undefined,
+    false,
+    undefined,
+    undefined,
+    {
+      get: () => undefined,
+      set: () => {
+        throw new Error("Preference storage is read-only.");
+      },
+    },
+  );
+  await failing.receive({
+    type: "viewer-settings",
+    settings: {
+      width: 300,
+      panels: { operator: true, find: true, metadata: false },
+    },
+  });
+  assert.match(failing.errors.at(-1), /Preference storage is read-only/);
+  assert.ok(
+    failing.logs.some((entry) =>
+      entry.includes("[FAILED] Save viewer settings"),
+    ),
+  );
+  failing.dispose();
+});
+
+test("routes task-filtered Hub searches and drops superseded or disposed search results", async () => {
+  const extension = await openExtension();
+  const first = {
+    id: "author/first",
+    url: "https://huggingface.co/author/first",
+    downloads: 10,
+  };
+  const second = {
+    id: "author/second",
+    url: "https://huggingface.co/author/second",
+    downloads: 20,
+  };
+  extension.setHubSearchResults([first]);
+  const release = extension.pauseNextHubSearch();
+  const pending = extension.receive({
+    type: "search-huggingface",
+    query: "first",
+    task: "",
+    requestId: 1,
+  });
+
+  extension.setHubSearchResults([second]);
+  await extension.receive({
+    type: "search-huggingface",
+    query: "second",
+    task: "text-generation",
+    requestId: 2,
+  });
+  assert.equal(extension.hubSearches[0].signal.aborted, true);
+  release();
+  await pending;
+  let responses = extension.events.filter(
+    ({ type }) => type === "huggingface-search-results",
+  );
+  assert.equal(responses.length, 1);
+  assert.deepEqual(responses[0], {
+    type: "huggingface-search-results",
+    requestId: 2,
+    models: [second],
+  });
+  assert.equal(extension.hubSearches[1].task, "text-generation");
+  const fail = extension.pauseNextHubSearch(
+    new Error("Hub search unavailable"),
+  );
+  const failed = extension.receive({
+    type: "search-huggingface",
+    query: "",
+    task: "",
+    requestId: 3,
+  });
+  fail();
+  await failed;
+  assert.match(
+    extension.events.find(({ type }) => type === "huggingface-search-error")
+      .error,
+    /unavailable/,
+  );
+  const close = extension.pauseNextHubSearch();
+  const closing = extension.receive({
+    type: "search-huggingface",
+    query: "",
+    task: "",
+    requestId: 4,
+  });
+  extension.dispose();
+  assert.equal(extension.hubSearches.at(-1).signal.aborted, true);
+  close();
+  await closing;
+  responses = extension.events.filter(
+    ({ type }) => type === "huggingface-search-results",
+  );
+  assert.equal(responses.length, 1);
+});
+
+test("publishes repository file sizes after search results without downloading models", async () => {
+  const extension = await openExtension();
+  const repository = {
+    id: "author/model",
+    url: "https://huggingface.co/author/model",
+    downloads: 10,
+  };
+  extension.setHubSearchResults([repository]);
+  extension.setRepositoryFiles([
+    {
+      url: `${repository.url}/resolve/main/model.onnx`,
+      path: "model.onnx",
+      fileName: "model.onnx",
+      size: 1024,
+    },
+    {
+      url: `${repository.url}/resolve/main/unknown.onnx`,
+      path: "unknown.onnx",
+      fileName: "unknown.onnx",
+    },
+  ]);
+  const nativeCount = extension.nativeModels.length;
+  await extension.receive({
+    type: "search-huggingface",
+    query: "",
+    task: "",
+    requestId: 21,
+  });
+  const resultsIndex = extension.events.findIndex(
+    ({ type }) => type === "huggingface-search-results",
+  );
+  const sizesIndex = extension.events.findIndex(
+    ({ type }) => type === "huggingface-model-files",
+  );
+  assert.ok(resultsIndex >= 0 && sizesIndex > resultsIndex);
+  assert.deepEqual(extension.events[sizesIndex], {
+    type: "huggingface-model-files",
+    requestId: 21,
+    id: repository.id,
+    entries: [
+      {
+        name: "model.onnx",
+        path: `${repository.url}/resolve/main/model.onnx`,
+        directory: false,
+        size: 1024,
+      },
+      {
+        name: "unknown.onnx",
+        path: `${repository.url}/resolve/main/unknown.onnx`,
+        directory: false,
+      },
+    ],
+  });
+  assert.equal(extension.nativeModels.length, nativeCount);
+  extension.dispose();
+});
+
 test("opens, browses and saves encrypted copies through embedded selectors without popup pickers", async (t) => {
   const directory = await mkdtemp(
     path.join(tmpdir(), "onnx-light-inline-files-"),
@@ -449,6 +717,70 @@ test("opens, browses and saves encrypted copies through embedded selectors witho
   window.HTMLCanvasElement.prototype.getContext = () => ({
     font: "",
     measureText: (text) => ({ width: text.length * 8 }),
+  });
+
+  test("remembers only successful Open and Save paths and supports persistent removal and clearing", async (t) => {
+    const directory = await mkdtemp(
+      path.join(tmpdir(), "onnx-viewer-path-history-"),
+    );
+    t.after(() => rm(directory, { recursive: true }));
+    const preferences = new Map();
+    const extension = await openExtension(
+      undefined,
+      undefined,
+      true,
+      undefined,
+      undefined,
+      preferences,
+    );
+    const source = require.resolve("./models/relu.onnx");
+    await extension.openFile(source);
+    const opened = preferences.get("pathHistory");
+    assert.deepEqual(
+      opened.open.map(({ path: location }) => location),
+      [source, path.dirname(source)],
+    );
+    await extension.openFile(source);
+    assert.deepEqual(preferences.get("pathHistory"), opened);
+    await extension.openFile(path.join(directory, "missing.onnx"));
+    await extension.cancelOpen();
+    assert.deepEqual(preferences.get("pathHistory"), opened);
+    const destination = path.join(directory, "copy.onnx");
+    await extension.save(destination);
+    assert.equal(preferences.get("pathHistory").save[0].path, destination);
+    const saved = structuredClone(preferences.get("pathHistory"));
+    await extension.save(undefined);
+    await extension.save(source);
+    assert.deepEqual(preferences.get("pathHistory"), saved);
+    extension.dispose();
+    const reopened = await openExtension(
+      undefined,
+      undefined,
+      true,
+      undefined,
+      undefined,
+      preferences,
+    );
+    await reopened.receive({ type: "ready" });
+    assert.deepEqual(
+      reopened.events.find(({ type }) => type === "path-history").history,
+      saved,
+    );
+    await reopened.receive({
+      type: "path-history-edit",
+      target: "open",
+      historyAction: "remove",
+      historyEntry: saved.open[0],
+    });
+    assert.deepEqual(preferences.get("pathHistory").open, saved.open.slice(1));
+    await reopened.receive({
+      type: "path-history-edit",
+      target: "save",
+      historyAction: "clear",
+    });
+    assert.deepEqual(preferences.get("pathHistory").save, []);
+    assert.deepEqual(preferences.get("pathHistory").open, saved.open.slice(1));
+    reopened.dispose();
   });
   document.getElementById("canvas").getBoundingClientRect = () =>
     new window.DOMRect(0, 0, 1060, 350);
@@ -1509,6 +1841,14 @@ test("opens a cached Hugging Face model and preserves the display on invalid inp
     storage,
   );
   await extension.openHuggingFace(url.replace("/resolve/", "/blob/"));
+  assert.deepEqual(extension.preferences.get("pathHistory").open, [
+    { source: "huggingface", kind: "file", path: url },
+    {
+      source: "huggingface",
+      kind: "directory",
+      path: "https://huggingface.co/viewer-tests/fixtures",
+    },
+  ]);
   assert.deepEqual(
     extension.picks.at(-1).items.map(({ label }) => label),
     ["Local file", "Hugging Face", "Backend test"],
@@ -1551,6 +1891,7 @@ test("opens a cached Hugging Face model and preserves the display on invalid inp
   await extension.receive({ type: "ready" });
   assert.equal(extension.messages.at(-1).graph.name, graph.name);
   const errors = extension.errors.length;
+  const history = structuredClone(extension.preferences.get("pathHistory"));
   await extension.openHuggingFace(undefined);
   await extension.openHuggingFace(url, true);
   await extension.openHuggingFace("viewer-tests/fixtures", false, {
@@ -1560,6 +1901,7 @@ test("opens a cached Hugging Face model and preserves the display on invalid inp
   await extension.receive({ type: "ready" });
   assert.equal(extension.messages.at(-1).graph.name, graph.name);
   assert.equal(extension.errors.length, errors);
+  assert.deepEqual(extension.preferences.get("pathHistory"), history);
   assert.equal(
     extension.logs.filter((line) =>
       line.includes("[CANCELLED] Open ONNX model"),
@@ -1591,6 +1933,16 @@ test("recovers a downloaded model from its published cache path after the tempor
     `http://127.0.0.1:${server.address().port}/custom.onnx`,
   );
   await extension.openHuggingFace(
+    "https://huggingface.co/viewer-tests/fixtures/resolve/main/custom.onnx",
+  );
+  const progress = extension.events.filter(
+    (event) => event.type === "model-progress" && event.received !== undefined,
+  );
+  assert.equal(progress[0].received, 0);
+  assert.equal(progress.at(-1).received, bytes.length);
+  assert.equal(progress.at(-1).total, bytes.length);
+  assert.equal(
+    extension.preferences.get("pathHistory").open[0].path,
     "https://huggingface.co/viewer-tests/fixtures/resolve/main/custom.onnx",
   );
   assert.equal(extension.messages.at(-1).type, "graph");
