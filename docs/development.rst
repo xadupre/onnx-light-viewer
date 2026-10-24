@@ -37,7 +37,7 @@ Run from the repository root:
 
    npm test
    npm run format:check
-   clang-format --dry-run --Werror native/addon.cc
+   clang-format --dry-run --Werror native/*.cc native/*.h
 
 The **Tests** GitHub Actions workflow builds the binding, runs the tests and
 checks JavaScript/C++ formatting on pull requests and pushes to ``main``.
@@ -53,7 +53,8 @@ repository's ``CODECOV_TOKEN`` Actions secret to authorize uploads to Codecov.
 
 It runs the Node tests with source-mapped TypeScript coverage and an instrumented
 C++ binding, then uploads separate ``typescript``, ``cpp`` and ``python`` reports.
-C++ coverage includes ``native/addon.cc``, not the prebuilt onnx-light libraries.
+C++ coverage includes the binding sources in ``native/``, not the prebuilt
+onnx-light libraries.
 Python coverage executes both model generators and the Sphinx build. Coverage
 tools and the matching onnx-light Python wheel are installed only in this workflow;
 normal extension builds and tests do not require them.
@@ -125,6 +126,6 @@ graph contracts and webview message protocol.
 
 * ``src/extension.ts``: VS Code integration and model opening.
 * ``src/graph.ts``: graph types and the typed native entry point.
-* ``native/addon.cc``: native model decoding.
+* ``native/``: native entry points, model ownership, I/O, snapshots and algorithms.
 * ``media/viewer.js`` and ``media/viewer.css``: graph rendering and layout.
 * ``media/logo.svg``: extension logo.

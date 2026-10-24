@@ -35,7 +35,18 @@ find_package(onnx_light CONFIG REQUIRED
   NO_DEFAULT_PATH
 )
 
-add_library(onnx_light_viewer SHARED native/addon.cc ${CMAKE_JS_SRC})
+add_library(onnx_light_viewer SHARED
+  native/addon.cc
+  native/model.cc
+  native/model_io.cc
+  native/model_storage.cc
+  native/model_serialization.cc
+  native/fusion.cc
+  native/graph_analysis.cc
+  native/graph_snapshot.cc
+  native/tensor_preview.cc
+  ${CMAKE_JS_SRC}
+)
 target_compile_features(onnx_light_viewer PRIVATE cxx_std_20)
 target_compile_definitions(onnx_light_viewer PRIVATE
   NAPI_VERSION=8

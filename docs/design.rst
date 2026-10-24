@@ -142,12 +142,33 @@ Where to change things
    * - :download:`src/log.ts <../src/log.ts>`
      - Correlated action history and status.
    * - :download:`native/addon.cc <../native/addon.cc>`
-     - Ownership, bounded parsing, graph projection and native algorithms.
+     - Node-API export registration.
+   * - :download:`native/model.cc <../native/model.cc>` /
+       :download:`model.h <../native/model.h>`
+     - Retained handles and backing-buffer ownership.
+   * - :download:`native/model_io.cc <../native/model_io.cc>`
+     - Loading, bounded protobuf parsing, decryption and payload recovery.
+   * - :download:`native/model_storage.cc <../native/model_storage.cc>`
+     - Shared tensor traversal and external payload loading.
+   * - :download:`native/model_serialization.cc <../native/model_serialization.cc>`
+     - Save workers, external-weight reuse and serialization methods.
+   * - :download:`native/fusion.cc <../native/fusion.cc>`
+     - Pattern enumeration, preview and fusion workers.
+   * - :download:`native/graph_analysis.cc <../native/graph_analysis.cc>`
+     - Graph-path scopes, metadata analysis and shape inference.
+   * - :download:`native/graph_snapshot.cc <../native/graph_snapshot.cc>`
+     - Graph snapshots, initializer descriptions and operator schemas.
+   * - :download:`native/tensor_preview.cc <../native/tensor_preview.cc>`
+     - Bounded attribute previews and small inline tensor values.
    * - :download:`src/webview.ts <../src/webview.ts>`
      - HTML shell, local resources and content security policy.
    * - :download:`media/viewer.js <../media/viewer.js>` /
        :download:`viewer.css <../media/viewer.css>`
      - SVG layout, gestures, search, inspector and presentation.
+
+Native workers and implementation helpers stay private to their source file.
+Shared headers expose model/path data and narrow function entry points; method
+closures and workers retain the same backing owners across these boundaries.
 
 ``CMakeLists.txt`` pins and checksum-verifies the published onnx-light libraries;
 only the addon is compiled locally. Its platform must match the extension host.
