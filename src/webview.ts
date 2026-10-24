@@ -362,7 +362,7 @@ export function webviewHtml(
           ${documentationLink("yet-another-onnx-builder", "https://xadupre.github.io/docs/yet-another-onnx-builder/index.html")}
           </div>
           <img class="repository-logo" src="${resource("repositories/yet-another-onnx-builder.svg")}" alt="" width="96" height="64">
-          <p>Provides a shared ONNX graph builder and the yobx.to_onnx conversion API across multiple source libraries.</p>
+          <p>Uses onnx-light for ONNX graph construction, optimization and shape inference, with the yobx.to_onnx conversion API across multiple source libraries.</p>
           <p class="repository-specialization"><strong>Specialized for:</strong> PyTorch, TensorFlow/Keras/LiteRT, scikit-learn, scikit-survival, category_encoders, imbalanced-learn, statsmodels, XGBoost and LightGBM, plus NumPy function tracing, using yobx and onnx-light. SQL queries, pandas/Polars-style DataFrame transformations and JAX support are in progress.</p>
         </li>
         <li>

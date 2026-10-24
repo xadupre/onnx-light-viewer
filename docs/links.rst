@@ -105,7 +105,8 @@ in the viewer. Supported models, operators and target runtimes vary by tool.
   `Documentation <https://xadupre.github.io/docs/mbext/index.html>`__.
 * `yet-another-onnx-builder
   <https://github.com/xadupre/yet-another-onnx-builder>`_:
-  a shared ONNX graph builder and the ``yobx.to_onnx`` conversion API.
+  uses ``onnx-light`` for ONNX graph construction, optimization and shape
+  inference, with the ``yobx.to_onnx`` conversion API.
   **Specialized for:** PyTorch, TensorFlow/Keras/LiteRT, scikit-learn,
   scikit-survival, category_encoders, imbalanced-learn, statsmodels, XGBoost and
   LightGBM, plus NumPy function tracing, using ``yobx`` and ``onnx-light``.
