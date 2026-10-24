@@ -76,3 +76,24 @@ test("removes URL credentials and does not publish failed persistence as saved h
   await history.update("open", { action: "remember", entries });
   assert.deepEqual(history.snapshot().open, entries);
 });
+
+test("sanitizes authority-less URIs without treating Windows drive paths as schemes", () => {
+  for (const [input, expected] of [
+    ["provider:/models/a.onnx?token=secret#secret", "provider:/models/a.onnx"],
+    ["provider:models/a.onnx?token=secret#secret", "provider:models/a.onnx"],
+    ["C:\\models\\a.onnx", "C:\\models\\a.onnx"],
+    ["C:/models/a.onnx", "C:/models/a.onnx"],
+    ["C:models\\a.onnx", "C:models\\a.onnx"],
+    ["/models/a?b#c.onnx", "/models/a?b#c.onnx"],
+  ]) {
+    assert.equal(historyEntries("local", input)[0].path, expected);
+  }
+  assert.deepEqual(
+    historyEntries(
+      "local",
+      "provider:/models/a.onnx?token=secret",
+      "provider:/models?token=secret",
+    ).map(({ path }) => path),
+    ["provider:/models/a.onnx", "provider:/models"],
+  );
+});

@@ -48,7 +48,10 @@ export function historyEntries(
       ? [{ source, kind: "directory" as const, path: directory }]
       : []),
   ].map((entry) => {
-    if (/^[a-z][a-z\d+.-]*:\/\//i.test(entry.path)) {
+    if (
+      /^[a-z][a-z\d+.-]*:/i.test(entry.path) &&
+      !/^[a-z]:/i.test(entry.path)
+    ) {
       const url = new URL(entry.path);
       url.username = "";
       url.password = "";

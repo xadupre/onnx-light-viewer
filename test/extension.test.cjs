@@ -70,6 +70,7 @@ async function openExtension(
   let failSaveRename = 0;
   let saveDialogGate;
   let saveWriteGate;
+  let historyUpdateGate;
   const listedRepositories = [];
   const hubSearches = [];
   const hubSearchGates = [];
@@ -309,6 +310,12 @@ async function openExtension(
     globalState: {
       get: (key) => structuredClone(preferences.get(key)),
       update: async (key, value) => {
+        if (key === "pathHistory" && historyUpdateGate) {
+          const gate = historyUpdateGate;
+          historyUpdateGate = undefined;
+          gate.arrived();
+          await gate.wait;
+        }
         preferences.set(key, structuredClone(value));
       },
     },
@@ -331,6 +338,17 @@ async function openExtension(
     logViews,
     events,
     preferences,
+    pauseNextHistoryUpdate: () => {
+      let release, arrived;
+      const wait = new Promise((resolve) => {
+        release = resolve;
+      });
+      const started = new Promise((resolve) => {
+        arrived = resolve;
+      });
+      historyUpdateGate = { wait, arrived };
+      return { started, release };
+    },
     passwordPrompts,
     saveDialogs,
     writes,
@@ -450,10 +468,10 @@ async function openExtension(
       selection = [uri(path.join(__dirname, "models", name))];
       await receive({ type: "open" });
     },
-    chooseBackend: async (name) => {
+    chooseBackend: async (name, type = "open") => {
       modelSource = "backend";
       backendSelection = name;
-      await receive({ type: "open" });
+      await receive({ type });
     },
     openHuggingFace: async (input, cancel = false, repository) => {
       modelSource = "huggingface";
@@ -760,6 +778,37 @@ test("remembers only successful Open and Save paths and supports persistent remo
   assert.deepEqual(preferences.get("pathHistory").save, []);
   assert.deepEqual(preferences.get("pathHistory").open, saved.open.slice(1));
   reopened.dispose();
+});
+
+test("publishes replacement graphs before delayed Open history persistence", async (t) => {
+  for (const source of ["local", "backend"]) {
+    const extension = await openExtension();
+    t.after(() => extension.dispose());
+    await extension.receive({ type: "ready" });
+    const initial = extension.messages.findLast(({ type }) => type === "graph");
+    const gate = extension.pauseNextHistoryUpdate();
+    const opening =
+      source === "local"
+        ? extension.open("relu.onnx")
+        : extension.chooseBackend("test_cc_relu", "open-backend-test");
+    await gate.started;
+    try {
+      const replacement = extension.messages.findLast(
+        ({ type }) => type === "graph",
+      );
+      assert.notEqual(replacement, initial);
+      assert.equal(replacement.graph.nodes[0].opType, "Relu");
+      assert.equal(extension.preferences.get("pathHistory"), undefined);
+      assert.equal(extension.errors.length, 0);
+    } finally {
+      gate.release();
+      await opening;
+    }
+    assert.equal(
+      extension.preferences.get("pathHistory").open[0].source,
+      source === "local" ? "local" : "backend",
+    );
+  }
 });
 
 test("opens, browses and saves encrypted copies through embedded selectors without popup pickers", async (t) => {

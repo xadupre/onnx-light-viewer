@@ -1014,11 +1014,11 @@ async function configurePanel(
           if (!active || !loaded) return;
           model = loaded.model;
           panel.title = `ONNX: ${loaded.name}`;
+          await sendGraph();
           await updateHistory("open", {
             action: "remember",
             entries: loaded.history,
           });
-          await sendGraph();
         } catch (error) {
           if (!active) return;
           const detail = error instanceof Error ? error.message : String(error);
@@ -1052,11 +1052,11 @@ async function configurePanel(
         if (!active || !loaded) return;
         model = loaded.model;
         panel.title = `ONNX: ${loaded.name}`;
+        await sendGraph();
         await updateHistory("open", {
           action: "remember",
           entries: loaded.history,
         });
-        await sendGraph();
       } else if (message?.type === "cancel-fusion") {
         fusionPreview = undefined;
         fusionRequest++;

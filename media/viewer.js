@@ -362,7 +362,7 @@ function operatorSizes(nodes) {
         node.id,
         {
           width,
-          height: 94 + parameterRows.length * 18 + subgraphs.length * 22,
+          height: 112 + parameterRows.length * 18 + subgraphs.length * 22,
           parameterRows,
           subgraphs,
           typeFontSize: Math.min(19, (19 * (width - 32)) / (typeWidth || 1)),
@@ -552,7 +552,7 @@ function addUnusedLabel(view, unusedOutputs = []) {
   const text = label(
     view.group,
     view.initial.x,
-    view.initial.y - view.halfHeight + 17,
+    view.initial.y - view.halfHeight + 34,
     `Unused: ${unusedOutputs.length}`,
     "unused-label",
   );
@@ -1304,7 +1304,7 @@ function render(graph, metadata) {
       const typeLabel = label(
         group,
         position.x,
-        top + 41,
+        top + 59,
         node.opType,
         "operator-label",
       );
@@ -1322,7 +1322,7 @@ function render(graph, metadata) {
         const information = tensorLabel(
           group,
           position.x,
-          top + 81 + size.parameterRows.length * 18,
+          top + 99 + size.parameterRows.length * 18,
           node.outputs,
           26,
         );
@@ -1332,7 +1332,7 @@ function render(graph, metadata) {
         const text = label(
           group,
           position.x,
-          top + 61 + index * 18,
+          top + 79 + index * 18,
           parameter.description,
           `tensor-info node-parameter ${parameter.className}`,
         );
@@ -1341,7 +1341,7 @@ function render(graph, metadata) {
         text.append(element("title", {}, parameter.description));
       });
       size.subgraphs.forEach((graph, index) => {
-        const y = top + 94 + size.parameterRows.length * 18 + index * 22;
+        const y = top + 112 + size.parameterRows.length * 18 + index * 22;
         const link = element("g", {
           class: "subgraph-link",
           role: "button",

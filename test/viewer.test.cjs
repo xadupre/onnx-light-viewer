@@ -1097,11 +1097,14 @@ test("closes Open only after a successful opening and allows reopening the selec
   load(demoGraph);
   open.click();
   for (const status of ["FAILED", "CANCELLED"]) {
+    document.getElementById("open-file").focus();
     submitOpen(document, window);
     complete(status);
     assert.equal(panel.hidden, false);
     assert.equal(open.getAttribute("aria-expanded"), "true");
+    assert.equal(document.activeElement, document.getElementById("open-file"));
   }
+  document.getElementById("open-file").focus();
   submitOpen(document, window);
   assert.equal(panel.hidden, false);
   complete("SUCCEEDED");
@@ -1109,9 +1112,17 @@ test("closes Open only after a successful opening and allows reopening the selec
   assert.equal(panel.hidden, true);
   assert.equal(open.getAttribute("aria-expanded"), "false");
   assert.equal(open.disabled, false);
+  assert.equal(document.activeElement, open);
   open.click();
   assert.equal(panel.hidden, false);
   assert.equal(open.getAttribute("aria-expanded"), "true");
+  document.getElementById("open-file").focus();
+  submitOpen(document, window);
+  const other = document.getElementById("show-metadata");
+  other.focus();
+  complete("SUCCEEDED");
+  assert.equal(panel.hidden, true);
+  assert.equal(document.activeElement, other);
 });
 
 test("browses folders inline, selects files without opening and ignores stale listings", (t) => {
@@ -2792,6 +2803,22 @@ test("shows native metadata in the sidebar and marks released and never-used res
       .textContent,
     /dimensions/,
   );
+  for (const badge of document.querySelectorAll(".unused-label")) {
+    const group = badge.parentElement;
+    const name = group.querySelector(".operator-name");
+    const type = group.querySelector(".operator-label");
+    const top = Number(group.querySelector("rect").getAttribute("y"));
+    const badgeY = Number(badge.getAttribute("y"));
+    assert.ok(Number(name.getAttribute("y")) >= top + 10);
+    assert.ok(badgeY - Number(name.getAttribute("y")) >= 14);
+    assert.ok(
+      Number(type.getAttribute("y")) -
+        parseFloat(type.style.fontSize) -
+        badgeY >=
+        6,
+    );
+    assert.equal(badge.getAttribute("visibility"), "visible");
+  }
   const select = (index) => {
     const group = document.querySelector(`[data-id="node-${index}"]`);
     const point = positions[index];
@@ -3188,7 +3215,7 @@ test("shows at most two short attributes and initializers inside operators", (t)
     const body = group.querySelector("rect");
     assert.equal(
       Number(body.getAttribute("height")),
-      94 + expected.length * 18,
+      112 + expected.length * 18,
     );
     const bottom =
       Number(body.getAttribute("y")) + Number(body.getAttribute("height"));
@@ -3214,7 +3241,7 @@ test("shows at most two short attributes and initializers inside operators", (t)
   assert.equal(document.querySelector(".node-initializer"), null);
   assert.equal(
     document.querySelector(".graph-node > rect").getAttribute("height"),
-    "94",
+    "112",
   );
 });
 
@@ -3253,7 +3280,7 @@ test("summarizes numerous or long parameters while preserving inspector details"
       group.querySelectorAll(".node-attribute, .node-initializer").length,
       0,
     );
-    assert.equal(group.querySelector("rect").getAttribute("height"), "112");
+    assert.equal(group.querySelector("rect").getAttribute("height"), "130");
     assert.equal(
       document.querySelectorAll("#node-initializers li").length,
       parameters.length,
@@ -4181,7 +4208,7 @@ test("assigns random horizontal positions and node-index rows on each model load
   load(model);
   const positions = nodePositions(document);
   positions.forEach((position, index) => {
-    assert.equal(position.y, 180 + index * 145);
+    assert.equal(position.y, 189 + index * 163);
     assert.ok(position.x >= 100 && position.x < 400);
   });
   assert.ok(new Set(positions.map((position) => position.x)).size > 1);
@@ -5538,9 +5565,10 @@ test("rectangle selection supports reverse and additive gestures and moves toget
   assert.ok(document.querySelector(".selection-rectangle"));
   pointer(graph, "pointerup", -10, 110);
   assert.equal(document.querySelector(".selection-rectangle"), null);
-  pointer(graph, "pointerdown", -10, 700, { ctrlKey: true });
-  pointer(graph, "pointermove", 500, 820, { ctrlKey: true });
-  pointer(graph, "pointerup", 500, 820, { ctrlKey: true });
+  const targetY = nodePositions(document)[4].y;
+  pointer(graph, "pointerdown", -10, targetY - 20, { ctrlKey: true });
+  pointer(graph, "pointermove", 500, targetY + 20, { ctrlKey: true });
+  pointer(graph, "pointerup", 500, targetY + 20, { ctrlKey: true });
   assert.deepEqual(
     Array.from(
       document.querySelectorAll(".graph-node.selected"),

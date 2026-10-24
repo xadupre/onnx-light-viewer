@@ -473,7 +473,11 @@ function createFilePanels({
     byId("save-submit").disabled = true;
   }
   function finishOpening(status) {
-    if (status === "SUCCEEDED") toggleFilePanel("open", false);
+    if (status === "SUCCEEDED") {
+      const restoreFocus = byId("open-panel").contains(document.activeElement);
+      toggleFilePanel("open", false);
+      if (restoreFocus) byId("open-model").focus();
+    }
   }
   function finishSaving(status, disabled) {
     showProgress("save", false);
