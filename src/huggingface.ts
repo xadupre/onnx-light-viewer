@@ -4,6 +4,7 @@ import { mkdir, rename, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import { huggingFaceTasks } from "./huggingFaceTasks";
 
 export interface HuggingFaceSource {
   url: string;
@@ -23,24 +24,6 @@ export interface DownloadProgress {
 export interface HuggingFaceModelFile extends HuggingFaceSource {
   path: string;
 }
-
-export const huggingFaceTasks = [
-  { value: "", label: "All tasks" },
-  { value: "feature-extraction", label: "Feature extraction / embeddings" },
-  { value: "sentence-similarity", label: "Sentence similarity" },
-  { value: "text-ranking", label: "Text ranking" },
-  { value: "text-generation", label: "Text generation" },
-  { value: "text-classification", label: "Text classification" },
-  { value: "token-classification", label: "Token classification" },
-  { value: "question-answering", label: "Question answering" },
-  { value: "summarization", label: "Summarization" },
-  { value: "translation", label: "Translation" },
-  { value: "image-classification", label: "Image classification" },
-  { value: "object-detection", label: "Object detection" },
-  { value: "image-segmentation", label: "Image segmentation" },
-  { value: "automatic-speech-recognition", label: "Speech recognition" },
-  { value: "text-to-speech", label: "Text to speech" },
-] as const;
 
 export interface HuggingFaceSearchResult extends HuggingFaceRepository {
   id: string;
