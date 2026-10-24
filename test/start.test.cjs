@@ -13,6 +13,10 @@ const { test } = require("node:test");
 const { format } = require("prettier");
 
 test("the launcher bypasses the remote CLI and forces the developed ONNX editor", async (t) => {
+  if (process.platform === "win32") {
+    t.skip("The shell launcher requires a POSIX environment");
+    return;
+  }
   const temporary = mkdtempSync(path.join(tmpdir(), "onnx viewer launch "));
   t.after(() => rmSync(temporary, { recursive: true, force: true }));
   const argumentsFile = path.join(temporary, "arguments.json");

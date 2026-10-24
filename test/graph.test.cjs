@@ -1179,6 +1179,17 @@ test("embeds external weights with offsets and repartitions plain external copie
   );
   assert.deepEqual(readFileSync(source), modelBytes(true));
   assert.deepEqual(readFileSync(weights), originalWeights);
+  writeFileSync(weights, originalWeights.subarray(0, 17));
+  await assert.rejects(
+    model.serialize(),
+    /External weight length exceeds the available data/,
+  );
+  writeFileSync(weights, originalWeights.subarray(0, 16));
+  await assert.rejects(
+    model.serialize(),
+    /External weight offset is past the end of the file/,
+  );
+  writeFileSync(weights, originalWeights);
   for (const location of [
     "../outside.data",
     "a/../outside.data",

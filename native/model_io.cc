@@ -433,7 +433,10 @@ public:
         throw std::system_error(errno, std::generic_category(), "Could not open model file");
       ol::utils::FdReadStream source(file.get());
       if (password_) {
-        std::string bytes(source.size(), '\0');
+        const auto size = std::filesystem::file_size(ModelFilePath(path_));
+        if (size > std::string{}.max_size())
+          throw std::runtime_error("Encrypted ONNX model exceeds the maximum supported size.");
+        std::string bytes(static_cast<size_t>(size), '\0');
         source.read_bytes(bytes.size(), reinterpret_cast<uint8_t *>(bytes.data()));
         ReadEncryptedModel(*model_->model, bytes, *password_, model_->has_training_info);
         return;

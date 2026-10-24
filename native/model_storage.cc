@@ -61,12 +61,16 @@ void LoadExternalTensorImpl(Proto &tensor, const std::filesystem::path &director
   if (file.get() < 0)
     throw std::system_error(errno, std::generic_category(), "Could not open external weights");
   ol::utils::FdReadStream stream(file.get());
+  const auto file_size = std::filesystem::file_size(path);
   offset = std::max<int64_t>(0, offset);
-  if (offset > stream.size())
+  if (static_cast<uint64_t>(offset) > file_size)
     throw std::runtime_error("External weight offset is past the end of the file.");
+  const auto available = file_size - static_cast<uint64_t>(offset);
+  if (available > static_cast<uint64_t>(std::numeric_limits<int64_t>::max()))
+    throw std::runtime_error("External weight length exceeds the available data.");
   if (length < 0)
-    length = stream.size() - offset;
-  if (length > stream.size() - offset ||
+    length = static_cast<int64_t>(available);
+  if (static_cast<uint64_t>(length) > available ||
       static_cast<uint64_t>(length) > std::numeric_limits<size_t>::max())
     throw std::runtime_error("External weight length exceeds the available data.");
   stream.skip_bytes(offset);

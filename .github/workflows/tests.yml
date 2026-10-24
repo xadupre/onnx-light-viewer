@@ -11,8 +11,13 @@ permissions:
 
 jobs:
   tests:
-    name: Unit tests and formatting
-    runs-on: ubuntu-latest
+    name: Unit tests and formatting (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Re-enable macOS after upgrading to the published onnx-light 0.2.1 release.
+        os: [ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -21,5 +26,6 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run format:check
-      - run: clang-format --dry-run --Werror native/*.cc native/*.h
+      - if: runner.os == 'Linux'
+        run: clang-format --dry-run --Werror native/*.cc native/*.h
       - run: npm test
