@@ -2,11 +2,13 @@ const assert = require("node:assert/strict");
 const { once } = require("node:events");
 const { mkdtemp, readFile, readdir, rm } = require("node:fs/promises");
 const { createServer } = require("node:http");
+const { createRequire } = require("node:module");
 const { tmpdir } = require("node:os");
 const { join } = require("node:path");
 const { test } = require("node:test");
 const { readFileSync } = require("node:fs");
 const vm = require("node:vm");
+const { huggingFaceTasks } = require("../dist/huggingFaceTasks");
 const { loadModel } = require("../dist/graph");
 const {
   cachedHuggingFaceModel,
@@ -72,7 +74,10 @@ test("searches ONNX repositories by task, ranks by downloads and validates publi
   const execute = vm.runInThisContext(
     `(function(require, module, exports, fetch) { ${readFileSync(require.resolve("../dist/huggingface"), "utf8")}\n})`,
   );
-  execute(require, module, module.exports, (url, options) => {
+  const requireHuggingFace = createRequire(
+    require.resolve("../dist/huggingface"),
+  );
+  execute(requireHuggingFace, module, module.exports, (url, options) => {
     const remote = new URL(url);
     const local = new URL(server.source(remote.pathname).url);
     local.search = remote.search;
@@ -105,6 +110,11 @@ test("searches ONNX repositories by task, ranks by downloads and validates publi
   const popular = new URL(server.requests.at(-1), "http://localhost");
   assert.equal(popular.searchParams.has("search"), false);
   assert.equal(popular.searchParams.has("pipeline_tag"), false);
+  for (const { value } of huggingFaceTasks) {
+    await search("", value);
+    const request = new URL(server.requests.at(-1), "http://localhost");
+    assert.equal(request.searchParams.get("pipeline_tag"), value || null);
+  }
   const count = server.requests.length;
   await assert.rejects(search("", "invalid-task"), /supported.*task/);
   assert.equal(server.requests.length, count);
