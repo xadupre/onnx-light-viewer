@@ -291,9 +291,12 @@ Napi::Object ModelGraph(Napi::Env env, const ol::ModelProto &model, const std::s
       if (information.Get("type").IsNull())
         information.Set("type", "ENCODED");
       tensor_information.insert_or_assign(name, information);
-      auto parameter = TensorInformation(
-          env, name, value.has_logical_type() ? &value.logical_type() : nullptr, &model);
-      parameter.Set("type", information.Get("type"));
+      auto parameter = Napi::Object::New(env);
+      const auto keys = information.GetPropertyNames();
+      for (uint32_t index = 0; index < keys.Length(); ++index) {
+        const auto key = keys.Get(index);
+        parameter.Set(key, information.Get(key));
+      }
       parameter.Set("storage", StorageInformation(env, value));
       if (value.has_affine())
         parameter.Set("encoding", "AFFINE " + Preview(value.affine()));
