@@ -25,8 +25,9 @@ before a model is loaded.
   connections intersecting the viewport, with a small margin for panning.
 * With focus in the graph or its zoom controls, **F** fits the graph, **R**
   jumps to readable size, and **+** / **-** zoom in / out.
-* Graphs with more than 500 nodes open at readable size. Only nearby SVG
-  elements are created and attached; **Fit** uses two batched paths rather than
+* Graphs with at least 250 nodes, including input and output ports, open at
+  readable size. Only nearby SVG elements are created and attached; **Fit**
+  uses two batched paths rather than
   thousands of interactive elements. Long connections crossing the viewport
   are batched when their labels are offscreen.
 * **Find node or operator**, above the sidebar inspector, searches the whole

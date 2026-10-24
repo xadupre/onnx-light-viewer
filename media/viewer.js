@@ -1116,7 +1116,7 @@ function render(graph, metadata) {
   connections = [];
   camera = undefined;
   virtualized =
-    graph.nodes.length + graph.inputs.length + graph.outputs.length > 500;
+    graph.nodes.length + graph.inputs.length + graph.outputs.length >= 250;
   overviewVisible = false;
   overviewDirty = true;
   crossingConnections = new Set();

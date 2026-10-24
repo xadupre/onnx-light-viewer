@@ -3346,7 +3346,7 @@ test("fits complete operator types and names without redundant node or port badg
 
 test("changes only affected selections and edges, and preserves an unchanged inspector during dragging", (t) => {
   const { document, window, load, pointer } = openViewer(t);
-  load(chainGraph(256));
+  load(chainGraph(200));
   const graph = document.getElementById("graph");
   const nodes = document.querySelectorAll(".graph-node");
   const edges = document.querySelectorAll(".edge");
@@ -4063,7 +4063,7 @@ test("Ctrl+wheel keeps the graph point under the pointer fixed while zooming in 
 
 test("zooms large graphs to a readable scale beyond four times Fit with buttons and Ctrl+wheel", (t) => {
   const { document, window, load } = openViewer(t);
-  load(chainGraph(400));
+  load(chainGraph(200));
   const graph = document.getElementById("graph");
   const initial = graph.getAttribute("viewBox");
   const positions = nodePositions(document);
@@ -4141,7 +4141,7 @@ test("keeps graph outlines visible when zooming out in regular and virtualized o
 
 test("jumps to readable zoom and culls offscreen SVG content without rebuilding a large graph", (t) => {
   const { document, window, load } = openViewer(t);
-  const model = chainGraph(400);
+  const model = chainGraph(200);
   model.nodes.at(-1).inputs = ["tensor_0"];
   load(model);
   const graph = document.getElementById("graph");
@@ -4542,28 +4542,32 @@ test("defers readable framing until a large model loaded in a hidden tab has a v
   );
 });
 
-test("virtualizes models above 500 nodes while preserving navigation and cached elements", (t) => {
+test("virtualizes models from 250 total nodes while preserving navigation and cached elements", (t) => {
   const { document, load } = openViewer(t);
-  load(chainGraph(600));
   const graph = document.getElementById("graph");
   const mounted = () => document.querySelectorAll(".graph-node").length;
-  assert.ok(mounted() > 0 && mounted() < 20);
-  assert.equal(Number(graph.getAttribute("viewBox").split(" ")[3]), 350);
-  const first = document.querySelector(".graph-node");
-  document.getElementById("go-bottom").click();
-  assert.equal(first.isConnected, false);
-  assert.ok(mounted() > 0 && mounted() < 20);
-  document.getElementById("go-top").click();
-  assert.equal(first.isConnected, true);
-  document.getElementById("zoom-fit").click();
-  assert.equal(mounted(), 0);
-  assert.equal(
-    document.getElementById("overview-nodes").getAttribute("d").match(/M/g)
-      .length,
-    602,
-  );
-  document.getElementById("zoom-readable").click();
-  assert.ok(mounted() > 0 && mounted() < 20);
+  load(chainGraph(247));
+  assert.equal(mounted(), 247);
+  for (const length of [248, 249, 600]) {
+    load(chainGraph(length));
+    assert.ok(mounted() > 0 && mounted() < 20);
+    assert.equal(Number(graph.getAttribute("viewBox").split(" ")[3]), 350);
+    const first = document.querySelector(".graph-node");
+    document.getElementById("go-bottom").click();
+    assert.equal(first.isConnected, false);
+    assert.ok(mounted() > 0 && mounted() < 20);
+    document.getElementById("go-top").click();
+    assert.equal(first.isConnected, true);
+    document.getElementById("zoom-fit").click();
+    assert.equal(mounted(), 0);
+    assert.equal(
+      document.getElementById("overview-nodes").getAttribute("d").match(/M/g)
+        .length,
+      length + 2,
+    );
+    document.getElementById("zoom-readable").click();
+    assert.ok(mounted() > 0 && mounted() < 20);
+  }
 });
 
 test("coalesces large-model wheel events without losing motion or leaving stale frames", (t) => {
