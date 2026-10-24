@@ -149,6 +149,7 @@ async function openExtension(
       },
     },
     workspace: {
+      isTrusted: true,
       fs: {
         readDirectory: async (directory) =>
           (await readdir(directory.path, { withFileTypes: true })).map(
@@ -306,7 +307,8 @@ async function openExtension(
   );
   module.exports.activate({
     extensionUri: { path: root },
-    globalStorageUri: { fsPath: storage },
+    extension: { packageJSON: require("../package.json") },
+    globalStorageUri: { fsPath: storage ?? tmpdir() },
     globalState: {
       get: (key) => structuredClone(preferences.get(key)),
       update: async (key, value) => {
@@ -338,6 +340,9 @@ async function openExtension(
     logViews,
     events,
     preferences,
+    setTrusted: (trusted) => {
+      vscode.workspace.isTrusted = trusted;
+    },
     pauseNextHistoryUpdate: () => {
       let release, arrived;
       const wait = new Promise((resolve) => {
@@ -527,6 +532,156 @@ test("persists only viewer preferences across closed extension panels", async ()
   second.dispose();
 });
 
+test("Settings reports defaults, versions and persisted paths without running Python", async (t) => {
+  const preferences = new Map();
+  const storage = path.join(tmpdir(), "viewer-settings");
+  const open = () =>
+    openExtension(undefined, undefined, false, storage, undefined, preferences);
+  const first = await open();
+  t.after(() => first.dispose());
+  await first.receive({ type: "get-settings" });
+  const info = first.messages.at(-1);
+  assert.equal(info.type, "settings-info");
+  assert.equal(
+    info.application.downloadDirectory,
+    path.join(storage, "huggingface"),
+  );
+  assert.equal(info.appVersion, require("../package.json").version);
+  assert.equal(info.nativeVersion, require("../dist/graph").onnxLightVersion);
+  assert.deepEqual(info.viewer.panels, {
+    operator: true,
+    find: true,
+    metadata: false,
+  });
+  assert.equal(
+    first.messages.some(({ type }) => type === "python-info"),
+    false,
+  );
+  const settings = {
+    downloadDirectory: path.join(storage, "custom"),
+    pythonPath: path.join(storage, "missing-python"),
+  };
+  await first.receive({
+    type: "application-settings",
+    settings: { ...settings, password: "discard" },
+  });
+  assert.deepEqual(preferences.get("applicationSettings"), settings);
+  const second = await open();
+  t.after(() => second.dispose());
+  await second.receive({ type: "get-settings" });
+  assert.deepEqual(second.messages.at(-1).application, settings);
+  await first.receive({
+    type: "application-settings",
+    settings: {
+      ...settings,
+      pythonPath: path.join(storage, "different-python"),
+    },
+  });
+  const inspection = {
+    type: "inspect-python",
+    requestId: 1,
+    pythonPath: settings.pythonPath,
+  };
+  await second.receive(inspection);
+  assert.equal(second.messages.at(-1).type, "settings-error");
+  assert.match(second.messages.at(-1).error, /ENOENT/);
+  assert.ok(second.messages.at(-1).error.includes(settings.pythonPath));
+  assert.equal(second.messages.at(-1).requestId, inspection.requestId);
+  assert.equal(second.messages.at(-1).pythonPath, inspection.pythonPath);
+  second.setTrusted(false);
+  await second.receive({ ...inspection, requestId: 2 });
+  assert.match(second.messages.at(-1).error, /Trust this workspace/);
+  assert.equal(second.messages.at(-1).requestId, 2);
+});
+
+test("Settings correlates real Python results with the panel's requested interpreter", async (t) => {
+  const extension = await openExtension();
+  t.after(() => extension.dispose());
+  await extension.receive({ type: "get-settings" });
+  const { application } = extension.messages.at(-1);
+  await extension.receive({
+    type: "application-settings",
+    settings: {
+      ...application,
+      pythonPath: path.join(tmpdir(), "missing-python"),
+    },
+  });
+  await extension.receive({
+    type: "inspect-python",
+    requestId: 7,
+    pythonPath: application.pythonPath,
+  });
+  const response = extension.messages.at(-1);
+  assert.equal(response.type, "python-info");
+  assert.equal(response.requestId, 7);
+  assert.equal(response.pythonPath, application.pythonPath);
+  assert.match(response.python.version, /^\d+\.\d+\.\d+/);
+  assert.ok(response.python.packages.some(({ name }) => name === "onnx"));
+});
+
+test("Settings returns a correlated busy error when a recreated webview requests inspection", async (t) => {
+  const extension = await openExtension();
+  t.after(() => extension.dispose());
+  const request = {
+    type: "inspect-python",
+    pythonPath: process.platform === "win32" ? "python" : "python3",
+  };
+  const pending = extension.receive({ ...request, requestId: 2 });
+  await extension.receive({ ...request, requestId: 1 });
+  const busy = extension.messages.at(-1);
+  assert.equal(busy.type, "settings-error");
+  assert.equal(busy.requestId, 1);
+  assert.equal(busy.pythonPath, request.pythonPath);
+  assert.match(busy.error, /inspection is already running/);
+  await pending;
+  const original = extension.messages.at(-1);
+  assert.equal(original.type, "python-info");
+  assert.equal(original.requestId, 2);
+  await extension.receive({ ...request, requestId: 3 });
+  const retry = extension.messages.at(-1);
+  assert.equal(retry.type, "python-info");
+  assert.equal(retry.requestId, 3);
+});
+
+test("Settings rejects invalid paths without overwriting preferences", async (t) => {
+  const extension = await openExtension();
+  t.after(() => extension.dispose());
+  for (const settings of [
+    null,
+    { downloadDirectory: "relative", pythonPath: "python3" },
+    { downloadDirectory: tmpdir(), pythonPath: "" },
+    { downloadDirectory: tmpdir(), pythonPath: "-c" },
+    { downloadDirectory: `${tmpdir()}\0`, pythonPath: "python3" },
+  ]) {
+    await extension.receive({ type: "application-settings", settings });
+    assert.equal(extension.messages.at(-1).type, "settings-error");
+    assert.equal(extension.preferences.has("applicationSettings"), false);
+  }
+});
+
+test("uses the configured directory for cached Hugging Face downloads", async (t) => {
+  const storage = await mkdtemp(path.join(tmpdir(), "viewer-settings-cache-"));
+  t.after(() => rm(storage, { recursive: true }));
+  const downloadDirectory = path.join(storage, "custom-downloads");
+  const url =
+    "https://huggingface.co/viewer-tests/fixtures/resolve/main/inference.onnx";
+  const key = createHash("sha256").update(url).digest("hex");
+  const cache = path.join(downloadDirectory, key);
+  await mkdir(cache, { recursive: true });
+  await copyFile(
+    path.join(__dirname, "models/inference.onnx"),
+    path.join(cache, "model.onnx"),
+  );
+  const extension = await openExtension(undefined, undefined, false, storage);
+  t.after(() => extension.dispose());
+  await extension.receive({
+    type: "application-settings",
+    settings: { downloadDirectory, pythonPath: "python3" },
+  });
+  await extension.openHuggingFace(url);
+  assert.equal(extension.messages.at(-1).type, "graph");
+  assert.ok(extension.logs.some((entry) => entry.includes("Cache hit")));
+});
 test("rejects invalid preferences and reports storage failures", async () => {
   const preferences = new Map();
   const extension = await openExtension(

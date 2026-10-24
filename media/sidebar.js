@@ -61,6 +61,7 @@ function createSidebar({
   function restoreSettings(settings) {
     if (settings.width !== undefined)
       graphBody.style.setProperty("--sidebar-width", `${settings.width}px`);
+    else graphBody.style.removeProperty("--sidebar-width");
     for (const [name, id] of Object.entries(panels)) {
       const visible = settings.panels[name];
       const button = byId(id);

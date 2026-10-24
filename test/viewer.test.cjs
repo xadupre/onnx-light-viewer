@@ -1874,8 +1874,8 @@ test("switches all tabs without logging clicks or changing graph, selection or c
     .dispatchEvent(
       new window.KeyboardEvent("keydown", { key: "End", bubbles: true }),
     );
-  assert.equal(document.activeElement.id, "repositories-tab");
-  assert.equal(document.getElementById("repositories-view").hidden, false);
+  assert.equal(document.activeElement.id, "settings-tab");
+  assert.equal(document.getElementById("settings-view").hidden, false);
   assert.equal(document.getElementById("status-view").hidden, true);
   document.getElementById("controls-tab").click();
   assert.equal(document.getElementById("controls-view").hidden, false);
@@ -1897,6 +1897,224 @@ test("switches all tabs without logging clicks or changing graph, selection or c
     document.getElementById("graph").getAttribute("viewBox"),
     camera,
   );
+});
+
+test("Settings edits saved paths and existing sidebar preferences and renders package versions safely", (t) => {
+  const { document, window, messages } = openViewer(t);
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  const byId = (id) => document.getElementById(id);
+  byId("settings-tab").click();
+  assert.equal(messages.at(-1).type, "get-settings");
+  send({
+    type: "settings-info",
+    application: {
+      downloadDirectory: "/downloads",
+      pythonPath: "/usr/bin/python3",
+    },
+    viewer: {
+      width: 420,
+      panels: { operator: false, find: true, metadata: false },
+    },
+    appVersion: "1.2.3",
+    nativeVersion: "0.2.0",
+    platform: "linux / x64",
+    trusted: true,
+  });
+  assert.equal(byId("settings-app-version").textContent, "1.2.3");
+  assert.equal(byId("settings-native-version").textContent, "0.2.0");
+  assert.equal(byId("settings-width").value, "420");
+  assert.equal(byId("operator-panel").hidden, true);
+  assert.equal(byId("show-operator").getAttribute("aria-expanded"), "false");
+  assert.equal(
+    document
+      .querySelector(".graph-body")
+      .style.getPropertyValue("--sidebar-width"),
+    "420px",
+  );
+  byId("settings-download").value = "/new-downloads";
+  byId("application-settings-form").dispatchEvent(
+    new window.Event("submit", { cancelable: true }),
+  );
+  assert.deepEqual(JSON.parse(JSON.stringify(messages.at(-1))), {
+    type: "application-settings",
+    settings: {
+      downloadDirectory: "/new-downloads",
+      pythonPath: "/usr/bin/python3",
+    },
+  });
+  byId("settings-operator").click();
+  assert.equal(byId("operator-panel").hidden, false);
+  assert.equal(messages.at(-1).type, "viewer-settings");
+  byId("settings-width").value = "";
+  byId("settings-width").dispatchEvent(new window.Event("change"));
+  assert.equal(
+    document
+      .querySelector(".graph-body")
+      .style.getPropertyValue("--sidebar-width"),
+    "",
+  );
+  byId("show-find").click();
+  assert.equal(byId("settings-find").checked, false);
+  byId("settings-inspect-python").click();
+  assert.equal(messages.at(-1).type, "inspect-python");
+  const inspection = messages.at(-1);
+  assert.equal(inspection.pythonPath, "/usr/bin/python3");
+  assert.equal(byId("settings-inspect-python").disabled, true);
+  send({
+    ...inspection,
+    type: "python-info",
+    python: {
+      executable: "/usr/bin/python3",
+      version: "3.12.3",
+      packages: [
+        { name: "onnx", version: null },
+        { name: "torch", version: "<img src=x onerror=alert(1)>" },
+      ],
+    },
+  });
+  assert.equal(byId("settings-inspect-python").disabled, false);
+  assert.match(byId("settings-packages").textContent, /Not installed/);
+  assert.equal(byId("settings-packages").querySelector("img"), null);
+  byId("settings-inspect-python").click();
+  send({
+    ...messages.at(-1),
+    type: "settings-error",
+    error: "Python not found",
+  });
+  assert.equal(byId("settings-feedback").textContent, "Python not found");
+  assert.equal(byId("settings-inspect-python").disabled, false);
+  assert.equal(byId("settings-packages").children.length, 0);
+  const info = {
+    type: "settings-info",
+    application: {
+      downloadDirectory: "/downloads",
+      pythonPath: "/other/python",
+    },
+    viewer: { panels: { operator: true, find: true, metadata: false } },
+    trusted: true,
+  };
+  byId("settings-inspect-python").click();
+  const staleInspection = messages.at(-1);
+  send(info);
+  send({
+    ...staleInspection,
+    type: "python-info",
+    python: {
+      executable: "/usr/bin/python3",
+      version: "3.12.3",
+      packages: [{ name: "onnx", version: "old" }],
+    },
+  });
+  assert.equal(byId("settings-packages").children.length, 0);
+  assert.equal(byId("settings-python-status").textContent, "Not checked");
+  send({ ...info, trusted: false });
+  assert.equal(byId("settings-inspect-python").disabled, true);
+  send({ type: "settings-error", error: "Invalid path" });
+  assert.equal(byId("settings-inspect-python").disabled, true);
+});
+
+test("Settings applies panel toggles while retaining the last valid sidebar width", (t) => {
+  const { document, window, messages } = openViewer(t);
+  const byId = (id) => document.getElementById(id);
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: {
+        type: "viewer-settings",
+        settings: {
+          width: 420,
+          panels: { operator: true, find: true, metadata: false },
+        },
+      },
+    }),
+  );
+  for (const invalid of ["199", "420.5"]) {
+    byId("settings-width").value = invalid;
+    const before = messages.length;
+    byId("settings-width").dispatchEvent(new window.Event("change"));
+    assert.equal(messages.length, before);
+    const wasHidden = byId("operator-panel").hidden;
+    byId("settings-operator").click();
+    assert.equal(byId("operator-panel").hidden, !wasHidden);
+    assert.equal(messages.at(-1).settings.width, 420);
+    assert.equal(messages.at(-1).settings.panels.operator, wasHidden);
+  }
+  byId("settings-width").value = "";
+  byId("settings-width").dispatchEvent(new window.Event("change"));
+  byId("settings-width").value = "199";
+  byId("settings-find").click();
+  assert.equal(byId("find-panel").hidden, true);
+  assert.equal("width" in messages.at(-1).settings, false);
+  assert.equal(
+    document
+      .querySelector(".graph-body")
+      .style.getPropertyValue("--sidebar-width"),
+    "",
+  );
+});
+
+test("Settings keeps inspections pending after save errors and rejects unrelated responses", (t) => {
+  const { document, window, messages } = openViewer(t);
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  const byId = (id) => document.getElementById(id);
+  const info = {
+    type: "settings-info",
+    application: {
+      downloadDirectory: "/downloads",
+      pythonPath: "/first/python",
+    },
+    viewer: { panels: { operator: true, find: true, metadata: false } },
+    trusted: true,
+  };
+  send(info);
+  byId("settings-inspect-python").click();
+  const first = messages.at(-1);
+  send({ type: "settings-error", error: "Invalid download directory" });
+  assert.equal(
+    byId("settings-feedback").textContent,
+    "Invalid download directory",
+  );
+  assert.equal(byId("settings-inspect-python").disabled, true);
+  assert.equal(
+    byId("settings-python-status").textContent,
+    "Checking Python packages…",
+  );
+  send({
+    ...info,
+    application: { ...info.application, pythonPath: "/second/python" },
+  });
+  byId("settings-inspect-python").click();
+  assert.equal(messages.at(-1), first);
+  const python = {
+    executable: "/first/python",
+    version: "3.12",
+    packages: [{ name: "onnx", version: "old" }],
+  };
+  send({ ...first, type: "python-info", python });
+  assert.equal(byId("settings-packages").children.length, 0);
+  assert.equal(byId("settings-inspect-python").disabled, false);
+  byId("settings-inspect-python").click();
+  const second = messages.at(-1);
+  assert.notEqual(second.requestId, first.requestId);
+  assert.equal(second.pythonPath, "/second/python");
+  send({ ...first, type: "settings-error", error: "Old inspection failed" });
+  send({ ...first, type: "python-info", python });
+  send({
+    ...second,
+    pythonPath: first.pythonPath,
+    type: "python-info",
+    python,
+  });
+  assert.equal(byId("settings-inspect-python").disabled, true);
+  assert.equal(byId("settings-packages").children.length, 0);
+  send({
+    ...second,
+    type: "python-info",
+    python: { ...python, executable: "/second/python", packages: [] },
+  });
+  assert.equal(byId("settings-inspect-python").disabled, false);
+  assert.match(byId("settings-python-status").textContent, /\/second\/python/);
 });
 
 for (const initialTab of ["model", "logs"]) {
@@ -2144,12 +2362,14 @@ for (const initialTab of ["model", "logs"]) {
     });
     tab.focus();
     for (const [key, expected] of [
+      ["ArrowRight", "settings"],
       ["ArrowRight", "model"],
+      ["ArrowLeft", "settings"],
       ["ArrowLeft", "repositories"],
       ["ArrowLeft", "controls"],
       ["ArrowRight", "repositories"],
       ["Home", "model"],
-      ["End", "repositories"],
+      ["End", "settings"],
     ]) {
       document.activeElement.dispatchEvent(
         new window.KeyboardEvent("keydown", { key, bubbles: true }),
@@ -2159,7 +2379,7 @@ for (const initialTab of ["model", "logs"]) {
     }
     assert.deepEqual(
       messages.map(({ type }) => type),
-      ["ready"],
+      ["ready", "get-settings", "get-settings", "get-settings"],
     );
   });
 
@@ -2240,13 +2460,15 @@ for (const initialTab of ["model", "logs"]) {
     tab.focus();
     for (const [key, expected] of [
       ["ArrowRight", "repositories"],
+      ["ArrowRight", "settings"],
       ["ArrowRight", "model"],
+      ["ArrowLeft", "settings"],
       ["ArrowLeft", "repositories"],
       ["ArrowLeft", "controls"],
       ["ArrowLeft", "status"],
       ["ArrowRight", "controls"],
       ["Home", "model"],
-      ["End", "repositories"],
+      ["End", "settings"],
     ]) {
       document.activeElement.dispatchEvent(
         new window.KeyboardEvent("keydown", { key, bubbles: true }),
@@ -2256,7 +2478,7 @@ for (const initialTab of ["model", "logs"]) {
     }
     assert.deepEqual(
       messages.map(({ type }) => type),
-      ["ready"],
+      ["ready", "get-settings", "get-settings", "get-settings"],
     );
   });
 }

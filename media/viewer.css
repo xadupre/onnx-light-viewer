@@ -87,6 +87,7 @@ p {
 #logs-view,
 #status-view,
 #controls-view,
+#settings-view,
 #repositories-view {
   padding: 16px;
   overflow: auto;
@@ -95,8 +96,29 @@ p {
 #logs-view h2,
 #status-view h2,
 #controls-view h2,
+#settings-view h2,
 #repositories-view h2 {
   margin-top: 0;
+}
+#application-settings-form {
+  display: grid;
+  gap: 8px;
+  max-width: 720px;
+  margin: 16px 0;
+}
+#application-settings-form button {
+  justify-self: start;
+}
+#settings-panels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-top: 12px;
+}
+#settings-view input[type="text"] {
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
 }
 .repository-list {
   display: grid;
