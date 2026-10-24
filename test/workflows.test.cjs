@@ -10,6 +10,8 @@ function workflow(name) {
   );
 }
 
+const documentation = workflow("documentation.yml");
+
 test("CI runs unit tests on Linux, macOS, and Windows without building documentation", () => {
   const source = workflow("tests.yml");
   assert.match(source, /runs-on: \$\{\{ matrix\.os \}\}/);
@@ -19,14 +21,16 @@ test("CI runs unit tests on Linux, macOS, and Windows without building documenta
   assert.doesNotMatch(source, /sphinx|setup-python/);
 });
 
-test("documentation builds in a separate Linux-only workflow", () => {
-  const source = workflow("documentation.yml");
-  assert.match(source, /push:\s+branches: \[main\]/);
-  assert.match(source, /pull_request:/);
-  assert.match(source, /workflow_dispatch:/);
-  assert.match(source, /runs-on: ubuntu-latest/);
-  assert.match(source, /python -m sphinx -n -W --keep-going -b html/);
-  assert.doesNotMatch(source, /matrix:|macos-|windows-/);
+test("documentation runs weekly or manually in a Linux-only workflow", () => {
+  assert.match(documentation, /cron: "0 3 \* \* 1"/);
+  assert.match(documentation, /^  workflow_dispatch:/m);
+  assert.doesNotMatch(documentation, /^  (push|pull_request):/m);
+  assert.match(documentation, /runs-on: ubuntu-latest/);
+  assert.match(
+    documentation,
+    /python -m sphinx -n -W --keep-going -b html docs build\/docs\/html/,
+  );
+  assert.doesNotMatch(documentation, /matrix:|macos-|windows-/);
 });
 
 test("releases retain native packages for all supported platforms", () => {
@@ -52,4 +56,21 @@ test("Windows checkouts preserve LF line endings without changing ONNX binaries"
   );
   assert.match(source, /^\* text=auto eol=lf$/m);
   assert.match(source, /^\*\.onnx binary$/m);
+});
+
+test("documentation failures open an issue with a link to the failed run", () => {
+  assert.match(documentation, /needs: docs/);
+  assert.match(
+    documentation,
+    /if: \$\{\{ always\(\) && needs\.docs\.result == 'failure' \}\}/,
+  );
+  assert.match(documentation, /permissions:\n      issues: write/);
+  assert.match(documentation, /GH_TOKEN: \$\{\{ github\.token \}\}/);
+  assert.match(documentation, /GH_REPO: \$\{\{ github\.repository \}\}/);
+  assert.match(documentation, /\/actions\/runs\/\$\{\{ github\.run_id \}\}/);
+  assert.match(
+    documentation,
+    /gh issue create --title "Documentation build failed"/,
+  );
+  assert.match(documentation, /--body ".*\$RUN_URL"/);
 });
