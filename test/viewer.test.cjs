@@ -1852,6 +1852,7 @@ test("Settings edits saved paths and existing sidebar preferences and renders pa
     error: "Python not found",
   });
   assert.equal(byId("settings-feedback").textContent, "Python not found");
+  assert.equal(byId("settings-inspect-python").disabled, false);
   assert.equal(byId("settings-packages").children.length, 0);
   const info = {
     type: "settings-info",

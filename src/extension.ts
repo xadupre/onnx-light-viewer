@@ -618,7 +618,10 @@ async function configurePanel(
               ...getApplicationSettings(),
               pythonPath: message.pythonPath,
             });
-            if (inspectingPackages) return;
+            if (inspectingPackages)
+              throw new Error(
+                "A Python package inspection is already running. Try again when it finishes.",
+              );
             inspectingPackages = true;
             try {
               const python = await inspectPythonPackages(pythonPath);

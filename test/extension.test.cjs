@@ -619,6 +619,30 @@ test("Settings correlates real Python results with the panel's requested interpr
   assert.ok(response.python.packages.some(({ name }) => name === "onnx"));
 });
 
+test("Settings returns a correlated busy error when a recreated webview requests inspection", async (t) => {
+  const extension = await openExtension();
+  t.after(() => extension.dispose());
+  const request = {
+    type: "inspect-python",
+    pythonPath: process.platform === "win32" ? "python" : "python3",
+  };
+  const pending = extension.receive({ ...request, requestId: 2 });
+  await extension.receive({ ...request, requestId: 1 });
+  const busy = extension.messages.at(-1);
+  assert.equal(busy.type, "settings-error");
+  assert.equal(busy.requestId, 1);
+  assert.equal(busy.pythonPath, request.pythonPath);
+  assert.match(busy.error, /inspection is already running/);
+  await pending;
+  const original = extension.messages.at(-1);
+  assert.equal(original.type, "python-info");
+  assert.equal(original.requestId, 2);
+  await extension.receive({ ...request, requestId: 3 });
+  const retry = extension.messages.at(-1);
+  assert.equal(retry.type, "python-info");
+  assert.equal(retry.requestId, 3);
+});
+
 test("Settings rejects invalid paths without overwriting preferences", async (t) => {
   const extension = await openExtension();
   t.after(() => extension.dispose());
