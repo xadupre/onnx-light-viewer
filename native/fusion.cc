@@ -47,7 +47,7 @@ public:
       : Napi::AsyncWorker(env), deferred_(Napi::Promise::Deferred::New(env)),
         source_(std::move(source)), snapshot_(source_->model->SharedCopy()),
         patterns_(std::move(patterns)), anchors_(std::move(anchors)), path_(std::move(path)),
-        weights_(source_->external_weights) {}
+        weights_(source_->external_weights), history_(source_->fusion_history) {}
   Napi::Promise Promise() const { return deferred_.Promise(); }
   void Execute() override {
     try {
@@ -149,8 +149,11 @@ public:
       for (const auto position : removed)
         edit->add_matched_nodes(position);
       const auto initializer_count = graph.Initializers().size();
-      std::map<size_t, std::vector<ol::NodeProto>> insertions;
+      std::map<size_t, std::vector<std::pair<ol::NodeProto, size_t>>> insertions;
+      std::vector<StoredModel::FusionMatch> operation;
       for (const auto &[pattern, match] : accepted) {
+        const auto match_id = operation.size();
+        operation.push_back({pattern->Name(), {}});
         size_t position = graph.Nodes().size();
         if (match.insert_at)
           position = index.Position(*match.insert_at);
@@ -160,17 +163,31 @@ public:
               position = std::min(position, index.Position(*node));
         auto replacement = pattern->Apply(index, match.nodes);
         for (const auto &node : replacement)
-          insertions[position].push_back(node.SharedCopy());
+          insertions[position].emplace_back(node.SharedCopy(), match_id);
       }
+      std::vector<std::vector<size_t>> destinations(graph.Nodes().size());
       size_t output_position = 0;
       for (size_t i = 0; i <= graph.Nodes().size(); ++i) {
-        for (const auto &node : insertions[i]) {
+        for (const auto &[node, match_id] : insertions[i]) {
+          operation[match_id].nodes.push_back(output_position);
           *edit->add_added_nodes() = node.SharedCopy();
           edit->add_added_nodes_positions(output_position++);
         }
         if (i < graph.Nodes().size() && !removed.contains(i))
-          ++output_position;
+          destinations[i].push_back(output_position++);
       }
+      for (size_t i = 0; i < accepted.size(); ++i)
+        for (const auto *node : accepted[i].second.nodes)
+          if (node)
+            destinations[index.Position(*node)] = operation[i].nodes;
+      for (auto &previous : history_)
+        for (auto &match : previous) {
+          std::set<size_t> nodes;
+          for (const auto node : match.nodes)
+            nodes.insert(destinations.at(node).begin(), destinations.at(node).end());
+          match.nodes.assign(nodes.begin(), nodes.end());
+        }
+      history_.push_back(std::move(operation));
       for (size_t i = initializer_count; i < graph.Initializers().size(); ++i) {
         *edit->add_added_initializers() = graph.Initializers()[i].SharedCopy();
         edit->add_added_initializer_positions(i);
@@ -182,6 +199,7 @@ public:
       auto rewritten = original.ApplyRewritings(plan);
       snapshot_ = rewritten.ToModel(snapshot_.ir_version());
       ol::VerifyModel(snapshot_);
+      plan_ = std::move(plan);
     } catch (const std::exception &error) {
       SetError(error.what());
     }
@@ -193,7 +211,15 @@ public:
     stored->file_name = source_->file_name;
     stored->file_path = path_;
     stored->external_weights = std::move(weights_);
+    stored->fusion_base = source_->fusion_base;
+    stored->fusion_previous = source_->fusion_previous;
+    stored->fusion_history = std::move(history_);
+    for (const auto &plan : source_->fusion_plans)
+      stored->fusion_plans.push_back(plan.SharedCopy());
     if (anchors_) {
+      stored->fusion_base = source_->fusion_base ? source_->fusion_base : source_;
+      stored->fusion_previous = source_;
+      stored->fusion_plans.push_back(std::move(plan_));
       deferred_.Resolve(ModelHandle(Env(), stored));
       return;
     }
@@ -232,11 +258,47 @@ private:
   std::string path_;
   std::vector<StoredModel::ExternalWeight> weights_;
   std::vector<Match> matches_;
+  ol::RewritingProto plan_;
+  std::vector<std::vector<StoredModel::FusionMatch>> history_;
 };
 
 } // namespace
 
 void AddFusionMethods(Napi::Env env, Napi::Object result, std::shared_ptr<StoredModel> model) {
+  result.Set("fusionCount", Napi::Function::New(env, [model](const Napi::CallbackInfo &call) {
+               return Napi::Number::New(call.Env(), model->fusion_plans.size());
+             }));
+  result.Set("fusionHistory", Napi::Function::New(env, [model](const Napi::CallbackInfo &call) {
+               auto operations = Napi::Array::New(call.Env(), model->fusion_history.size());
+               for (uint32_t i = 0; i < model->fusion_history.size(); ++i) {
+                 auto operation = Napi::Object::New(call.Env());
+                 const auto &history = model->fusion_history[i];
+                 auto matches = Napi::Array::New(call.Env(), history.size());
+                 for (uint32_t j = 0; j < history.size(); ++j) {
+                   auto match = Napi::Object::New(call.Env());
+                   match.Set("pattern", history[j].pattern);
+                   auto nodes = Napi::Array::New(call.Env(), history[j].nodes.size());
+                   for (uint32_t k = 0; k < history[j].nodes.size(); ++k)
+                     nodes.Set(k, Napi::Number::New(call.Env(), history[j].nodes[k]));
+                   match.Set("nodes", nodes);
+                   matches.Set(j, match);
+                 }
+                 operation.Set("matches", matches);
+                 operations.Set(i, operation);
+               }
+               return operations;
+             }));
+  result.Set("undoFusion",
+             Napi::Function::New(env, [model](const Napi::CallbackInfo &call) -> Napi::Value {
+               try {
+                 if (!model->fusion_previous)
+                   throw std::runtime_error("No fusion operation to undo.");
+                 return ModelHandle(call.Env(), CloneStoredModel(model->fusion_previous));
+               } catch (const std::exception &error) {
+                 Napi::Error::New(call.Env(), error.what()).ThrowAsJavaScriptException();
+                 return call.Env().Undefined();
+               }
+             }));
   result.Set("fusionPatterns",
              Napi::Function::New(env, [model](const Napi::CallbackInfo &call) -> Napi::Value {
                try {

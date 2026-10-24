@@ -40,6 +40,10 @@ struct StoredModel {
     ol::TensorProto reference;
     ol::TensorProto value;
   };
+  struct FusionMatch {
+    std::string pattern;
+    std::vector<size_t> nodes;
+  };
   Napi::Reference<Napi::Uint8Array> source;
   std::shared_ptr<StoredModel> backing;
   std::shared_ptr<ol::core::backend_test::TestCase> backend_case;
@@ -52,8 +56,13 @@ struct StoredModel {
   std::vector<SkippedTensorPayload> skipped;
   bool has_training_info = false;
   std::vector<ExternalWeight> external_weights;
+  std::shared_ptr<StoredModel> fusion_base;
+  std::shared_ptr<StoredModel> fusion_previous;
+  std::vector<ol::RewritingProto> fusion_plans;
+  std::vector<std::vector<FusionMatch>> fusion_history;
 };
 
+std::shared_ptr<StoredModel> CloneStoredModel(const std::shared_ptr<StoredModel> &model);
 Napi::Object ModelHandle(Napi::Env env, std::shared_ptr<StoredModel> model);
 void AddSerializationMethods(Napi::Env env, Napi::Object result,
                              std::shared_ptr<StoredModel> model);

@@ -5,24 +5,33 @@
 #include <stdexcept>
 
 namespace onnx_light_viewer {
+std::shared_ptr<StoredModel> CloneStoredModel(const std::shared_ptr<StoredModel> &model) {
+  auto copy = std::make_shared<StoredModel>();
+  copy->backing = model;
+  copy->model = std::make_shared<ol::ModelProto>(model->model->SharedCopy());
+  copy->file_name = model->file_name;
+  copy->file_path = model->file_path;
+  copy->pipeline_stage = model->pipeline_stage;
+  copy->source_size = model->source_size;
+  copy->source_time = model->source_time;
+  copy->skipped = model->skipped;
+  copy->has_training_info = model->has_training_info;
+  copy->external_weights = model->external_weights;
+  copy->fusion_base = model->fusion_base;
+  copy->fusion_previous = model->fusion_previous;
+  copy->fusion_history = model->fusion_history;
+  for (const auto &plan : model->fusion_plans)
+    copy->fusion_plans.push_back(plan.SharedCopy());
+  return copy;
+}
+
 /** Method closures share ownership, even if JavaScript retains only one method. */
 Napi::Object ModelHandle(Napi::Env env, std::shared_ptr<StoredModel> model) {
   auto result = Napi::Object::New(env);
   result.Set("clone",
              Napi::Function::New(env, [model](const Napi::CallbackInfo &call) -> Napi::Value {
                try {
-                 auto copy = std::make_shared<StoredModel>();
-                 copy->backing = model;
-                 copy->model = std::make_shared<ol::ModelProto>(model->model->SharedCopy());
-                 copy->file_name = model->file_name;
-                 copy->file_path = model->file_path;
-                 copy->pipeline_stage = model->pipeline_stage;
-                 copy->source_size = model->source_size;
-                 copy->source_time = model->source_time;
-                 copy->skipped = model->skipped;
-                 copy->has_training_info = model->has_training_info;
-                 copy->external_weights = model->external_weights;
-                 return ModelHandle(call.Env(), copy);
+                 return ModelHandle(call.Env(), CloneStoredModel(model));
                } catch (const std::exception &error) {
                  Napi::Error::New(call.Env(), error.what()).ThrowAsJavaScriptException();
                  return call.Env().Undefined();

@@ -906,6 +906,9 @@ button:disabled {
   cursor: pointer;
   border-bottom: 1px solid var(--vscode-panel-border, #d0d7de);
 }
+.fusion-match-overlap {
+  background: color-mix(in srgb, var(--panel) 75%, black);
+}
 .fusion-match[aria-current="true"] {
   border-left: 3px solid var(--mint);
   padding-left: 12px;
@@ -916,8 +919,38 @@ button:disabled {
   margin-right: 16px;
 }
 .fusion-match pre {
+  margin: 4px 0 0;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+.fusion-stage {
+  margin-top: 8px;
+}
+#unfuse-history {
+  max-height: 18rem;
+  overflow-y: auto;
+  padding-left: 24px;
+}
+#unfuse-history > li {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+#unfuse-history ul {
+  padding-left: 16px;
+  overflow-wrap: anywhere;
+}
+#unfuse-history button {
+  padding: 2px 0;
+  color: var(--text);
+  text-align: left;
+  background: transparent;
+  border: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+#unfuse-history button:hover:not(:disabled) {
+  color: var(--mint);
+  text-decoration: underline;
 }
 #fusion-panel footer {
   display: flex;
