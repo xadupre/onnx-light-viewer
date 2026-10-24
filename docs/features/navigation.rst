@@ -25,8 +25,9 @@ before a model is loaded.
   connections intersecting the viewport, with a small margin for panning.
 * With focus in the graph or its zoom controls, **F** fits the graph, **R**
   jumps to readable size, and **+** / **-** zoom in / out.
-* Graphs with more than 1,000 nodes open at readable size. Only nearby SVG
-  elements are created and attached; **Fit** uses two batched paths rather than
+* Graphs with at least 250 nodes, including input and output ports, open at
+  readable size. Only nearby SVG elements are created and attached; **Fit**
+  uses two batched paths rather than
   thousands of interactive elements. Long connections crossing the viewport
   are batched when their labels are offscreen.
 * **Find node or operator**, above the sidebar inspector, searches the whole
@@ -36,7 +37,8 @@ before a model is loaded.
   center that node at readable size. Press Enter in the search field or **Go**
   to cycle through all matches.
 * Wheel scrolling moves the view vertically; Shift+wheel moves it horizontally.
-  Horizontal trackpad scrolling is supported.
+  Horizontal trackpad scrolling is supported. Large graphs combine wheel events
+  into one redraw per animation frame without dropping scroll distance.
 * Drag an operator, input or output to move it. Connections and tensor labels
   follow, including while zoomed. Drag a selected node to move the selection.
 * Selected operators, inputs and outputs have a blue fill and a thick gold
