@@ -450,7 +450,6 @@ li > .tensor-info {
   stroke: #397363;
   stroke-width: 1.5;
 }
-.graph-node.selected rect,
 .graph-node:hover rect {
   stroke: var(--mint);
   stroke-width: 2;
@@ -492,10 +491,16 @@ li > .tensor-info {
   stroke: #45698b;
   fill: #17283a;
 }
-.port.selected rect,
 .port:hover rect {
   stroke: var(--mint);
   stroke-width: 2;
+}
+.graph-node.selected > rect,
+.port.selected > rect {
+  fill: #284a72;
+  stroke: #ffd166;
+  stroke-width: 3;
+  vector-effect: non-scaling-stroke;
 }
 .zoom-controls {
   position: absolute;
@@ -996,8 +1001,9 @@ button:disabled {
     fill: Canvas;
     stroke: CanvasText;
   }
-  .graph-node.selected rect,
-  .port.selected rect {
+  .graph-node.selected > rect,
+  .port.selected > rect {
+    fill: Canvas;
     stroke: Highlight;
   }
   .selection-rectangle {

@@ -3885,7 +3885,7 @@ test("keeps graph outlines visible when zooming out in regular and virtualized o
   for (const length of [6, 2000]) {
     load(chainGraph(length));
     document.getElementById("zoom-readable").click();
-    const node = document.querySelector(".graph-node rect");
+    const node = document.querySelector(".graph-node:not(.selected) > rect");
     assert.notEqual(
       window.getComputedStyle(node).getPropertyValue("vector-effect"),
       "non-scaling-stroke",
@@ -4532,6 +4532,69 @@ test("modifier clicks toggle selection and dragging a selected operator moves th
   pointer(graph, "pointerup", before[0].x - 35, before[0].y + 45);
   assertMoved(before, nodePositions(document), [0, 2], -35, 45);
 });
+
+for (const modifier of ["ctrlKey", "metaKey"]) {
+  test(`${modifier} clicks add and remove operators and ports with persistent high-contrast selection`, (t) => {
+    const { document, load, pointer, window } = openViewer(t);
+    load(chainGraph());
+    const graph = document.getElementById("graph");
+    graph.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape" }));
+    const targets = [
+      document.querySelector(".graph-node"),
+      document.querySelector(".port:not(.output)"),
+      document.querySelector(".port.output"),
+    ];
+    const initial = targets.map((target) => {
+      const style = window.getComputedStyle(
+        target.querySelector(":scope > rect"),
+      );
+      return { fill: style.fill, stroke: style.stroke };
+    });
+    const click = (target) => {
+      pointer(target, "pointerdown", 0, 0, { [modifier]: true });
+      pointer(graph, "pointerup", 0, 0, { [modifier]: true });
+      target.dispatchEvent(
+        new window.MouseEvent("click", {
+          bubbles: true,
+          detail: 1,
+          [modifier]: true,
+        }),
+      );
+    };
+    targets.forEach((target, index) => {
+      click(target);
+      assert.equal(target.getAttribute("aria-pressed"), "true");
+      const style = window.getComputedStyle(
+        target.querySelector(":scope > rect"),
+      );
+      assert.notEqual(style.fill, initial[index].fill);
+      assert.notEqual(style.stroke, initial[index].stroke);
+      assert.ok(parseFloat(style.strokeWidth) >= 3);
+      assert.equal(
+        style.getPropertyValue("vector-effect"),
+        "non-scaling-stroke",
+      );
+      assert.equal(document.querySelectorAll(".selected").length, index + 1);
+    });
+    const selectionStyle = window.getComputedStyle(
+      targets[0].querySelector(":scope > rect"),
+    );
+    const selectionFill = selectionStyle.fill;
+    const selectionStroke = selectionStyle.stroke;
+    let remaining = targets.length;
+    for (const index of [1, 0, 2]) {
+      click(targets[index]);
+      assert.equal(targets[index].getAttribute("aria-pressed"), "false");
+      const style = window.getComputedStyle(
+        targets[index].querySelector(":scope > rect"),
+      );
+      assert.notEqual(style.fill, selectionFill);
+      assert.notEqual(style.stroke, selectionStroke);
+      assert.equal(document.querySelectorAll(".selected").length, --remaining);
+    }
+    assert.equal(document.querySelectorAll(".selected").length, 0);
+  });
+}
 
 test("rectangle selection supports reverse and additive gestures and moves together", (t) => {
   const { document, load, pointer, window } = openViewer(t);
