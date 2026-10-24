@@ -1110,90 +1110,129 @@ for (const initialTab of ["model", "logs"]) {
       assert.equal(document.getElementById(`${name}-tab`).tabIndex, -1);
     }
     const repositories = [
-      ["ONNX", "onnx/onnx", "repositories/onnx.png", ["onnx"]],
+      [
+        "ONNX",
+        "onnx/onnx",
+        "repositories/onnx.png",
+        ["onnx"],
+        "https://onnx.ai/onnx/",
+      ],
       [
         "ONNX Runtime",
         "microsoft/onnxruntime",
         "repositories/onnxruntime.png",
         ["onnxruntime"],
+        "https://onnxruntime.ai/docs/",
       ],
       [
         "ONNX Runtime Extensions",
         "microsoft/onnxruntime-extensions",
         "repositories/onnxruntime.png",
         ["onnxruntime", "onnxruntime-extensions"],
+        "https://onnxruntime.ai/docs/extensions/",
       ],
       [
         "ONNX Runtime GenAI",
         "microsoft/onnxruntime-genai",
         "repositories/onnxruntime.png",
         ["onnxruntime-genai"],
+        "https://onnxruntime.ai/docs/genai/",
       ],
       [
         "onnx-light",
         "xadupre/onnx-light",
         "repositories/onnx-light.svg",
         ["onnx-light"],
+        "https://sdpython.github.io/doc/onnx-light/dev/index.html",
       ],
       [
         "onnx-light-cpu",
         "xadupre/onnx-light-cpu",
         "repositories/onnx-light-cpu.svg",
         ["onnx-light"],
+        "https://xadupre.github.io/docs/onnx-light-cpu/",
       ],
       [
         "onnx-light-ort",
         "xadupre/onnx-light-ort",
         "repositories/onnx-light-ort.svg",
         ["onnx-light", "onnxruntime"],
+        "https://xadupre.github.io/onnx-light-ort/",
       ],
       [
         "onnx-light-viewer",
         "xadupre/onnx-light-viewer",
         "logo.svg",
         ["VS Code", "onnx-light"],
+        "https://xadupre.github.io/docs/onnx-light-viewer/",
       ],
       [
         "Mobius",
         "onnxruntime/mobius",
         "repositories/onnxruntime.png",
         ["Transformers", "Diffusers", "ONNX Runtime GenAI"],
+        "https://onnxruntime.github.io/mobius/",
       ],
       [
         "modelbuilder",
         "microsoft/onnxruntime-genai/tree/main/src/python/py/models",
         "repositories/onnxruntime.png",
         ["Transformers", "onnxruntime-genai"],
+        "https://onnxruntime.ai/docs/genai/howto/build-model.html",
       ],
       [
         "mbext",
         "xadupre/mbext",
         "repositories/mbext.svg",
-        ["Transformers", "onnxruntime-genai", "modelbuilder"],
+        ["Transformers", "onnxruntime-genai", "modelbuilder", "onnx-light"],
+        "https://xadupre.github.io/docs/mbext/index.html",
       ],
       [
         "yet-another-onnx-builder",
         "xadupre/yet-another-onnx-builder",
         "repositories/yet-another-onnx-builder.svg",
-        ["PyTorch", "TensorFlow", "scikit-learn", "yobx", "onnx-light"],
+        [
+          "PyTorch",
+          "TensorFlow",
+          "Keras",
+          "LiteRT",
+          "scikit-learn",
+          "scikit-survival",
+          "category_encoders",
+          "imbalanced-learn",
+          "statsmodels",
+          "XGBoost",
+          "LightGBM",
+          "NumPy",
+          "SQL",
+          "pandas",
+          "Polars",
+          "JAX",
+          "yobx",
+          "onnx-light",
+        ],
+        "https://xadupre.github.io/docs/yet-another-onnx-builder/index.html",
       ],
       [
         "sklearn-onnx",
         "onnx/sklearn-onnx",
         "repositories/sklearn-onnx.png",
         ["scikit-learn"],
+        "https://onnx.ai/sklearn-onnx/",
       ],
       [
         "tensorflow-onnx",
         "onnx/tensorflow-onnx",
         "repositories/onnx.png",
         ["TensorFlow", "Keras", "TFLite", "TensorFlow.js"],
+        "https://github.com/onnx/tensorflow-onnx/blob/main/README.md",
       ],
       [
         "onnxmltools",
         "onnx/onnxmltools",
         "repositories/onnxmltools.png",
         ["XGBoost", "LightGBM", "CatBoost", "Core ML"],
+        "https://onnx.ai/onnxmltools/",
       ],
     ];
     assert.deepEqual(
@@ -1202,18 +1241,43 @@ for (const initialTab of ["model", "logs"]) {
     );
     assert.deepEqual(
       [
-        ...panel.querySelectorAll(".repository-list")[2].querySelectorAll("a"),
+        ...panel
+          .querySelectorAll(".repository-list")[2]
+          .querySelectorAll(".repository-heading > a:first-child"),
       ].map((link) => link.textContent),
       repositories.slice(8).map(([name]) => name),
     );
     const cards = [...panel.querySelectorAll(".repository-list li")];
     assert.equal(cards.length, repositories.length);
     cards.forEach((card, index) => {
-      const [name, repository, logo, packages] = repositories[index];
+      const [name, repository, logo, packages, documentationUrl] =
+        repositories[index];
       const link = card.querySelector("a");
       assert.equal(link.textContent, name);
       assert.equal(link.href, `https://github.com/${repository}`);
+      const documentationLink = card.querySelector(".repository-documentation");
+      assert.ok(documentationLink);
+      assert.equal(card.querySelectorAll("a").length, 2);
+      assert.equal(documentationLink.href, documentationUrl);
+      assert.equal(
+        documentationLink.getAttribute("aria-label"),
+        `${name} documentation`,
+      );
+      assert.equal(documentationLink.title, `${name} documentation`);
+      assert.equal(
+        documentationLink.querySelector("svg").getAttribute("aria-hidden"),
+        "true",
+      );
+      assert.ok(documentationLink.querySelector("svg path"));
+      documentationLink.focus();
+      assert.equal(document.activeElement, documentationLink);
       assert.ok(card.querySelector("p").textContent.trim().length > 20);
+      if (name === "mbext") {
+        assert.match(
+          card.querySelector("p").textContent,
+          /rewrite.*onnx-light.*faster/i,
+        );
+      }
       const specialization = card.querySelector(".repository-specialization");
       assert.ok(specialization);
       assert.equal(

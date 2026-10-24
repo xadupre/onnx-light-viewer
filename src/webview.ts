@@ -18,6 +18,8 @@ export function webviewHtml(
   onnxLightVersion: string,
   initialTab: "model" | "logs" = "model",
 ): string {
+  const documentationLink = (name: string, url: string): string =>
+    `<a class="repository-documentation" href="${url}" aria-label="${name} documentation" title="${name} documentation"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path d="M12 5v16M12 5C9 3 5 3 2 4v15c3-1 7-1 10 2 3-3 7-3 10-2V4c-3-1-7-1-10 1Z"/></svg></a>`;
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -249,25 +251,37 @@ export function webviewHtml(
       <h3>Official projects</h3>
       <ul class="repository-list">
         <li>
+          <div class="repository-heading">
           <a href="https://github.com/onnx/onnx"><svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true"><circle cx="5" cy="12" r="3"/><circle cx="18" cy="5" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8 11 7-5M8 13l7 5"/></svg>ONNX</a>
+          ${documentationLink("ONNX", "https://onnx.ai/onnx/")}
+          </div>
           <img class="repository-logo" src="${resource("repositories/onnx.png")}" alt="" width="96" height="64">
           <p>An open standard for representing machine learning models, with a common model format and operator definitions.</p>
           <p class="repository-specialization"><strong>Specialized for:</strong> Framework-independent model interchange with the onnx package.</p>
         </li>
         <li>
+          <div class="repository-heading">
           <a href="https://github.com/microsoft/onnxruntime"><svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m10 7 7 5-7 5Z"/></svg>ONNX Runtime</a>
+          ${documentationLink("ONNX Runtime", "https://onnxruntime.ai/docs/")}
+          </div>
           <img class="repository-logo" src="${resource("repositories/onnxruntime.png")}" alt="" width="96" height="64">
           <p>A cross-platform engine for accelerating machine learning inference and training across hardware backends.</p>
           <p class="repository-specialization"><strong>Specialized for:</strong> ONNX model execution with onnxruntime.</p>
         </li>
         <li>
+          <div class="repository-heading">
           <a href="https://github.com/microsoft/onnxruntime-extensions"><svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true"><path d="M8 4H4v16h16v-7h-4a3 3 0 1 1 0-6h4V4h-7V3a3 3 0 0 0-6 0v1"/></svg>ONNX Runtime Extensions</a>
+          ${documentationLink("ONNX Runtime Extensions", "https://onnxruntime.ai/docs/extensions/")}
+          </div>
           <img class="repository-logo" src="${resource("repositories/onnxruntime.png")}" alt="" width="96" height="64">
           <p>Custom operators and tools for adding preprocessing and postprocessing to ONNX models.</p>
           <p class="repository-specialization"><strong>Specialized for:</strong> onnxruntime preprocessing and postprocessing with onnxruntime-extensions.</p>
         </li>
         <li>
+          <div class="repository-heading">
           <a href="https://github.com/microsoft/onnxruntime-genai"><svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true"><path d="m12 3 3 6 6 3-6 3-3 6-3-6-6-3 6-3ZM19 2v4M17 4h4"/></svg>ONNX Runtime GenAI</a>
+          ${documentationLink("ONNX Runtime GenAI", "https://onnxruntime.ai/docs/genai/")}
+          </div>
           <img class="repository-logo" src="${resource("repositories/onnxruntime.png")}" alt="" width="96" height="64">
           <p>Generative AI APIs for ONNX Runtime, including tokenization, generation loops, sampling and beam search.</p>
           <p class="repository-specialization"><strong>Specialized for:</strong> Generative model execution with onnxruntime-genai.</p>
@@ -276,25 +290,37 @@ export function webviewHtml(
       <h3>onnx-light ecosystem</h3>
       <ul class="repository-list">
         <li>
+          <div class="repository-heading">
           <a href="https://github.com/xadupre/onnx-light"><svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true"><path d="m14 2-9 12h6l-1 8 9-13h-6Z"/></svg>onnx-light</a>
+          ${documentationLink("onnx-light", "https://sdpython.github.io/doc/onnx-light/dev/index.html")}
+          </div>
           <img class="repository-logo" src="${resource("repositories/onnx-light.svg")}" alt="" width="96" height="64">
           <p>A lightweight C++ library with Python bindings for manipulating ONNX models, shape inference and graph optimization.</p>
           <p class="repository-specialization"><strong>Specialized for:</strong> ONNX model I/O and graph analysis with onnx-light.</p>
         </li>
         <li>
+          <div class="repository-heading">
           <a href="https://github.com/xadupre/onnx-light-cpu"><svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4m6-4v4M9 18v4m6-4v4M2 9h4m-4 6h4m12-6h4m-4 6h4M10 10h4v4h-4Z"/></svg>onnx-light-cpu</a>
+          ${documentationLink("onnx-light-cpu", "https://xadupre.github.io/docs/onnx-light-cpu/")}
+          </div>
           <img class="repository-logo" src="${resource("repositories/onnx-light-cpu.svg")}" alt="" width="96" height="64">
           <p>CPU execution kernels for running ONNX models with onnx-light.</p>
           <p class="repository-specialization"><strong>Specialized for:</strong> onnx-light CPU execution.</p>
         </li>
         <li>
+          <div class="repository-heading">
           <a href="https://github.com/xadupre/onnx-light-ort"><svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true"><path d="M8 4v5m8-5v5M5 9h14v3a7 7 0 0 1-14 0ZM12 19v3"/></svg>onnx-light-ort</a>
+          ${documentationLink("onnx-light-ort", "https://xadupre.github.io/onnx-light-ort/")}
+          </div>
           <img class="repository-logo" src="${resource("repositories/onnx-light-ort.svg")}" alt="" width="96" height="64">
           <p>Custom-operator interoperability between onnx-light and ONNX Runtime, in both directions.</p>
           <p class="repository-specialization"><strong>Specialized for:</strong> onnx-light and onnxruntime interoperability.</p>
         </li>
         <li>
+          <div class="repository-heading">
           <a href="https://github.com/xadupre/onnx-light-viewer"><img src="${resource("logo.svg")}" alt="" width="28" height="28">onnx-light-viewer</a>
+          ${documentationLink("onnx-light-viewer", "https://xadupre.github.io/docs/onnx-light-viewer/")}
+          </div>
           <img class="repository-logo" src="${resource("logo.svg")}" alt="" width="96" height="64">
           <p>An interactive ONNX graph viewer for VS Code, powered by onnx-light.</p>
           <p class="repository-specialization"><strong>Specialized for:</strong> VS Code model inspection with onnx-light.</p>
@@ -304,43 +330,64 @@ export function webviewHtml(
       <p>These external tools create ONNX files to open in the viewer; they are not built-in export commands. Supported models and target runtimes vary by exporter.</p>
       <ul class="repository-list">
         <li>
+          <div class="repository-heading">
           <a href="https://github.com/onnxruntime/mobius"><svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true"><path d="M14 3h7v7M21 3l-9 9M10 3H3v18h18v-7"/></svg>Mobius</a>
+          ${documentationLink("Mobius", "https://onnxruntime.github.io/mobius/")}
+          </div>
           <img class="repository-logo" src="${resource("repositories/onnxruntime.png")}" alt="" width="96" height="64">
           <p>Builds ONNX graphs with ONNX Script and applies pretrained weights rather than tracing a PyTorch model.</p>
           <p class="repository-specialization"><strong>Specialized for:</strong> Hugging Face Transformers and Diffusers models, including ONNX Runtime GenAI workflows.</p>
         </li>
         <li>
+          <div class="repository-heading">
           <a href="https://github.com/microsoft/onnxruntime-genai/tree/main/src/python/py/models"><svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true"><path d="M14 3h7v7M21 3l-9 9M10 3H3v18h18v-7"/></svg>modelbuilder</a>
+          ${documentationLink("modelbuilder", "https://onnxruntime.ai/docs/genai/howto/build-model.html")}
+          </div>
           <img class="repository-logo" src="${resource("repositories/onnxruntime.png")}" alt="" width="96" height="64">
           <p>The ONNX Runtime GenAI model builder constructs optimized and quantized ONNX graphs for supported generative architectures.</p>
           <p class="repository-specialization"><strong>Specialized for:</strong> Hugging Face Transformers models targeting onnxruntime-genai.</p>
         </li>
         <li>
+          <div class="repository-heading">
           <a href="https://github.com/xadupre/mbext"><svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true"><path d="M14 3h7v7M21 3l-9 9M10 3H3v18h18v-7"/></svg>mbext</a>
+          ${documentationLink("mbext", "https://xadupre.github.io/docs/mbext/index.html")}
+          </div>
           <img class="repository-logo" src="${resource("repositories/mbext.svg")}" alt="" width="96" height="64">
-          <p>Extends the GenAI model builder with additional architectures and fast, offline export-validation tests.</p>
-          <p class="repository-specialization"><strong>Specialized for:</strong> Hugging Face Transformers models targeting onnxruntime-genai, through the modelbuilder package.</p>
+          <p>A rewrite using onnx-light for faster ONNX model construction and export.</p>
+          <p class="repository-specialization"><strong>Specialized for:</strong> Hugging Face Transformers models targeting onnxruntime-genai, using onnx-light through the modelbuilder package.</p>
         </li>
         <li>
+          <div class="repository-heading">
           <a href="https://github.com/xadupre/yet-another-onnx-builder"><svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true"><path d="M14 3h7v7M21 3l-9 9M10 3H3v18h18v-7"/></svg>yet-another-onnx-builder</a>
+          ${documentationLink("yet-another-onnx-builder", "https://xadupre.github.io/docs/yet-another-onnx-builder/index.html")}
+          </div>
           <img class="repository-logo" src="${resource("repositories/yet-another-onnx-builder.svg")}" alt="" width="96" height="64">
           <p>Provides a shared ONNX graph builder and the yobx.to_onnx conversion API across multiple source libraries.</p>
-          <p class="repository-specialization"><strong>Specialized for:</strong> PyTorch, TensorFlow/LiteRT, scikit-learn, XGBoost and LightGBM models, using yobx and onnx-light.</p>
+          <p class="repository-specialization"><strong>Specialized for:</strong> PyTorch, TensorFlow/Keras/LiteRT, scikit-learn, scikit-survival, category_encoders, imbalanced-learn, statsmodels, XGBoost and LightGBM, plus NumPy function tracing, using yobx and onnx-light. SQL queries, pandas/Polars-style DataFrame transformations and JAX support are in progress.</p>
         </li>
         <li>
+          <div class="repository-heading">
           <a href="https://github.com/onnx/sklearn-onnx"><svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true"><path d="M14 3h7v7M21 3l-9 9M10 3H3v18h18v-7"/></svg>sklearn-onnx</a>
+          ${documentationLink("sklearn-onnx", "https://onnx.ai/sklearn-onnx/")}
+          </div>
           <img class="repository-logo" src="${resource("repositories/sklearn-onnx.png")}" alt="" width="96" height="64">
           <p>Converts supported scikit-learn estimators and pipelines to ONNX through the skl2onnx package.</p>
           <p class="repository-specialization"><strong>Specialized for:</strong> scikit-learn models and pipelines.</p>
         </li>
         <li>
+          <div class="repository-heading">
           <a href="https://github.com/onnx/tensorflow-onnx"><svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true"><path d="M14 3h7v7M21 3l-9 9M10 3H3v18h18v-7"/></svg>tensorflow-onnx</a>
+          ${documentationLink("tensorflow-onnx", "https://github.com/onnx/tensorflow-onnx/blob/main/README.md")}
+          </div>
           <img class="repository-logo" src="${resource("repositories/onnx.png")}" alt="" width="96" height="64">
           <p>Converts TensorFlow, Keras and TFLite models to ONNX through tf2onnx, with experimental TensorFlow.js support.</p>
           <p class="repository-specialization"><strong>Specialized for:</strong> TensorFlow, Keras, TFLite and TensorFlow.js.</p>
         </li>
         <li>
+          <div class="repository-heading">
           <a href="https://github.com/onnx/onnxmltools"><svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true"><path d="M14 3h7v7M21 3l-9 9M10 3H3v18h18v-7"/></svg>onnxmltools</a>
+          ${documentationLink("onnxmltools", "https://onnx.ai/onnxmltools/")}
+          </div>
           <img class="repository-logo" src="${resource("repositories/onnxmltools.png")}" alt="" width="96" height="64">
           <p>Converts models from multiple machine-learning toolkits to ONNX, including boosted-tree libraries.</p>
           <p class="repository-specialization"><strong>Specialized for:</strong> XGBoost, LightGBM, CatBoost, Core ML and other ML toolkits.</p>
