@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="310" viewBox="0 0 800 310" role="img" aria-labelledby="title description">
+  <title id="title">Iterative optimization and previewed global passes</title>
+  <desc id="description">A separate Optimize panel runs the full native optimizer with selected patterns and priority groups. Fuse uses Run Matching and Fuse selected for IdentityRemoval, ConstantFolding and RemoveUnusedNodes, just like other patterns. Either committed action is reversed by one Unfuse operation. Matching does not change the source model.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 10 5 0 10Z" fill="#91d9c6"/></marker>
+  </defs>
+  <rect width="800" height="310" rx="12" fill="#101c2d"/>
+  <g fill="#1c3045" stroke="#7895b2" stroke-width="1.5">
+    <rect x="20" y="110" width="160" height="65" rx="8"/>
+    <rect x="245" y="25" width="265" height="65" rx="8"/>
+    <rect x="245" y="190" width="265" height="65" rx="8"/>
+    <rect x="605" y="110" width="175" height="65" rx="8"/>
+  </g>
+  <g fill="none" stroke="#91d9c6" stroke-width="2" marker-end="url(#arrow)">
+    <path d="M180 125H210V58H238"/>
+    <path d="M510 58H555V125H598"/>
+    <path d="M180 160H210V223H238"/>
+    <path d="M510 223H555V160H598"/>
+    <path d="M693 180V285H100V182"/>
+  </g>
+  <g fill="#edf7ff" font-family="system-ui, sans-serif" font-size="15" text-anchor="middle">
+    <text x="100" y="136">Original model</text><text x="100" y="158">In memory</text>
+    <text x="378" y="52">Choose patterns / priorities</text><text x="378" y="76">Optimize: native iterations</text>
+    <text x="378" y="216">Run Matching: global pass</text><text x="378" y="240">Original model unchanged</text>
+    <text x="693" y="136">Modified model</text><text x="693" y="158">Inspect result nodes</text>
+    <text x="575" y="245">Fuse selected</text>
+    <text x="400" y="279">Unfuse: one operation</text>
+  </g>
+</svg>

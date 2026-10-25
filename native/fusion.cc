@@ -1,33 +1,23 @@
 /** @file Pattern enumeration, preview and application on independent snapshots. */
 #include "model_io.h"
 #include "model_storage.h"
+#include "rewriting_trace.h"
 #include "tensor_preview.h"
 #include <algorithm>
 #include <cmath>
 #include <map>
 #include <onnx_core/builder/graph_graph.h>
 #include <onnx_core/builder/pattern_registry.h>
+#include <onnx_extensions/kernels/kernel_dispatch_table.h>
 #include <onnx_extensions/patterns/dispatch_table.h>
 #include <onnx_extensions/shapes/dispatch_table.h>
 #include <onnx_proto/onnx_verify.h>
 #include <stdexcept>
 #include <tuple>
+#include <unordered_map>
 
 namespace onnx_light_viewer {
 namespace {
-
-using FusionNodeKey = std::tuple<std::string, std::string, std::string, std::string,
-                                 std::vector<std::string>, std::vector<std::string>>;
-
-FusionNodeKey NodeOrderKey(const ol::NodeProto &node) {
-  std::vector<std::string> inputs, outputs;
-  for (const auto &value : node.input())
-    inputs.push_back(value.value());
-  for (const auto &value : node.output())
-    outputs.push_back(value.value());
-  return {node.domain().value(), node.op_type().value(), node.overload().value(),
-          node.name().value(),   std::move(inputs),      std::move(outputs)};
-}
 
 std::vector<size_t> FinalizedNodeOrder(const ol::ModelProto &model,
                                        const std::vector<FusionNodeKey> &inserted_order) {
@@ -51,7 +41,8 @@ std::vector<size_t> FinalizedNodeOrder(const ol::ModelProto &model,
 
 void FinalizeCapturedPlan(const ol::ModelProto &model, ol::RewritingProto &plan,
                           std::vector<std::vector<StoredModel::FusionMatch>> &history,
-                          const std::vector<FusionNodeKey> &inserted_order) {
+                          const std::vector<FusionNodeKey> &inserted_order,
+                          const ol::core::builder::GraphBuilder &builder) {
   const auto permutation = FinalizedNodeOrder(model, inserted_order);
   bool reordered = false;
   for (size_t i = 0; i < permutation.size(); ++i)
@@ -71,60 +62,9 @@ void FinalizeCapturedPlan(const ol::ModelProto &model, ol::RewritingProto &plan,
   for (size_t i = 0; i < final_nodes.size(); ++i) {
     reorder->add_matched_nodes(i);
     *reorder->add_added_nodes() = final_nodes[i].SharedCopy();
+    reorder->ref_added_nodes()[i].ref_attribute() = builder.Nodes()[i].attribute();
     reorder->add_added_nodes_positions(i);
   }
-}
-
-std::vector<size_t> TraceRewriting(const ol::LocalRewritingProto &edit,
-                                   std::vector<FusionNodeKey> &nodes,
-                                   std::vector<std::vector<StoredModel::FusionMatch>> &history) {
-  if (!edit.graph_path().empty())
-    return {};
-  const std::set<size_t> removed(edit.matched_nodes().begin(), edit.matched_nodes().end());
-  if (removed.size() > nodes.size())
-    throw std::runtime_error("Invalid rewriting node count.");
-  const size_t count = nodes.size() - removed.size() + edit.added_nodes_size();
-  std::vector<std::optional<FusionNodeKey>> next(count);
-  std::vector<size_t> added;
-  for (size_t i = 0; i < edit.added_nodes().size(); ++i) {
-    const auto position = edit.added_nodes_positions(i);
-    if (position >= count || next[position])
-      throw std::runtime_error("Invalid rewriting insertion position.");
-    next[position] = NodeOrderKey(edit.added_nodes(i));
-    added.push_back(position);
-  }
-  std::vector<std::vector<size_t>> destinations(nodes.size());
-  size_t position = 0;
-  for (size_t i = 0; i < nodes.size(); ++i) {
-    if (removed.contains(i)) {
-      for (const auto target : added)
-        if (nodes[i] == *next[target])
-          destinations[i].push_back(target);
-      if (destinations[i].empty())
-        destinations[i] = added;
-    } else {
-      while (position < count && next[position])
-        ++position;
-      if (position == count)
-        throw std::runtime_error("Invalid rewriting node positions.");
-      next[position] = nodes[i];
-      destinations[i].push_back(position++);
-    }
-  }
-  for (auto &operation : history)
-    for (auto &match : operation) {
-      std::set<size_t> mapped;
-      for (const auto node : match.nodes)
-        mapped.insert(destinations.at(node).begin(), destinations.at(node).end());
-      match.nodes.assign(mapped.begin(), mapped.end());
-    }
-  nodes.clear();
-  for (auto &node : next) {
-    if (!node)
-      throw std::runtime_error("Incomplete rewriting node order.");
-    nodes.push_back(std::move(*node));
-  }
-  return added;
 }
 
 Napi::Object FusionNode(Napi::Env env, const ol::NodeProto &node) {
@@ -151,11 +91,122 @@ Napi::Object FusionNode(Napi::Env env, const ol::NodeProto &node) {
   return result;
 }
 
+using TransformationScopes = std::map<std::vector<std::string>, ol::GraphProto>;
+
+TransformationScopes CaptureScopes(const ol::core::builder::GraphBuilder &builder) {
+  // Keep native *_ref attributes so parent replacements reuse existing subgraphs.
+  TransformationScopes scopes;
+  const auto visit = [&](const auto &self, const auto &scope,
+                         const std::vector<std::string> &path) -> void {
+    auto &graph = scopes[path];
+    for (const auto &node : scope.Nodes())
+      *graph.add_node() = node.SharedCopy();
+    for (const auto &tensor : scope.Initializers())
+      *graph.add_initializer() = tensor.SharedCopy();
+    for (const auto &tensor : scope.ExtendedInitializers())
+      *graph.add_extended_initializer() = tensor.SharedCopy();
+    for (const auto &child : scope.Subgraphs()) {
+      auto nested = path;
+      nested.push_back(child->name());
+      self(self, *child, nested);
+    }
+  };
+  visit(visit, builder, {});
+  return scopes;
+}
+
+bool CaptureTransformation(const ol::GraphProto &original, const ol::GraphProto &updated,
+                           const std::string &name, ol::RewritingProto &plan,
+                           const std::vector<std::string> &path) {
+  ol::LocalRewritingProto edit;
+  edit.set_pattern_name(name);
+  for (const auto &scope : path)
+    edit.add_graph_path(scope);
+  std::map<FusionNodeKey, std::vector<size_t>> positions;
+  for (size_t i = 0; i < original.node().size(); ++i)
+    positions[NodeOrderKey(original.node(i))].push_back(i);
+  std::set<size_t> retained;
+  size_t first = 0;
+  for (size_t i = 0; i < updated.node().size(); ++i) {
+    const auto &node = updated.node(i);
+    const auto &candidates = positions[NodeOrderKey(node)];
+    const auto found = std::find_if(candidates.begin(), candidates.end(), [&](size_t index) {
+      return index >= first && original.node(index).Equals(node);
+    });
+    if (found != candidates.end()) {
+      retained.insert(*found);
+      first = *found + 1;
+    } else {
+      *edit.add_added_nodes() = node.SharedCopy();
+      edit.add_added_nodes_positions(i);
+    }
+  }
+  for (size_t i = 0; i < original.node().size(); ++i)
+    if (!retained.contains(i))
+      edit.add_matched_nodes(i);
+  std::set<size_t> retained_initializers;
+  std::unordered_map<std::string, size_t> initializer_positions;
+  initializer_positions.reserve(original.initializer().size());
+  for (size_t i = 0; i < original.initializer().size(); ++i)
+    initializer_positions.emplace(original.initializer(i).name().value(), i);
+  size_t first_initializer = 0;
+  for (size_t i = 0; i < updated.initializer().size(); ++i) {
+    const auto &tensor = updated.initializer(i);
+    const auto found = initializer_positions.find(tensor.name().value());
+    if (found != initializer_positions.end()) {
+      const auto position = found->second;
+      if (position < first_initializer || !original.initializer(position).Equals(tensor))
+        throw std::runtime_error("Cannot capture " + name + ": existing initializer " +
+                                 tensor.name().value() + " changed or moved.");
+      retained_initializers.insert(position);
+      first_initializer = position + 1;
+    } else {
+      *edit.add_added_initializers() = tensor.SharedCopy();
+      edit.add_added_initializer_positions(i);
+    }
+  }
+  for (size_t i = 0; i < original.initializer().size(); ++i)
+    if (!retained_initializers.contains(i))
+      edit.add_removed_initializers(i);
+  size_t next = 0;
+  for (size_t i = 0; i < original.extended_initializer().size(); ++i) {
+    if (next < updated.extended_initializer().size() &&
+        original.extended_initializer(i).Equals(updated.extended_initializer(next))) {
+      ++next;
+    } else {
+      edit.add_removed_extended_initializers(i);
+    }
+  }
+  if (next != updated.extended_initializer().size())
+    throw std::runtime_error("Optimization introduced an unsupported extended initializer.");
+  if (edit.matched_nodes().empty() && edit.added_nodes().empty() &&
+      edit.removed_initializers().empty() && edit.added_initializers().empty() &&
+      edit.removed_extended_initializers().empty())
+    return false;
+  *plan.add_rewrites() = std::move(edit);
+  return true;
+}
+
+void PreserveFunctionBodies(ol::ModelProto &model, const ol::ModelProto &original) {
+  for (auto &function : model.ref_functions())
+    for (const auto &source : original.functions())
+      if (function.name() == source.name() && function.domain() == source.domain() &&
+          function.overload() == source.overload()) {
+        function = source.SharedCopy();
+        break;
+      }
+}
+
+bool IsGlobalPass(const std::string &name) {
+  return name == "IdentityRemoval" || name == "ConstantFolding" || name == "RemoveUnusedNodes";
+}
+
 class FusionWorker : public Napi::AsyncWorker {
 public:
   FusionWorker(Napi::Env env, std::shared_ptr<StoredModel> source,
                std::vector<std::string> patterns, std::optional<std::vector<size_t>> anchors,
-               std::string path, std::string scenario = "", bool all = false)
+               std::string path, std::string scenario = "", bool all = false,
+               std::string operation = "")
       : Napi::AsyncWorker(env), deferred_(Napi::Promise::Deferred::New(env)),
         source_(std::move(source)),
         canonical_(!scenario.empty() && source_->rewriting_base ? source_->rewriting_base
@@ -163,7 +214,7 @@ public:
         snapshot_(canonical_->model->SharedCopy()), patterns_(std::move(patterns)),
         anchors_(std::move(anchors)), path_(std::move(path)),
         weights_(canonical_->external_weights), history_(source_->fusion_history),
-        scenario_(std::move(scenario)), all_(all) {}
+        scenario_(std::move(scenario)), all_(all), operation_(std::move(operation)) {}
   Napi::Promise Promise() const { return deferred_.Promise(); }
   void Execute() override {
     try {
@@ -187,8 +238,28 @@ public:
           weights_.push_back({std::move(reference), tensor->SharedCopy()});
         }
       ol::VerifyModel(snapshot_);
+      if (!operation_.empty()) {
+        ApplyTransformation();
+        return;
+      }
       if (!scenario_.empty()) {
         ApplyScenario();
+        return;
+      }
+      if (std::any_of(patterns_.begin(), patterns_.end(), IsGlobalPass)) {
+        if (patterns_.size() != 1 || (anchors_ && *anchors_ != std::vector<size_t>{0}))
+          throw std::runtime_error("Apply a global pass individually.");
+        const auto original = snapshot_.SharedCopy();
+        operation_ = patterns_[0];
+        ApplyTransformation();
+        if (anchors_ && plan_.rewrites().empty())
+          throw std::runtime_error("The selected fusion preview is no longer applicable.");
+        if (!anchors_) {
+          snapshot_ = original.SharedCopy();
+          history_ = source_->fusion_history;
+          operation_.clear();
+          plan_.clear_rewrites();
+        }
         return;
       }
       namespace builder = ol::core::builder;
@@ -323,13 +394,17 @@ public:
       auto rewritten = original.ApplyRewritings(plan);
       snapshot_ = rewritten.ToModel(snapshot_.ir_version());
       ol::VerifyModel(snapshot_);
-      FinalizeCapturedPlan(snapshot_, plan, history_, inserted_order);
+      FinalizeCapturedPlan(snapshot_, plan, history_, inserted_order, rewritten);
       plan_ = std::move(plan);
     } catch (const std::exception &error) {
       SetError(error.what());
     }
   }
   void OnOK() override {
+    if (!operation_.empty() && plan_.rewrites().empty()) {
+      deferred_.Resolve(ModelHandle(Env(), CloneStoredModel(source_)));
+      return;
+    }
     auto stored = std::make_shared<StoredModel>();
     stored->backing = source_;
     stored->model = std::make_shared<ol::ModelProto>(std::move(snapshot_));
@@ -351,7 +426,7 @@ public:
     }
     for (const auto &plan : source_->fusion_plans)
       stored->fusion_plans.push_back(plan.SharedCopy());
-    if (anchors_) {
+    if (anchors_ || !operation_.empty()) {
       stored->fusion_base = source_->fusion_base ? source_->fusion_base : source_;
       stored->fusion_previous = source_;
       stored->fusion_plans.push_back(std::move(plan_));
@@ -367,6 +442,8 @@ public:
     for (uint32_t i = 0; i < matches_.size(); ++i) {
       auto item = Napi::Object::New(Env());
       item.Set("anchor", Napi::Number::New(Env(), matches_[i].anchor));
+      if (patterns_.size() == 1 && IsGlobalPass(patterns_[0]))
+        item.Set("global", true);
       auto nodes = Napi::Array::New(Env(), matches_[i].nodes.size());
       for (uint32_t j = 0; j < matches_[i].nodes.size(); ++j)
         nodes.Set(j, Napi::Number::New(Env(), matches_[i].nodes[j]));
@@ -383,6 +460,184 @@ public:
   void OnError(const Napi::Error &error) override { deferred_.Reject(error.Value()); }
 
 private:
+  void ApplyTransformation() {
+    namespace builder = ol::core::builder;
+    const auto original = snapshot_.SharedCopy();
+    builder::GraphBuilder graph(snapshot_);
+    auto scopes = CaptureScopes(graph);
+    const auto capture = [&](const std::string &name) {
+      auto updated = snapshot_.SharedCopy();
+      *updated.mutable_graph() = graph.BuildGraph();
+      auto updated_scopes = CaptureScopes(graph);
+      // Rewrite children before removing enclosing values they previously captured.
+      for (auto scope = updated_scopes.rbegin(); scope != updated_scopes.rend(); ++scope) {
+        const auto before = scopes.find(scope->first);
+        if (before == scopes.end())
+          throw std::runtime_error("Global cleanup introduced an unsupported subgraph.");
+        CaptureTransformation(before->second, scope->second, name, plan_, scope->first);
+      }
+      if (!anchors_ && patterns_.size() == 1 && IsGlobalPass(patterns_[0]) &&
+          !plan_.rewrites().empty()) {
+        Match match;
+        match.anchor = 0;
+        std::set<size_t> affected;
+        std::set<FusionNodeKey> replacements;
+        const auto &root = scopes.at({});
+        std::map<std::string, std::vector<size_t>> owners;
+        for (size_t i = 0; i < root.node().size(); ++i)
+          for (const auto &attribute : root.node(i).attribute())
+            if (attribute.name().value().ends_with("_ref")) {
+              if (attribute.type() == ol::AttributeProto::STRING)
+                owners[attribute.s().value()].push_back(i);
+              else if (attribute.type() == ol::AttributeProto::STRINGS)
+                for (const auto &value : attribute.strings())
+                  owners[std::string(value)].push_back(i);
+            }
+        for (const auto &edit : plan_.rewrites()) {
+          if (edit.graph_path().empty()) {
+            affected.insert(edit.matched_nodes().begin(), edit.matched_nodes().end());
+            for (const auto &node : edit.added_nodes())
+              replacements.insert(NodeOrderKey(node));
+          } else {
+            const auto &child = edit.graph_path(0).value();
+            const auto found = owners.find(child);
+            if (found != owners.end())
+              for (const auto i : found->second) {
+                affected.insert(i);
+                replacements.insert(NodeOrderKey(root.node(i)));
+              }
+          }
+        }
+        match.nodes.assign(affected.begin(), affected.end());
+        for (const auto &node : updated.graph().node())
+          if (replacements.contains(NodeOrderKey(node)))
+            match.replacement.push_back(node.SharedCopy());
+        matches_.push_back(std::move(match));
+      }
+      scopes = std::move(updated_scopes);
+      snapshot_ = std::move(updated);
+      graph = builder::GraphBuilder(snapshot_);
+    };
+    if (operation_ == "IdentityRemoval") {
+      if (graph.RemoveIdentityNodes())
+        capture("IdentityRemoval");
+    } else if (operation_ == "ConstantFolding") {
+      if (graph.ConstantFold())
+        capture("ConstantFolding");
+    } else if (operation_ == "RemoveUnusedNodes") {
+      graph.RemoveUnusedNodes();
+      capture("RemoveUnusedNodes");
+    } else {
+      {
+        builder::GraphGraph canonicalizer(
+            graph, std::vector<std::unique_ptr<builder::PatternOptimization>>{});
+        canonicalizer.Canonicalize();
+      }
+      capture("Canonicalize");
+      std::vector<std::unique_ptr<builder::PatternOptimization>> chosen;
+      for (const auto &name : patterns_)
+        chosen.push_back(builder::CreateRegisteredPattern(name));
+      builder::GraphGraph optimizer(graph, std::move(chosen));
+      auto rewrites = optimizer.Optimize();
+      plan_.ref_added_functions() = rewrites.added_functions();
+      plan_.ref_required_opset_imports() = rewrites.required_opset_imports();
+      for (const auto &edit : rewrites.rewrites())
+        *plan_.add_rewrites() = edit.SharedCopy();
+      const auto optimized_graph = graph.BuildGraph();
+      scopes = CaptureScopes(graph);
+      snapshot_ = graph.ToModel(snapshot_.ir_version());
+      *snapshot_.mutable_graph() = optimized_graph;
+      PreserveFunctionBodies(snapshot_, original);
+      {
+        builder::GraphGraph canonicalizer(
+            graph, std::vector<std::unique_ptr<builder::PatternOptimization>>{});
+        canonicalizer.Canonicalize();
+      }
+      capture("Canonicalize");
+    }
+    if (plan_.rewrites().empty())
+      return;
+    if (!plan_.added_functions().empty()) {
+      ol::ModelProto declarations;
+      declarations.mutable_graph()->set_name("Optimization function declarations");
+      declarations.ref_struct_types() = snapshot_.struct_types();
+      declarations.ref_opset_import() = snapshot_.opset_import();
+      declarations.ref_functions() = snapshot_.functions();
+      for (const auto &function : plan_.added_functions()) {
+        auto found = std::find_if(declarations.ref_functions().begin(),
+                                  declarations.ref_functions().end(), [&](const auto &other) {
+                                    return function.name() == other.name() &&
+                                           function.domain() == other.domain() &&
+                                           function.overload() == other.overload();
+                                  });
+        if (found == declarations.ref_functions().end())
+          *declarations.add_functions() = function.SharedCopy();
+        else
+          *found = function.SharedCopy();
+      }
+      const auto normalized = builder::GraphBuilder(declarations).ToModel(original.ir_version());
+      for (auto &function : plan_.ref_added_functions()) {
+        const auto found = std::find_if(
+            normalized.functions().begin(), normalized.functions().end(), [&](const auto &other) {
+              return function.name() == other.name() && function.domain() == other.domain() &&
+                     function.overload() == other.overload();
+            });
+        if (found == normalized.functions().end())
+          throw std::runtime_error("Optimization lost a function declaration.");
+        function = found->SharedCopy();
+      }
+    }
+    for (const auto &function : snapshot_.functions()) {
+      const auto found = std::find_if(
+          plan_.added_functions().begin(), plan_.added_functions().end(), [&](const auto &other) {
+            return function.name() == other.name() && function.domain() == other.domain() &&
+                   function.overload() == other.overload();
+          });
+      if (found == plan_.added_functions().end())
+        *plan_.add_added_functions() = function.SharedCopy();
+      else {
+        auto expected = function.SharedCopy();
+        auto actual = found->SharedCopy();
+        const auto sort_imports = [](auto &definition) {
+          std::vector<ol::OperatorSetIdProto> imports(definition.opset_import().begin(),
+                                                      definition.opset_import().end());
+          std::vector<std::pair<std::string, size_t>> order;
+          for (size_t i = 0; i < imports.size(); ++i)
+            order.emplace_back(imports[i].domain().value(), i);
+          std::sort(order.begin(), order.end());
+          for (size_t i = 0; i < order.size(); ++i)
+            definition.ref_opset_import()[i] = std::move(imports[order[i].second]);
+        };
+        sort_imports(expected);
+        sort_imports(actual);
+        std::string difference;
+        if (!expected.Equals(actual, &difference))
+          throw std::runtime_error("Optimization produced conflicting function declarations: " +
+                                   function.name().value() + ": " + difference);
+      }
+    }
+    for (const auto &opset : snapshot_.opset_import()) {
+      const auto found = std::find_if(
+          plan_.required_opset_imports().begin(), plan_.required_opset_imports().end(),
+          [&](const auto &other) { return opset.domain().value() == other.domain().value(); });
+      if (found == plan_.required_opset_imports().end())
+        *plan_.add_required_opset_imports() = opset;
+      else if (opset.version() != found->version())
+        throw std::runtime_error("Optimization produced conflicting opset declarations.");
+    }
+    RewritingTrace trace(original.graph());
+    history_.emplace_back();
+    for (const auto &edit : plan_.rewrites()) {
+      auto nodes = trace.Apply(edit);
+      history_.back().push_back({edit.pattern_name().value(), std::move(nodes)});
+    }
+    const auto order = trace.Finish(history_);
+    auto replayed = builder::GraphBuilder(original).ApplyRewritings(plan_);
+    snapshot_ = replayed.ToModel(original.ir_version());
+    ol::VerifyModel(snapshot_);
+    FinalizeCapturedPlan(snapshot_, plan_, history_, order, replayed);
+  }
+
   void ApplyScenario() {
     if (!source_->fusion_history.empty() && source_->rewriting_name != scenario_)
       throw std::runtime_error("Unfuse current edits before choosing another rewriting scenario.");
@@ -419,7 +674,7 @@ private:
     }
     snapshot_ = rewritten.ToModel(snapshot_.ir_version());
     ol::VerifyModel(snapshot_);
-    FinalizeCapturedPlan(snapshot_, plan_, history_, order);
+    FinalizeCapturedPlan(snapshot_, plan_, history_, order, rewritten);
   }
 
   struct Match {
@@ -441,11 +696,66 @@ private:
   std::string scenario_;
   bool all_;
   std::vector<size_t> batches_;
+  std::string operation_;
 };
 
 } // namespace
 
 void AddFusionMethods(Napi::Env env, Napi::Object result, std::shared_ptr<StoredModel> model) {
+  result.Set("optimizationPatterns", Napi::Function::New(env, [](const Napi::CallbackInfo &call) {
+               ol::onnx_patterns::RegisterPatterns();
+               auto values = Napi::Array::New(call.Env());
+               for (const auto &pattern : ol::core::builder::CreateRegisteredPatterns()) {
+                 auto item = Napi::Object::New(call.Env());
+                 item.Set("name", pattern->Name());
+                 item.Set("priority", pattern->priority);
+                 item.Set("device", ol::core::symbolic::DeviceName(pattern->device));
+                 values.Set(values.Length(), item);
+               }
+               return values;
+             }));
+  result.Set(
+      "optimize", Napi::Function::New(env, [model](const Napi::CallbackInfo &call) -> Napi::Value {
+        try {
+          if (!call[0].IsArray() || !call[1].IsString() ||
+              (!call[2].IsUndefined() && !call[2].IsString()))
+            throw std::runtime_error(
+                "Expected selected patterns, an optimization mode and optional source path.");
+          const auto operation = call[1].As<Napi::String>().Utf8Value();
+          if (operation != "Optimize" && !IsGlobalPass(operation))
+            throw std::runtime_error("Unknown optimization mode.");
+          ol::onnx_patterns::RegisterPatterns();
+          ol::onnx_shapes::RegisterShapeFunctions();
+          ol::onnx_kernels::RegisterKernelFunctions();
+          std::vector<std::string> patterns;
+          std::set<std::string> unique;
+          const auto selected = call[0].As<Napi::Array>();
+          for (uint32_t i = 0; i < selected.Length(); ++i) {
+            if (!selected.Get(i).IsString())
+              throw std::runtime_error("Invalid optimization pattern.");
+            auto name = selected.Get(i).As<Napi::String>().Utf8Value();
+            ol::core::builder::CreateRegisteredPattern(name);
+            if (!unique.insert(name).second)
+              throw std::runtime_error("Duplicate optimization pattern.");
+            patterns.push_back(std::move(name));
+          }
+          if (operation != "Optimize" && !patterns.empty())
+            throw std::runtime_error("Global passes do not accept fusion patterns.");
+          const auto path =
+              call[2].IsString() ? call[2].As<Napi::String>().Utf8Value() : model->file_path;
+          if (path.find('\0') != std::string::npos)
+            throw std::runtime_error("Invalid source model file path.");
+          auto worker = std::make_unique<FusionWorker>(call.Env(), model, std::move(patterns),
+                                                       std::nullopt, path, "", false, operation);
+          const auto promise = worker->Promise();
+          worker->Queue();
+          worker.release();
+          return promise;
+        } catch (const std::exception &error) {
+          Napi::Error::New(call.Env(), error.what()).ThrowAsJavaScriptException();
+          return call.Env().Undefined();
+        }
+      }));
   result.Set("fusionCount", Napi::Function::New(env, [model](const Napi::CallbackInfo &call) {
                return Napi::Number::New(call.Env(), model->fusion_history.size());
              }));
@@ -528,6 +838,7 @@ void AddFusionMethods(Napi::Env env, Napi::Object result, std::shared_ptr<Stored
           if (path.find('\0') != std::string::npos)
             throw std::runtime_error("Invalid source model file path.");
           ol::onnx_shapes::RegisterShapeFunctions();
+          ol::onnx_kernels::RegisterKernelFunctions();
           auto worker = std::make_unique<FusionWorker>(
               call.Env(), model, std::vector<std::string>{}, std::nullopt, path,
               call[0].As<Napi::String>().Utf8Value(), call[1].As<Napi::Boolean>().Value());
@@ -587,6 +898,9 @@ void AddFusionMethods(Napi::Env env, Napi::Object result, std::shared_ptr<Stored
                        }))
                      values.Set(i++, pattern->Name());
                  }
+                 for (const auto *name :
+                      {"IdentityRemoval", "ConstantFolding", "RemoveUnusedNodes"})
+                   values.Set(i++, name);
                  return values;
                } catch (const std::exception &error) {
                  Napi::Error::New(call.Env(), error.what()).ThrowAsJavaScriptException();
@@ -618,6 +932,9 @@ void AddFusionMethods(Napi::Env env, Napi::Object result, std::shared_ptr<Stored
                 patterns.push_back(values.Get(i).As<Napi::String>().Utf8Value());
               }
             }
+            const bool global = std::any_of(patterns.begin(), patterns.end(), IsGlobalPass);
+            if (global)
+              ol::onnx_kernels::RegisterKernelFunctions();
             std::optional<std::vector<size_t>> anchors;
             if (apply) {
               anchors.emplace();
@@ -628,7 +945,7 @@ void AddFusionMethods(Napi::Env env, Napi::Object result, std::shared_ptr<Stored
                   throw std::runtime_error("Invalid fusion match index.");
                 const double index = value.As<Napi::Number>().DoubleValue();
                 if (!std::isfinite(index) || index < 0 || std::floor(index) != index ||
-                    index >= model->model->graph().node().size())
+                    (global ? index != 0 : index >= model->model->graph().node().size()))
                   throw std::runtime_error("Invalid fusion match index.");
                 anchors->push_back(static_cast<size_t>(index));
               }

@@ -4,7 +4,7 @@ Fusion patterns
 **Fuse**, at the top of the right sidebar, opens the native onnx-light pattern
 matcher on the main graph.
 The list keeps patterns whose anchor operator occurs in that graph, plus patterns
-without an anchor restriction. Matching and rewriting do not execute the model.
+without an anchor restriction. Manual matching does not run model inference.
 Return to the main graph's breadcrumb to enable this control.
 The available native patterns are displayed in the sidebar; select one or more
 names with normal clicks, then click **Run Matching** while keeping
@@ -54,6 +54,55 @@ refreshed against the new operators. Select patterns and run matching again to
 find further fusions; obsolete candidates are discarded.
 Graph replacement or navigation invalidates the preview.
 
+Iterative optimization and global passes
+----------------------------------------
+
+**Optimize** has its own sidebar panel, separate from **Fuse**.
+It opens the full native catalog, including patterns whose operators
+are not present yet. Select individual patterns, whole **Priority** groups,
+or **Select all**, then click **Run global optimization**.
+Groups use onnx-light's native priority metadata, not inferred categories.
+This runs onnx-light's complete native optimizer, not a single pattern batch:
+native canonicalization, repeated priority-ordered matching, evaluation of
+constant replacements and unused-code cleanup.
+A replacement can enable another pattern in a later iteration.
+Final native canonicalization removes redundant identities by rewiring consumers,
+without inserting replacement Identity operators.
+
+.. figure:: ../_static/optimization-passes.svg
+   :alt: The separate Optimize panel runs the full native optimizer. In Fuse, Run Matching previews a global pass and Fuse selected applies it. Unfuse reverses either action in one operation.
+   :width: 800px
+
+   Global optimization is separate; individual passes use the pattern workflow.
+
+In **Fuse → Native patterns**, ``IdentityRemoval``, ``ConstantFolding`` and
+``RemoveUnusedNodes`` use the same **Run Matching → Fusion candidates →
+Fuse selected** workflow as other patterns.
+Candidates show affected operators and rewired consumers, not synthetic
+replacement identities. Constant folding evaluates constant expressions with
+native kernels, not model inputs. Unused-code removal also removes unused weights.
+An initializer-only change can have no root operators to highlight.
+Each global pass is a whole-scope candidate and must be applied individually;
+no-op passes produce no candidates.
+Closing Fuse, navigating or replacing the graph discards previews.
+
+Each optimization or applied pass is one **Unfuse** operation.
+Applied patterns are listed in the optimization results and in **Unfuse**;
+click an entry to highlight its surviving result nodes. Folding a node entirely
+into an initializer leaves no operator to select.
+**Save → Include fusion rewritings** works for these operations too:
+unchecked saves the optimized graph; checked saves the original and its
+replayable plan, including any initializer-preparation functions.
+Pipeline stages are optimized independently. Existing local function bodies
+are preserved; transformations apply to model graphs and nested graph attributes.
+
+Open :download:`optimization.onnx <../../examples/optimization.onnx>` to try
+all three passes and iterative fusion on an eight-node model, including
+an unused ``Relu`` branch.
+The ``MatMulAdd`` replacement enables ``GemmTranspose``, which has no anchor
+in the original graph. Regenerate the example with
+``node examples/generate_optimization.cjs``; no Python dependency is required.
+
 Saved rewriting scenarios
 -------------------------
 
@@ -94,7 +143,8 @@ Undo and rewriting plans
 
 **Unfuse**, beside **Fuse**, offers **Unfuse last** and **Unfuse all**.
 Unfuse last restores the model before the last fusion or scenario operation:
-one step reverses all candidates applied together. The choices remain open so
+one step reverses all candidates, optimization iterations or global-pass edits
+applied together. The choices remain open so
 you can repeat Unfuse last to undo earlier operations, including operations on
 different pipeline stages. Unfuse all reverses every remaining operation at once.
 Below the buttons, each applied match is listed separately, even when several

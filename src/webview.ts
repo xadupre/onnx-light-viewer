@@ -64,6 +64,7 @@ export function webviewHtml(
             <button id="open-model" class="icon-button" title="Show or hide the model file selector" aria-expanded="false" aria-controls="open-panel">Open</button>
             <button id="save-model" class="icon-button" disabled title="Show or hide model save options" aria-expanded="false" aria-controls="save-options" aria-describedby="save-status">Save</button>
             <button id="show-find" class="icon-button" aria-expanded="true" aria-controls="find-panel" title="Show or hide node search">Find</button>
+            <button id="optimize-model" class="icon-button" disabled title="Show or hide full native model optimization" aria-expanded="false" aria-controls="optimization-panel">Optimize</button>
             <button id="fuse-pattern" class="icon-button" disabled title="Show or hide fusion patterns and select candidates to fuse on the main graph" aria-expanded="false" aria-controls="fusion-panel">Fuse</button>
             <button id="undo-fusion" class="icon-button" disabled title="Choose whether to unfuse the last operation or all operations" aria-expanded="false" aria-controls="unfuse-panel" aria-describedby="fusion-status">Unfuse</button>
             <button id="show-operator" class="icon-button" aria-expanded="true" aria-controls="operator-panel" title="Show or hide operator and tensor details">Op</button>
@@ -106,9 +107,22 @@ export function webviewHtml(
               <section><h3>Graph metadata</h3><table id="metadata-graph" aria-label="Graph metadata"></table></section>
             </div>
           </section>
+          <section id="optimization-panel" class="inspector-panel" aria-labelledby="optimization-title" hidden>
+            <h2 id="optimization-title" class="eyebrow panel-title">Global optimization</h2>
+            <p>Run onnx-light's complete native optimization algorithm: canonicalization, repeated priority-ordered matching, constant evaluation and unused-code cleanup. Final native canonicalization rewires redundant identities without replacement operators. This is not a single matching pass.</p>
+            <details id="optimization-picker" class="fusion-picker" open>
+              <summary>Patterns and priority groups</summary>
+              <div class="fusion-selection-controls"><button id="select-optimization-patterns" disabled>Select all</button><button id="clear-optimization-patterns" disabled>Clear selection</button></div>
+              <fieldset id="optimization-patterns" disabled aria-label="Optimization patterns"></fieldset>
+              <button id="run-optimization" disabled>Run global optimization</button>
+              <p id="optimization-feedback" role="status"></p>
+              <p id="optimization-status" role="status"></p>
+              <ol id="optimization-results" aria-label="Applied optimization patterns"></ol>
+            </details>
+          </section>
           <section id="fusion-panel" class="inspector-panel" aria-labelledby="fusion-title" hidden>
             <h2 id="fusion-title" class="eyebrow panel-title">Fusion patterns</h2>
-            <p>Select one or more patterns, then click Run Matching. Check the candidates to fuse; clicking a candidate highlights its nodes in the graph. Click Fuse selected to apply them, then Save to keep the result.</p>
+            <p>Select patterns or global passes, then click Run Matching. Check candidates and click Fuse selected. IdentityRemoval, ConstantFolding and RemoveUnusedNodes use this same workflow; each global pass applies to the whole graph and must be selected individually.</p>
             <details id="rewriting-scenarios" class="fusion-picker" open>
               <summary>Saved rewriting scenarios</summary>
               <label for="rewriting-scenario">Scenario</label><select id="rewriting-scenario" disabled></select>

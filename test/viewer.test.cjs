@@ -1393,22 +1393,27 @@ test("rejects queued fusion and scenario completions after local close or naviga
     readFileSync(require.resolve("../examples/rewriting-scenarios.onnx")),
     "Saved rewriting example",
   );
-  for (const type of ["fusion-info", "rewriting-info"]) {
+  for (const type of ["fusion-info", "rewriting-info", "optimization-info"]) {
     for (const invalidation of ["close", "navigate", "replace"]) {
       await t.test(`${type}: ${invalidation}`, async (t) => {
         const { document, window, messages, load } = openViewer(t);
         const send = (data) =>
           window.dispatchEvent(new window.MessageEvent("message", { data }));
-        const fuse = document.getElementById("fuse-pattern");
+        const fuse = document.getElementById(
+          type === "optimization-info" ? "optimize-model" : "fuse-pattern",
+        );
         load(saved.graph());
         fuse.click();
         send({
           type: "fusion-patterns",
           requestId: messages.at(-1).requestId,
           patterns: ["TransposeTranspose"],
+          optimizationPatterns: saved.optimizationPatterns(),
           scenarios: saved.rewritingScenarios(),
         });
-        if (type === "rewriting-info") {
+        if (type === "optimization-info") {
+          document.getElementById("run-optimization").click();
+        } else if (type === "rewriting-info") {
           document.getElementById("rewriting-next").click();
         } else {
           document.querySelector("#fusion-pattern label").click();
@@ -1425,12 +1430,14 @@ test("rejects queued fusion and scenario completions after local close or naviga
         }
         const requestId = messages.at(-1).requestId;
         const edited =
-          type === "rewriting-info"
-            ? await saved.applyRewritingScenario(
-                "onnx-light-viewer.fusions",
-                false,
-              )
-            : await saved.applyFusion("TransposeTranspose", [0]);
+          type === "optimization-info"
+            ? await saved.optimize(["TransposeTranspose"], "Optimize")
+            : type === "rewriting-info"
+              ? await saved.applyRewritingScenario(
+                  "onnx-light-viewer.fusions",
+                  false,
+                )
+              : await saved.applyFusion("TransposeTranspose", [0]);
         if (invalidation === "close") fuse.click();
         load(
           {
@@ -1453,11 +1460,18 @@ test("rejects queued fusion and scenario completions after local close or naviga
           type,
           requestId,
           count: 1,
+          operation: "Optimize",
+          changed: true,
+          matches: edited.fusionHistory().at(-1).matches,
           name: "onnx-light-viewer.fusions",
           patterns: edited.fusionPatterns(),
           scenarios: edited.rewritingScenarios(),
         });
         assert.equal(document.getElementById("fusion-panel").hidden, true);
+        assert.equal(
+          document.getElementById("optimization-panel").hidden,
+          true,
+        );
         assert.equal(fuse.getAttribute("aria-expanded"), "false");
         assert.equal(
           document.getElementById("rewriting-scenario").options.length,
@@ -1884,7 +1898,7 @@ test("toggles separated, stacked sidebar panels independently from Op Data Find 
   const allButtons = [...controls.querySelectorAll("button")];
   assert.deepEqual(
     allButtons.map((button) => button.lastChild.textContent.trim()),
-    ["Open", "Save", "Find", "Fuse", "Unfuse", "Op", "Data"],
+    ["Open", "Save", "Find", "Optimize", "Fuse", "Unfuse", "Op", "Data"],
   );
   assert.match(
     window.getComputedStyle(controls).gridTemplateColumns,
@@ -1894,6 +1908,7 @@ test("toggles separated, stacked sidebar panels independently from Op Data Find 
     "show-find",
     "show-operator",
     "show-metadata",
+    "optimize-model",
     "fuse-pattern",
   ].map((id) => document.getElementById(id));
   const panels = buttons.map((button) =>
@@ -1908,7 +1923,7 @@ test("toggles separated, stacked sidebar panels independently from Op Data Find 
   );
   assert.deepEqual(
     panels.map((panel) => panel.hidden),
-    [false, false, true, true],
+    [false, false, true, true, true],
   );
   const panelStyle = [...style.sheet.cssRules].find(
     (rule) => rule.selectorText === ".inspector-panel",
@@ -1963,9 +1978,10 @@ test("toggles separated, stacked sidebar panels independently from Op Data Find 
   }
   buttons[2].click();
   buttons[3].click();
+  buttons[4].click();
   assert.deepEqual(
     panels.map((panel) => panel.hidden),
-    [false, false, false, false],
+    [false, false, false, false, false],
   );
   buttons[0].click();
   buttons[1].click();

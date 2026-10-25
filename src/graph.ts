@@ -149,6 +149,8 @@ export type GraphSummary = Pick<
 > & { nodeCount: number };
 
 export interface FusionMatch {
+  /** Global passes transform the entire scope and cannot be combined with other candidates. */
+  global?: boolean;
   anchor: number;
   nodes: number[];
   replacement: {
@@ -165,6 +167,15 @@ export interface FusionOperation {
   matches: { pattern: string; nodes: number[] }[];
   stage?: PipelineRole;
 }
+
+export interface OptimizationPattern {
+  name: string;
+  priority: number;
+  device: string;
+}
+
+export type OptimizationOperation =
+  "Optimize" | "IdentityRemoval" | "ConstantFolding" | "RemoveUnusedNodes";
 
 export interface RewritingScenario {
   name: string;
@@ -195,6 +206,14 @@ export interface NativeModel {
   summary(inferShapes?: boolean): GraphSummary;
   /** Pipeline fusions require the path of a stage root; ordinary models use []. */
   fusionPatterns(path?: GraphPath): string[];
+  optimizationPatterns(path?: GraphPath): OptimizationPattern[];
+  /** Runs a global pass or the native iterative optimizer on an independent snapshot. */
+  optimize(
+    patterns: string[],
+    operation: OptimizationOperation,
+    sourceFilePath?: string,
+    path?: GraphPath,
+  ): Promise<NativeModel>;
   previewFusion(
     pattern: string,
     sourceFilePath?: string,

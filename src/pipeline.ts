@@ -6,6 +6,8 @@ import type {
   GraphPath,
   GraphSummary,
   NativeModel,
+  OptimizationOperation,
+  OptimizationPattern,
   PipelineRole,
   RewritingScenario,
 } from "./graph";
@@ -244,6 +246,36 @@ export class PipelineModel implements NativeModel {
         "Return to a pipeline stage root to apply fusion patterns.",
       );
     return stage.model.fusionPatterns();
+  };
+
+  optimizationPatterns = (path: GraphPath = []): OptimizationPattern[] => {
+    const stage = this.select(path);
+    this.fusionPatterns(path);
+    return stage.model.optimizationPatterns();
+  };
+
+  optimize = async (
+    patterns: string[],
+    operation: OptimizationOperation,
+    sourceFilePath?: string,
+    path: GraphPath = [],
+  ): Promise<NativeModel> => {
+    const stage = this.select(path);
+    this.optimizationPatterns(path);
+    const edited = await stage.model.optimize(
+      patterns,
+      operation,
+      sourceFilePath,
+    );
+    const replacement = this.replace(stage.role, edited);
+    if (edited.fusionCount() === stage.model.fusionCount()) return replacement;
+    return new PipelineModel(
+      this.data,
+      this.fileName,
+      replacement.models,
+      this,
+      [...this.fusionOrder, stage.role],
+    );
   };
 
   rewritingScenarios = (path: GraphPath = []): RewritingScenario[] => {
