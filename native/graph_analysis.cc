@@ -123,7 +123,7 @@ GraphPath ReadPath(const Napi::Value &value) {
       return static_cast<int>(number);
     };
     if (object.Has("function"))
-      path.push_back({read("node"), 0, 0, read("function")});
+      path.push_back({object.Has("node") ? read("node") : -1, 0, 0, read("function")});
     else
       path.push_back({read("node"), read("attribute"), read("graph")});
   }
@@ -134,7 +134,8 @@ Napi::Array PathValue(Napi::Env env, const GraphPath &path) {
   auto result = Napi::Array::New(env);
   for (uint32_t index = 0; index < path.size(); ++index) {
     auto step = Napi::Object::New(env);
-    step.Set("node", path[index].node);
+    if (path[index].node >= 0)
+      step.Set("node", path[index].node);
     if (path[index].function >= 0)
       step.Set("function", path[index].function);
     else {
@@ -161,8 +162,10 @@ GraphSelection GraphScopes(const ol::ModelProto &model, const GraphPath &path) {
       selection.scopes.push_back(&ChildGraph(parent, step));
       continue;
     }
-    if (step.node >= parent.node_size() || step.function >= model.functions_size() ||
-        !CallsFunction(parent.node(step.node), model.functions(step.function)))
+    if (step.function >= model.functions_size() ||
+        (step.node >= 0 &&
+         (step.node >= parent.node_size() ||
+          !CallsFunction(parent.node(step.node), model.functions(step.function)))))
       throw std::runtime_error("Unknown function in subgraph path.");
     selection.function = &model.functions(step.function);
     selection.functions.push_back(

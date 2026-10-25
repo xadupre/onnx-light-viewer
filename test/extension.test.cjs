@@ -3493,6 +3493,18 @@ test("opens function call paths through the host and returns to the caller", asy
   assert.equal(extension.messages.at(-1).graph.name, "example::Transform");
   await extension.receive({ type: "navigate", path: [] });
   assert.equal(extension.messages.at(-1).graph.name, root.name);
+  const definition = root.localFunctions[0];
+  await extension.receive({ type: "navigate", path: definition.path });
+  assert.equal(extension.messages.at(-1).graph.name, definition.name);
+  await extension.receive({ type: "metadata" });
+  assert.equal(
+    extension.messages.at(-1).metadata.nodes.length,
+    definition.nodeCount,
+  );
+  await extension.receive({ type: "navigate", path: [{ function: 9999 }] });
+  assert.equal(extension.messages.at(-1).type, "navigation-error");
+  await extension.receive({ type: "navigate", path: [] });
+  assert.equal(extension.messages.at(-1).graph.name, root.name);
   assert.equal(extension.reads.length, reads);
 });
 

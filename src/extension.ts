@@ -353,7 +353,9 @@ function isGraphPath(path: unknown): path is GraphPath {
         );
       return (
         Reflect.has(step, "function")
-          ? ["node", "function"]
+          ? Reflect.has(step, "node")
+            ? ["node", "function"]
+            : ["function"]
           : ["node", "attribute", "graph"]
       ).every((key) => {
         const index: unknown = Reflect.get(step, key);

@@ -6,6 +6,7 @@ import type {
   GraphMetadata,
   GraphPath,
   GraphSummary,
+  MetadataEntry,
   NativeModel,
   OptimizationOperation,
   OptimizationPattern,
@@ -16,7 +17,7 @@ import type {
 
 export interface PipelineData {
   name: string;
-  description: string;
+  metadata: MetadataEntry[];
   models: Partial<Record<PipelineRole, NativeModel>>;
   assemble(
     models: Partial<Record<PipelineRole, Uint8Array>>,
@@ -138,6 +139,7 @@ export class PipelineModel implements NativeModel {
         pipeline: true,
         pipelineStages,
         canFuse: stage.path.length === 0,
+        localFunctions: graph.localFunctions.map(link),
         breadcrumbs: [
           { name, path: [] },
           ...graph.breadcrumbs.map((crumb, index) =>
@@ -170,6 +172,7 @@ export class PipelineModel implements NativeModel {
       pipeline: true,
       pipelineStages,
       canFuse: false,
+      localFunctions: [],
       breadcrumbs: [{ name, path: [] }],
       nodes: stages.map(({ role, graph }, index) => ({
         id: `node-${index}`,
@@ -209,6 +212,9 @@ export class PipelineModel implements NativeModel {
         (count, { graph }) => count + graph.initializerCount,
         0,
       ),
+      initializers: [],
+      sparseInitializers: [],
+      encodedInitializers: [],
       tensors: stages.flatMap(({ role, graph }) =>
         ["input", "output"].flatMap((direction) =>
           (direction === "input" ? graph.inputs : graph.outputs).map((name) => {
@@ -234,7 +240,7 @@ export class PipelineModel implements NativeModel {
       return stage.model.metadata(stage.path);
     }
     return {
-      model: [{ key: "PipelineProto", value: this.data.description }],
+      model: this.data.metadata.map((entry) => ({ ...entry })),
       graph: [],
       nodes: [],
       values: [],
