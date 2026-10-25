@@ -4,6 +4,7 @@
 
 # ONNX Light Viewer
 
+[![CI](https://github.com/xadupre/onnx-light-viewer/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/xadupre/onnx-light-viewer/actions/workflows/tests.yml)
 [![Code coverage](https://codecov.io/gh/xadupre/onnx-light-viewer/branch/main/graph/badge.svg)](https://codecov.io/gh/xadupre/onnx-light-viewer)
 
 ONNX Light Viewer explores ONNX models in VS Code, powered by native onnx-light.
