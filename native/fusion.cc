@@ -29,6 +29,104 @@ FusionNodeKey NodeOrderKey(const ol::NodeProto &node) {
           node.name().value(),   std::move(inputs),      std::move(outputs)};
 }
 
+std::vector<size_t> FinalizedNodeOrder(const ol::ModelProto &model,
+                                       const std::vector<FusionNodeKey> &inserted_order) {
+  const auto &final_nodes = model.graph().node();
+  if (final_nodes.size() != inserted_order.size())
+    throw std::runtime_error("Model finalization changed the fusion node count.");
+  std::map<FusionNodeKey, std::vector<size_t>> final_positions;
+  for (size_t i = final_nodes.size(); i-- > 0;)
+    final_positions[NodeOrderKey(final_nodes[i])].push_back(i);
+  std::vector<size_t> permutation;
+  for (size_t i = 0; i < inserted_order.size(); ++i) {
+    auto found = final_positions.find(inserted_order[i]);
+    if (found == final_positions.end() || found->second.empty())
+      throw std::runtime_error("Model finalization changed fusion node identities.");
+    const auto position = found->second.back();
+    found->second.pop_back();
+    permutation.push_back(position);
+  }
+  return permutation;
+}
+
+void FinalizeCapturedPlan(const ol::ModelProto &model, ol::RewritingProto &plan,
+                          std::vector<std::vector<StoredModel::FusionMatch>> &history,
+                          const std::vector<FusionNodeKey> &inserted_order) {
+  const auto permutation = FinalizedNodeOrder(model, inserted_order);
+  bool reordered = false;
+  for (size_t i = 0; i < permutation.size(); ++i)
+    reordered |= permutation[i] != i;
+  if (!reordered)
+    return;
+  for (auto &previous : history)
+    for (auto &match : previous) {
+      for (auto &node : match.nodes)
+        node = permutation.at(node);
+      std::sort(match.nodes.begin(), match.nodes.end());
+    }
+  // Replay must establish the same finalized order before the next edit.
+  const auto &final_nodes = model.graph().node();
+  auto *reorder = plan.add_rewrites();
+  reorder->set_pattern_name("Finalize fusion node order");
+  for (size_t i = 0; i < final_nodes.size(); ++i) {
+    reorder->add_matched_nodes(i);
+    *reorder->add_added_nodes() = final_nodes[i].SharedCopy();
+    reorder->add_added_nodes_positions(i);
+  }
+}
+
+std::vector<size_t> TraceRewriting(const ol::LocalRewritingProto &edit,
+                                   std::vector<FusionNodeKey> &nodes,
+                                   std::vector<std::vector<StoredModel::FusionMatch>> &history) {
+  if (!edit.graph_path().empty())
+    return {};
+  const std::set<size_t> removed(edit.matched_nodes().begin(), edit.matched_nodes().end());
+  if (removed.size() > nodes.size())
+    throw std::runtime_error("Invalid rewriting node count.");
+  const size_t count = nodes.size() - removed.size() + edit.added_nodes_size();
+  std::vector<std::optional<FusionNodeKey>> next(count);
+  std::vector<size_t> added;
+  for (size_t i = 0; i < edit.added_nodes().size(); ++i) {
+    const auto position = edit.added_nodes_positions(i);
+    if (position >= count || next[position])
+      throw std::runtime_error("Invalid rewriting insertion position.");
+    next[position] = NodeOrderKey(edit.added_nodes(i));
+    added.push_back(position);
+  }
+  std::vector<std::vector<size_t>> destinations(nodes.size());
+  size_t position = 0;
+  for (size_t i = 0; i < nodes.size(); ++i) {
+    if (removed.contains(i)) {
+      for (const auto target : added)
+        if (nodes[i] == *next[target])
+          destinations[i].push_back(target);
+      if (destinations[i].empty())
+        destinations[i] = added;
+    } else {
+      while (position < count && next[position])
+        ++position;
+      if (position == count)
+        throw std::runtime_error("Invalid rewriting node positions.");
+      next[position] = nodes[i];
+      destinations[i].push_back(position++);
+    }
+  }
+  for (auto &operation : history)
+    for (auto &match : operation) {
+      std::set<size_t> mapped;
+      for (const auto node : match.nodes)
+        mapped.insert(destinations.at(node).begin(), destinations.at(node).end());
+      match.nodes.assign(mapped.begin(), mapped.end());
+    }
+  nodes.clear();
+  for (auto &node : next) {
+    if (!node)
+      throw std::runtime_error("Incomplete rewriting node order.");
+    nodes.push_back(std::move(*node));
+  }
+  return added;
+}
+
 Napi::Object FusionNode(Napi::Env env, const ol::NodeProto &node) {
   auto result = Napi::Object::New(env);
   result.Set("opType", node.op_type().value());
@@ -57,15 +155,19 @@ class FusionWorker : public Napi::AsyncWorker {
 public:
   FusionWorker(Napi::Env env, std::shared_ptr<StoredModel> source,
                std::vector<std::string> patterns, std::optional<std::vector<size_t>> anchors,
-               std::string path)
+               std::string path, std::string scenario = "", bool all = false)
       : Napi::AsyncWorker(env), deferred_(Napi::Promise::Deferred::New(env)),
-        source_(std::move(source)), snapshot_(source_->model->SharedCopy()),
-        patterns_(std::move(patterns)), anchors_(std::move(anchors)), path_(std::move(path)),
-        weights_(source_->external_weights), history_(source_->fusion_history) {}
+        source_(std::move(source)),
+        canonical_(!scenario.empty() && source_->rewriting_base ? source_->rewriting_base
+                                                                : source_),
+        snapshot_(canonical_->model->SharedCopy()), patterns_(std::move(patterns)),
+        anchors_(std::move(anchors)), path_(std::move(path)),
+        weights_(canonical_->external_weights), history_(source_->fusion_history),
+        scenario_(std::move(scenario)), all_(all) {}
   Napi::Promise Promise() const { return deferred_.Promise(); }
   void Execute() override {
     try {
-      RestoreModelPayloads(snapshot_, *source_, path_);
+      RestoreModelPayloads(snapshot_, *canonical_, path_);
       std::vector<ol::EncodedValueProto *> encoded;
       std::set<const ol::TensorProto *> layout_tensors;
       const auto tensors = ModelSaveTensors(snapshot_, &encoded, &layout_tensors);
@@ -85,6 +187,10 @@ public:
           weights_.push_back({std::move(reference), tensor->SharedCopy()});
         }
       ol::VerifyModel(snapshot_);
+      if (!scenario_.empty()) {
+        ApplyScenario();
+        return;
+      }
       namespace builder = ol::core::builder;
       std::map<std::string, std::unique_ptr<builder::PatternOptimization>> patterns;
       for (const auto &name : patterns_)
@@ -217,39 +323,7 @@ public:
       auto rewritten = original.ApplyRewritings(plan);
       snapshot_ = rewritten.ToModel(snapshot_.ir_version());
       ol::VerifyModel(snapshot_);
-      const auto &final_nodes = snapshot_.graph().node();
-      if (final_nodes.size() != inserted_order.size())
-        throw std::runtime_error("Model finalization changed the fusion node count.");
-      std::map<FusionNodeKey, std::vector<size_t>> final_positions;
-      for (size_t i = final_nodes.size(); i-- > 0;)
-        final_positions[NodeOrderKey(final_nodes[i])].push_back(i);
-      std::vector<size_t> permutation;
-      bool reordered = false;
-      for (size_t i = 0; i < inserted_order.size(); ++i) {
-        auto found = final_positions.find(inserted_order[i]);
-        if (found == final_positions.end() || found->second.empty())
-          throw std::runtime_error("Model finalization changed fusion node identities.");
-        const auto position = found->second.back();
-        found->second.pop_back();
-        permutation.push_back(position);
-        reordered |= position != i;
-      }
-      if (reordered) {
-        for (auto &previous : history_)
-          for (auto &match : previous) {
-            for (auto &node : match.nodes)
-              node = permutation.at(node);
-            std::sort(match.nodes.begin(), match.nodes.end());
-          }
-        // Replay must establish the same finalized order before the next Fuse edit.
-        auto *reorder = plan.add_rewrites();
-        reorder->set_pattern_name("Finalize fusion node order");
-        for (size_t i = 0; i < final_nodes.size(); ++i) {
-          reorder->add_matched_nodes(i);
-          *reorder->add_added_nodes() = final_nodes[i].SharedCopy();
-          reorder->add_added_nodes_positions(i);
-        }
-      }
+      FinalizeCapturedPlan(snapshot_, plan, history_, inserted_order);
       plan_ = std::move(plan);
     } catch (const std::exception &error) {
       SetError(error.what());
@@ -265,6 +339,16 @@ public:
     stored->fusion_base = source_->fusion_base;
     stored->fusion_previous = source_->fusion_previous;
     stored->fusion_history = std::move(history_);
+    if (!scenario_.empty()) {
+      stored->fusion_base = canonical_;
+      stored->fusion_previous = source_;
+      stored->fusion_plans.push_back(std::move(plan_));
+      stored->rewriting_base = canonical_;
+      stored->rewriting_name = scenario_;
+      stored->rewriting_batches = std::move(batches_);
+      deferred_.Resolve(ModelHandle(Env(), stored));
+      return;
+    }
     for (const auto &plan : source_->fusion_plans)
       stored->fusion_plans.push_back(plan.SharedCopy());
     if (anchors_) {
@@ -274,6 +358,9 @@ public:
       deferred_.Resolve(ModelHandle(Env(), stored));
       return;
     }
+    stored->rewriting_base = source_->rewriting_base;
+    stored->rewriting_name = source_->rewriting_name;
+    stored->rewriting_batches = source_->rewriting_batches;
     auto result = Napi::Object::New(Env());
     result.Set("model", ModelHandle(Env(), stored));
     auto matches = Napi::Array::New(Env(), matches_.size());
@@ -296,6 +383,45 @@ public:
   void OnError(const Napi::Error &error) override { deferred_.Reject(error.Value()); }
 
 private:
+  void ApplyScenario() {
+    if (!source_->fusion_history.empty() && source_->rewriting_name != scenario_)
+      throw std::runtime_error("Unfuse current edits before choosing another rewriting scenario.");
+    const auto found = snapshot_.rewritings().find(scenario_);
+    if (found == snapshot_.rewritings().end())
+      throw std::runtime_error("Unknown rewriting scenario: " + scenario_);
+    const auto &scenario = found->second;
+    const size_t applied =
+        source_->rewriting_batches.empty() ? 0 : source_->rewriting_batches.back();
+    if (applied >= scenario.rewrites().size())
+      throw std::runtime_error("No remaining steps in this rewriting scenario.");
+    const size_t target = all_ ? scenario.rewrites().size() : applied + 1;
+    batches_ = source_->rewriting_batches;
+    batches_.push_back(target);
+    plan_ = scenario.SharedCopy();
+    plan_.clear_rewrites();
+    for (size_t i = 0; i < target; ++i)
+      *plan_.add_rewrites() = scenario.rewrites(i).SharedCopy();
+    auto rewritten = ol::core::builder::GraphBuilder(snapshot_).ApplyRewritings(plan_);
+    std::vector<FusionNodeKey> order;
+    for (const auto &node : snapshot_.graph().node())
+      order.push_back(NodeOrderKey(node));
+    history_.clear();
+    size_t step = 0;
+    for (const auto end : batches_) {
+      history_.emplace_back();
+      for (; step < end; ++step) {
+        const auto &edit = scenario.rewrites(step);
+        auto nodes = TraceRewriting(edit, order, history_);
+        history_.back().push_back(
+            {edit.pattern_name().empty() ? "Stored rewriting" : edit.pattern_name().value(),
+             std::move(nodes)});
+      }
+    }
+    snapshot_ = rewritten.ToModel(snapshot_.ir_version());
+    ol::VerifyModel(snapshot_);
+    FinalizeCapturedPlan(snapshot_, plan_, history_, order);
+  }
+
   struct Match {
     size_t anchor;
     std::vector<size_t> nodes;
@@ -303,6 +429,7 @@ private:
   };
   Napi::Promise::Deferred deferred_;
   std::shared_ptr<StoredModel> source_;
+  std::shared_ptr<StoredModel> canonical_;
   ol::ModelProto snapshot_;
   std::vector<std::string> patterns_;
   std::optional<std::vector<size_t>> anchors_;
@@ -311,14 +438,108 @@ private:
   std::vector<Match> matches_;
   ol::RewritingProto plan_;
   std::vector<std::vector<StoredModel::FusionMatch>> history_;
+  std::string scenario_;
+  bool all_;
+  std::vector<size_t> batches_;
 };
 
 } // namespace
 
 void AddFusionMethods(Napi::Env env, Napi::Object result, std::shared_ptr<StoredModel> model) {
   result.Set("fusionCount", Napi::Function::New(env, [model](const Napi::CallbackInfo &call) {
-               return Napi::Number::New(call.Env(), model->fusion_plans.size());
+               return Napi::Number::New(call.Env(), model->fusion_history.size());
              }));
+  result.Set("rewritingScenarios",
+             Napi::Function::New(env, [model](const Napi::CallbackInfo &call) -> Napi::Value {
+               try {
+                 const auto base = model->rewriting_base ? model->rewriting_base
+                                   : model->fusion_base  ? model->fusion_base
+                                                         : model;
+                 auto scenarios = Napi::Array::New(call.Env());
+                 for (const auto &[name, plan] : base->model->rewritings()) {
+                   auto item = Napi::Object::New(call.Env());
+                   item.Set("name", name);
+                   const size_t applied =
+                       model->rewriting_name == name && !model->rewriting_batches.empty()
+                           ? model->rewriting_batches.back()
+                           : 0;
+                   item.Set("applied", Napi::Number::New(call.Env(), applied));
+                   const bool available =
+                       (model->fusion_history.empty() || model->rewriting_name == name) &&
+                       applied < plan.rewrites().size();
+                   item.Set("available", available);
+                   std::vector<std::vector<size_t>> selections(plan.rewrites().size());
+                   if (model->rewriting_name == name) {
+                     size_t index = 0;
+                     for (const auto &operation : model->fusion_history)
+                       for (const auto &match : operation)
+                         selections.at(index++) = match.nodes;
+                   }
+                   if (available && plan.rewrites(applied).graph_path().empty()) {
+                     std::vector<FusionNodeKey> order;
+                     for (const auto &node : base->model->graph().node())
+                       order.push_back(NodeOrderKey(node));
+                     std::vector<std::vector<StoredModel::FusionMatch>> history;
+                     for (size_t i = 0; i < applied; ++i)
+                       TraceRewriting(plan.rewrites(i), order, history);
+                     const auto permutation = FinalizedNodeOrder(*model->model, order);
+                     const auto &matched = plan.rewrites(applied).matched_nodes();
+                     if (std::all_of(matched.begin(), matched.end(),
+                                     [&](const auto node) { return node < permutation.size(); }))
+                       for (const auto node : matched)
+                         selections[applied].push_back(permutation[node]);
+                     std::sort(selections[applied].begin(), selections[applied].end());
+                   }
+                   auto steps = Napi::Array::New(call.Env(), plan.rewrites_size());
+                   for (uint32_t i = 0; i < plan.rewrites().size(); ++i) {
+                     auto step = Napi::Object::New(call.Env());
+                     step.Set("pattern", plan.rewrites(i).pattern_name().empty()
+                                             ? "Stored rewriting"
+                                             : plan.rewrites(i).pattern_name().value());
+                     auto path = Napi::Array::New(call.Env(), plan.rewrites(i).graph_path_size());
+                     for (uint32_t j = 0; j < plan.rewrites(i).graph_path().size(); ++j)
+                       path.Set(j, plan.rewrites(i).graph_path(j).value());
+                     step.Set("path", path);
+                     auto nodes = Napi::Array::New(call.Env(), selections[i].size());
+                     for (uint32_t j = 0; j < selections[i].size(); ++j)
+                       nodes.Set(j, Napi::Number::New(call.Env(), selections[i][j]));
+                     step.Set("nodes", nodes);
+                     steps.Set(i, step);
+                   }
+                   item.Set("steps", steps);
+                   scenarios.Set(scenarios.Length(), item);
+                 }
+                 return scenarios;
+               } catch (const std::exception &error) {
+                 Napi::Error::New(call.Env(), error.what()).ThrowAsJavaScriptException();
+                 return call.Env().Undefined();
+               }
+             }));
+  result.Set(
+      "applyRewritingScenario",
+      Napi::Function::New(env, [model](const Napi::CallbackInfo &call) -> Napi::Value {
+        try {
+          if (!call[0].IsString() || call[0].As<Napi::String>().Utf8Value().empty() ||
+              !call[1].IsBoolean() || (!call[2].IsUndefined() && !call[2].IsString()))
+            throw std::runtime_error(
+                "Expected a rewriting scenario, an all-steps choice and optional source path.");
+          const auto path =
+              call[2].IsString() ? call[2].As<Napi::String>().Utf8Value() : model->file_path;
+          if (path.find('\0') != std::string::npos)
+            throw std::runtime_error("Invalid source model file path.");
+          ol::onnx_shapes::RegisterShapeFunctions();
+          auto worker = std::make_unique<FusionWorker>(
+              call.Env(), model, std::vector<std::string>{}, std::nullopt, path,
+              call[0].As<Napi::String>().Utf8Value(), call[1].As<Napi::Boolean>().Value());
+          const auto promise = worker->Promise();
+          worker->Queue();
+          worker.release();
+          return promise;
+        } catch (const std::exception &error) {
+          Napi::Error::New(call.Env(), error.what()).ThrowAsJavaScriptException();
+          return call.Env().Undefined();
+        }
+      }));
   result.Set("fusionHistory", Napi::Function::New(env, [model](const Napi::CallbackInfo &call) {
                auto operations = Napi::Array::New(call.Env(), model->fusion_history.size());
                for (uint32_t i = 0; i < model->fusion_history.size(); ++i) {

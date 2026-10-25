@@ -8,7 +8,8 @@ without an anchor restriction. Matching and rewriting do not execute the model.
 Return to the main graph's breadcrumb to enable this control.
 The available native patterns are displayed in the sidebar; select one or more
 names with normal clicks, then click **Run Matching** while keeping
-the main graph visible. Every click reruns matching from scratch for the selected
+the main graph visible. This button belongs to the **Native patterns** section.
+Every click reruns matching from scratch for the selected
 patterns and clears the previous candidates and selection.
 Click a pattern again to uncheck it. **Select all** checks every pattern;
 **Clear selection** unchecks them all. No modifier key is needed.
@@ -40,20 +41,59 @@ Hover over a darker entry for an explanation; graph highlighting is unchanged.
 
 Check individual candidates or choose **Select all compatible**, then click
 **Fuse selected**. Candidates from different patterns can be fused together.
+The **Fuse selected** button is inside **Fusion candidates**.
 **Clear selection** in the candidate list unchecks all candidates without
 changing the model.
 Overlapping matches
 cannot be applied together; the selection count and next step are shown.
-Clicking **Fuse** again or **Close** hides the panel and discards the preview
+Clicking **Fuse** again hides the panel and discards the preview
 and selection without applying anything, including while matching is running.
 All fusions change only the in-memory model; use **Save** to keep the result.
+After **Fuse selected**, the panel stays open with the native pattern list
+refreshed against the new operators. Select patterns and run matching again to
+find further fusions; obsolete candidates are discarded.
 Graph replacement or navigation invalidates the preview.
+
+Saved rewriting scenarios
+-------------------------
+
+**Fuse → Saved rewriting scenarios** lists named ``RewritingProto`` variants
+stored in the model. Select a scenario to inspect its ordered patterns and
+progress, then choose **Apply next pattern** or **Apply remaining scenario**.
+The latter applies every remaining step as one operation. Each click can be
+reversed with **Unfuse last**; **Unfuse all** restores the original model.
+In a pipeline, open a stage's main graph to choose that stage's scenarios.
+Click the next pattern to highlight its matched nodes. **Apply next pattern**
+automatically highlights the following step's nodes in the updated graph.
+Applied steps select their surviving result nodes; later steps become
+inspectable when their preceding steps have been applied.
+
+Open :download:`rewriting-scenarios.onnx <../../examples/rewriting-scenarios.onnx>`
+for a ready-to-use model containing the ``onnx-light-viewer.fusions`` scenario
+with two successive ``TransposeTranspose`` steps. No manual fusion or save is
+needed before trying the scenario controls. To regenerate it after compiling
+the extension, run ``node examples/generate_rewritings.cjs`` with Node.js 22.
+
+.. figure:: ../_static/rewriting-scenarios.svg
+   :alt: Apply next advances one stored step; apply remaining completes the scenario in one operation. Unfuse last returns to the state before that click.
+   :width: 800px
+
+   Next applies one stored edit; remaining applies a batch with one undo boundary.
+
+Scenarios are alternatives against the original graph, not successive variants.
+Unfuse existing edits before switching scenarios. Manual fusion after a scenario
+also pauses scenario playback until that manual operation is undone.
+Each step is replayed from the original graph with its complete preceding prefix,
+so intermediate node reordering cannot change the meaning of stored indices.
+Structural edits, such as ``Finalize fusion node order``, appear as steps too.
+Subgraph edits display their stored scope path; their history entries do not
+select nodes in the main graph.
 
 Undo and rewriting plans
 -------------------------
 
 **Unfuse**, beside **Fuse**, offers **Unfuse last** and **Unfuse all**.
-Unfuse last restores the model before the last **Fuse selected** operation:
+Unfuse last restores the model before the last fusion or scenario operation:
 one step reverses all candidates applied together. The choices remain open so
 you can repeat Unfuse last to undo earlier operations, including operations on
 different pipeline stages. Unfuse all reverses every remaining operation at once.
@@ -91,8 +131,8 @@ In **Save**, **Include fusion rewritings** selects the saved representation:
        Existing named variants are retained without overwriting their names.
 
 The checked form follows onnx-light's canonical-model/variant contract:
-reopening it displays the original graph; onnx-light can replay the saved plan
-to obtain the fused graph. It does not persist the viewer's Undo stack.
+reopening it displays the original graph; choose the saved scenario in **Fuse**
+to replay it. It does not persist the viewer's Undo stack.
 For pipelines, each modified stage stores its own original graph and ordered
 plan. The choice also applies to encrypted saves and external-weight storage.
 

@@ -10,8 +10,75 @@ function createFusionPanel({
 }) {
   let fusionGraph;
   let fusionRequest = 0;
+  let fusionCompletion;
   let fusionPreview;
   let fusionBusy = false;
+  let scenarios = [];
+  let selectedStep;
+  function currentScenario() {
+    return scenarios.find(
+      (item) => item.name === byId("rewriting-scenario").value,
+    );
+  }
+  function focusScenarioStep(index) {
+    const scenario = currentScenario();
+    const step = scenario?.steps[index];
+    if (fusionBusy || !canFuse() || !step?.nodes.length) return;
+    selectedStep = { name: scenario.name, index };
+    for (const [stepIndex, button] of [
+      ...byId("rewriting-steps").querySelectorAll("button"),
+    ].entries())
+      button.setAttribute("aria-current", String(stepIndex === index));
+    focusNodes(step.nodes);
+  }
+  function updateScenario() {
+    const scenario = currentScenario();
+    byId("rewriting-scenario").disabled = fusionBusy || !scenarios.length;
+    for (const id of ["rewriting-next", "rewriting-all"])
+      byId(id).disabled = fusionBusy || !scenario?.available || !canFuse();
+    byId("rewriting-steps").replaceChildren();
+    for (const [index, step] of (scenario?.steps ?? []).entries()) {
+      const item = document.createElement("li");
+      const button = document.createElement("button");
+      button.textContent = `${index < scenario.applied ? "Applied: " : ""}${step.pattern}${step.path.length ? ` [${step.path.join(" / ")}]` : ""}`;
+      button.disabled = fusionBusy || !canFuse() || !step.nodes.length;
+      button.title = step.path.length
+        ? "This step edits a subgraph, not nodes in the main graph."
+        : index > scenario.applied
+          ? "Apply preceding steps to inspect these nodes."
+          : step.nodes.length
+            ? "Select this step's nodes in the graph."
+            : "No nodes from this step are present in the main graph.";
+      button.setAttribute(
+        "aria-current",
+        String(
+          selectedStep?.name === scenario.name && selectedStep.index === index,
+        ),
+      );
+      button.addEventListener("click", () => focusScenarioStep(index));
+      item.append(button);
+      byId("rewriting-steps").append(item);
+    }
+    byId("rewriting-progress").textContent = scenario
+      ? `${scenario.applied} / ${scenario.steps.length} steps applied.${!scenario.available && scenario.applied < scenario.steps.length ? " Unfuse current edits before applying this scenario." : ""}`
+      : "No saved rewriting scenarios in this model.";
+  }
+  function showScenarios(values, name) {
+    const previous = name ?? byId("rewriting-scenario").value;
+    scenarios = values ?? [];
+    byId("rewriting-scenario").replaceChildren();
+    for (const scenario of [...scenarios].sort((a, b) =>
+      a.name.localeCompare(b.name),
+    )) {
+      const option = document.createElement("option");
+      option.value = option.textContent = scenario.name;
+      byId("rewriting-scenario").append(option);
+    }
+    const active = scenarios.find((scenario) => scenario.applied)?.name;
+    if (scenarios.some((scenario) => scenario.name === (active ?? previous)))
+      byId("rewriting-scenario").value = active ?? previous;
+    updateScenario();
+  }
   function fusionControls(busy, message = "") {
     fusionBusy = busy;
     for (const control of byId("fusion-matches").querySelectorAll(
@@ -30,6 +97,7 @@ function createFusionPanel({
     byId("clear-fusions").disabled = busy || !fusionSelection().length;
     byId("apply-fusion").disabled = busy || !fusionSelection().length;
     byId("fuse-pattern").disabled = !canFuse();
+    updateScenario();
     if (message) byId("fusion-feedback").textContent = message;
     else if (fusionPreview) updateFusionSelection();
   }
@@ -173,7 +241,14 @@ function createFusionPanel({
   }
   byId("fuse-pattern").addEventListener("click", () => {
     if (!byId("fusion-panel").hidden) {
-      byId("close-fusion").click();
+      fusionRequest++;
+      byId("fusion-panel").hidden = true;
+      byId("fuse-pattern").setAttribute("aria-expanded", "false");
+      if (selectedStep) clearSelection();
+      selectedStep = undefined;
+      clearFusionPreview();
+      fit();
+      postMessage({ type: "cancel-fusion" });
       return;
     }
     byId("fusion-panel").hidden = false;
@@ -186,14 +261,6 @@ function createFusionPanel({
     requestAction("fusion-patterns", "List fusion patterns", {
       requestId: ++fusionRequest,
     });
-  });
-  byId("close-fusion").addEventListener("click", () => {
-    fusionRequest++;
-    byId("fusion-panel").hidden = true;
-    byId("fuse-pattern").setAttribute("aria-expanded", "false");
-    clearFusionPreview();
-    fit();
-    postMessage({ type: "cancel-fusion" });
   });
   function changeFusionPatterns() {
     fusionRequest++;
@@ -232,10 +299,45 @@ function createFusionPanel({
   byId("apply-fusion").addEventListener("click", () => {
     applyFusion(fusionSelection());
   });
+  byId("rewriting-scenario").addEventListener("change", () => {
+    selectedStep = undefined;
+    clearSelection();
+    updateScenario();
+  });
+  for (const [id, all] of [
+    ["rewriting-next", false],
+    ["rewriting-all", true],
+  ])
+    byId(id).addEventListener("click", () => {
+      clearFusionPreview();
+      fusionControls(true, "Applying saved rewriting scenario…");
+      requestAction("apply-rewriting", "Apply rewriting scenario", {
+        requestId: ++fusionRequest,
+        scenario: byId("rewriting-scenario").value,
+        all,
+      });
+    });
 
   function handleMessage(data) {
-    if (data?.type === "fusion-patterns") {
-      if (data.requestId !== fusionRequest) return true;
+    if (
+      data?.type === "fusion-patterns" ||
+      data?.type === "rewriting-info" ||
+      data?.type === "fusion-info"
+    ) {
+      if (data.type === "fusion-patterns" && data.requestId !== fusionRequest)
+        return true;
+      if (data.type !== "fusion-patterns") {
+        if (
+          fusionCompletion === undefined ||
+          data.requestId !== fusionCompletion ||
+          fusionRequest !== fusionCompletion + 1
+        )
+          return true;
+        fusionCompletion = undefined;
+        byId("fusion-panel").hidden = false;
+        byId("fuse-pattern").setAttribute("aria-expanded", "true");
+      }
+      showScenarios(data.scenarios, data.name);
       byId("fusion-pattern").replaceChildren();
       for (const pattern of [...data.patterns].sort()) {
         const label = document.createElement("label");
@@ -251,27 +353,39 @@ function createFusionPanel({
           ? `${data.patterns.length} native patterns available. Select patterns, then click Run Matching.`
           : "No native patterns have compatible anchors in this graph.",
       );
+      if (data.type !== "fusion-patterns") {
+        byId("fusion-status").textContent =
+          data.type === "rewriting-info"
+            ? `Applied rewriting scenario ${data.name}. Use Unfuse to undo.`
+            : `Applied ${data.count} fusion matches. Save a copy to keep changes.`;
+        updateScenario();
+        revealPanel(byId("fusion-panel"));
+        fit();
+        if (data.type === "rewriting-info")
+          focusScenarioStep(currentScenario()?.applied);
+      }
     } else if (data?.type === "fusion-preview") {
       if (data.requestId === fusionRequest) showFusionMatches(data);
     } else if (data?.type === "fusion-error") {
       if (data.requestId !== fusionRequest) return true;
       fusionControls(false, data.error);
       byId("fusion-status").textContent = `Fusion failed: ${data.error}`;
-    } else if (data?.type === "fusion-info") {
-      byId("fusion-status").textContent =
-        `Applied ${data.count} fusion matches. Save a copy to keep changes.`;
     } else {
       return false;
     }
     return true;
   }
-  function reset(graph) {
+  function reset(graph, operationRequestId) {
     fusionGraph = graph;
+    selectedStep = undefined;
+    fusionCompletion =
+      operationRequestId === fusionRequest ? operationRequestId : undefined;
     fusionRequest++;
     byId("fusion-panel").hidden = true;
     byId("fuse-pattern").setAttribute("aria-expanded", "false");
     clearFusionPreview();
     byId("fusion-status").textContent = "";
+    showScenarios([]);
   }
   function setEnabled(enabled) {
     byId("fuse-pattern").disabled = !enabled;
@@ -282,5 +396,10 @@ function createFusionPanel({
     reset,
     setEnabled,
     refresh: () => fusionControls(false),
+    invalidate: () => {
+      fusionRequest++;
+      fusionCompletion = undefined;
+      clearFusionPreview();
+    },
   };
 }

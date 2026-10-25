@@ -20,6 +20,9 @@ std::shared_ptr<StoredModel> CloneStoredModel(const std::shared_ptr<StoredModel>
   copy->fusion_base = model->fusion_base;
   copy->fusion_previous = model->fusion_previous;
   copy->fusion_history = model->fusion_history;
+  copy->rewriting_base = model->rewriting_base;
+  copy->rewriting_name = model->rewriting_name;
+  copy->rewriting_batches = model->rewriting_batches;
   for (const auto &plan : model->fusion_plans)
     copy->fusion_plans.push_back(plan.SharedCopy());
   return copy;

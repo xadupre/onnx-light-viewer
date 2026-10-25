@@ -524,7 +524,7 @@ async function configurePanel(
       directory: false,
       ...(file.size === undefined ? {} : { size: file.size }),
     }));
-  const sendGraph = (selectedNodes?: number[]) => {
+  const sendGraph = (selectedNodes?: number[], fusionRequestId?: unknown) => {
     fusionPreview = undefined;
     fusionRequest++;
     const current = requireModel();
@@ -532,6 +532,7 @@ async function configurePanel(
     return postMessage({
       type: "graph",
       graph: current.graph,
+      ...(fusionRequestId === undefined ? {} : { fusionRequestId }),
       ...(selectedNodes ? { selectedNodes } : {}),
       file: {
         fusionCount: current.fusionCount ?? 0,
@@ -594,6 +595,7 @@ async function configurePanel(
         requestId?: unknown;
         previewId?: unknown;
         pattern?: unknown;
+        scenario?: unknown;
         patterns?: unknown;
         anchors?: unknown;
         candidates?: unknown;
@@ -1183,6 +1185,7 @@ async function configurePanel(
         fusionRequest++;
       } else if (
         message?.type === "undo-fusion" ||
+        message?.type === "apply-rewriting" ||
         message?.type === "fusion-patterns" ||
         message?.type === "preview-fusion" ||
         message?.type === "apply-fusion"
@@ -1203,11 +1206,13 @@ async function configurePanel(
           await log.run(
             message.type === "undo-fusion"
               ? "Undo fusion"
-              : message.type === "apply-fusion"
-                ? "Apply fusion pattern"
-                : message.type === "preview-fusion"
-                  ? "Preview fusion pattern"
-                  : "List fusion patterns",
+              : message.type === "apply-rewriting"
+                ? "Apply rewriting scenario"
+                : message.type === "apply-fusion"
+                  ? "Apply fusion pattern"
+                  : message.type === "preview-fusion"
+                    ? "Preview fusion pattern"
+                    : "List fusion patterns",
             async () => {
               const current = requireModel();
               if (message.type === "undo-fusion") {
@@ -1256,6 +1261,61 @@ async function configurePanel(
                   "Return to a model's main graph to apply fusion patterns.",
                 );
               const path = current.graph.breadcrumbs.at(-1)?.path ?? [];
+              if (message.type === "apply-rewriting") {
+                if (
+                  typeof message.scenario !== "string" ||
+                  typeof message.all !== "boolean"
+                )
+                  throw new Error(
+                    "Choose a rewriting scenario and an all-steps option.",
+                  );
+                const native = await nativeModel(
+                  current,
+                  log,
+                  () => void sendStatus(),
+                );
+                if (!isCurrent()) return;
+                const edited = await native.applyRewritingScenario(
+                  message.scenario,
+                  message.all,
+                  current.source?.uri.scheme === "file"
+                    ? current.source.uri.fsPath
+                    : undefined,
+                  path,
+                );
+                if (!isCurrent()) return;
+                const retained = edited.clone();
+                const graph = edited.graph(false, path);
+                const replacement: LoadedModel = {
+                  ...current,
+                  native: edited,
+                  nativeReload: undefined,
+                  graph,
+                  metadata: undefined,
+                  fusionCount: edited.fusionCount(),
+                  fusionHistory: edited.fusionHistory(),
+                  reload: () => retained.clone(),
+                };
+                model = replacement;
+                graphRevision++;
+                navigationRequest++;
+                panel.title = `ONNX: ${current.fileName ?? graph.name} (modified)`;
+                await sendGraph(undefined, message.requestId);
+                if (
+                  !active ||
+                  model !== replacement ||
+                  fusionRequest !== generation + 1
+                )
+                  return;
+                await postMessage({
+                  type: "rewriting-info",
+                  requestId: message.requestId,
+                  name: message.scenario,
+                  patterns: edited.fusionPatterns(path),
+                  scenarios: edited.rewritingScenarios(path),
+                });
+                return;
+              }
               if (message.type === "apply-fusion") {
                 const preview = fusionPreview;
                 const candidates: unknown = message.candidates;
@@ -1320,11 +1380,19 @@ async function configurePanel(
                 graphRevision++;
                 navigationRequest++;
                 panel.title = `ONNX: ${current.fileName ?? graph.name} (modified)`;
-                await sendGraph();
-                if (!active || model !== replacement) return;
+                await sendGraph(undefined, message.requestId);
+                if (
+                  !active ||
+                  model !== replacement ||
+                  fusionRequest !== generation + 1
+                )
+                  return;
                 await postMessage({
                   type: "fusion-info",
+                  requestId: message.requestId,
                   count: anchors.length,
+                  patterns: edited.fusionPatterns(path),
+                  scenarios: edited.rewritingScenarios(path),
                 });
                 return;
               }
@@ -1341,6 +1409,7 @@ async function configurePanel(
                   type: "fusion-patterns",
                   requestId: message.requestId,
                   patterns,
+                  scenarios: native.rewritingScenarios(path),
                 });
                 return;
               }

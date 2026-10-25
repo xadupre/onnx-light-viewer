@@ -880,6 +880,16 @@ button:disabled {
 .fusion-picker summary {
   cursor: pointer;
 }
+#rewriting-scenario {
+  width: 100%;
+  margin-top: 4px;
+}
+#rewriting-steps {
+  max-height: 12rem;
+  overflow: auto;
+  padding-left: 24px;
+  overflow-wrap: anywhere;
+}
 #fusion-pattern label {
   display: flex;
   align-items: center;
@@ -939,7 +949,8 @@ button:disabled {
   padding-left: 16px;
   overflow-wrap: anywhere;
 }
-#unfuse-history button {
+#unfuse-history button,
+#rewriting-steps button {
   padding: 2px 0;
   color: var(--text);
   text-align: left;
@@ -948,7 +959,9 @@ button:disabled {
   white-space: normal;
   overflow-wrap: anywhere;
 }
-#unfuse-history button:hover:not(:disabled) {
+#unfuse-history button:hover:not(:disabled),
+#rewriting-steps button:hover:not(:disabled),
+#rewriting-steps button[aria-current="true"] {
   color: var(--mint);
   text-decoration: underline;
 }

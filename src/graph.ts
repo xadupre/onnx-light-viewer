@@ -166,6 +166,13 @@ export interface FusionOperation {
   stage?: PipelineRole;
 }
 
+export interface RewritingScenario {
+  name: string;
+  steps: { pattern: string; path: string[]; nodes: number[] }[];
+  applied: number;
+  available: boolean;
+}
+
 /**
  * Retained model or pipeline whose inferred information survives graph projections.
  * Methods do not execute the model or write files.
@@ -178,6 +185,13 @@ export interface NativeModel {
   fusionHistory(): FusionOperation[];
   /** Returns an independent snapshot before the last Fuse operation. */
   undoFusion(): NativeModel;
+  rewritingScenarios(path?: GraphPath): RewritingScenario[];
+  applyRewritingScenario(
+    name: string,
+    all: boolean,
+    sourceFilePath?: string,
+    path?: GraphPath,
+  ): Promise<NativeModel>;
   summary(inferShapes?: boolean): GraphSummary;
   /** Pipeline fusions require the path of a stage root; ordinary models use []. */
   fusionPatterns(path?: GraphPath): string[];
