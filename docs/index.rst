@@ -1,6 +1,10 @@
 ONNX Light Viewer
 =================
 
+.. image:: https://github.com/xadupre/onnx-light-viewer/actions/workflows/tests.yml/badge.svg?branch=main
+   :target: https://github.com/xadupre/onnx-light-viewer/actions/workflows/tests.yml
+   :alt: CI
+
 .. image:: https://codecov.io/gh/xadupre/onnx-light-viewer/branch/main/graph/badge.svg
    :target: https://codecov.io/gh/xadupre/onnx-light-viewer
    :alt: Code coverage
