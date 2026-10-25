@@ -416,10 +416,14 @@ private:
     SetShape(row, shape + "]");
     if (Full() || std::find(tensor.dims().begin(), tensor.dims().end(), 0) != tensor.dims().end())
       return;
-    if (const auto values = TinyTensorValues(tensor))
-      SetData(row, *values);
-    else
-      SetData(row, "Not previewed (external, omitted or 16+ elements).");
+    try {
+      if (const auto values = TinyTensorValues(tensor))
+        SetData(row, *values);
+      else
+        SetData(row, "Not previewed (external, omitted or 16+ elements).");
+    } catch (const std::exception &error) {
+      SetData(row, std::string("Unavailable: ") + error.what());
+    }
   }
 
   void AddStruct(const std::string &path, const ol::StructTypeProto &type, size_t depth) {
