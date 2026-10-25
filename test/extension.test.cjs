@@ -1313,6 +1313,86 @@ test("opens pipeline files, navigates stages, applies stage fusions and saves th
   await assert.rejects(readFile(encrypted), { code: "ENOENT" });
 });
 
+test("lists saved scenarios and applies one or all remaining steps with host undo", async (t) => {
+  const { loadModel } = require("../dist/graph");
+  const sourceModel = loadModel(
+    readFileSync(require.resolve("./models/fusion.onnx")),
+    "scenario",
+  );
+  const first = await sourceModel.applyFusion("TransposeTranspose", [0]);
+  const full = await first.applyFusion("TransposeTranspose", [1]);
+  const directory = await mkdtemp(path.join(tmpdir(), "onnx-light-scenarios-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const source = path.join(directory, "scenario.onnx");
+  await writeFile(source, await full.serialize(undefined, undefined, true));
+  const extension = await openExtension(undefined, undefined, true);
+  t.after(() => extension.dispose());
+  await extension.openFile(source);
+  const latestGraph = () =>
+    extension.messages.findLast((message) => message.type === "graph");
+  await extension.receive({ type: "fusion-patterns", requestId: 1 });
+  const name = extension.messages.at(-1).scenarios[0].name;
+  assert.deepEqual(
+    extension.messages.at(-1).scenarios[0].steps[0].nodes,
+    [0, 1],
+  );
+  await extension.receive({
+    type: "apply-rewriting",
+    scenario: name,
+    all: false,
+    requestId: 2,
+  });
+  assert.equal(extension.messages.at(-1).type, "rewriting-info");
+  assert.equal(extension.messages.at(-1).scenarios[0].applied, 1);
+  assert.deepEqual(
+    extension.messages.at(-1).scenarios[0].steps[1].nodes,
+    [1, 2],
+  );
+  assert.deepEqual(latestGraph().graph, first.graph());
+  assert.equal(latestGraph().file.fusionCount, 1);
+  await extension.receive({
+    type: "apply-rewriting",
+    scenario: name,
+    all: true,
+    requestId: 3,
+  });
+  assert.deepEqual(latestGraph().graph, full.graph());
+  assert.equal(extension.messages.at(-1).scenarios[0].applied, 2);
+  await extension.receive({ type: "undo-fusion" });
+  assert.deepEqual(latestGraph().graph, first.graph());
+  await extension.receive({ type: "fusion-patterns", requestId: 4 });
+  assert.equal(extension.messages.at(-1).scenarios[0].applied, 1);
+  await extension.receive({ type: "undo-fusion", all: true });
+  assert.deepEqual(latestGraph().graph, sourceModel.graph());
+  await extension.receive({
+    type: "apply-rewriting",
+    scenario: "missing",
+    all: true,
+    requestId: 5,
+  });
+  assert.equal(extension.messages.at(-1).type, "fusion-error");
+  assert.match(extension.messages.at(-1).error, /Unknown/);
+  const completions = extension.messages.filter(
+    (message) => message.type === "rewriting-info",
+  ).length;
+  extension.connect((message) => {
+    if (message.type === "graph")
+      void extension.receive({ type: "cancel-fusion" });
+  });
+  await extension.receive({
+    type: "apply-rewriting",
+    scenario: name,
+    all: true,
+    requestId: 6,
+  });
+  assert.equal(
+    extension.messages.filter((message) => message.type === "rewriting-info")
+      .length,
+    completions,
+  );
+  assert.deepEqual(latestGraph().graph, full.graph());
+});
+
 test("unfuses the last operation or all successive native fusions atomically", async () => {
   const extension = await openExtension(
     undefined,
@@ -1339,6 +1419,10 @@ test("unfuses the last operation or all successive native fusions atomically", a
       requestId: ++requestId,
     });
     assert.equal(extension.messages.at(-1).type, "fusion-info");
+    assert.equal(
+      extension.messages.at(-1).patterns.includes("TransposeTranspose"),
+      latestGraph().graph.nodes.some((node) => node.opType === "Transpose"),
+    );
   };
   await fuseNext();
   await fuseNext();
@@ -1370,6 +1454,36 @@ test("unfuses the last operation or all successive native fusions atomically", a
   assert.equal(
     extension.messages.filter((message) => message.type === "graph").length,
     beforeUnfuse + 1,
+  );
+});
+
+test("does not reopen fusion controls after cancellation during the updated graph delivery", async () => {
+  const extension = await openExtension("fusion.onnx");
+  await extension.receive({
+    type: "preview-fusion",
+    pattern: "TransposeTranspose",
+    requestId: 1,
+  });
+  const preview = extension.messages.at(-1);
+  assert.equal(preview.type, "fusion-preview");
+  extension.connect((message) => {
+    if (message.type === "graph")
+      void extension.receive({ type: "cancel-fusion" });
+  });
+  await extension.receive({
+    type: "apply-fusion",
+    previewId: preview.previewId,
+    candidates: [0],
+    requestId: 2,
+  });
+  assert.equal(
+    extension.messages.findLast((message) => message.type === "graph").file
+      .fusionCount,
+    1,
+  );
+  assert.equal(
+    extension.messages.some((message) => message.type === "fusion-info"),
+    false,
   );
 });
 
@@ -1415,6 +1529,7 @@ test("previews and applies selected native fusions, rejects stale previews and s
     requestId: 3,
   });
   assert.equal(extension.messages.at(-1).type, "fusion-info");
+  assert.deepEqual(extension.messages.at(-1).patterns, edited.fusionPatterns());
   const graph = extension.messages.findLast(
     (message) => message.type === "graph",
   ).graph;
@@ -2073,13 +2188,19 @@ test("ignores stale recovery results and errors after replacing a local model", 
     "refresh-shapes",
     "verify",
     "undo-fusion",
+    "apply-rewriting",
   ]) {
     const extension = await openExtension("inference.onnx", undefined, true);
     for (const path of [[], [{ node: 9999, attribute: 0, graph: 0 }]]) {
       await extension.open("invalid-graph.onnx");
       await extension.receive({ type: "metadata" });
       const resume = extension.pauseNextFileLoad();
-      const recovery = extension.receive({ type, path });
+      const recovery = extension.receive({
+        type,
+        path,
+        scenario: "scenario",
+        all: false,
+      });
       await extension.open("relu.onnx");
       const count = extension.messages.length;
       const errors = extension.errors.length;
@@ -2144,6 +2265,7 @@ test("ignores delayed recovery results and errors after disposing the panel", as
     { type: "refresh-shapes" },
     { type: "verify" },
     { type: "undo-fusion" },
+    { type: "apply-rewriting", scenario: "scenario", all: false },
   ]) {
     const extension = await openExtension(
       "invalid-graph.onnx",
@@ -2539,6 +2661,21 @@ test("matches multiple patterns and fuses checked candidates through the real we
     document.getElementById("fusion-status").textContent,
     /Applied 2 fusion/,
   );
+  assert.equal(document.getElementById("fusion-panel").hidden, false);
+  const refreshed = extension.messages.findLast(
+    (message) => message.type === "fusion-info",
+  );
+  assert.deepEqual(
+    [...list.querySelectorAll("input")].map((input) => input.value),
+    [...refreshed.patterns].sort(),
+  );
+  assert.equal(document.querySelectorAll("#fusion-matches li").length, 0);
+  assert.equal(list.querySelectorAll("input:checked").length, 0);
+  list.querySelector('input[value="TransposeTranspose"]').parentElement.click();
+  await flush();
+  document.getElementById("preview-fusion").click();
+  await flush();
+  assert.equal(document.querySelectorAll("#fusion-matches li").length, 1);
   const undo = document.getElementById("undo-fusion");
   assert.equal(undo.disabled, false);
   undo.click();

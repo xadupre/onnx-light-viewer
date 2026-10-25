@@ -60,6 +60,9 @@ struct StoredModel {
   std::shared_ptr<StoredModel> fusion_previous;
   std::vector<ol::RewritingProto> fusion_plans;
   std::vector<std::vector<FusionMatch>> fusion_history;
+  std::shared_ptr<StoredModel> rewriting_base;
+  std::string rewriting_name;
+  std::vector<size_t> rewriting_batches;
 };
 
 std::shared_ptr<StoredModel> CloneStoredModel(const std::shared_ptr<StoredModel> &model);

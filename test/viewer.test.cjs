@@ -1209,6 +1209,155 @@ test("shows matching adjacent Open/Save sidebar buttons and an explicit storage/
   assert.equal(messages.at(-1).type, "open");
 });
 
+test("chooses saved rewriting scenarios, applies next or remaining steps and recovers from errors", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  load(demoGraph);
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  const scenarios = [
+    {
+      name: "z-last",
+      applied: 0,
+      available: true,
+      steps: [{ pattern: "Identity", path: [], nodes: [] }],
+    },
+    {
+      name: "a-first",
+      applied: 0,
+      available: true,
+      steps: [
+        { pattern: "TransposeTranspose", path: [], nodes: [0] },
+        { pattern: "SameChildren", path: [], nodes: [] },
+      ],
+    },
+  ];
+  const select = document.getElementById("rewriting-scenario");
+  const next = document.getElementById("rewriting-next");
+  const all = document.getElementById("rewriting-all");
+  document.getElementById("fuse-pattern").click();
+  send({
+    type: "fusion-patterns",
+    requestId: messages.at(-1).requestId,
+    patterns: [],
+    scenarios,
+  });
+  assert.deepEqual(
+    [...select.options].map((option) => option.value),
+    ["a-first", "z-last"],
+  );
+  assert.equal(next.disabled, false);
+  next.click();
+  next.click();
+  assert.equal(messages.at(-1).type, "apply-rewriting");
+  assert.equal(messages.at(-1).scenario, "a-first");
+  assert.equal(messages.at(-1).all, false);
+  assert.equal(
+    messages.filter((message) => message.type === "apply-rewriting").length,
+    1,
+  );
+  assert.equal(all.disabled, true);
+  send({
+    type: "fusion-error",
+    requestId: messages.at(-1).requestId,
+    error: "Invalid stored step",
+  });
+  assert.equal(next.disabled, false);
+  assert.match(
+    document.getElementById("fusion-feedback").textContent,
+    /Invalid stored step/,
+  );
+  next.click();
+  load(demoGraph);
+  scenarios[1].applied = 1;
+  scenarios[1].steps[1].nodes = [0];
+  scenarios[0].available = false;
+  send({ type: "rewriting-info", name: "a-first", patterns: [], scenarios });
+  assert.equal(document.getElementById("fusion-panel").hidden, false);
+  assert.match(
+    document.getElementById("rewriting-progress").textContent,
+    /1 \/ 2/,
+  );
+  assert.match(
+    document.getElementById("rewriting-steps").children[0].textContent,
+    /^Applied:/,
+  );
+  select.value = "z-last";
+  select.dispatchEvent(new window.Event("change"));
+  assert.equal(all.disabled, true);
+  select.value = "a-first";
+  select.dispatchEvent(new window.Event("change"));
+  all.click();
+  assert.equal(messages.at(-1).all, true);
+  scenarios[1].applied = 2;
+  scenarios[1].available = false;
+  load(demoGraph);
+  send({ type: "rewriting-info", name: "a-first", patterns: [], scenarios });
+  assert.equal(next.disabled, true);
+  assert.equal(all.disabled, true);
+  load(demoGraph);
+  assert.equal(select.options.length, 0);
+});
+
+test("selects saved pattern nodes and automatically reveals the next pattern after applying a step", async (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const saved = loadModel(
+    readFileSync(require.resolve("../examples/rewriting-scenarios.onnx")),
+    "Saved rewriting example",
+  );
+  load(saved.graph());
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  const selectedNodes = () =>
+    [...document.querySelectorAll(".graph-node.selected")].map(
+      (node) => node.dataset.id,
+    );
+  const buttons = () => document.querySelectorAll("#rewriting-steps button");
+  document.getElementById("fuse-pattern").click();
+  send({
+    type: "fusion-patterns",
+    requestId: messages.at(-1).requestId,
+    patterns: [],
+    scenarios: saved.rewritingScenarios(),
+  });
+  assert.equal(buttons()[1].disabled, true);
+  buttons()[0].click();
+  assert.deepEqual(selectedNodes(), ["node-0", "node-1"]);
+  assert.equal(buttons()[0].getAttribute("aria-current"), "true");
+  document.getElementById("rewriting-next").click();
+  assert.equal(buttons()[0].disabled, true);
+  const request = messages.at(-1);
+  const first = await saved.applyRewritingScenario(
+    request.scenario,
+    request.all,
+  );
+  load(first.graph());
+  send({
+    type: "rewriting-info",
+    name: request.scenario,
+    patterns: [],
+    scenarios: first.rewritingScenarios(),
+  });
+  assert.deepEqual(selectedNodes(), ["node-1", "node-2"]);
+  assert.equal(buttons()[1].getAttribute("aria-current"), "true");
+  assert.equal(buttons()[1].disabled, false);
+  buttons()[0].click();
+  assert.deepEqual(selectedNodes(), ["node-0"]);
+  buttons()[1].click();
+  assert.deepEqual(selectedNodes(), ["node-1", "node-2"]);
+  document.getElementById("rewriting-next").click();
+  const full = await first.applyRewritingScenario(request.scenario, false);
+  load(full.graph());
+  send({
+    type: "rewriting-info",
+    name: request.scenario,
+    patterns: [],
+    scenarios: full.rewritingScenarios(),
+  });
+  assert.equal(document.getElementById("rewriting-next").disabled, true);
+  buttons()[1].click();
+  assert.deepEqual(selectedNodes(), ["node-1"]);
+});
+
 test("offers last and all Unfuse actions beside Fuse and preserves repeated undo", (t) => {
   const { document, window, messages } = openViewer(t);
   const selectionGraph = loadModel(
@@ -1770,6 +1919,19 @@ test("runs matching explicitly, highlights candidates and fuses only checked mat
   });
   const matches = document.getElementById("fusion-matches");
   assert.equal(matches.closest("details").open, true);
+  assert.equal(
+    document.getElementById("apply-fusion").closest("details"),
+    matches.closest("details"),
+  );
+  assert.equal(document.getElementById("close-fusion"), null);
+  assert.equal(
+    document.getElementById("preview-fusion").closest("details"),
+    pattern.closest("details"),
+  );
+  assert.equal(
+    document.getElementById("fusion-feedback").closest("details"),
+    pattern.closest("details"),
+  );
   assert.equal(matches.querySelector("button"), null);
   assert.equal(matches.children.length, 2);
   assert.match(matches.textContent, /first:[\s\S]*second:/);
@@ -2087,7 +2249,7 @@ test("selects only non-overlapping matches and sends the external-weight reuse c
     inputs.map((input) => input.checked),
     [true, false],
   );
-  document.getElementById("close-fusion").click();
+  document.getElementById("fuse-pattern").click();
   assert.equal(document.querySelectorAll(".graph-node.selected").length, 0);
   assert.equal(document.getElementById("fusion-panel").hidden, true);
   assert.equal(messages.at(-1).type, "cancel-fusion");

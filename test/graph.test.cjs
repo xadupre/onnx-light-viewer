@@ -1546,6 +1546,384 @@ test("replays successive fusion plans through intervening Shape/Size materializa
   }
 });
 
+async function savedFusionScenario(
+  bytes = modelBytes("fusion.onnx"),
+  anchors = [0, 1],
+) {
+  const stages = [loadModel(bytes, "scenario")];
+  for (const anchor of anchors)
+    stages.push(
+      await stages.at(-1).applyFusion("TransposeTranspose", [anchor]),
+    );
+  return {
+    stages,
+    bytes: Buffer.from(
+      await stages.at(-1).serialize(undefined, undefined, true),
+    ),
+  };
+}
+
+test("opens the saved rewriting example and replays both patterns with undo", async () => {
+  const loaded = loadModel(
+    readFileSync(path.join(__dirname, "../examples/rewriting-scenarios.onnx")),
+    "Saved rewriting example",
+  );
+  loaded.verify();
+  const [scenario] = loaded.rewritingScenarios();
+  assert.equal(scenario.name, "onnx-light-viewer.fusions");
+  assert.equal(scenario.steps.length, 2);
+  const first = await loaded.applyRewritingScenario(scenario.name, false);
+  const second = await first.applyRewritingScenario(scenario.name, false);
+  const all = await loaded.applyRewritingScenario(scenario.name, true);
+  second.verify();
+  assert.deepEqual(second.graph(), all.graph());
+  assert.deepEqual(second.undoFusion().graph(), first.graph());
+  assert.deepEqual(second.undoFusion().undoFusion().graph(), loaded.graph());
+});
+
+test("applies saved rewriting scenarios all at once or stepwise with independent undo and exports", async () => {
+  const { stages, bytes } = await savedFusionScenario();
+  const name = "onnx-light-viewer.fusions";
+  const loaded = loadModel(bytes, "scenario");
+  assert.deepEqual(loaded.rewritingScenarios(), [
+    {
+      name,
+      applied: 0,
+      available: true,
+      steps: [
+        { pattern: "TransposeTranspose", path: [], nodes: [0, 1] },
+        { pattern: "TransposeTranspose", path: [], nodes: [] },
+      ],
+    },
+  ]);
+  const partial = await loaded.applyRewritingScenario(name, false);
+  assert.deepEqual(partial.graph(), stages[1].graph());
+  assert.equal(partial.rewritingScenarios()[0].applied, 1);
+  assert.deepEqual(
+    partial.rewritingScenarios()[0].steps.map((step) => step.nodes),
+    [[0], [1, 2]],
+  );
+  const preview = await partial.clone().previewFusion("TransposeTranspose");
+  const full = await preview.model.applyRewritingScenario(name, false);
+  assert.deepEqual(full.graph(), stages[2].graph());
+  assert.equal(full.fusionCount(), 2);
+  assert.equal(full.rewritingScenarios()[0].available, false);
+  assert.deepEqual(
+    full.rewritingScenarios()[0].steps.map((step) => step.nodes),
+    [[0], [1]],
+  );
+  assert.deepEqual(full.undoFusion().graph(), partial.graph());
+  assert.deepEqual(full.undoFusion().undoFusion().graph(), loaded.graph());
+  const all = await loaded.applyRewritingScenario(name, true);
+  assert.deepEqual(all.graph(), full.graph());
+  assert.equal(all.fusionCount(), 1);
+  assert.deepEqual(all.undoFusion().graph(), loaded.graph());
+  await assert.rejects(
+    full.applyRewritingScenario(name, false),
+    /No remaining/,
+  );
+  await assert.rejects(
+    loaded.applyRewritingScenario("missing", true),
+    /Unknown/,
+  );
+  const manual = await partial.applyFusion("TransposeTranspose", [1]);
+  assert.equal(manual.rewritingScenarios()[0].available, false);
+  assert.ok(
+    manual.rewritingScenarios()[0].steps.every((step) => !step.nodes.length),
+  );
+  await assert.rejects(
+    manual.applyRewritingScenario(name, true),
+    /Unfuse current edits/,
+  );
+  const continued = await manual
+    .undoFusion()
+    .applyRewritingScenario(name, true);
+  assert.deepEqual(continued.graph(), full.graph());
+  const exported = Buffer.from(
+    await full.serialize(undefined, undefined, true),
+  );
+  const plan = rewritingPlans(exported).find((plan) =>
+    plan.name.endsWith(".2"),
+  );
+  assert.deepEqual(loadModel(plan.bytes, "scenario").graph(), full.graph());
+  assert.deepEqual(
+    loadModel(await full.serialize(), "scenario").graph(),
+    full.graph(),
+  );
+  const encrypted = loadModel(
+    await full.serialize("scenario-secret"),
+    "scenario",
+    "scenario-secret",
+  );
+  assert.deepEqual(encrypted.graph(), full.graph());
+  const alternatives = loadModel(
+    Buffer.from(await partial.serialize(undefined, undefined, true)),
+    "scenario",
+  );
+  const selected = await alternatives.applyRewritingScenario(name, false);
+  await assert.rejects(
+    selected.applyRewritingScenario(`${name}.2`, true),
+    /Unfuse/,
+  );
+  const alternative = await selected
+    .undoFusion()
+    .applyRewritingScenario(`${name}.2`, true);
+  assert.deepEqual(alternative.graph(), partial.graph());
+});
+
+test("replays stored prefixes from canonical order despite Shape/Size finalization and rejects invalid plans", async () => {
+  for (const opType of ["Shape", "Size"]) {
+    const { stages, bytes } = await savedFusionScenario(
+      fusionWithLateMetadata(opType),
+      [2, 4],
+    );
+    const loaded = loadModel(bytes, "scenario");
+    let applied = loaded;
+    const scenario = loaded.rewritingScenarios()[0];
+    for (let i = 0; i < scenario.steps.length; ++i) {
+      applied = await applied.applyRewritingScenario(scenario.name, false);
+      assert.equal(applied.rewritingScenarios()[0].applied, i + 1);
+    }
+    assert.deepEqual(applied.graph(), stages.at(-1).graph());
+    assert.equal(applied.fusionCount(), scenario.steps.length);
+    const plans = rewritingPlans(
+      Buffer.from(await applied.serialize(undefined, undefined, true)),
+    );
+    assert.deepEqual(
+      loadModel(
+        plans.find((plan) => plan.name.endsWith(".2")).bytes,
+        "scenario",
+      ).graph(),
+      applied.graph(),
+    );
+  }
+  const malformed = Buffer.concat([
+    modelBytes("fusion.onnx"),
+    bytesField(
+      1001,
+      Buffer.concat([
+        bytesField(1, "bad"),
+        bytesField(2, bytesField(1, varintField(3, 999))),
+      ]),
+    ),
+  ]);
+  const invalid = loadModel(malformed, "invalid");
+  const original = invalid.graph();
+  await assert.rejects(invalid.applyRewritingScenario("bad", true));
+  assert.deepEqual(invalid.graph(), original);
+  assert.equal(invalid.fusionCount(), 0);
+});
+
+test("maps the next saved pattern to current nodes after Shape/Size reordering", async () => {
+  const edit = (matched, position, output) =>
+    bytesField(
+      1,
+      Buffer.concat([
+        bytesField(1, "TransposeTranspose"),
+        ...matched.map((index) => varintField(3, index)),
+        bytesField(
+          5,
+          Buffer.concat([
+            bytesField(1, "x"),
+            bytesField(2, output),
+            bytesField(4, "Identity"),
+          ]),
+        ),
+        varintField(6, position),
+      ]),
+    );
+  for (const opType of ["Shape", "Size"]) {
+    const bytes = Buffer.concat([
+      fusionWithLateMetadata(opType),
+      bytesField(
+        1001,
+        Buffer.concat([
+          bytesField(1, "two-pairs"),
+          bytesField(
+            2,
+            Buffer.concat([edit([2, 3], 2, "b"), edit([3, 4], 3, "c")]),
+          ),
+        ]),
+      ),
+    ]);
+    const saved = loadModel(bytes, "late-metadata");
+    assert.deepEqual(saved.rewritingScenarios()[0].steps[0].nodes, [2, 3]);
+    const first = await saved.applyRewritingScenario("two-pairs", false);
+    const [scenario] = first.rewritingScenarios();
+    assert.deepEqual(scenario.steps[1].nodes, [4, 5]);
+    assert.deepEqual(
+      scenario.steps[1].nodes.map((index) => first.graph().nodes[index].name),
+      ["fifth", "sixth"],
+    );
+    const second = await first.applyRewritingScenario("two-pairs", false);
+    assert.deepEqual(
+      second.undoFusion().rewritingScenarios()[0].steps[1].nodes,
+      [4, 5],
+    );
+  }
+});
+
+test("restores scenario-only initializers, imports and functions from embedded or external storage", async (t) => {
+  const node = (op, inputs, output, domain = "") =>
+    Buffer.concat([
+      ...inputs.map((input) => bytesField(1, input)),
+      bytesField(2, output),
+      bytesField(4, op),
+      bytesField(7, domain),
+    ]);
+  const type = bytesField(
+    2,
+    bytesField(
+      1,
+      Buffer.concat([
+        varintField(1, 1),
+        bytesField(2, bytesField(1, varintField(1, 1))),
+      ]),
+    ),
+  );
+  const value = (name) => Buffer.concat([bytesField(1, name), type]);
+  const bias = Buffer.alloc(4);
+  bias.writeFloatLE(2.5);
+  const plan = (payload) =>
+    Buffer.concat([
+      bytesField(
+        1,
+        Buffer.concat([
+          bytesField(1, "Shift with bias"),
+          varintField(3, 0),
+          bytesField(5, node("Shift", ["x", "bias"], "y", "scenario.custom")),
+          varintField(6, 0),
+          bytesField(
+            7,
+            Buffer.concat([
+              varintField(1, 1),
+              varintField(2, 1),
+              bytesField(8, "bias"),
+              ...payload,
+            ]),
+          ),
+          varintField(8, 0),
+        ]),
+      ),
+      bytesField(
+        2,
+        Buffer.concat([bytesField(1, "scenario.custom"), varintField(2, 1)]),
+      ),
+      bytesField(
+        4,
+        Buffer.concat([
+          bytesField(1, "Shift"),
+          bytesField(4, "X"),
+          bytesField(4, "B"),
+          bytesField(5, "Y"),
+          bytesField(7, node("Add", ["X", "B"], "Y")),
+          bytesField(9, varintField(2, 18)),
+          bytesField(10, "scenario.custom"),
+        ]),
+      ),
+    ]);
+  const bytes = (payload) =>
+    Buffer.concat([
+      varintField(1, 9),
+      bytesField(8, varintField(2, 18)),
+      bytesField(
+        7,
+        Buffer.concat([
+          bytesField(1, node("Identity", ["x"], "y")),
+          bytesField(2, "scenario"),
+          bytesField(11, value("x")),
+          bytesField(12, value("y")),
+        ]),
+      ),
+      bytesField(
+        1001,
+        Buffer.concat([bytesField(1, "shift"), bytesField(2, plan(payload))]),
+      ),
+    ]);
+  const embedded = loadModel(bytes([bytesField(9, bias)]), "scenario");
+  const applied = await embedded.applyRewritingScenario("shift", true);
+  assert.equal(applied.graph().nodes[0].opType, "Shift");
+  assert.ok(
+    applied.graph().opsets.some((opset) => opset.domain === "scenario.custom"),
+  );
+  assert.equal(
+    applied.graph(false, applied.graph().nodes[0].function.path).nodes[0]
+      .opType,
+    "Add",
+  );
+  const directory = mkdtempSync(
+    path.join(tmpdir(), "onnx-light-scenario-weights-"),
+  );
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const source = path.join(directory, "scenario.onnx");
+  writeFileSync(
+    source,
+    bytes([
+      varintField(14, 1),
+      bytesField(
+        13,
+        Buffer.concat([bytesField(1, "location"), bytesField(2, "bias.bin")]),
+      ),
+    ]),
+  );
+  writeFileSync(path.join(directory, "bias.bin"), bias);
+  const external = await loadModelFile(source, "scenario");
+  const externalApplied = await external.applyRewritingScenario("shift", false);
+  assert.deepEqual(externalApplied.graph(), applied.graph());
+  assert.deepEqual(
+    Buffer.from(await externalApplied.serialize()),
+    Buffer.from(await applied.serialize()),
+  );
+  const replay = rewritingPlans(
+    Buffer.from(await externalApplied.serialize(undefined, undefined, true)),
+  );
+  assert.deepEqual(
+    loadModel(
+      replay.find((plan) => plan.name === "onnx-light-viewer.fusions").bytes,
+      "scenario",
+    ).graph(),
+    applied.graph(),
+  );
+});
+
+test("keeps saved scenario progress and undo ordering independent across pipeline stages", async () => {
+  const { bytes } = await savedFusionScenario();
+  const pipeline = loadModel(
+    pipelineBytes({ embedding: bytes, prefill: bytes }),
+    "scenarios.pipe-onnx",
+  );
+  const embedding = [{ pipeline: "embedding" }];
+  const prefill = [{ pipeline: "prefill" }];
+  const name = pipeline.rewritingScenarios(embedding)[0].name;
+  const first = await pipeline.applyRewritingScenario(
+    name,
+    false,
+    undefined,
+    embedding,
+  );
+  const second = await first
+    .clone()
+    .applyRewritingScenario(name, true, undefined, prefill);
+  assert.equal(second.fusionCount(), 2);
+  assert.equal(second.rewritingScenarios(embedding)[0].applied, 1);
+  assert.equal(second.rewritingScenarios(prefill)[0].applied, 2);
+  const undone = second.undoFusion();
+  assert.equal(undone.rewritingScenarios(prefill)[0].applied, 0);
+  assert.equal(undone.rewritingScenarios(embedding)[0].applied, 1);
+  assert.deepEqual(
+    undone.graph(false, embedding),
+    first.graph(false, embedding),
+  );
+  const continued = await undone.applyRewritingScenario(
+    name,
+    true,
+    undefined,
+    embedding,
+  );
+  assert.equal(continued.rewritingScenarios(embedding)[0].applied, 2);
+  assert.equal(continued.fusionCount(), 2);
+});
+
 test("tracks fused pattern descendants when a later fusion consumes them", async () => {
   const tensorType = bytesField(
     1,

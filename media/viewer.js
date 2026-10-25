@@ -1838,7 +1838,7 @@ window.addEventListener("message", (event) => {
         button.dataset.nodeCount = String(match.nodes.length);
         button.title = match.nodes.length
           ? "Select the remaining nodes produced by this match."
-          : "No nodes remain from this match after later fusions.";
+          : "No nodes remain selectable in this main graph.";
         button.addEventListener("click", () => {
           const path = displayedGraph.breadcrumbs.at(-1)?.path ?? [];
           const sameGraph = operation.stage

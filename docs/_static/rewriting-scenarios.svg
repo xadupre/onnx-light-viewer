@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="280" viewBox="0 0 800 280" role="img" aria-labelledby="title description">
+  <title id="title">Saved scenario playback and undo boundaries</title>
+  <desc id="description">Apply next pattern advances from the original graph to one applied step. Apply remaining scenario advances to the completed scenario in one operation. Unfuse last returns to the state before the last click. Applying the entire scenario directly is also one undoable operation.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 10 5 0 10Z" fill="#91d9c6"/></marker>
+  </defs>
+  <rect width="800" height="280" rx="12" fill="#101c2d"/>
+  <g fill="#1c3045" stroke="#7895b2" stroke-width="1.5">
+    <rect x="20" y="85" width="175" height="90" rx="8"/>
+    <rect x="315" y="85" width="175" height="90" rx="8"/>
+    <rect x="610" y="85" width="170" height="90" rx="8"/>
+  </g>
+  <g fill="none" stroke="#91d9c6" stroke-width="2" marker-end="url(#arrow)">
+    <path d="M200 110H308"/><path d="M310 155H202"/>
+    <path d="M495 110H603"/><path d="M605 155H497"/>
+    <path d="M108 80V35H695V78"/>
+    <path d="M695 180V230H108V182"/>
+  </g>
+  <g fill="#edf7ff" font-family="system-ui, sans-serif" font-size="14" text-anchor="middle">
+    <text x="108" y="121">Original graph</text><text x="108" y="149">0 steps applied</text>
+    <text x="403" y="121">Partial scenario</text><text x="403" y="149">1 step applied</text>
+    <text x="695" y="121">Complete scenario</text><text x="695" y="149">All steps applied</text>
+    <text x="255" y="100">Apply next</text><text x="255" y="145">Unfuse last</text>
+    <text x="550" y="100">Apply remaining</text><text x="550" y="145">Unfuse last</text>
+    <text x="400" y="24">Apply remaining from the start: one operation</text>
+    <text x="400" y="254">Unfuse last after applying all at once; otherwise Unfuse all</text>
+  </g>
+</svg>

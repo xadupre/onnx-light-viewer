@@ -7,6 +7,7 @@ import type {
   GraphSummary,
   NativeModel,
   PipelineRole,
+  RewritingScenario,
 } from "./graph";
 
 export interface PipelineData {
@@ -243,6 +244,36 @@ export class PipelineModel implements NativeModel {
         "Return to a pipeline stage root to apply fusion patterns.",
       );
     return stage.model.fusionPatterns();
+  };
+
+  rewritingScenarios = (path: GraphPath = []): RewritingScenario[] => {
+    const stage = this.select(path);
+    if (stage.path.length)
+      throw new Error("Return to a pipeline stage root to choose a scenario.");
+    return stage.model.rewritingScenarios();
+  };
+
+  applyRewritingScenario = async (
+    name: string,
+    all: boolean,
+    sourceFilePath?: string,
+    path: GraphPath = [],
+  ): Promise<NativeModel> => {
+    const stage = this.select(path);
+    this.rewritingScenarios(path);
+    const edited = await stage.model.applyRewritingScenario(
+      name,
+      all,
+      sourceFilePath,
+    );
+    const replacement = this.replace(stage.role, edited);
+    return new PipelineModel(
+      this.data,
+      this.fileName,
+      replacement.models,
+      this,
+      [...this.fusionOrder, stage.role],
+    );
   };
 
   previewFusion = async (

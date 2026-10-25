@@ -109,20 +109,27 @@ export function webviewHtml(
           <section id="fusion-panel" class="inspector-panel" aria-labelledby="fusion-title" hidden>
             <h2 id="fusion-title" class="eyebrow panel-title">Fusion patterns</h2>
             <p>Select one or more patterns, then click Run Matching. Check the candidates to fuse; clicking a candidate highlights its nodes in the graph. Click Fuse selected to apply them, then Save to keep the result.</p>
+            <details id="rewriting-scenarios" class="fusion-picker" open>
+              <summary>Saved rewriting scenarios</summary>
+              <label for="rewriting-scenario">Scenario</label><select id="rewriting-scenario" disabled></select>
+              <p id="rewriting-progress" role="status">No saved rewriting scenarios in this model.</p>
+              <ol id="rewriting-steps" aria-label="Stored rewriting steps"></ol>
+              <div class="fusion-selection-controls"><button id="rewriting-next" disabled>Apply next pattern</button><button id="rewriting-all" disabled>Apply remaining scenario</button></div>
+              <p>Scenarios are alternatives against the original graph. Unfuse current edits before switching scenarios. Each click can be undone with Unfuse.</p>
+            </details>
             <details class="fusion-picker" open>
               <summary>Native patterns</summary>
               <div class="fusion-selection-controls"><button id="select-patterns" disabled>Select all</button><button id="clear-patterns" disabled>Clear selection</button></div>
               <fieldset id="fusion-pattern" disabled aria-label="Native patterns" aria-describedby="fusion-feedback"></fieldset>
+              <button id="preview-fusion" disabled>Run Matching</button>
+              <p id="fusion-feedback" role="status"></p>
             </details>
-            <button id="preview-fusion" disabled>Run Matching</button>
-            <button id="close-fusion">Close</button>
-            <p id="fusion-feedback" role="status"></p>
             <details class="fusion-picker" open>
               <summary>Fusion candidates</summary>
               <div class="fusion-selection-controls"><button id="select-fusions" disabled>Select all compatible</button><button id="clear-fusions" disabled>Clear selection</button></div>
               <ul id="fusion-matches" aria-label="Fusion candidates"></ul>
+              <footer><button id="apply-fusion" class="primary" disabled>Fuse selected</button></footer>
             </details>
-            <footer><button id="apply-fusion" class="primary" disabled>Fuse selected</button></footer>
           </section>
           <section id="open-panel" class="inspector-panel file-panel" aria-labelledby="open-title" hidden>
             <h2 id="open-title" class="eyebrow panel-title">Open model</h2>
