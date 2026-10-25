@@ -29,9 +29,9 @@ export interface SubgraphStep {
   graph: number;
 }
 
-/** Call-site node index and the index of its model-local function definition. */
+/** Model-local function index, optionally tied to a call-site node. */
 export interface FunctionStep {
-  node: number;
+  node?: number;
   function: number;
 }
 
@@ -68,6 +68,17 @@ export interface InitializerStorage {
   location: string | null;
 }
 
+/** Bounded, display-ready rows for a logical type or physical encoding layout. */
+export interface GraphTypeDetails {
+  kind: string;
+  /** Parent indices precede their children; data previews never dequantize weights. */
+  entries: (MetadataEntry & {
+    parent?: number;
+    shape?: string;
+    data?: string;
+  })[];
+}
+
 /** Dense, sparse or encoded weight metadata with bounded previews. */
 export interface GraphInitializer {
   name: string;
@@ -75,6 +86,8 @@ export interface GraphInitializer {
   shape?: string[] | null;
   /** EncodedValueProto layout description, resolving model-scoped struct references. */
   encoding?: string;
+  typeDetails?: GraphTypeDetails;
+  encodingDetails?: GraphTypeDetails;
   storage: InitializerStorage;
   /** Present for sparse initializers, describing their indices tensor. */
   indicesStorage?: InitializerStorage;
@@ -136,9 +149,15 @@ export interface Graph {
   canFuse?: boolean;
   breadcrumbs: GraphBreadcrumb[];
   nodes: GraphNode[];
+  /** Definitions listed at the model root, including functions with no call sites. */
+  localFunctions: SubgraphLink[];
   inputs: string[];
   outputs: string[];
   initializerCount: number;
+  /** Initializers declared in this graph, including unused ones, excluding outer captures. */
+  initializers: GraphInitializer[];
+  sparseInitializers: GraphInitializer[];
+  encodedInitializers: GraphInitializer[];
   tensors: TensorInformation[];
 }
 
@@ -413,6 +432,10 @@ export const demoGraph: Graph = {
   inputs: ["input"],
   outputs: ["output"],
   initializerCount: 0,
+  localFunctions: [],
+  initializers: [],
+  sparseInitializers: [],
+  encodedInitializers: [],
   tensors: [
     { name: "input", type: "FLOAT", shape: ["1", "3"] },
     { name: "output", type: "FLOAT", shape: ["1", "3"] },

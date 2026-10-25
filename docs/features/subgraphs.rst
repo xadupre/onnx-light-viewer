@@ -22,6 +22,12 @@ including intermediate ``value_info`` retained in its native graph.
 Model-local functions
 ---------------------
 
+Click the background to inspect the model, then choose an entry in
+**Local functions**, below the initializer lists, to open its definition.
+The list includes unused functions and distinguishes domains and overloads.
+For pipelines, open a contained model's graph first. Breadcrumbs return to the
+model.
+
 Nodes calling a function defined in the model have a **Function** entry and an
 **Open function** inspector button. Open either to explore the definition, then
 use breadcrumbs to return to the caller. Nested function calls and graph

@@ -248,9 +248,17 @@ test("opens PipelineProto stages, rebases nested links and preserves settings on
   assert.equal(nested.breadcrumbs[1].name, "decode");
   assert.ok(model.metadata(prefillPath).nodes.length);
   const metadata = model.metadata();
-  assert.match(metadata.model[0].value, /pipeline_version: 0/);
-  assert.match(metadata.model[0].value, /temperature: 0/);
-  assert.doesNotMatch(metadata.model[0].value, /top_p/);
+  assert.deepEqual(metadata.model, [
+    { key: "name", value: "Test pipeline" },
+    { key: "pipeline_version", value: "0" },
+    { key: "max_new_tokens", value: "4" },
+    { key: "temperature", value: "0" },
+    { key: "seed", value: "42" },
+    { key: "pad_token_id", value: "0" },
+    { key: "input_ids_name", value: "input_ids" },
+    { key: "logits_name", value: "logits" },
+    { key: "metadata_props.source", value: "test" },
+  ]);
   const restored = loadModel(await model.serialize(), "saved.pipe-onnx");
   assert.deepEqual(restored.metadata(), metadata);
   assert.deepEqual(
@@ -258,6 +266,35 @@ test("opens PipelineProto stages, rebases nested links and preserves settings on
     model.graph(false, prefillPath),
   );
   assert.deepEqual(decodeGraph(bytes, "test.pipe-onnx"), overview);
+});
+
+test("pipeline metadata preserves present empty strings, exact integers and untruncated literal text", () => {
+  const description = '<img src=x onerror="alert(1)">\n' + "x".repeat(5000);
+  const topP = Buffer.alloc(4);
+  topP.writeFloatLE(0.25);
+  const bytes = Buffer.concat([
+    pipelineBytes(),
+    bytesField(2, ""),
+    bytesField(6, description),
+    varint(12 * 8),
+    Buffer.from([0x81, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x10]),
+    varintField(15, 0),
+    varint(16 * 8 + 5),
+    topP,
+  ]);
+  const model = loadModel(bytes, "metadata.pipe-onnx");
+  const metadata = model.metadata();
+  const entries = Object.fromEntries(
+    metadata.model.map(({ key, value }) => [key, value]),
+  );
+  assert.equal(entries.producer_name, "");
+  assert.equal(entries.doc_string, description);
+  assert.equal(entries.seed, "9007199254740993");
+  assert.equal(entries.top_k, "0");
+  assert.equal(entries.top_p, "0.25");
+  assert.equal(Object.hasOwn(entries, "eos_token_id"), false);
+  metadata.model[0].value = "changed";
+  assert.equal(model.metadata().model[0].value, "Test pipeline");
 });
 
 test("projects all declared opsets, including unused domains and function-specific imports", () => {
@@ -551,33 +588,36 @@ function encodedModel({
   structured = false,
   logicalType,
   rawData,
+  layout: suppliedLayout,
 } = {}) {
   const scale = Buffer.alloc(4);
   scale.writeFloatLE(0.5);
-  const layout = structured
-    ? bytesField(
-        2,
-        bytesField(
-          3,
-          Buffer.concat([
-            bytesField(
-              1,
-              Buffer.concat([bytesField(1, "code"), varintField(2, 3)]),
-            ),
-            varintField(2, 8),
-          ]),
-        ),
-      )
-    : bytesField(
-        1,
-        Buffer.concat([
-          varintField(1, 26), // UINT2
+  const layout =
+    suppliedLayout ??
+    (structured
+      ? bytesField(
+          2,
           bytesField(
-            2,
-            Buffer.concat([varintField(2, 1), bytesField(9, scale)]),
+            3,
+            Buffer.concat([
+              bytesField(
+                1,
+                Buffer.concat([bytesField(1, "code"), varintField(2, 3)]),
+              ),
+              varintField(2, 8),
+            ]),
           ),
-        ]),
-      );
+        )
+      : bytesField(
+          1,
+          Buffer.concat([
+            varintField(1, 26), // UINT2
+            bytesField(
+              2,
+              Buffer.concat([varintField(2, 1), bytesField(9, scale)]),
+            ),
+          ]),
+        ));
   const type =
     logicalType ??
     bytesField(
@@ -744,9 +784,20 @@ test("reuses model-scoped struct declarations for repeated and missing reference
           new RegExp(`^STRUCT .*name: "${name}".*type_id: 7`, "s"),
         );
         assert.doesNotMatch(type, /Duplicate|Unused/);
+        assert.ok(
+          parameter.encodingDetails.entries.some(
+            ({ key, value }) => key === "Name" && value === name,
+          ),
+        );
       } else {
         assert.match(type, /^STRUCT .*type_ref: 99/s);
         assert.doesNotMatch(type, /type_id/);
+        assert.ok(
+          parameter.encodingDetails.entries.some(
+            ({ key, value }) =>
+              key === "Reference" && value === "Declaration not found.",
+          ),
+        );
       }
     }
     assert.equal(graph.tensors[0].type, graph.tensors[2].type);
@@ -818,6 +869,57 @@ for (const bits of [2, 3]) {
         new RegExp(`^STRUCT .*quantization.v1/q${bits}_k`),
       );
       assert.ok(parameter.encoding.length < 4104);
+      assert.deepEqual(parameter.typeDetails, {
+        kind: "FLOAT",
+        entries: [{ key: "Type", value: "FLOAT", shape: "[8, 4]" }],
+      });
+      const details = Object.fromEntries(
+        parameter.encodingDetails.entries.map(({ key, value }) => [key, value]),
+      );
+      assert.equal(details.Name, `onnx_light.quantization.v1/q${bits}_k`);
+      assert.equal(details["blocks.run_0.Length"], "1");
+      assert.equal(
+        details["blocks.run_0.Element [0].parameters"],
+        "Constant INT64",
+      );
+      const data = Object.fromEntries(
+        parameter.encodingDetails.entries.map(({ key, data }) => [key, data]),
+      );
+      assert.equal(
+        data["blocks.run_0.Element [0].parameters"],
+        `[32, 0, ${bits}, 1, 1, 0, 1, 0, 10]`,
+      );
+      assert.equal(data["blocks.run_0.Element [0].scale"], "[1]");
+      assert.equal(data["blocks.run_0.Element [0].zero_point"], "[0]");
+      assert.equal(data["blocks.run_0.Element [0].offset"], "[0]");
+      assert.equal(data.permutation, undefined);
+      assert.equal(
+        data["blocks.run_0.Element [0].codes"],
+        bits === 2
+          ? "[255, 255, 0, 0, 0, 0, 84, 85]"
+          : "[255, 255, 255, 0, 0, 0, 0, 0, 0, 72, 146, 36]",
+      );
+      assert.equal(details["blocks.run_0.Element [0].codes"], "UINT8");
+      assert.equal(
+        parameter.encodingDetails.entries.find(
+          ({ key }) => key === "blocks.run_0.Element [0].codes",
+        ).shape,
+        `[${bits * 4}]`,
+      );
+      assert.equal(
+        parameter.encodingDetails.entries.some(
+          ({ key }) => key === "Shape" || key.endsWith(".Shape"),
+        ),
+        false,
+      );
+      assert.equal(
+        parameter.encodingDetails.entries.filter(({ key }) => key === "blocks")
+          .length,
+        1,
+      );
+      for (const entry of parameter.encodingDetails.entries) {
+        if (entry.shape === "[0]") assert.equal(entry.data, undefined);
+      }
       assert.equal(parameter.value, undefined);
       assert.deepEqual(model.externalDataLocations(), []);
       assert.equal(
@@ -864,6 +966,14 @@ test("shows affine and shape-less bit-packed encoded initializers", async () => 
   const affine = loadModel(encodedModel(), "affine");
   const [parameter] = affine.graph().nodes[0].parameters;
   assert.match(parameter.encoding, /^AFFINE .*storage_type: 26.*scale:/);
+  assert.deepEqual(parameter.encodingDetails, {
+    kind: "AFFINE",
+    entries: [
+      { key: "Storage type", value: "INT2" },
+      { key: "Scale", value: "Constant FLOAT", shape: "[]", data: "[0.5]" },
+      { key: "Codes", value: "INT2", data: "[0, 1, -2, -1, 0, 1, -2, -1]" },
+    ],
+  });
   assert.deepEqual(parameter.shape, ["8"]);
   assert.equal(parameter.value, undefined);
   const structured = loadModel(
@@ -874,9 +984,281 @@ test("shows affine and shape-less bit-packed encoded initializers", async () => 
   assert.equal(packed.type, "ENCODED");
   assert.equal(packed.shape, null);
   assert.match(packed.encoding, /^STRUCT .*bit_width: 3/);
+  assert.deepEqual(packed.encodingDetails, {
+    kind: "STRUCT",
+    entries: [
+      {
+        key: "Payload preview",
+        value: "First record of 1; stored fields, not dequantized weights.",
+      },
+      { key: "Layout", value: "Bit packing" },
+      { key: "Groups", value: "8", parent: 1 },
+      {
+        key: "code",
+        value: "3 bits",
+        parent: 1,
+        data: "[0, 1, 2, 3, 4, 5, 6, 7]",
+      },
+    ],
+  });
   assert.deepEqual(
     loadModel(await structured.serialize(), "packed").graph(),
     structured.graph(),
+  );
+});
+
+test("previews physical arrays and unaligned fields without losing subsequent offsets", () => {
+  const tensor = (type, dims = []) =>
+    bytesField(
+      1,
+      Buffer.concat([
+        varintField(1, type),
+        bytesField(
+          2,
+          Buffer.concat(
+            dims.map((size) => bytesField(1, varintField(1, size))),
+          ),
+        ),
+      ]),
+    );
+  const structure = (fields) =>
+    bytesField(
+      2,
+      Buffer.concat(
+        fields.map(([name, type]) =>
+          bytesField(
+            1,
+            Buffer.concat([bytesField(1, name), bytesField(2, type)]),
+          ),
+        ),
+      ),
+    );
+  const inspect = (fields, rawData) =>
+    loadModel(
+      encodedModel({
+        layout: bytesField(2, structure(fields)),
+        rawData,
+      }),
+      "physical-fields",
+    ).graph().nodes[0].parameters[0].encodingDetails.entries;
+  const array = bytesField(
+    1000,
+    bytesField(
+      1,
+      Buffer.concat([bytesField(1, tensor(2, [2])), varintField(2, 10)]),
+    ),
+  );
+  const payload = Buffer.alloc(28);
+  for (let index = 0; index < 20; ++index) payload[index] = index;
+  payload.writeBigInt64LE(9007199254740993n, 20);
+  const fields = [
+    ["empty", tensor(2, [0])],
+    ["emptyMatrix", tensor(2, [2, 0, 3])],
+    ["items", array],
+    ["after", tensor(7)],
+  ];
+  const rows = inspect(fields, payload);
+  for (const [key, shape] of [
+    ["empty", "[0]"],
+    ["emptyMatrix", "[2, 0, 3]"],
+  ]) {
+    const entry = rows.find((entry) => entry.key === key);
+    assert.equal(entry.shape, shape);
+    assert.equal(entry.data, undefined);
+  }
+  assert.equal(
+    rows.find(({ key }) => key === "items.Element [0]").data,
+    "[0, 1]",
+  );
+  assert.equal(
+    rows.find(({ key }) => key === "items.Element [7]").data,
+    "[14, 15]",
+  );
+  assert.equal(
+    rows.some(({ key }) => key === "items.Element [8]"),
+    false,
+  );
+  assert.ok(
+    rows.some(({ value }) => /first 8 of 10 array elements/.test(value)),
+  );
+  assert.equal(
+    rows.find(({ key }) => key === "after").data,
+    "[9007199254740993]",
+  );
+  assert.match(
+    inspect(fields, Buffer.concat([payload, payload]))[0].value,
+    /First record of 2/,
+  );
+
+  const packing = bytesField(
+    1000,
+    bytesField(
+      3,
+      Buffer.concat([
+        bytesField(
+          1,
+          Buffer.concat([bytesField(1, "code"), varintField(2, 3)]),
+        ),
+        varintField(2, 2),
+      ]),
+    ),
+  );
+  const packed = Buffer.alloc(4);
+  packed.writeUInt32LE(
+    Number(
+      2n |
+        (BigInt.asUintN(16, -12345n) << 2n) |
+        (5n << 18n) |
+        (2n << 21n) |
+        (77n << 24n),
+    ),
+  );
+  const unaligned = inspect(
+    [
+      ["prefix", tensor(25)],
+      ["middle", tensor(5)],
+      ["packed", packing],
+      ["after", tensor(2)],
+    ],
+    packed,
+  );
+  assert.equal(unaligned.find(({ key }) => key === "prefix").data, "[2]");
+  assert.equal(unaligned.find(({ key }) => key === "middle").data, "[-12345]");
+  assert.equal(
+    unaligned.find(({ key }) => key === "packed.code").data,
+    "[5, 2]",
+  );
+  assert.equal(unaligned.find(({ key }) => key === "after").data, "[77]");
+
+  let nested = tensor(2);
+  for (let depth = 0; depth < 10; ++depth)
+    nested = bytesField(
+      1000,
+      bytesField(1, Buffer.concat([bytesField(1, nested), varintField(2, 1)])),
+    );
+  const deep = inspect(
+    [
+      ["nested", nested],
+      ["after", tensor(2)],
+    ],
+    Buffer.from([7, 99]),
+  );
+  assert.ok(deep.some(({ value }) => /Maximum type nesting depth/.test(value)));
+  assert.equal(deep.find(({ key }) => key === "after").data, "[99]");
+  const large = inspect(
+    [
+      ["values", tensor(2, [32])],
+      ["after", tensor(2)],
+    ],
+    Buffer.from([...Array.from({ length: 32 }, (_, index) => index), 77]),
+  );
+  assert.match(
+    large.find(({ key }) => key === "values").data,
+    /first 15 of 32 elements/,
+  );
+  assert.equal(large.find(({ key }) => key === "after").data, "[77]");
+});
+
+test("encoded physical previews report external, truncated and invalid layouts explicitly", () => {
+  for (const [bytes, reason] of [
+    [
+      encodedModel({
+        structured: true,
+        logical: false,
+        external: "missing.bin",
+      }),
+      /External payload/,
+    ],
+    [
+      encodedModel({
+        structured: true,
+        logical: false,
+        rawData: Buffer.from([0, 1]),
+      }),
+      /record size/,
+    ],
+    [
+      encodedModel({
+        structured: true,
+        logical: false,
+        rawData: Buffer.alloc(0),
+      }),
+      /empty/,
+    ],
+    [
+      Buffer.concat([
+        encodedModel({ structured: true, logical: false }),
+        bytesField(1000, bytesField(7, "Invalid declaration")),
+      ]),
+      /type_id|declaration/,
+    ],
+  ]) {
+    const entries = loadModel(bytes, "unavailable-fields").graph().nodes[0]
+      .parameters[0].encodingDetails.entries;
+    assert.match(
+      entries.find(({ key }) => key === "Payload preview").value,
+      reason,
+    );
+    assert.match(
+      entries.find(({ key }) => key === "code").data,
+      /Unavailable:/,
+    );
+  }
+});
+
+test("keeps encoded type tables bounded for recursive references and large layouts", () => {
+  const reference = bytesField(1000, varintField(4, 7));
+  const recursive = loadModel(
+    Buffer.concat([
+      encodedModel({ logicalType: reference }),
+      bytesField(
+        1000,
+        Buffer.concat([
+          bytesField(
+            2,
+            bytesField(
+              1,
+              Buffer.concat([bytesField(1, "self"), bytesField(2, reference)]),
+            ),
+          ),
+          varintField(10, 7),
+        ]),
+      ),
+    ]),
+    "recursive-encoded",
+  ).graph().nodes[0].parameters[0].typeDetails;
+  assert.ok(
+    recursive.entries.some(({ value }) => /Recursive reference/.test(value)),
+  );
+  assert.ok(recursive.entries.length < 20);
+  const large = loadModel(
+    encodedModel({
+      logicalType: bytesField(
+        1000,
+        bytesField(
+          3,
+          Buffer.concat([
+            ...Array.from({ length: 300 }, (_, index) =>
+              bytesField(
+                1,
+                Buffer.concat([
+                  bytesField(1, `component_${index}`),
+                  varintField(2, 1),
+                ]),
+              ),
+            ),
+            varintField(2, 1),
+          ]),
+        ),
+      ),
+    }),
+    "large-encoded",
+  ).graph().nodes[0].parameters[0].typeDetails;
+  assert.ok(large.entries.length < 300);
+  assert.match(large.entries.at(-1).value, /Additional type fields omitted/);
+  assert.equal(
+    large.entries.some(({ key }) => key === "component_299"),
+    false,
   );
 });
 
@@ -885,7 +1267,8 @@ test("keeps encoded parameter fields separate from common tensor metadata", () =
     const graph = loadModel(encodedModel(options), "encoded").graph();
     const [parameter] = graph.nodes[0].parameters;
     const tensor = graph.tensors.find((tensor) => tensor.name === "weight");
-    const { storage, encoding, ...metadata } = parameter;
+    const { storage, encoding, typeDetails, encodingDetails, ...metadata } =
+      parameter;
     assert.notStrictEqual(parameter, tensor);
     assert.deepEqual(metadata, tensor);
     assert.deepEqual(storage, { external: false, location: null });
@@ -990,8 +1373,15 @@ test("resolves model-scoped logical types of encoded initializers", () => {
   const [parameter] = graph.nodes[0].parameters;
   const tensor = graph.tensors.find((tensor) => tensor.name === "weight");
   assert.match(parameter.type, /^STRUCT .*handle.*Record/);
-  const { storage, encoding, ...metadata } = parameter;
+  const { storage, encoding, typeDetails, encodingDetails, ...metadata } =
+    parameter;
   assert.deepEqual(metadata, tensor);
+  assert.equal(typeDetails.kind, "STRUCT");
+  assert.ok(
+    typeDetails.entries.some(
+      ({ key, value }) => key === "handle.Name" && value === "Handle",
+    ),
+  );
 });
 
 test("fusion embeds external encoded payloads and requires a safe local source", async (t) => {
@@ -3931,6 +4321,69 @@ test("loads a real one-node ONNX model file matching the demo", () => {
   assert.deepEqual(decodeGraph(bytes, "relu.onnx"), demoGraph);
 });
 
+test("lists unused local definitions and opens them directly, including pipeline stages", () => {
+  const definition = (overload) =>
+    bytesField(
+      25,
+      Buffer.concat([
+        bytesField(1, "Unused"),
+        bytesField(4, "x"),
+        bytesField(5, "y"),
+        bytesField(
+          7,
+          Buffer.concat([
+            bytesField(1, "x"),
+            bytesField(2, "y"),
+            bytesField(4, "Identity"),
+          ]),
+        ),
+        bytesField(9, varintField(2, 13)),
+        bytesField(10, "extra"),
+        bytesField(13, overload),
+      ]),
+    );
+  const bytes = Buffer.concat([
+    modelBytes("relu.onnx"),
+    definition("fast"),
+    definition("slow"),
+  ]);
+  const model = loadModel(bytes, "unused.onnx");
+  const root = model.graph();
+  assert.ok(root.nodes.every((node) => !node.function));
+  assert.deepEqual(root.localFunctions, [
+    { name: "extra::Unused [fast]", path: [{ function: 0 }], nodeCount: 1 },
+    { name: "extra::Unused [slow]", path: [{ function: 1 }], nodeCount: 1 },
+  ]);
+  for (const link of root.localFunctions) {
+    const body = model.graph(false, link.path);
+    assert.equal(body.name, link.name);
+    assert.deepEqual(body.inputs, ["x"]);
+    assert.deepEqual(body.outputs, ["y"]);
+    assert.equal(body.nodes[0].opType, "Identity");
+    assert.deepEqual(body.localFunctions, []);
+    assert.deepEqual(body.breadcrumbs.at(-1).path, link.path);
+    assert.equal(model.metadata(link.path).nodes.length, 1);
+  }
+  for (const path of [
+    [{ function: -1 }],
+    [{ function: 0.5 }],
+    [{ function: 2 }],
+    [{ node: undefined, function: 0 }],
+  ])
+    assert.throws(() => model.graph(false, path), /subgraph path/);
+  const pipeline = loadModel(
+    pipelineBytes({ prefill: bytes }),
+    "unused.pipe-onnx",
+  );
+  assert.deepEqual(pipeline.graph().localFunctions, []);
+  const stage = pipeline.graph(false, [{ pipeline: "prefill" }]);
+  for (const [index, link] of stage.localFunctions.entries()) {
+    assert.deepEqual(link.path, [{ pipeline: "prefill" }, { function: index }]);
+    assert.equal(pipeline.graph(false, link.path).name, link.name);
+    assert.equal(pipeline.metadata(link.path).nodes.length, 1);
+  }
+});
+
 test("navigates local function definitions, overloads and their nested graphs without caller captures", async () => {
   const bytes = modelBytes("functions.onnx");
   for (const model of [
@@ -3941,6 +4394,12 @@ test("navigates local function definitions, overloads and their nested graphs wi
     ),
   ]) {
     const root = model.graph();
+    for (const definition of root.localFunctions) {
+      const body = model.graph(false, definition.path);
+      assert.equal(body.name, definition.name);
+      assert.equal(body.nodes.length, definition.nodeCount);
+      assert.equal(body.breadcrumbs.length, 2);
+    }
     const call = root.nodes[0].function;
     assert.deepEqual(call.path, [{ node: 0, function: 0 }]);
     assert.equal(call.name, "example::Transform");
@@ -4287,6 +4746,107 @@ test("loads typed attributes and dense/sparse initializer parameters without los
   );
 });
 
+test("lists local dense, sparse and encoded initializers, including unused weights but not captures", () => {
+  const tensor = (name, value) =>
+    Buffer.concat([
+      varintField(1, 1),
+      varintField(2, 7),
+      bytesField(7, varint(value)),
+      bytesField(8, name),
+    ]);
+  const bytes = Buffer.concat([
+    varintField(1, 10),
+    bytesField(8, varintField(2, 18)),
+    bytesField(
+      7,
+      Buffer.concat([
+        bytesField(5, tensor("captured", 11)),
+        bytesField(5, tensor("unused_dense", 12)),
+        bytesField(
+          15,
+          Buffer.concat([
+            bytesField(1, tensor("unused_sparse", 13)),
+            bytesField(2, tensor("indices", 0)),
+            varintField(3, 1),
+          ]),
+        ),
+        bytesField(
+          1000,
+          bytesField(
+            1,
+            Buffer.concat([
+              bytesField(1, varintField(1, 26)),
+              bytesField(4, Buffer.from([0])),
+              bytesField(7, "unused_encoded"),
+            ]),
+          ),
+        ),
+        bytesField(
+          1,
+          Buffer.concat([
+            bytesField(2, "y"),
+            bytesField(4, "Container"),
+            bytesField(
+              5,
+              Buffer.concat([
+                bytesField(1, "body"),
+                varintField(20, 5),
+                bytesField(
+                  6,
+                  Buffer.concat([
+                    bytesField(
+                      1,
+                      Buffer.concat([
+                        bytesField(1, "captured"),
+                        bytesField(2, "child_y"),
+                        bytesField(4, "Identity"),
+                      ]),
+                    ),
+                    bytesField(12, bytesField(1, "child_y")),
+                  ]),
+                ),
+              ]),
+            ),
+          ]),
+        ),
+      ]),
+    ),
+  ]);
+  const model = loadModel(bytes, "local-initializers.onnx");
+  const graph = model.graph();
+  assert.deepEqual(
+    graph.initializers.map(({ name }) => name),
+    ["captured", "unused_dense"],
+  );
+  assert.equal(graph.initializers[1].value, "[12]");
+  assert.deepEqual(
+    graph.sparseInitializers.map(({ name }) => name),
+    ["unused_sparse"],
+  );
+  assert.deepEqual(
+    graph.encodedInitializers.map(({ name }) => name),
+    ["unused_encoded"],
+  );
+  assert.match(graph.encodedInitializers[0].encoding, /^AFFINE/);
+  assert.equal(graph.encodedInitializers[0].value, undefined);
+  const child = model.graph(false, graph.nodes[0].attributes[0].graphs[0].path);
+  assert.deepEqual(child.initializers, []);
+  assert.deepEqual(child.sparseInitializers, []);
+  assert.deepEqual(child.encodedInitializers, []);
+  assert.equal(child.nodes[0].parameters[0].name, "captured");
+  const pipeline = loadModel(
+    pipelineBytes({ prefill: bytes }),
+    "local.pipe-onnx",
+  );
+  const stage = pipeline.graph(false, [{ pipeline: "prefill" }]);
+  for (const field of [
+    "initializers",
+    "sparseInitializers",
+    "encodedInitializers",
+  ])
+    assert.deepEqual(stage[field], graph[field]);
+});
+
 test("exposes connected initializer metadata and tiny values without external reads", () => {
   const graph = decodeGraph(
     modelBytes("initializers.onnx"),
@@ -4295,6 +4855,9 @@ test("exposes connected initializer metadata and tiny values without external re
   const parameters = graph.nodes[0].parameters;
   assert.equal(graph.initializerCount, 12);
   assert.equal(parameters.length, 12);
+  assert.deepEqual(graph.initializers, parameters.slice(0, 11));
+  assert.deepEqual(graph.sparseInitializers, parameters.slice(11));
+  assert.deepEqual(graph.encodedInitializers, []);
   assert.deepEqual(parameters[9], {
     name: "weight_9",
     type: "FLOAT",

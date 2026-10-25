@@ -4288,6 +4288,38 @@ test("metadata tables preserve duplicate keys, empty and multiline values, and l
   assert.equal(table.parentElement.hidden, false);
 });
 
+test("renders PipelineProto fields as metadata table rows instead of a serialized dictionary", (t) => {
+  const { document, window, load, pointer } = openViewer(t);
+  const model = loadModel(
+    readFileSync(require.resolve("./models/tiny.pipe-onnx")),
+    "tiny.pipe-onnx",
+  );
+  load(model.graph());
+  const svg = document.getElementById("graph");
+  pointer(svg, "pointerdown", 0, 0);
+  pointer(svg, "pointerup", 0, 0);
+  document.getElementById("show-metadata").click();
+  const metadata = model.metadata();
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: { type: "metadata-info", metadata },
+    }),
+  );
+  const table = document.getElementById("metadata-model");
+  assertMetadataTable(table, metadata.model);
+  const rows = Object.fromEntries(
+    [...table.tBodies[0].rows].map((row) => [
+      row.cells[0].textContent,
+      row.cells[1].textContent,
+    ]),
+  );
+  assert.equal(rows.name, "Three-token cycle");
+  assert.equal(rows.max_new_tokens, "4");
+  assert.equal(rows.temperature, "0");
+  assert.equal(rows.seed, "42");
+  assert.equal(Object.hasOwn(rows, "PipelineProto"), false);
+});
+
 test("shows native metadata in the sidebar and marks released and never-used results without changing the layout", (t) => {
   const { document, window, messages, load, pointer } = openViewer(t);
   const model = loadModel(
@@ -4551,6 +4583,63 @@ test("reports metadata errors, allows retry and clears stale metadata and releas
   );
 });
 
+test("lists local definitions in model inspection and opens them using their buttons", (t) => {
+  const { document, load, pointer, messages } = openViewer(t);
+  const model = loadModel(
+    readFileSync(require.resolve("./models/functions.onnx")),
+    "functions.onnx",
+  );
+  const root = model.graph();
+  const inspectModel = () => {
+    const svg = document.getElementById("graph");
+    pointer(svg, "pointerdown", 0, 0);
+    pointer(svg, "pointerup", 0, 0);
+  };
+  load(root);
+  const section = document.getElementById("scope-functions");
+  const list = document.getElementById("local-functions");
+  assert.equal(section.hidden, true);
+  inspectModel();
+  assert.equal(section.hidden, false);
+  assert.equal(list.children.length, root.localFunctions.length);
+  assert.equal(
+    document.getElementById("function-count").textContent,
+    String(root.localFunctions.length),
+  );
+  for (const [index, button] of [
+    ...list.querySelectorAll("button"),
+  ].entries()) {
+    assert.ok(button.textContent.includes(root.localFunctions[index].name));
+    assert.ok(
+      button.textContent.includes(
+        `${root.localFunctions[index].nodeCount} nodes`,
+      ),
+    );
+  }
+  list.querySelector("button").click();
+  assert.equal(messages.at(-1).type, "navigate");
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(messages.at(-1).path)),
+    root.localFunctions[0].path,
+  );
+  load(model.graph(false, messages.at(-1).path));
+  assert.equal(section.hidden, true);
+  assert.equal(list.children.length, 0);
+  assert.equal(
+    document.querySelector('#graph-navigation [aria-current="page"]')
+      .textContent,
+    root.localFunctions[0].name,
+  );
+  document.querySelector("#graph-navigation button").click();
+  load(model.graph(false, messages.at(-1).path));
+  inspectModel();
+  assert.equal(list.children.length, root.localFunctions.length);
+  load(demoGraph);
+  inspectModel();
+  assert.equal(list.children.length, 0);
+  assert.equal(document.getElementById("function-count").textContent, "0");
+});
+
 test("opens local functions from the operator or inspector and returns using breadcrumbs", (t) => {
   const { document, window, messages, load } = openViewer(t);
   const model = loadModel(
@@ -4656,7 +4745,7 @@ test("renders the demo, inspects its operator and requests a real file", (t) => 
   assert.equal(graph.getAttribute("viewBox"), initialViewBox);
 });
 
-test("shows encoded initializer layouts without interpreting packed bytes as tensor values", (t) => {
+test("shows stored encoded field values and folds nested layouts without dequantizing weights", (t) => {
   const { document, load } = openViewer(t);
   const graph = decodeGraph(
     readFileSync(require.resolve("../examples/quantized-3bit.onnx")),
@@ -4667,17 +4756,87 @@ test("shows encoded initializer layouts without interpreting packed bytes as ten
   assert.match(parameters.textContent, /weight \(FLOAT\).*Shape: \[8, 4\]/s);
   assert.match(
     parameters.textContent,
-    /Encoding: STRUCT .*quantization.v1\/q3_k/s,
+    /Encoding: STRUCT.*quantization.v1\/q3_k/s,
   );
   assert.match(parameters.textContent, /Storage: embedded/);
   assert.doesNotMatch(parameters.textContent, /Values:|raw_data:/);
   assert.equal(document.getElementById("parameter-count").textContent, "1");
+  const tables = parameters.querySelectorAll(".initializer-type-table");
+  assert.equal(tables.length, 2);
+  assert.equal(tables[0].caption.textContent, "Logical type: FLOAT");
+  assert.equal(tables[1].caption.textContent, "Encoding: STRUCT");
+  const rows = Object.fromEntries(
+    [...tables[1].tBodies[0].rows].map((row) => {
+      assert.equal(row.cells[0].scope, "row");
+      return [row.cells[0].title, row];
+    }),
+  );
+  const code = rows["blocks.run_0.Element [0].codes"];
+  assert.equal(code.cells[1].textContent, "UINT8 [12]");
+  assert.equal(
+    code.cells[2].textContent,
+    "[255, 255, 255, 0, 0, 0, 0, 0, 0, 72, 146, 36]",
+  );
+  const scale = rows["blocks.run_0.Element [0].scale"];
+  assert.equal(scale.cells[1].textContent, "DOUBLE []");
+  assert.equal(scale.cells[2].textContent, "[1]");
+  assert.equal(rows["blocks.run_0.Element [0].codes.Shape"], undefined);
+  assert.equal(scale.querySelector("button"), null);
+  assert.equal(rows.permutation.cells[1].textContent, "INT64 [0]");
+  assert.equal(rows.permutation.cells[2].textContent, "");
+  assert.equal(rows.permutation.cells[2].querySelector("pre"), null);
+  assert.equal(
+    [...tables[1].tBodies[0].rows].filter(
+      (row) => row.cells[0].title === "blocks",
+    ).length,
+    1,
+  );
+  const disclosure = tables[1].closest("details");
+  assert.equal(disclosure.open, false);
+  assert.equal(tables[0].closest("details").open, false);
+  assert.equal(code.hidden, true);
+  for (const toggle of tables[1].querySelectorAll(".initializer-fold"))
+    assert.equal(toggle.getAttribute("aria-expanded"), "false");
+  disclosure.querySelector("summary").click();
+  assert.equal(disclosure.open, true);
+  rows.Layout.querySelector("button").click();
+  assert.equal(rows.reserved.hidden, false);
+  const blocks = rows.blocks.querySelector("button");
+  blocks.click();
+  assert.equal(scale.hidden, true);
+  const run = rows["blocks.run_0"].querySelector("button");
+  run.click();
+  assert.equal(scale.hidden, true);
+  rows["blocks.run_0.Element [0]"].querySelector("button").click();
+  assert.equal(scale.hidden, false);
+  assert.equal(code.hidden, false);
+  run.click();
+  assert.equal(run.getAttribute("aria-expanded"), "false");
+  assert.equal(scale.hidden, true);
+  blocks.click();
+  assert.equal(scale.hidden, true);
+  assert.equal(code.hidden, true);
+  assert.equal(rows.reserved.hidden, false);
+  blocks.click();
+  assert.equal(scale.hidden, true);
+  assert.equal(code.hidden, true);
+  assert.equal(run.getAttribute("aria-expanded"), "false");
+  run.click();
+  assert.equal(scale.hidden, false);
+  assert.equal(code.hidden, false);
+  disclosure.querySelector("summary").click();
+  assert.equal(disclosure.open, false);
+  disclosure.querySelector("summary").click();
+  assert.equal(disclosure.open, true);
+  assert.equal(scale.hidden, false);
   const [parameter] = graph.nodes[0].parameters;
-  parameter.encoding = '<img src=x onerror="alert(1)">';
+  parameter.encodingDetails.entries.find(({ key }) =>
+    key.endsWith(".codes"),
+  ).data = '<img src=x onerror="alert(1)">';
   parameter.shape = null;
   load(graph);
   assert.match(parameters.textContent, /Shape: \[\?\]/);
-  assert.match(parameters.textContent, /Encoding: <img/);
+  assert.ok(parameters.textContent.includes('<img src=x onerror="alert(1)">'));
   assert.equal(parameters.querySelector("img"), null);
   delete parameter.shape;
   load(graph);
@@ -4994,6 +5153,73 @@ test("lists more than eight initializer metadata entries, including external den
   assert.equal(list.querySelectorAll("pre").length, 10);
   assert.equal(list.children[10].querySelector("pre"), null);
   assert.equal(list.children[11].querySelector("pre"), null);
+});
+
+test("model inspection lists dense, sparse and encoded weights and clears them on selection or navigation", (t) => {
+  const { document, window, load, pointer } = openViewer(t);
+  const inspectModel = () => {
+    const svg = document.getElementById("graph");
+    pointer(svg, "pointerdown", 0, 0);
+    pointer(svg, "pointerup", 0, 0);
+  };
+  const graph = decodeGraph(
+    readFileSync(require.resolve("./models/initializers.onnx")),
+    "initializers.onnx",
+  );
+  const unsafe = '<img src=x onerror="alert(1)">';
+  graph.initializers[10].storage.location = unsafe;
+  load(graph);
+  assert.equal(document.getElementById("scope-initializers").hidden, true);
+  inspectModel();
+  assert.equal(document.getElementById("scope-initializers").hidden, false);
+  assert.equal(document.getElementById("node-parameters").hidden, true);
+  assert.equal(
+    document.getElementById("dense-initializer-count").textContent,
+    "11",
+  );
+  assert.equal(
+    document.getElementById("sparse-initializer-count").textContent,
+    "1",
+  );
+  assert.equal(
+    document.getElementById("encoded-initializer-count").textContent,
+    "0",
+  );
+  const dense = document.getElementById("scope-dense-initializers");
+  assert.equal(dense.children.length, 11);
+  assert.match(
+    dense.children[9].textContent,
+    /weight_9.*Shape: \[1\].*Values: \[9.25\]/,
+  );
+  assert.ok(dense.children[10].textContent.includes(unsafe));
+  assert.equal(dense.querySelector("img"), null);
+  assert.match(
+    document.getElementById("scope-sparse-initializers").textContent,
+    /external_sparse.*Values: external file: weights\/values.bin.*Indices: external file: weights\/indices.bin/,
+  );
+  document
+    .querySelector(".graph-node")
+    .dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter" }));
+  assert.equal(document.getElementById("scope-initializers").hidden, true);
+  assert.equal(dense.children.length, 0);
+  const encoded = decodeGraph(
+    readFileSync(require.resolve("../examples/quantized-2bit.onnx")),
+    "quantized-2bit.onnx",
+  );
+  load(encoded);
+  inspectModel();
+  const encodedList = document.getElementById("scope-encoded-initializers");
+  assert.equal(encodedList.children.length, encoded.encodedInitializers.length);
+  assert.ok(encodedList.children.length > 0);
+  assert.match(encodedList.textContent, /Encoding: STRUCT/);
+  assert.equal(dense.children.length, 0);
+  load(demoGraph);
+  inspectModel();
+  assert.equal(encodedList.children.length, 0);
+  assert.equal(
+    document.getElementById("encoded-initializer-count").textContent,
+    "0",
+  );
 });
 
 test("opens native LightOpSchema docs and clears stale docs and parameters on selection or model changes", (t) => {

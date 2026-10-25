@@ -13,6 +13,10 @@ It does not hide the operator, search or fusion panels.
 Metadata sections and stored tensor entries are shown directly, without
 collapsible headings. Clicking the background shows metadata for the current
 model, graph, function or pipeline.
+Pipeline fields and sampling settings appear as individual **Key** / **Value**
+rows, not a serialized ``PipelineProto`` block. Only present fields are listed,
+including explicit zeros and empty strings; stored metadata uses
+``metadata_props.<key>`` rows. Contained models are inspected in their own graphs.
 **Refresh metadata** recomputes this analysis for the displayed graph,
 even with the metadata inspector closed, without changing the view.
 

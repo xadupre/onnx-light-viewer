@@ -31,6 +31,11 @@ attribute arrays show a bounded preview.
 Click the background to inspect the current **Model**, **Graph**, **Function** or
 **Pipeline** instead of an operator. The inspector shows its name and ports.
 It also lists every imported domain and opset version, including unused imports.
+Model and graph scopes also list their **Initializers**, **Sparse initializers**
+and **Encoded initializers** separately, with counts, types, shapes and storage
+details. These lists include unused initializers declared in the current graph,
+not weights captured from a parent graph. For pipelines, open a model's graph
+to inspect its initializers.
 Functions show their own imports; a pipeline overview combines the imports of
 its models, preserving different versions of the same domain.
 
@@ -67,7 +72,25 @@ including model-scoped type references. These are ``TypeProto.Opaque`` and
 ``EncodedValueProto`` initializers appear in the connected parameter list with
 their logical type/shape when present, an **Encoding** layout preview and
 embedded/external storage. Affine and structured layouts are supported.
-Packed bytes are not displayed as ordinary tensor values or decoded by the viewer.
+Logical types and encoding layouts are shown as **Field**, **Type / description**
+and **Value** tables rather than serialized objects. Each field occupies one row,
+with its shape next to its type instead of on a separate row.
+Zero-sized shapes such as ``[0]`` are valid and have no values; scalars ``[]``
+still have one value.
+Tables and nested structures start folded. Unfold each table with its heading,
+and nested structures with their **+** / **-** buttons.
+Nested field paths identify array elements,
+bit widths and layout constants; model-scoped type references are resolved.
+Small constants use the same bounded previews as ordinary initializers.
+For inline payloads, **Value** also previews the actual stored fields: scales,
+zero points, offsets, codebooks, packed codes and bit-packing components.
+Inspection shows the first record, up to eight elements of each structured array,
+and up to fifteen values per numeric field. Larger previews are marked explicitly.
+External files are not opened; unavailable or malformed payloads show a reason.
+Recursive references, missing declarations and display limits are identified
+explicitly instead of expanding indefinitely.
+This reads the physical layout only: it does not run decoder functions or
+dequantize packed bytes into logical model weights.
 
 Open ``examples/quantized-2bit.onnx`` or ``examples/quantized-3bit.onnx`` and select
 **Dequantize** to inspect portable Q2_K/Q3_K weight layouts. The 2-bit example

@@ -666,6 +666,10 @@ function inspectionScope() {
     opsets: displayedGraph.opsets,
     inputs: displayedGraph.inputs,
     outputs: displayedGraph.outputs,
+    initializers: displayedGraph.initializers,
+    sparseInitializers: displayedGraph.sparseInitializers,
+    encodedInitializers: displayedGraph.encodedInitializers,
+    localFunctions: displayedGraph.localFunctions,
   };
 }
 

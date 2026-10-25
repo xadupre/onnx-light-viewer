@@ -3,6 +3,7 @@
 #include "addon.h"
 #include "tensor_preview.h"
 #include <cerrno>
+#include <charconv>
 #include <stdexcept>
 #include <system_error>
 
@@ -19,6 +20,54 @@ ol::ModelProto &PipelineStage(ol::PipelineProto &pipeline, const std::string &ro
 }
 
 namespace {
+
+Napi::Array PipelineMetadata(Napi::Env env, const ol::PipelineProto &pipeline) {
+  auto result = Napi::Array::New(env);
+  const auto add = [&](std::string_view key, std::string_view value) {
+    auto entry = Napi::Object::New(env);
+    entry.Set("key", Text(env, key));
+    entry.Set("value", Text(env, value));
+    result.Set(result.Length(), entry);
+  };
+  const auto add_number = [&](std::string_view key, const auto *value) {
+    if (!value)
+      return;
+    char buffer[64];
+    const auto [end, error] = std::to_chars(buffer, buffer + sizeof(buffer), *value);
+    if (error != std::errc{})
+      throw std::system_error(std::make_error_code(error), "Could not format pipeline metadata");
+    add(key, std::string_view(buffer, end - buffer));
+  };
+  if (pipeline.has_name())
+    add("name", pipeline.name());
+  if (pipeline.has_producer_name())
+    add("producer_name", pipeline.producer_name());
+  if (pipeline.has_producer_version())
+    add("producer_version", pipeline.producer_version());
+  if (pipeline.has_domain())
+    add("domain", pipeline.domain());
+  add_number("pipeline_version", pipeline.ptr_pipeline_version());
+  if (pipeline.has_doc_string())
+    add("doc_string", pipeline.doc_string());
+  add_number("max_new_tokens", pipeline.ptr_max_new_tokens());
+  add_number("temperature", pipeline.ptr_temperature());
+  add_number("seed", pipeline.ptr_seed());
+  add_number("eos_token_id", pipeline.ptr_eos_token_id());
+  add_number("pad_token_id", pipeline.ptr_pad_token_id());
+  add_number("top_k", pipeline.ptr_top_k());
+  add_number("top_p", pipeline.ptr_top_p());
+  if (pipeline.has_input_ids_name())
+    add("input_ids_name", pipeline.input_ids_name());
+  if (pipeline.has_logits_name())
+    add("logits_name", pipeline.logits_name());
+  if (pipeline.has_attention_mask_name())
+    add("attention_mask_name", pipeline.attention_mask_name());
+  if (pipeline.has_position_ids_name())
+    add("position_ids_name", pipeline.position_ids_name());
+  for (const auto &entry : pipeline.metadata_props())
+    add("metadata_props." + std::string(entry.key()), entry.value());
+  return result;
+}
 
 class AssemblePipelineWorker : public Napi::AsyncWorker {
 public:
@@ -89,7 +138,7 @@ private:
 Napi::Object PipelineHandle(Napi::Env env, std::shared_ptr<StoredPipeline> pipeline) {
   auto result = Napi::Object::New(env);
   result.Set("name", Text(env, pipeline->proto.name()));
-  result.Set("description", Preview(pipeline->proto));
+  result.Set("metadata", PipelineMetadata(env, pipeline->proto));
   auto models = Napi::Object::New(env);
   for (const auto &[role, model] : pipeline->models)
     models.Set(role, ModelHandle(env, model));

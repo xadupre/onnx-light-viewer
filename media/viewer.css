@@ -784,20 +784,24 @@ button:disabled {
   cursor: default;
   opacity: 0.5;
 }
-#node-parameters pre {
+#node-parameters pre,
+#scope-initializers pre {
   margin: 5px 0 0;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   font: inherit;
 }
-#metadata-panel table {
+#metadata-panel table,
+.initializer-type-table {
   width: 100%;
   table-layout: fixed;
   border-collapse: collapse;
   margin: 8px 0 12px;
 }
 #metadata-panel th,
-#metadata-panel td {
+#metadata-panel td,
+.initializer-type-table th,
+.initializer-type-table td {
   padding: 5px 8px;
   border: 1px solid var(--border);
   text-align: left;
@@ -807,14 +811,47 @@ button:disabled {
   font-size: 11px;
   letter-spacing: 0;
 }
-#metadata-panel th:first-child {
+#metadata-panel th:first-child,
+.initializer-type-table th:first-child {
   width: 35%;
 }
-#metadata-panel thead {
+#metadata-panel thead,
+.initializer-type-table thead {
   background: var(--border);
 }
-#metadata-panel tbody th {
+#metadata-panel tbody th,
+.initializer-type-table tbody th {
   font-weight: 500;
+}
+.initializer-type-table caption {
+  text-align: left;
+  padding: 5px 0;
+  font-weight: 500;
+}
+.initializer-structure {
+  margin-top: 8px;
+}
+.initializer-structure > summary {
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.initializer-type-table th:nth-child(2) {
+  width: 25%;
+}
+.initializer-type-table .initializer-fold {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+.initializer-fold::before {
+  content: "- ";
+}
+.initializer-fold[aria-expanded="false"]::before {
+  content: "+ ";
 }
 #metadata-values {
   margin-top: 8px;

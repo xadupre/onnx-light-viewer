@@ -92,6 +92,14 @@ export function webviewHtml(
             <section id="node-parameters" hidden>
               <h3>Attributes <span id="attribute-count">0</span></h3><ul id="node-attributes"></ul>
               <h3>Initializers <span id="parameter-count">0</span></h3><ul id="node-initializers"></ul>
+            </section>
+            <section id="scope-initializers" hidden>
+              <h3>Initializers <span id="dense-initializer-count">0</span></h3><ul id="scope-dense-initializers"></ul>
+              <h3>Sparse initializers <span id="sparse-initializer-count">0</span></h3><ul id="scope-sparse-initializers"></ul>
+              <h3>Encoded initializers <span id="encoded-initializer-count">0</span></h3><ul id="scope-encoded-initializers"></ul>
+            </section>
+            <section id="scope-functions" hidden>
+              <h3>Local functions <span id="function-count">0</span></h3><ul id="local-functions"></ul>
             </section></div>
           </section>
           <section id="metadata-panel" class="inspector-panel" aria-labelledby="metadata-title" hidden>

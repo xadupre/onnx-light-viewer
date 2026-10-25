@@ -84,6 +84,36 @@ function createInspector({ byId, tensorDescription, subgraphLabel, navigate }) {
     );
     initializerList(node?.parameters ?? []);
     byId("node-parameters").hidden = !node;
+    const inspectFunctions = !node && !port && scope?.kind === "Model";
+    const functions = inspectFunctions ? (scope.localFunctions ?? []) : [];
+    byId("scope-functions").hidden = !inspectFunctions;
+    byId("function-count").textContent = functions.length;
+    byId("local-functions").replaceChildren(
+      ...functions.map((definition) => {
+        const item = document.createElement("li");
+        const button = document.createElement("button");
+        button.className = "icon-button";
+        button.type = "button";
+        button.textContent = `${definition.name} (${definition.nodeCount} nodes)`;
+        button.addEventListener("click", () => navigate(definition.path));
+        item.append(button);
+        return item;
+      }),
+    );
+    const inspectInitializers =
+      !node && !port && scope && scope.kind !== "Pipeline";
+    byId("scope-initializers").hidden = !inspectInitializers;
+    for (const [field, id] of [
+      ["initializers", "dense"],
+      ["sparseInitializers", "sparse"],
+      ["encodedInitializers", "encoded"],
+    ]) {
+      initializerList(
+        inspectInitializers ? (scope[field] ?? []) : [],
+        `scope-${id}-initializers`,
+        `${id}-initializer-count`,
+      );
+    }
     for (const direction of ["inputs", "outputs"]) {
       const names =
         node?.[direction] ??
@@ -119,19 +149,28 @@ function createInspector({ byId, tensorDescription, subgraphLabel, navigate }) {
     );
   }
 
-  function initializerList(parameters) {
-    byId("parameter-count").textContent = parameters.length;
-    byId("node-initializers").replaceChildren(
+  function initializerList(
+    parameters,
+    id = "node-initializers",
+    countId = "parameter-count",
+  ) {
+    byId(countId).textContent = parameters.length;
+    byId(id).replaceChildren(
       ...parameters.map((parameter) => {
         const item = document.createElement("li");
         const heading = document.createElement("strong");
-        heading.textContent = `${parameter.name} (${parameter.type})`;
+        heading.textContent = `${parameter.name} (${parameter.typeDetails?.kind ?? parameter.type})`;
         const shape = document.createElement("div");
         shape.className = "tensor-info";
         shape.textContent = `Shape: [${parameter.shape?.join(", ") ?? "?"}]`;
         item.append(heading);
         if (parameter.shape !== undefined) item.append(shape);
-        if (parameter.encoding !== undefined) {
+        if (parameter.typeDetails) {
+          item.append(typeTable("Logical type", parameter.typeDetails));
+        }
+        if (parameter.encodingDetails) {
+          item.append(typeTable("Encoding", parameter.encodingDetails));
+        } else if (parameter.encoding !== undefined) {
           const encoding = document.createElement("pre");
           encoding.className = "initializer-values";
           encoding.textContent = `Encoding: ${parameter.encoding}`;
@@ -156,6 +195,85 @@ function createInspector({ byId, tensorDescription, subgraphLabel, navigate }) {
         return item;
       }),
     );
+  }
+
+  function typeTable(title, details) {
+    const disclosure = document.createElement("details");
+    disclosure.className = "initializer-structure";
+    const summary = document.createElement("summary");
+    summary.textContent = `${title}: ${details.kind}`;
+    disclosure.append(summary);
+    const table = document.createElement("table");
+    table.className = "initializer-type-table";
+    table.setAttribute("aria-label", `${title}: ${details.kind}`);
+    table.createCaption().textContent = `${title}: ${details.kind}`;
+    table.caption.hidden = true;
+    const heading = table.createTHead().insertRow();
+    for (const label of ["Field", "Type / description", "Value"]) {
+      const cell = document.createElement("th");
+      cell.scope = "col";
+      cell.textContent = label;
+      heading.append(cell);
+    }
+    const body = table.createTBody();
+    const parents = new Set(details.entries.map((entry) => entry.parent));
+    const expanded = new Set();
+    const rows = [];
+    const refresh = () => {
+      for (const [index, row] of rows.entries()) {
+        let parent = details.entries[index].parent;
+        row.hidden = false;
+        while (parent !== undefined) {
+          if (!expanded.has(parent)) {
+            row.hidden = true;
+            break;
+          }
+          parent = details.entries[parent].parent;
+        }
+      }
+    };
+    for (const [
+      index,
+      { key, value, shape, data, parent },
+    ] of details.entries.entries()) {
+      const row = body.insertRow();
+      rows.push(row);
+      const name = document.createElement("th");
+      name.scope = "row";
+      const prefix =
+        parent === undefined ? "" : `${details.entries[parent].key}.`;
+      const label =
+        prefix && key.startsWith(prefix) ? key.slice(prefix.length) : key;
+      if (parents.has(index)) {
+        const toggle = document.createElement("button");
+        toggle.type = "button";
+        toggle.className = "initializer-fold";
+        toggle.textContent = label;
+        toggle.setAttribute("aria-expanded", "false");
+        toggle.addEventListener("click", () => {
+          if (expanded.has(index)) expanded.delete(index);
+          else expanded.add(index);
+          toggle.setAttribute("aria-expanded", String(expanded.has(index)));
+          refresh();
+        });
+        name.append(toggle);
+      } else {
+        name.textContent = label;
+      }
+      name.title = key;
+      const description = document.createElement("td");
+      description.textContent = `${value}${shape === undefined ? "" : ` ${shape}`}`;
+      const preview = document.createElement("td");
+      if (data !== undefined) {
+        const values = document.createElement("pre");
+        values.textContent = data;
+        preview.append(values);
+      }
+      row.append(name, description, preview);
+    }
+    refresh();
+    disclosure.append(table);
+    return disclosure;
   }
 
   function parameterList(id, parameters, countId) {

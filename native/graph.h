@@ -14,7 +14,7 @@ namespace onnx_light_viewer {
 namespace ol = ONNX_LIGHT_NAMESPACE;
 
 struct GraphStep {
-  int node;
+  int node; // -1 opens a function definition without a call site.
   int attribute;
   int graph;
   int function = -1;
