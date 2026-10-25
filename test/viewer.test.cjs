@@ -5681,7 +5681,7 @@ test("magnifies a rectangle in either direction without moving or selecting node
       window.getComputedStyle(button).backgroundColor,
       activeBackground,
     );
-    assert.equal(window.getComputedStyle(button).fontWeight, "400");
+    assert.equal(window.getComputedStyle(button).fontWeight, "600");
     assert.equal(window.getComputedStyle(indicator).visibility, "hidden");
     assert.equal(graph.hasPointerCapture(1), false);
     assert.deepEqual(selection(), selected);
