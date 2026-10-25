@@ -58,6 +58,7 @@ target_include_directories(onnx_light_viewer PRIVATE ${CMAKE_JS_INC})
 target_link_libraries(onnx_light_viewer PRIVATE
   onnx_light::lib_onnx_op onnx_light::lib_onnx_shape
   onnx_light::lib_onnx_patterns
+  onnx_light::lib_onnx_kernels
   onnx_light::lib_onnx_backend_test ${CMAKE_JS_LIB}
 )
 set(_output "${CMAKE_CURRENT_SOURCE_DIR}/dist/native")
@@ -96,7 +97,8 @@ add_library(test_model_storage SHARED test/model-storage-addon.cc native/model_t
 target_compile_features(test_model_storage PRIVATE cxx_std_20)
 target_include_directories(test_model_storage PRIVATE ${CMAKE_JS_INC})
 target_link_libraries(test_model_storage PRIVATE
-  onnx_light::lib_onnx_op onnx_light::lib_onnx_shape onnx_light::lib_onnx_patterns ${CMAKE_JS_LIB})
+  onnx_light::lib_onnx_op onnx_light::lib_onnx_shape onnx_light::lib_onnx_patterns
+  onnx_light::lib_onnx_kernels ${CMAKE_JS_LIB})
 set_target_properties(test_model_storage PROPERTIES PREFIX "" SUFFIX ".node")
 if(MSVC)
   set_property(TARGET test_model_storage PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreadedDLL")

@@ -853,7 +853,8 @@ button:disabled {
 #fusion-panel[hidden] {
   display: none;
 }
-#fusion-pattern {
+#fusion-pattern,
+#optimization-patterns {
   display: block;
   min-width: 0;
   max-height: 12rem;
@@ -871,6 +872,7 @@ button:disabled {
   list-style: none;
 }
 #fusion-pattern,
+#optimization-patterns,
 #fusion-matches {
   overflow-y: auto;
 }
@@ -884,20 +886,23 @@ button:disabled {
   width: 100%;
   margin-top: 4px;
 }
-#rewriting-steps {
+#rewriting-steps,
+#optimization-results {
   max-height: 12rem;
   overflow: auto;
   padding-left: 24px;
   overflow-wrap: anywhere;
 }
-#fusion-pattern label {
+#fusion-pattern label,
+#optimization-patterns label {
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 6px 8px;
   cursor: pointer;
 }
-#fusion-pattern label:has(input:checked) {
+#fusion-pattern label:has(input:checked),
+#optimization-patterns label:has(input:checked) {
   background: color-mix(
     in srgb,
     var(--vscode-list-activeSelectionBackground, var(--mint)) 22%,

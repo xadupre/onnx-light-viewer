@@ -1563,6 +1563,262 @@ async function savedFusionScenario(
   };
 }
 
+function optimizationModel() {
+  return loadModel(
+    readFileSync(path.join(__dirname, "../examples/optimization.onnx")),
+    "Optimization playground",
+  );
+}
+
+test("previews global cleanup passes independently, folds real values and preserves undo and saved rewritings", async () => {
+  const source = optimizationModel();
+  const original = source.graph();
+  const identityPreview = await source.previewFusion("IdentityRemoval");
+  assert.equal(identityPreview.matches[0].global, true);
+  assert.equal(
+    identityPreview.matches[0].replacement.some(
+      (node) => node.opType === "Identity",
+    ),
+    false,
+  );
+  const identities = await identityPreview.model.applyFusion(
+    "IdentityRemoval",
+    [0],
+  );
+  const foldingPreview = await identities.previewFusion("ConstantFolding");
+  const folded = await foldingPreview.model.applyFusion("ConstantFolding", [0]);
+  assert.deepEqual(source.graph(), original);
+  assert.equal(identities.fusionCount(), 1);
+  assert.equal(folded.fusionCount(), 2);
+  assert.equal(
+    identities.graph().nodes.some((node) => node.opType === "Identity"),
+    false,
+  );
+  assert.equal(
+    identities.graph().nodes.find((node) => node.name === "transpose")
+      .inputs[0],
+    "x",
+  );
+  const graph = folded.graph();
+  assert.equal(
+    graph.nodes.some((node) => node.name === "constant_sum"),
+    false,
+  );
+  assert.equal(
+    graph.nodes.find((node) => node.name === "matmul").parameters[0].value,
+    "[2, 0, 0, 2]",
+  );
+  folded.verify();
+  assert.deepEqual(folded.undoFusion().graph(), identities.graph());
+  assert.deepEqual(folded.undoFusion().undoFusion().graph(), original);
+  const noMatches = await folded.previewFusion("ConstantFolding");
+  assert.deepEqual(noMatches.matches, []);
+  const noop = noMatches.model;
+  assert.equal(noop.fusionCount(), folded.fusionCount());
+  assert.deepEqual(noop.graph(), graph);
+  assert.deepEqual(noop.undoFusion().graph(), identities.graph());
+  const plain = loadModel(await folded.serialize(), "plain");
+  assert.deepEqual(plain.graph(), graph);
+  assert.deepEqual(plain.rewritingScenarios(), []);
+  const saved = loadModel(
+    await folded.serialize(undefined, undefined, true),
+    "saved",
+  );
+  assert.deepEqual(saved.graph(), original);
+  const scenario = saved.rewritingScenarios().at(-1);
+  assert.deepEqual(
+    scenario.steps
+      .filter((step) => !step.pattern.startsWith("Finalize"))
+      .map((step) => step.pattern),
+    ["IdentityRemoval", "ConstantFolding"],
+  );
+  const replayed = await saved.applyRewritingScenario(scenario.name, true);
+  assert.deepEqual(replayed.graph(), graph);
+});
+
+test("matches and applies unused-code removal including initializer-only changes", async () => {
+  const source = optimizationModel();
+  assert.ok(source.fusionPatterns().includes("RemoveUnusedNodes"));
+  const preview = await source.previewFusion("RemoveUnusedNodes");
+  assert.equal(preview.matches.length, 1);
+  assert.equal(preview.matches[0].global, true);
+  assert.deepEqual(preview.matches[0].replacement, []);
+  const cleaned = await preview.model.applyFusion("RemoveUnusedNodes", [0]);
+  assert.equal(
+    cleaned.graph().nodes.some((node) => node.name === "unused_relu"),
+    false,
+  );
+  assert.ok(source.graph().nodes.some((node) => node.name === "unused_relu"));
+  const folding = await cleaned.previewFusion("ConstantFolding");
+  const folded = await folding.model.applyFusion("ConstantFolding", [0]);
+  const unused = await folded.previewFusion("RemoveUnusedNodes");
+  assert.equal(unused.matches.length, 1);
+  assert.deepEqual(unused.matches[0].nodes, []);
+  const result = await unused.model.applyFusion("RemoveUnusedNodes", [0]);
+  assert.ok(result.graph().initializerCount < folded.graph().initializerCount);
+  assert.deepEqual(result.graph().nodes, folded.graph().nodes);
+  assert.equal(result.fusionCount(), 3);
+  assert.deepEqual(result.undoFusion().graph(), folded.graph());
+  const saved = loadModel(
+    await result.serialize(undefined, undefined, true),
+    "saved",
+  );
+  const replayed = await saved.applyRewritingScenario(
+    saved.rewritingScenarios()[0].name,
+    true,
+  );
+  assert.deepEqual(replayed.graph(), result.graph());
+  await assert.rejects(
+    source.applyFusion(["IdentityRemoval", "RemoveUnusedNodes"], [0, 0]),
+    /global pass individually/,
+  );
+});
+
+test("uses the full catalog and native priority iteration to match operators introduced by earlier patterns", async () => {
+  const source = optimizationModel();
+  const catalog = source.optimizationPatterns();
+  assert.equal(source.fusionPatterns().includes("GemmTranspose"), false);
+  assert.ok(catalog.some((pattern) => pattern.name === "GemmTranspose"));
+  const selected = ["TransposeTranspose", "MatMulAdd", "GemmTranspose"];
+  const optimized = await source.optimize(selected, "Optimize");
+  const all = await source.optimize(
+    catalog.map((pattern) => pattern.name),
+    "Optimize",
+  );
+  const patterns = optimized
+    .fusionHistory()[0]
+    .matches.map((match) => match.pattern);
+  assert.ok(patterns.indexOf("GemmTranspose") > patterns.indexOf("MatMulAdd"));
+  assert.ok(patterns.includes("TransposeTranspose"));
+  assert.equal(optimized.fusionCount(), 1);
+  assert.equal(
+    optimized
+      .graph()
+      .nodes.some(
+        (node) => node.opType === "Identity" || node.name === "unused_relu",
+      ),
+    false,
+  );
+  assert.equal(
+    optimized.graph().nodes.some((node) => node.opType === "MatMul"),
+    false,
+  );
+  assert.ok(optimized.graph().nodes.some((node) => node.opType === "Gemm"));
+  assert.deepEqual(all.graph(), optimized.graph());
+  assert.deepEqual(optimized.undoFusion().graph(), source.graph());
+  const transposeOnly = await source.optimize(
+    ["TransposeTranspose"],
+    "Optimize",
+  );
+  assert.ok(
+    transposeOnly.graph().nodes.some((node) => node.opType === "MatMul"),
+  );
+  assert.equal(
+    transposeOnly.graph().nodes.some((node) => node.opType === "Gemm"),
+    false,
+  );
+  const manual = await source.applyFusion("TransposeTranspose", [2]);
+  const continued = await manual.optimize(selected, "Optimize");
+  assert.equal(continued.fusionCount(), 2);
+  assert.deepEqual(continued.undoFusion().graph(), manual.graph());
+  const bytes = Buffer.from(
+    await continued.serialize(undefined, undefined, true),
+  );
+  const freshReplay = execFileSync(
+    process.execPath,
+    [
+      "-e",
+      `const {loadModel}=require('./dist/graph');
+       const model=loadModel(require('node:fs').readFileSync(0),'saved');
+       model.applyRewritingScenario(model.rewritingScenarios()[0].name,true)
+         .then(result=>console.log(JSON.stringify(result.graph())))
+         .catch(error=>{console.error(error);process.exitCode=1;});`,
+    ],
+    { input: bytes },
+  );
+  assert.deepEqual(JSON.parse(freshReplay), continued.graph());
+  const plans = rewritingPlans(bytes);
+  assert.equal(plans.length, 1);
+  assert.deepEqual(
+    loadModel(plans[0].bytes, "replayed").graph(),
+    continued.graph(),
+  );
+  const loaded = loadModel(bytes, "saved");
+  const replayed = await loaded.applyRewritingScenario(
+    loaded.rewritingScenarios()[0].name,
+    true,
+  );
+  assert.deepEqual(replayed.graph(), continued.graph());
+  const relu = loadModel(modelBytes("relu.onnx"), "relu");
+  const noop = await relu.optimize(selected, "Optimize");
+  assert.equal(noop.fusionCount(), 0);
+  assert.deepEqual(noop.graph(), relu.graph());
+  assert.throws(
+    () => source.optimize(["unknown"], "Optimize"),
+    /Unknown|unknown|registered/,
+  );
+  assert.throws(
+    () => source.optimize(["TransposeTranspose"], "ConstantFolding"),
+    /Global passes/,
+  );
+});
+
+test("optimizes one pipeline stage without adding no-op undo entries or changing other stages", async () => {
+  const stagePath = [{ pipeline: "prefill" }];
+  const source = loadModel(
+    pipelineBytes({
+      embedding: modelBytes("relu.onnx"),
+      prefill: readFileSync(
+        path.join(__dirname, "../examples/optimization.onnx"),
+      ),
+      decode: modelBytes("relu.onnx"),
+    }),
+    "optimization.pipe-onnx",
+  );
+  const patterns = source
+    .optimizationPatterns(stagePath)
+    .map((pattern) => pattern.name);
+  const optimized = await source.optimize(
+    patterns,
+    "Optimize",
+    undefined,
+    stagePath,
+  );
+  assert.equal(optimized.fusionCount(), 1);
+  assert.equal(optimized.fusionHistory()[0].stage, "prefill");
+  assert.deepEqual(
+    optimized.graph(false, [{ pipeline: "embedding" }]),
+    source.graph(false, [{ pipeline: "embedding" }]),
+  );
+  assert.deepEqual(
+    optimized.graph(false, [{ pipeline: "decode" }]),
+    source.graph(false, [{ pipeline: "decode" }]),
+  );
+  const noop = await optimized.optimize([], "IdentityRemoval", undefined, [
+    { pipeline: "decode" },
+  ]);
+  assert.equal(noop.fusionCount(), 1);
+  assert.deepEqual(noop.fusionHistory(), optimized.fusionHistory());
+  assert.deepEqual(
+    noop.undoFusion().graph(false, stagePath),
+    source.graph(false, stagePath),
+  );
+  const saved = loadModel(
+    await optimized.serialize(undefined, undefined, true),
+    "saved.pipe-onnx",
+  );
+  const replayed = await saved.applyRewritingScenario(
+    saved.rewritingScenarios(stagePath)[0].name,
+    true,
+    undefined,
+    stagePath,
+  );
+  assert.deepEqual(
+    replayed.graph(false, stagePath),
+    optimized.graph(false, stagePath),
+  );
+});
+
 test("opens the saved rewriting example and replays both patterns with undo", async () => {
   const loaded = loadModel(
     readFileSync(path.join(__dirname, "../examples/rewriting-scenarios.onnx")),

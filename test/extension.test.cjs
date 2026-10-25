@@ -1395,6 +1395,161 @@ test("lists saved scenarios and applies one or all remaining steps with host und
   assert.deepEqual(latestGraph().graph, full.graph());
 });
 
+test("previews global passes without editing, rejects stale previews and optimizes with replayable saves", async (t) => {
+  const directory = await mkdtemp(
+    path.join(tmpdir(), "onnx-light-optimization-"),
+  );
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const extension = await openExtension(undefined, undefined, true);
+  t.after(() => extension.dispose());
+  const source = require.resolve("../examples/optimization.onnx");
+  await extension.openFile(source);
+  const originalBytes = await readFile(source);
+  const latest = () =>
+    extension.messages.findLast((message) => message.type === "graph");
+  const original = latest().graph;
+  await extension.receive({ type: "fusion-patterns", requestId: 1 });
+  const catalog = extension.messages.at(-1).optimizationPatterns;
+  assert.ok(catalog.some((pattern) => pattern.name === "GemmTranspose"));
+  await extension.receive({
+    type: "preview-fusion",
+    pattern: "IdentityRemoval",
+    requestId: 2,
+  });
+  const stale = extension.messages.at(-1);
+  assert.equal(stale.type, "fusion-preview");
+  assert.equal(stale.matches[0].global, true);
+  assert.ok(stale.matches[0].nodes.length);
+  assert.deepEqual(latest().graph, original);
+  assert.equal(latest().file.fusionCount, 0);
+  await extension.receive({ type: "cancel-fusion" });
+  await extension.receive({
+    type: "apply-fusion",
+    previewId: stale.previewId,
+    candidates: [0],
+    requestId: 3,
+  });
+  assert.equal(extension.messages.at(-1).type, "fusion-error");
+  assert.match(extension.messages.at(-1).error, /stale/);
+  await extension.receive({
+    type: "preview-fusion",
+    pattern: "ConstantFolding",
+    requestId: 4,
+  });
+  const preview = extension.messages.at(-1);
+  await extension.receive({
+    type: "apply-fusion",
+    previewId: preview.previewId,
+    candidates: [0],
+    requestId: 5,
+  });
+  assert.equal(extension.messages.at(-1).type, "fusion-info");
+  assert.equal(extension.messages.at(-1).requestId, 5);
+  assert.equal(latest().fusionRequestId, 5);
+  assert.equal(latest().file.fusionCount, 1);
+  assert.equal(
+    latest().graph.nodes.some((node) => node.name === "constant_sum"),
+    false,
+  );
+  await extension.receive({ type: "undo-fusion" });
+  assert.deepEqual(latest().graph, original);
+  await extension.receive({
+    type: "apply-optimization",
+    operation: "Optimize",
+    patterns: ["unknown"],
+    requestId: 6,
+  });
+  assert.equal(extension.messages.at(-1).type, "fusion-error");
+  assert.equal(latest().file.fusionCount, 0);
+  await extension.receive({
+    type: "apply-optimization",
+    operation: "Optimize",
+    patterns: ["TransposeTranspose", "MatMulAdd", "GemmTranspose"],
+    requestId: 7,
+  });
+  assert.equal(extension.messages.at(-1).type, "optimization-info");
+  assert.ok(
+    extension.messages
+      .at(-1)
+      .matches.some((match) => match.pattern === "GemmTranspose"),
+  );
+  const optimized = latest().graph;
+  const { loadModelFile } = require("../dist/graph");
+  const plain = path.join(directory, "plain.onnx");
+  const variants = path.join(directory, "variants.onnx");
+  for (const [location, includeRewritings] of [
+    [plain, false],
+    [variants, true],
+  ]) {
+    await extension.receive({
+      type: "save",
+      location,
+      overwrite: false,
+      storage: "embedded",
+      encrypted: false,
+      includeRewritings,
+    });
+    assert.equal(extension.messages.at(-1).type, "save-info");
+  }
+  assert.deepEqual((await loadModelFile(plain, "plain")).graph(), optimized);
+  const saved = await loadModelFile(variants, "variants");
+  assert.deepEqual(saved.graph(), original);
+  const replayed = await saved.applyRewritingScenario(
+    saved.rewritingScenarios()[0].name,
+    true,
+  );
+  assert.deepEqual(replayed.graph(), optimized);
+  assert.deepEqual(await readFile(source), originalBytes);
+  await extension.receive({ type: "undo-fusion", all: true });
+  assert.deepEqual(latest().graph, original);
+});
+
+test("discards optimization preview results after replacing their owning model", async (t) => {
+  const extension = await openExtension(undefined, undefined, true);
+  t.after(() => extension.dispose());
+  await extension.openFile(require.resolve("../examples/optimization.onnx"));
+  const native = extension.nativeModels.at(-1);
+  const previewFusion = native.previewFusion;
+  let release, arrived;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  const started = new Promise((resolve) => {
+    arrived = resolve;
+  });
+  native.previewFusion = async (...args) => {
+    const result = await previewFusion(...args);
+    arrived();
+    await gate;
+    return result;
+  };
+  const pending = extension.receive({
+    type: "preview-fusion",
+    pattern: "ConstantFolding",
+    requestId: 1,
+  });
+  await started;
+  await extension.openFile(require.resolve("./models/relu.onnx"));
+  release();
+  await pending;
+  assert.equal(
+    extension.messages.some((message) => message.type === "fusion-preview"),
+    false,
+  );
+  assert.equal(
+    extension.messages.some((message) => message.type === "fusion-error"),
+    false,
+  );
+  const graph = extension.messages.findLast(
+    (message) => message.type === "graph",
+  );
+  assert.deepEqual(
+    graph.graph.nodes.map((node) => node.opType),
+    ["Relu"],
+  );
+  assert.equal(graph.file.fusionCount, 0);
+});
+
 test("unfuses the last operation or all successive native fusions atomically", async () => {
   const extension = await openExtension(
     undefined,
@@ -2584,6 +2739,140 @@ test("recovers a downloaded model from its published cache path after the tempor
   assert.equal(extension.messages.at(-1).type, "metadata-info");
   assert.equal(downloads, 1);
   assert.deepEqual(extension.reads, []);
+});
+
+test("selects optimization groups and previews global passes through the real webview bridge", async (t) => {
+  const extension = await openExtension("../../examples/optimization.onnx");
+  t.after(() => extension.dispose());
+  const dom = new JSDOM(extension.webview.html, { runScripts: "outside-only" });
+  t.after(() => dom.window.close());
+  const { window } = dom;
+  const { document } = window;
+  const requests = [];
+  window.HTMLCanvasElement.prototype.getContext = () => ({
+    font: "",
+    measureText: (text) => ({ width: text.length * 8 }),
+  });
+  document.getElementById("canvas").getBoundingClientRect = () =>
+    new window.DOMRect(0, 0, 1060, 350);
+  window.acquireVsCodeApi = () => ({
+    postMessage: (message) => requests.push(extension.receive(message)),
+  });
+  extension.connect((data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data })),
+  );
+  for (const script of document.querySelectorAll("script[src]"))
+    window.eval(readFileSync(new URL(script.src), "utf8"));
+  const flush = async () => {
+    while (requests.length) await Promise.all(requests.splice(0));
+  };
+  await flush();
+  const count = () => document.querySelectorAll(".graph-node").length;
+  const original = count();
+  document.getElementById("optimize-model").click();
+  await flush();
+  const patterns = document.getElementById("optimization-patterns");
+  assert.equal(document.getElementById("optimization-panel").hidden, false);
+  assert.equal(document.getElementById("fusion-panel").hidden, true);
+  assert.equal(document.getElementById("optimization-picker").open, true);
+  assert.ok(patterns.querySelector('input[value="GemmTranspose"]'));
+  assert.ok(patterns.querySelectorAll("details").length > 1);
+  document.getElementById("clear-optimization-patterns").click();
+  assert.equal(document.getElementById("run-optimization").disabled, true);
+  const group = patterns.querySelector("details");
+  const toggle = group.querySelector("input[data-priority]");
+  toggle.click();
+  assert.equal(
+    group.querySelectorAll("input[data-pattern]:checked").length,
+    group.querySelectorAll("input[data-pattern]").length,
+  );
+  group.querySelector("input[data-pattern]").click();
+  assert.equal(toggle.indeterminate, true);
+  document.getElementById("select-optimization-patterns").click();
+  document.getElementById("optimize-model").click();
+  document.getElementById("fuse-pattern").click();
+  await flush();
+  const selectPass = (name) =>
+    document.querySelector(`#fusion-pattern input[value="${name}"]`).click();
+  for (const name of [
+    "IdentityRemoval",
+    "ConstantFolding",
+    "RemoveUnusedNodes",
+  ])
+    selectPass(name);
+  await flush();
+  document.getElementById("preview-fusion").click();
+  await flush();
+  assert.equal(count(), original);
+  const candidates = document.querySelectorAll("#fusion-matches input");
+  assert.equal(candidates.length, 3);
+  candidates[0].click();
+  candidates[1].click();
+  assert.equal(document.getElementById("apply-fusion").disabled, true);
+  assert.match(
+    document.getElementById("fusion-feedback").textContent,
+    /individually/,
+  );
+  document.getElementById("select-fusions").click();
+  assert.equal(
+    document.querySelectorAll("#fusion-matches input:checked").length,
+    1,
+  );
+  document.getElementById("clear-fusions").click();
+  [...document.querySelectorAll("#fusion-matches li")]
+    .find(
+      (item) => item.querySelector("label").textContent === "ConstantFolding",
+    )
+    .querySelector("input")
+    .click();
+  document.getElementById("apply-fusion").click();
+  await flush();
+  assert.equal(count(), original - 1);
+  assert.match(
+    document.getElementById("fusion-status").textContent,
+    /Applied 1 fusion/,
+  );
+  assert.equal(document.getElementById("fusion-panel").hidden, false);
+  selectPass("ConstantFolding");
+  await flush();
+  document.getElementById("preview-fusion").click();
+  await flush();
+  assert.equal(document.querySelectorAll("#fusion-matches li").length, 0);
+  assert.equal(document.getElementById("apply-fusion").disabled, true);
+  document.getElementById("undo-fusion").click();
+  document.getElementById("unfuse-last").click();
+  await flush();
+  assert.equal(count(), original);
+  document.getElementById("optimize-model").click();
+  await flush();
+  document.getElementById("run-optimization").click();
+  assert.equal(document.getElementById("run-optimization").disabled, true);
+  await flush();
+  assert.ok(count() < original);
+  assert.equal(document.getElementById("optimization-panel").hidden, false);
+  assert.equal(document.getElementById("fusion-panel").hidden, true);
+  const optimized = extension.messages.findLast(
+    (message) => message.type === "graph",
+  ).graph;
+  assert.equal(
+    optimized.nodes.some(
+      (node) => node.opType === "Identity" || node.name === "unused_relu",
+    ),
+    false,
+  );
+  const results = document.getElementById("optimization-results");
+  assert.match(results.textContent, /MatMulAdd/);
+  assert.match(results.textContent, /GemmTranspose/);
+  [...results.querySelectorAll("button")]
+    .find((button) => button.textContent.startsWith("MatMulAdd "))
+    .click();
+  assert.ok(document.querySelectorAll(".graph-node.selected").length);
+  document.getElementById("undo-fusion").click();
+  assert.equal(document.querySelectorAll("#unfuse-history > li").length, 1);
+  document.getElementById("unfuse-last").click();
+  await flush();
+  assert.equal(count(), original);
+  assert.deepEqual(extension.errors, []);
 });
 
 test("matches multiple patterns and fuses checked candidates through the real webview bridge", async (t) => {

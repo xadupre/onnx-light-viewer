@@ -1188,6 +1188,7 @@ async function configurePanel(
         message?.type === "apply-rewriting" ||
         message?.type === "fusion-patterns" ||
         message?.type === "preview-fusion" ||
+        message?.type === "apply-optimization" ||
         message?.type === "apply-fusion"
       ) {
         const owner = model;
@@ -1206,13 +1207,15 @@ async function configurePanel(
           await log.run(
             message.type === "undo-fusion"
               ? "Undo fusion"
-              : message.type === "apply-rewriting"
-                ? "Apply rewriting scenario"
-                : message.type === "apply-fusion"
-                  ? "Apply fusion pattern"
-                  : message.type === "preview-fusion"
-                    ? "Preview fusion pattern"
-                    : "List fusion patterns",
+              : message.type === "apply-optimization"
+                ? "Optimize ONNX model"
+                : message.type === "apply-rewriting"
+                  ? "Apply rewriting scenario"
+                  : message.type === "apply-fusion"
+                    ? "Apply fusion pattern"
+                    : message.type === "preview-fusion"
+                      ? "Preview fusion pattern"
+                      : "List fusion patterns",
             async () => {
               const current = requireModel();
               if (message.type === "undo-fusion") {
@@ -1261,6 +1264,76 @@ async function configurePanel(
                   "Return to a model's main graph to apply fusion patterns.",
                 );
               const path = current.graph.breadcrumbs.at(-1)?.path ?? [];
+              if (message.type === "apply-optimization") {
+                const native = await nativeModel(
+                  current,
+                  log,
+                  () => void sendStatus(),
+                );
+                if (!isCurrent()) return;
+                const chosen: unknown = message.patterns;
+                const catalog = native.optimizationPatterns(path);
+                if (
+                  message.operation !== "Optimize" ||
+                  !Array.isArray(chosen) ||
+                  !chosen.length ||
+                  !chosen.every(
+                    (name: unknown) =>
+                      typeof name === "string" &&
+                      catalog.some((pattern) => pattern.name === name),
+                  ) ||
+                  new Set(chosen).size !== chosen.length
+                )
+                  throw new Error("Choose registered optimization patterns.");
+                fusionPreview = undefined;
+                const edited = await native.optimize(
+                  chosen,
+                  "Optimize",
+                  current.source?.uri.scheme === "file"
+                    ? current.source.uri.fsPath
+                    : undefined,
+                  path,
+                );
+                if (!isCurrent()) return;
+                const changed = edited.fusionCount() > native.fusionCount();
+                const graph = edited.graph(false, path);
+                const matches = changed
+                  ? (edited.fusionHistory().at(-1)?.matches ?? [])
+                  : [];
+                const retained = edited.clone();
+                const replacement: LoadedModel = {
+                  ...current,
+                  native: edited,
+                  nativeReload: undefined,
+                  graph,
+                  metadata: undefined,
+                  fusionCount: edited.fusionCount(),
+                  fusionHistory: edited.fusionHistory(),
+                  reload: () => retained.clone(),
+                };
+                model = replacement;
+                graphRevision++;
+                navigationRequest++;
+                panel.title = `ONNX: ${current.fileName ?? graph.name}${edited.fusionCount() ? " (modified)" : ""}`;
+                await sendGraph(undefined, message.requestId);
+                if (
+                  !active ||
+                  model !== replacement ||
+                  fusionRequest !== generation + 1
+                )
+                  return;
+                await postMessage({
+                  type: "optimization-info",
+                  requestId: message.requestId,
+                  operation: "Optimize",
+                  changed,
+                  matches,
+                  patterns: edited.fusionPatterns(path),
+                  optimizationPatterns: edited.optimizationPatterns(path),
+                  scenarios: edited.rewritingScenarios(path),
+                });
+                return;
+              }
               if (message.type === "apply-rewriting") {
                 if (
                   typeof message.scenario !== "string" ||
@@ -1312,6 +1385,7 @@ async function configurePanel(
                   requestId: message.requestId,
                   name: message.scenario,
                   patterns: edited.fusionPatterns(path),
+                  optimizationPatterns: edited.optimizationPatterns(path),
                   scenarios: edited.rewritingScenarios(path),
                 });
                 return;
@@ -1355,6 +1429,11 @@ async function configurePanel(
                   throw new Error(
                     "The fusion preview is stale or invalid. Preview again.",
                   );
+                if (
+                  selectedMatches?.some((match) => match.global) &&
+                  selectedMatches.length !== 1
+                )
+                  throw new Error("Apply a global pass individually.");
                 const edited = await preview.snapshot.applyFusion(
                   selectedMatches
                     ? selectedMatches.map((match) => match.pattern)
@@ -1392,6 +1471,7 @@ async function configurePanel(
                   requestId: message.requestId,
                   count: anchors.length,
                   patterns: edited.fusionPatterns(path),
+                  optimizationPatterns: edited.optimizationPatterns(path),
                   scenarios: edited.rewritingScenarios(path),
                 });
                 return;
@@ -1409,6 +1489,7 @@ async function configurePanel(
                   type: "fusion-patterns",
                   requestId: message.requestId,
                   patterns,
+                  optimizationPatterns: native.optimizationPatterns(path),
                   scenarios: native.rewritingScenarios(path),
                 });
                 return;

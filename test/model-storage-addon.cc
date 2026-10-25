@@ -2,6 +2,7 @@
 
 #include <map>
 #include <onnx_core/builder/graph_builder.h>
+#include <onnx_extensions/kernels/kernel_dispatch_table.h>
 #include <onnx_extensions/shapes/dispatch_table.h>
 #include <onnx_proto/onnx_verify.h>
 #include <stdexcept>
@@ -121,6 +122,7 @@ Napi::Value RewritingPlans(const Napi::CallbackInfo &info) {
             std::string(reinterpret_cast<const char *>(bytes.Data()), bytes.Length())))
       throw std::runtime_error("Could not parse test model.");
     ol::onnx_shapes::RegisterShapeFunctions();
+    ol::onnx_kernels::RegisterKernelFunctions();
     auto result = Napi::Array::New(info.Env());
     for (const auto &[name, plan] : model.rewritings()) {
       auto replayed =
