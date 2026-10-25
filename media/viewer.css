@@ -885,9 +885,20 @@ button:disabled {
 .fusion-picker summary {
   cursor: pointer;
 }
-#rewriting-scenario {
+#rewriting-scenario,
+#diagnostic-pattern {
   width: 100%;
   margin-top: 4px;
+}
+.native-report {
+  max-height: 24rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.native-source-link {
+  color: var(--mint);
+  overflow-wrap: anywhere;
 }
 #rewriting-steps,
 #optimization-results {
@@ -979,7 +990,8 @@ button:disabled {
   gap: 12px;
   margin-top: 12px;
 }
-#operator-doc {
+#operator-doc,
+#optimization-report {
   width: min(900px, 95vw);
   max-height: 90vh;
   overflow: auto;
@@ -988,8 +1000,42 @@ button:disabled {
   border: 1px solid var(--border);
   border-radius: 8px;
 }
-#operator-doc::backdrop {
+#operator-doc::backdrop,
+#optimization-report::backdrop {
   background: #0009;
+}
+#optimization-report {
+  width: min(1400px, 95vw);
+  max-width: 95vw;
+  font-size: 14px;
+}
+#optimization-report > header {
+  position: sticky;
+  top: 0;
+  padding: 8px 0;
+  background: var(--panel);
+}
+#optimization-report table {
+  width: 100%;
+  margin: 16px 0 24px;
+  border-collapse: collapse;
+  overflow-wrap: anywhere;
+}
+#optimization-report caption {
+  padding-bottom: 8px;
+  text-align: left;
+  font-size: 16px;
+  font-weight: 600;
+}
+#optimization-report th,
+#optimization-report td {
+  padding: 8px 12px;
+  text-align: left;
+  vertical-align: top;
+  border: 1px solid var(--border);
+}
+#optimization-report thead {
+  background: var(--bg);
 }
 .save-grid {
   min-width: 0;

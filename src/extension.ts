@@ -404,6 +404,7 @@ async function configurePanel(
   let graphRevision = 0;
   let navigationRequest = 0;
   let fusionRequest = 0;
+  let diagnosticRequest = 0;
   let undoRequest = 0;
   let fusionPreview:
     | {
@@ -527,6 +528,7 @@ async function configurePanel(
   const sendGraph = (selectedNodes?: number[], fusionRequestId?: unknown) => {
     fusionPreview = undefined;
     fusionRequest++;
+    diagnosticRequest++;
     const current = requireModel();
     void sendStatus();
     return postMessage({
@@ -597,6 +599,7 @@ async function configurePanel(
         pattern?: unknown;
         scenario?: unknown;
         patterns?: unknown;
+        anchor?: unknown;
         anchors?: unknown;
         candidates?: unknown;
         operation?: unknown;
@@ -1180,6 +1183,77 @@ async function configurePanel(
           action: "remember",
           entries: loaded.history,
         });
+      } else if (message?.type === "cancel-fusion-diagnostic") {
+        diagnosticRequest++;
+      } else if (message?.type === "explain-fusion") {
+        const owner = model;
+        const revision = graphRevision;
+        const generation = ++diagnosticRequest;
+        const isCurrent = () =>
+          active &&
+          model === owner &&
+          graphRevision === revision &&
+          diagnosticRequest === generation;
+        try {
+          await log.run(
+            "Explain fusion match",
+            async () => {
+              const current = requireModel();
+              if (!(
+                current.graph.canFuse ?? current.graph.breadcrumbs.length === 1
+              ))
+                throw new Error(
+                  "Return to a model's main graph to inspect patterns.",
+                );
+              const native = await nativeModel(
+                current,
+                log,
+                () => void sendStatus(),
+              );
+              if (!isCurrent()) return;
+              const path = current.graph.breadcrumbs.at(-1)?.path ?? [];
+              if (
+                typeof message.pattern !== "string" ||
+                !native
+                  .optimizationPatterns(path)
+                  .some((pattern) => pattern.name === message.pattern) ||
+                typeof message.anchor !== "number" ||
+                !Number.isSafeInteger(message.anchor) ||
+                message.anchor < 0 ||
+                message.anchor >= current.graph.nodes.length
+              )
+                throw new Error(
+                  "Choose a native pattern and one operator node.",
+                );
+              const diagnostic = await native.explainFusion(
+                message.pattern,
+                message.anchor,
+                current.source?.uri.scheme === "file"
+                  ? current.source.uri.fsPath
+                  : undefined,
+                path,
+              );
+              if (!isCurrent()) return;
+              await postMessage({
+                type: "fusion-diagnostic",
+                requestId: message.requestId,
+                diagnostic,
+              });
+            },
+            message.actionId,
+          );
+        } catch (error) {
+          if (!isCurrent()) return;
+          const detail = error instanceof Error ? error.message : String(error);
+          await postMessage({
+            type: "fusion-diagnostic-error",
+            requestId: message.requestId,
+            error: detail,
+          });
+          await vscode.window.showErrorMessage(
+            `Could not explain fusion match: ${detail}`,
+          );
+        }
       } else if (message?.type === "cancel-fusion") {
         fusionPreview = undefined;
         fusionRequest++;
@@ -1326,6 +1400,7 @@ async function configurePanel(
                   type: "optimization-info",
                   requestId: message.requestId,
                   operation: "Optimize",
+                  optimizationReport: edited.optimizationReport(path),
                   changed,
                   matches,
                   patterns: edited.fusionPatterns(path),
@@ -1490,6 +1565,7 @@ async function configurePanel(
                   requestId: message.requestId,
                   patterns,
                   optimizationPatterns: native.optimizationPatterns(path),
+                  optimizationReport: native.optimizationReport(path),
                   scenarios: native.rewritingScenarios(path),
                 });
                 return;

@@ -54,6 +54,27 @@ refreshed against the new operators. Select patterns and run matching again to
 find further fusions; obsolete candidates are discarded.
 Graph replacement or navigation invalidates the preview.
 
+Why does a pattern not match?
+-----------------------------
+
+If **Run Matching** finds no candidates, its message points to
+**Why did matching fail?**, at the end of **Fuse**.
+Select the operator where you expected a match,
+choose one of the native patterns checked in **Native patterns**, then click
+**Explain failed match** to see the rejection reason.
+The dropdown contains only those checked patterns, not the whole catalog.
+Only this pattern/node pair is inspected; no rewrite is applied.
+
+The result explicitly says whether the pattern does not match and why,
+cannot match the operator type (``FastOpType()``), matches after all,
+or supplies no rejection reason.
+**Native source location** directly shows a clickable URL to the source file
+and line in the bundled onnx-light release; there is no extra disclosure to open.
+Changing the selected node, checked patterns or diagnostic pattern, closing Fuse,
+navigating or replacing the model discards pending results and errors.
+Global cleanup passes are not individual-node patterns and use their existing
+whole-graph preview instead.
+
 Iterative optimization and global passes
 ----------------------------------------
 
@@ -68,6 +89,21 @@ constant replacements and unused-code cleanup.
 A replacement can enable another pattern in a later iteration.
 Final native canonicalization removes redundant identities by rewiring consumers,
 without inserting replacement Identity operators.
+
+After each run, click **Show optimization report** to open a wide dialog outside
+the sidebar. Its tables show iteration and rewrite counters, phase timings in
+milliseconds, per-pattern attempts and accepted matches, rejection reasons with
+occurrence counts and native source locations, and nested-graph statistics.
+Source locations link to the corresponding release file and line on GitHub.
+The dialog opens only when requested; **Close** or Escape returns to the graph.
+The report is also available after a no-op run and when reopening Optimize.
+Counters include nested graphs; phase timings marked **root** exclude them.
+Subgraph rows include their descendants and must not be summed.
+Timings exclude viewer preparation and final canonicalization; they are not
+an end-to-end UI measurement.
+Reports belong to the current in-memory snapshot or pipeline stage.
+Unfuse restores the preceding snapshot's report; applying another rewrite
+clears it. Reports are not saved into ONNX files.
 
 .. figure:: ../_static/optimization-passes.svg
    :alt: The separate Optimize panel runs the full native optimizer. In Fuse, Run Matching previews a global pass and Fuse selected applies it. Unfuse reverses either action in one operation.
@@ -107,7 +143,8 @@ Saved rewriting scenarios
 -------------------------
 
 **Fuse → Saved rewriting scenarios** lists named ``RewritingProto`` variants
-stored in the model. Select a scenario to inspect its ordered patterns and
+stored in the model. This section starts collapsed when the model has none.
+Select a scenario to inspect its ordered patterns and
 progress, then choose **Apply next pattern** or **Apply remaining scenario**.
 The latter applies every remaining step as one operation. Each click can be
 reversed with **Unfuse last**; **Unfuse all** restores the original model.

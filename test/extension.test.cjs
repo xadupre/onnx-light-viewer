@@ -1468,12 +1468,25 @@ test("previews global passes without editing, rejects stale previews and optimiz
     requestId: 7,
   });
   assert.equal(extension.messages.at(-1).type, "optimization-info");
+  const report = extension.messages.at(-1).optimizationReport;
+  assert.ok(
+    report.patterns.some(
+      (pattern) => pattern.name === "GemmTranspose" && pattern.matches > 0,
+    ),
+  );
+  assert.ok(
+    report.patterns.some(
+      (pattern) => pattern.name === "MatMulAdd" && pattern.matches > 0,
+    ),
+  );
   assert.ok(
     extension.messages
       .at(-1)
       .matches.some((match) => match.pattern === "GemmTranspose"),
   );
   const optimized = latest().graph;
+  await extension.receive({ type: "fusion-patterns", requestId: 8 });
+  assert.deepEqual(extension.messages.at(-1).optimizationReport, report);
   const { loadModelFile } = require("../dist/graph");
   const plain = path.join(directory, "plain.onnx");
   const variants = path.join(directory, "variants.onnx");
@@ -1502,6 +1515,96 @@ test("previews global passes without editing, rejects stale previews and optimiz
   assert.deepEqual(await readFile(source), originalBytes);
   await extension.receive({ type: "undo-fusion", all: true });
   assert.deepEqual(latest().graph, original);
+  await extension.receive({ type: "fusion-patterns", requestId: 9 });
+  assert.equal(extension.messages.at(-1).optimizationReport, null);
+});
+
+test("explains native pattern matches without invalidating a matching preview", async (t) => {
+  const extension = await openExtension("fusion.onnx", undefined, true);
+  t.after(() => extension.dispose());
+  await extension.receive({
+    type: "preview-fusion",
+    pattern: "TransposeTranspose",
+    requestId: 1,
+  });
+  const preview = extension.messages.at(-1);
+  for (const [pattern, anchor, status] of [
+    ["TransposeTranspose", 0, "matched"],
+    ["TransposeTranspose", 1, "rejected"],
+    ["GemmTranspose", 0, "op-type-mismatch"],
+  ]) {
+    await extension.receive({
+      type: "explain-fusion",
+      pattern,
+      anchor,
+      requestId: 2,
+    });
+    const result = extension.messages.at(-1);
+    assert.equal(result.type, "fusion-diagnostic");
+    assert.equal(result.requestId, 2);
+    assert.equal(result.diagnostic.pattern, pattern);
+    assert.equal(result.diagnostic.anchor, anchor);
+    assert.equal(result.diagnostic.status, status);
+  }
+  await extension.receive({
+    type: "explain-fusion",
+    pattern: "TransposeTranspose",
+    anchor: -1,
+    requestId: 3,
+  });
+  assert.equal(extension.messages.at(-1).type, "fusion-diagnostic-error");
+  await extension.receive({
+    type: "apply-fusion",
+    previewId: preview.previewId,
+    candidates: [0],
+    requestId: 4,
+  });
+  assert.equal(extension.messages.at(-1).type, "fusion-info");
+});
+
+test("discards diagnosis results and errors after cancellation, navigation or replacement", async (t) => {
+  for (const invalidate of ["cancel", "navigate", "replace"]) {
+    for (const fail of [false, true]) {
+      const extension = await openExtension("fusion.onnx", undefined, true);
+      t.after(() => extension.dispose());
+      const native = extension.nativeModels.at(-1);
+      const explainFusion = native.explainFusion;
+      let release, arrived;
+      const gate = new Promise((resolve) => {
+        release = resolve;
+      });
+      const started = new Promise((resolve) => {
+        arrived = resolve;
+      });
+      native.explainFusion = async (...args) => {
+        const result = await explainFusion(...args);
+        arrived();
+        await gate;
+        if (fail) throw new Error("Late diagnostic failure");
+        return result;
+      };
+      const pending = extension.receive({
+        type: "explain-fusion",
+        pattern: "TransposeTranspose",
+        anchor: 0,
+        requestId: 71,
+      });
+      await started;
+      if (invalidate === "replace") await extension.open("relu.onnx");
+      else
+        await extension.receive({
+          type:
+            invalidate === "cancel" ? "cancel-fusion-diagnostic" : "navigate",
+          path: [],
+        });
+      const count = extension.messages.length;
+      const errors = extension.errors.length;
+      release();
+      await pending;
+      assert.equal(extension.messages.length, count);
+      assert.equal(extension.errors.length, errors);
+    }
+  }
 });
 
 test("discards optimization preview results after replacing their owning model", async (t) => {
@@ -2352,6 +2455,7 @@ test("ignores stale recovery results and errors after replacing a local model", 
     "verify",
     "undo-fusion",
     "apply-rewriting",
+    "explain-fusion",
   ]) {
     const extension = await openExtension("inference.onnx", undefined, true);
     for (const path of [[], [{ node: 9999, attribute: 0, graph: 0 }]]) {
@@ -2363,6 +2467,8 @@ test("ignores stale recovery results and errors after replacing a local model", 
         path,
         scenario: "scenario",
         all: false,
+        pattern: "TransposeTranspose",
+        anchor: 0,
       });
       await extension.open("relu.onnx");
       const count = extension.messages.length;
@@ -2429,6 +2535,7 @@ test("ignores delayed recovery results and errors after disposing the panel", as
     { type: "verify" },
     { type: "undo-fusion" },
     { type: "apply-rewriting", scenario: "scenario", all: false },
+    { type: "explain-fusion", pattern: "TransposeTranspose", anchor: 0 },
   ]) {
     const extension = await openExtension(
       "invalid-graph.onnx",
@@ -2749,6 +2856,13 @@ test("selects optimization groups and previews global passes through the real we
   const { window } = dom;
   const { document } = window;
   const requests = [];
+  const reportDialog = document.getElementById("optimization-report");
+  reportDialog.showModal = () => {
+    reportDialog.open = true;
+  };
+  reportDialog.close = () => {
+    reportDialog.open = false;
+  };
   window.HTMLCanvasElement.prototype.getContext = () => ({
     font: "",
     measureText: (text) => ({ width: text.length * 8 }),
@@ -2839,6 +2953,35 @@ test("selects optimization groups and previews global passes through the real we
   await flush();
   assert.equal(document.querySelectorAll("#fusion-matches li").length, 0);
   assert.equal(document.getElementById("apply-fusion").disabled, true);
+  document.getElementById("clear-patterns").click();
+  selectPass("SameChildren");
+  await flush();
+  assert.deepEqual(
+    [...document.getElementById("diagnostic-pattern").options].map(
+      (option) => option.value,
+    ),
+    ["SameChildren"],
+  );
+  document.getElementById("fusion-diagnostics").open = false;
+  document.getElementById("preview-fusion").click();
+  await flush();
+  assert.match(
+    document.getElementById("fusion-feedback").textContent,
+    /No matching candidates.*Why did matching fail/,
+  );
+  assert.equal(document.getElementById("fusion-diagnostics").open, true);
+  document
+    .querySelector('[data-id="node-0"]')
+    .dispatchEvent(
+      new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+    );
+  document.getElementById("explain-fusion").click();
+  await flush();
+  assert.match(
+    document.getElementById("diagnostic-feedback").textContent,
+    /Pattern does not match: no equivalent sibling nodes found/,
+  );
+  assert.equal(document.getElementById("diagnostic-source").hidden, false);
   document.getElementById("undo-fusion").click();
   document.getElementById("unfuse-last").click();
   await flush();
@@ -2863,6 +3006,24 @@ test("selects optimization groups and previews global passes through the real we
   const results = document.getElementById("optimization-results");
   assert.match(results.textContent, /MatMulAdd/);
   assert.match(results.textContent, /GemmTranspose/);
+  assert.equal(reportDialog.open, false);
+  document.getElementById("show-optimization-report").click();
+  assert.equal(reportDialog.open, true);
+  const patternRows = document.querySelectorAll(
+    "#optimization-report-patterns tbody tr",
+  );
+  assert.equal(
+    patternRows.length,
+    extension.messages.findLast(
+      (message) => message.type === "optimization-info",
+    ).optimizationReport.patterns.length,
+  );
+  assert.match(
+    document.getElementById("optimization-report-rejections").textContent,
+    /not consumed/,
+  );
+  document.getElementById("close-optimization-report").click();
+  assert.equal(reportDialog.open, false);
   [...results.querySelectorAll("button")]
     .find((button) => button.textContent.startsWith("MatMulAdd "))
     .click();

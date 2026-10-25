@@ -46,7 +46,7 @@ export function webviewHtml(
     <section id="model-view" role="tabpanel" aria-labelledby="model-tab"${initialTab === "logs" ? " hidden" : ""}>
       <header class="graph-toolbar">
         <div><a id="repository-link" href="https://github.com/xadupre/onnx-light-viewer" title="ONNX Light Viewer on GitHub" aria-label="Open the ONNX Light Viewer GitHub repository"><img src="${resource("logo.svg")}" alt="" width="24" height="24"></a><button id="refresh-shapes" class="icon-button" disabled title="Refresh shape and type information with onnx-light" aria-label="Refresh shape and type information" aria-describedby="shape-status"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2 6M20 4v7h-7"/></svg>Refresh shapes</button><button id="refresh-metadata" class="icon-button" disabled title="Recompute constants, tags and lifetimes for the displayed graph with onnx-light" aria-label="Refresh metadata for the displayed graph" aria-describedby="metadata-status"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2 6M20 4v7h-7"/></svg>Refresh metadata</button><button id="refresh-positions" class="icon-button" disabled title="Reset the portrait layout with new random horizontal positions" aria-label="Refresh node positions"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2 6M20 4v7h-7"/></svg>Refresh positions</button><button id="verify-model" class="icon-button" disabled title="Verify the entire model or all pipeline stages with onnx-light, without changing them" aria-label="Verify model" aria-describedby="verify-status"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg>Verify</button></div>
-        <div class="graph-stats" aria-live="polite"><span id="graph-summary">No model loaded</span><span id="initializer-count">0 initializers</span><span id="onnx-light-version" title="onnx-light C++ release used by this viewer">onnx-light ${onnxLightVersion}</span><span id="shape-status" role="status"></span><span id="metadata-status" role="status"></span><span id="verify-status" role="status"></span><span id="navigation-status" role="status"></span><span id="load-status" role="status"></span></div>
+        <div class="graph-stats" aria-live="polite"><span id="graph-summary">No model loaded</span><span id="initializer-count">0 initializers</span><span id="onnx-light-version" data-version="${onnxLightVersion}" title="onnx-light C++ release used by this viewer">onnx-light ${onnxLightVersion}</span><span id="shape-status" role="status"></span><span id="metadata-status" role="status"></span><span id="verify-status" role="status"></span><span id="navigation-status" role="status"></span><span id="load-status" role="status"></span></div>
         <span id="save-status" role="status"></span>
         <span id="fusion-status" role="status"></span>
         <nav id="graph-navigation" aria-label="Graph breadcrumbs" hidden></nav>
@@ -119,11 +119,14 @@ export function webviewHtml(
               <p id="optimization-status" role="status"></p>
               <ol id="optimization-results" aria-label="Applied optimization patterns"></ol>
             </details>
+            <div id="optimization-report-section" hidden>
+              <button id="show-optimization-report" disabled aria-haspopup="dialog">Show optimization report</button>
+            </div>
           </section>
           <section id="fusion-panel" class="inspector-panel" aria-labelledby="fusion-title" hidden>
             <h2 id="fusion-title" class="eyebrow panel-title">Fusion patterns</h2>
             <p>Select patterns or global passes, then click Run Matching. Check candidates and click Fuse selected. IdentityRemoval, ConstantFolding and RemoveUnusedNodes use this same workflow; each global pass applies to the whole graph and must be selected individually.</p>
-            <details id="rewriting-scenarios" class="fusion-picker" open>
+            <details id="rewriting-scenarios" class="fusion-picker">
               <summary>Saved rewriting scenarios</summary>
               <label for="rewriting-scenario">Scenario</label><select id="rewriting-scenario" disabled></select>
               <p id="rewriting-progress" role="status">No saved rewriting scenarios in this model.</p>
@@ -143,6 +146,15 @@ export function webviewHtml(
               <div class="fusion-selection-controls"><button id="select-fusions" disabled>Select all compatible</button><button id="clear-fusions" disabled>Clear selection</button></div>
               <ul id="fusion-matches" aria-label="Fusion candidates"></ul>
               <footer><button id="apply-fusion" class="primary" disabled>Fuse selected</button></footer>
+            </details>
+            <details id="fusion-diagnostics" class="fusion-picker" open>
+              <summary>Why did matching fail?</summary>
+              <p>Expected a fusion candidate but found none? Select the operator where you expected a match, choose one of the native patterns checked above, then click Explain failed match to see the rejection reason. This does not apply a rewrite. Global passes use whole-graph previews instead.</p>
+              <label for="diagnostic-pattern">Pattern</label><select id="diagnostic-pattern" disabled></select>
+              <p id="diagnostic-node">Select exactly one operator in the graph.</p>
+              <button id="explain-fusion" disabled>Explain failed match</button>
+              <p id="diagnostic-feedback" role="status"></p>
+              <section id="diagnostic-source" hidden><h3>Native source location</h3><p id="diagnostic-location" class="native-report"></p></section>
             </details>
           </section>
           <section id="open-panel" class="inspector-panel file-panel" aria-labelledby="open-title" hidden>
@@ -494,6 +506,13 @@ export function webviewHtml(
   <dialog id="operator-doc" aria-labelledby="doc-title">
     <header class="inspector-heading"><h2 id="doc-title"></h2><button id="close-doc" autofocus>Close</button></header>
     <p id="doc-version"></p><div id="doc-body"></div>
+  </dialog>
+  <dialog id="optimization-report" aria-labelledby="optimization-report-title">
+    <header class="inspector-heading"><h2 id="optimization-report-title">Global optimization report</h2><button id="close-optimization-report" autofocus>Close</button></header>
+    <p id="optimization-report-scope"></p>
+    <p>Counters include nested graphs. Phase timings marked root exclude them. Native timings are shown in milliseconds and exclude viewer preparation and final canonicalization.</p>
+    <div id="optimization-report-body"></div>
+    <p>Each subgraph's counters and elapsed time include its descendants; subgraph rows are not additive.</p>
   </dialog>
   <script nonce="${nonce}" src="${resource("vendor/markdown-it.min.js")}"></script>
   <script nonce="${nonce}" src="${resource("sidebar.js")}"></script>
