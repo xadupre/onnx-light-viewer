@@ -241,10 +241,13 @@ private:
     const uint64_t width = ol::FixedBitWidth(type);
     if (!width)
       return "Unavailable: unsupported numeric element type.";
+    uint64_t total_bits = 0;
+    if (!Multiply(count, width, total_bits))
+      return "Unavailable: " + preview_error_;
+    if (!Slice(offset, total_bits))
+      return "Unavailable: inline payload is truncated.";
     const auto shown = std::min<uint64_t>(count, 15);
     const auto bits = shown * width;
-    if (!Slice(offset, bits))
-      return "Unavailable: inline payload is truncated.";
     std::string bytes((bits + 7) / 8, '\0');
     for (uint64_t bit = 0; bit < bits; ++bit) {
       const auto source = offset + bit;
