@@ -21,6 +21,7 @@ const { withCommaLocale } = require("../build/native/Release/test_locale.node");
 const {
   layoutTensors,
   rewritingPlans,
+  traceRewritings,
 } = require("../build/native/Release/test_model_storage.node");
 const {
   decodeGraph,
@@ -1569,6 +1570,274 @@ function optimizationModel() {
     "Optimization playground",
   );
 }
+
+function rotaryModelBytes() {
+  const value = (name, shape) =>
+    Buffer.concat([
+      bytesField(1, name),
+      bytesField(
+        2,
+        bytesField(
+          1,
+          Buffer.concat([
+            varintField(1, 1),
+            bytesField(
+              2,
+              Buffer.concat(
+                shape.map((dim) => bytesField(1, varintField(1, dim))),
+              ),
+            ),
+          ]),
+        ),
+      ),
+    ]);
+  const integer = (name, number) =>
+    bytesField(
+      5,
+      Buffer.concat([
+        bytesField(1, name),
+        varintField(3, number),
+        varintField(20, 2),
+      ]),
+    );
+  const node = (op, inputs, outputs, attributes = []) =>
+    bytesField(
+      1,
+      Buffer.concat([
+        ...inputs.map((name) => bytesField(1, name)),
+        ...outputs.map((name) => bytesField(2, name)),
+        bytesField(4, op),
+        ...attributes,
+      ]),
+    );
+  return Buffer.concat([
+    varintField(1, 9),
+    bytesField(8, varintField(2, 18)),
+    bytesField(
+      7,
+      Buffer.concat([
+        node(
+          "Split",
+          ["X"],
+          ["x1", "x2"],
+          [integer("axis", 3), integer("num_outputs", 2)],
+        ),
+        node("Neg", ["x2"], ["negated"]),
+        node("Concat", ["negated", "x1"], ["rotated"], [integer("axis", 3)]),
+        node("Mul", ["rotated", "sin"], ["rotated_sin"]),
+        node("Mul", ["X", "cos"], ["scaled"]),
+        node("Add", ["rotated_sin", "scaled"], ["Y"]),
+        bytesField(2, "rotary"),
+        bytesField(11, value("X", [1, 2, 3, 8])),
+        bytesField(11, value("cos", [3, 8])),
+        bytesField(11, value("sin", [3, 8])),
+        bytesField(12, value("Y", [1, 2, 3, 8])),
+      ]),
+    ),
+  ]);
+}
+
+function tracingModelBytes(names, edits) {
+  const node = (name) =>
+    Buffer.concat([
+      bytesField(1, "x"),
+      bytesField(2, name),
+      bytesField(3, name),
+      bytesField(4, "Relu"),
+    ]);
+  return Buffer.concat([
+    bytesField(
+      7,
+      Buffer.concat(names.map((name) => bytesField(1, node(name)))),
+    ),
+    bytesField(
+      1001,
+      Buffer.concat([
+        bytesField(1, "trace"),
+        bytesField(
+          2,
+          Buffer.concat(
+            edits.map(({ removed, added, nested }) =>
+              bytesField(
+                1,
+                Buffer.concat([
+                  bytesField(1, "Trace test"),
+                  ...(nested ? [bytesField(2, "nested")] : []),
+                  ...removed.map((index) => varintField(3, index)),
+                  ...added.map(([name]) => bytesField(5, node(name))),
+                  ...added.map(([, position]) => varintField(6, position)),
+                ]),
+              ),
+            ),
+          ),
+        ),
+      ]),
+    ),
+  ]);
+}
+
+test("resolves rewrite provenance through replacements, deletions and reordering", () => {
+  const bytes = tracingModelBytes(
+    ["a", "b", "c", "d"],
+    [
+      { removed: [0, 2], added: [["f", 1]] },
+      {
+        removed: [1],
+        added: [
+          ["f", 0],
+          ["g", 2],
+        ],
+      },
+      { removed: [2, 3], added: [["h", 1]] },
+      { removed: [0], added: [] },
+      { removed: [999], added: [], nested: true },
+      { removed: [], added: [] },
+      {
+        removed: [0, 1],
+        added: [
+          ["b", 0],
+          ["h", 1],
+        ],
+      },
+    ],
+  );
+  const result = traceRewritings(bytes);
+  assert.deepEqual(result.order, ["b", "h"]);
+  assert.deepEqual(result.history, [
+    [[], [0], [], [1]],
+    [[], [1], [1], [], [], [], [0, 1]],
+  ]);
+  const reference = traceRewritings(bytes, true);
+  assert.deepEqual(result.order, reference.order);
+  assert.deepEqual(result.history, reference.history);
+});
+
+test("tracks independent rewrites without changing earlier selections", () => {
+  const names = Array.from({ length: 256 }, (_, i) => `original-${i}`);
+  const bytes = tracingModelBytes(
+    names,
+    names.map((_, i) => ({
+      removed: [i],
+      added: [[`replacement-${i}`, i]],
+    })),
+  );
+  const result = traceRewritings(bytes);
+  assert.deepEqual(
+    result.order,
+    names.map((_, i) => `replacement-${i}`),
+  );
+  const selections = names.map((_, i) => [i]);
+  assert.deepEqual(result.history, [selections, selections]);
+  const reference = traceRewritings(bytes, true);
+  assert.deepEqual(result.history, reference.history);
+});
+
+test("agrees with sequential tracing across mixed deterministic rewrite sequences", () => {
+  const names = Array.from({ length: 32 }, (_, i) => `original-${i}`);
+  let current = [...names];
+  let seed = 42;
+  const random = (limit) => {
+    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+    return seed % limit;
+  };
+  const edits = [];
+  for (let step = 0; step < 200; ++step) {
+    const removed = [];
+    const count = Math.min(current.length, random(4));
+    while (removed.length < count) {
+      const index = random(current.length);
+      if (!removed.includes(index)) removed.push(index);
+    }
+    const keep = current.filter((_, i) => !removed.includes(i));
+    const size = random(4);
+    const positions = [];
+    while (positions.length < size) {
+      const index = random(keep.length + size);
+      if (!positions.includes(index)) positions.push(index);
+    }
+    positions.sort((a, b) => a - b);
+    const added = positions.map((position, i) => [
+      i === 0 && removed.length && random(2)
+        ? current[removed[0]]
+        : `added-${step}-${i}`,
+      position,
+    ]);
+    edits.push({ removed, added });
+    for (const [name, position] of added) keep.splice(position, 0, name);
+    current = keep;
+  }
+  const bytes = tracingModelBytes(names, edits);
+  const result = traceRewritings(bytes);
+  const reference = traceRewritings(bytes, true);
+  assert.deepEqual(result.order, current);
+  assert.deepEqual(result.order, reference.order);
+  assert.deepEqual(result.history, reference.history);
+});
+
+test("optimizes function-generating patterns and replays their declarations", async () => {
+  const source = loadModel(rotaryModelBytes(), "rotary");
+  const optimized = await source.optimize(
+    ["FunctionHalfRotaryEmbedding"],
+    "Optimize",
+  );
+  optimized.verify();
+  const [call] = optimized.graph().nodes;
+  assert.equal(call.opType, "HalfRotaryEmbedding");
+  assert.equal(call.domain, "intermediate");
+  assert.ok(optimized.graph(false, call.function.path).nodes.length > 1);
+  assert.deepEqual(optimized.fusionHistory()[0].matches.at(-1).nodes, [0]);
+  assert.deepEqual(optimized.undoFusion().graph(), source.graph());
+  const bytes = Buffer.from(
+    await optimized.serialize(undefined, undefined, true),
+  );
+  const [plan] = rewritingPlans(bytes);
+  assert.deepEqual(
+    loadModel(plan.bytes, "replayed").graph(),
+    optimized.graph(),
+  );
+  const saved = loadModel(bytes, "saved");
+  const replayed = await saved.applyRewritingScenario(
+    saved.rewritingScenarios()[0].name,
+    true,
+  );
+  assert.deepEqual(replayed.graph(), optimized.graph());
+  assert.deepEqual(
+    replayed.graph(false, replayed.graph().nodes[0].function.path),
+    optimized.graph(false, call.function.path),
+  );
+});
+
+test("rejects empty global-pass applications without corrupting pipeline history", async () => {
+  const relu = loadModel(modelBytes("relu.onnx"), "relu");
+  const source = loadModel(
+    pipelineBytes({
+      prefill: readFileSync(
+        path.join(__dirname, "../examples/optimization.onnx"),
+      ),
+      decode: modelBytes("relu.onnx"),
+    }),
+    "cleanup.pipe-onnx",
+  );
+  const prefill = [{ pipeline: "prefill" }];
+  const edited = await source.applyFusion("IdentityRemoval", [0], prefill);
+  const history = edited.fusionHistory();
+  for (const pass of [
+    "IdentityRemoval",
+    "ConstantFolding",
+    "RemoveUnusedNodes",
+  ]) {
+    await assert.rejects(relu.applyFusion(pass, [0]), /no longer applicable/);
+    await assert.rejects(
+      edited.applyFusion(pass, [0], [{ pipeline: "decode" }]),
+      /no longer applicable/,
+    );
+    assert.deepEqual(edited.fusionHistory(), history);
+  }
+  assert.deepEqual(
+    edited.undoFusion().graph(false, prefill),
+    source.graph(false, prefill),
+  );
+});
 
 test("previews global cleanup passes independently, folds real values and preserves undo and saved rewritings", async () => {
   const source = optimizationModel();

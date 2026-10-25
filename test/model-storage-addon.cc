@@ -1,5 +1,7 @@
 #include "../native/model_storage.h"
+#include "../native/rewriting_trace.h"
 
+#include <chrono>
 #include <map>
 #include <onnx_core/builder/graph_builder.h>
 #include <onnx_extensions/kernels/kernel_dispatch_table.h>
@@ -144,7 +146,60 @@ Napi::Value RewritingPlans(const Napi::CallbackInfo &info) {
   }
 }
 
+Napi::Value TraceRewritings(const Napi::CallbackInfo &info) {
+  try {
+    const auto bytes = info[0].As<Napi::Buffer<uint8_t>>();
+    ol::ModelProto model;
+    if (!model.ParseFromString(
+            std::string(reinterpret_cast<const char *>(bytes.Data()), bytes.Length())))
+      throw std::runtime_error("Could not parse test model.");
+    const auto &plan = model.rewritings().at("trace");
+    std::vector<std::vector<viewer::StoredModel::FusionMatch>> history(2);
+    for (size_t i = 0; i < model.graph().node().size(); ++i)
+      history[0].push_back({"existing", {i}});
+    std::vector<viewer::FusionNodeKey> order;
+    const auto start = std::chrono::steady_clock::now();
+    if (info[1].IsBoolean() && info[1].As<Napi::Boolean>().Value()) {
+      for (const auto &node : model.graph().node())
+        order.push_back(viewer::NodeOrderKey(node));
+      for (const auto &edit : plan.rewrites())
+        history.back().push_back(
+            {edit.pattern_name().value(), viewer::TraceRewriting(edit, order, history)});
+    } else {
+      viewer::RewritingTrace trace(model.graph());
+      for (const auto &edit : plan.rewrites())
+        history.back().push_back({edit.pattern_name().value(), trace.Apply(edit)});
+      order = trace.Finish(history);
+    }
+    const auto elapsed =
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+    auto result = Napi::Object::New(info.Env());
+    auto names = Napi::Array::New(info.Env(), order.size());
+    for (size_t i = 0; i < order.size(); ++i)
+      names.Set(i, std::get<3>(order[i]));
+    result.Set("order", names);
+    auto operations = Napi::Array::New(info.Env(), history.size());
+    for (size_t i = 0; i < history.size(); ++i) {
+      auto matches = Napi::Array::New(info.Env(), history[i].size());
+      for (size_t j = 0; j < history[i].size(); ++j) {
+        auto nodes = Napi::Array::New(info.Env(), history[i][j].nodes.size());
+        for (size_t k = 0; k < history[i][j].nodes.size(); ++k)
+          nodes.Set(k, history[i][j].nodes[k]);
+        matches.Set(j, nodes);
+      }
+      operations.Set(i, matches);
+    }
+    result.Set("history", operations);
+    result.Set("milliseconds", elapsed);
+    return result;
+  } catch (const std::exception &error) {
+    Napi::Error::New(info.Env(), error.what()).ThrowAsJavaScriptException();
+    return info.Env().Undefined();
+  }
+}
+
 Napi::Object Init(Napi::Env env, Napi::Object exports) {
+  exports.Set("traceRewritings", Napi::Function::New(env, TraceRewritings));
   exports.Set("rewritingPlans", Napi::Function::New(env, RewritingPlans));
   exports.Set("tensorVisits", Napi::Function::New(env, TensorVisits));
   exports.Set("layoutTensors", Napi::Function::New(env, LayoutTensors));

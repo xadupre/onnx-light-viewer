@@ -1,6 +1,7 @@
 /** @file Pattern enumeration, preview and application on independent snapshots. */
 #include "model_io.h"
 #include "model_storage.h"
+#include "rewriting_trace.h"
 #include "tensor_preview.h"
 #include <algorithm>
 #include <cmath>
@@ -17,19 +18,6 @@
 
 namespace onnx_light_viewer {
 namespace {
-
-using FusionNodeKey = std::tuple<std::string, std::string, std::string, std::string,
-                                 std::vector<std::string>, std::vector<std::string>>;
-
-FusionNodeKey NodeOrderKey(const ol::NodeProto &node) {
-  std::vector<std::string> inputs, outputs;
-  for (const auto &value : node.input())
-    inputs.push_back(value.value());
-  for (const auto &value : node.output())
-    outputs.push_back(value.value());
-  return {node.domain().value(), node.op_type().value(), node.overload().value(),
-          node.name().value(),   std::move(inputs),      std::move(outputs)};
-}
 
 std::vector<size_t> FinalizedNodeOrder(const ol::ModelProto &model,
                                        const std::vector<FusionNodeKey> &inserted_order) {
@@ -75,58 +63,6 @@ void FinalizeCapturedPlan(const ol::ModelProto &model, ol::RewritingProto &plan,
     *reorder->add_added_nodes() = final_nodes[i].SharedCopy();
     reorder->add_added_nodes_positions(i);
   }
-}
-
-std::vector<size_t> TraceRewriting(const ol::LocalRewritingProto &edit,
-                                   std::vector<FusionNodeKey> &nodes,
-                                   std::vector<std::vector<StoredModel::FusionMatch>> &history) {
-  if (!edit.graph_path().empty())
-    return {};
-  const std::set<size_t> removed(edit.matched_nodes().begin(), edit.matched_nodes().end());
-  if (removed.size() > nodes.size())
-    throw std::runtime_error("Invalid rewriting node count.");
-  const size_t count = nodes.size() - removed.size() + edit.added_nodes_size();
-  std::vector<std::optional<FusionNodeKey>> next(count);
-  std::vector<size_t> added;
-  for (size_t i = 0; i < edit.added_nodes().size(); ++i) {
-    const auto position = edit.added_nodes_positions(i);
-    if (position >= count || next[position])
-      throw std::runtime_error("Invalid rewriting insertion position.");
-    next[position] = NodeOrderKey(edit.added_nodes(i));
-    added.push_back(position);
-  }
-  std::vector<std::vector<size_t>> destinations(nodes.size());
-  size_t position = 0;
-  for (size_t i = 0; i < nodes.size(); ++i) {
-    if (removed.contains(i)) {
-      for (const auto target : added)
-        if (nodes[i] == *next[target])
-          destinations[i].push_back(target);
-      if (destinations[i].empty())
-        destinations[i] = added;
-    } else {
-      while (position < count && next[position])
-        ++position;
-      if (position == count)
-        throw std::runtime_error("Invalid rewriting node positions.");
-      next[position] = nodes[i];
-      destinations[i].push_back(position++);
-    }
-  }
-  for (auto &operation : history)
-    for (auto &match : operation) {
-      std::set<size_t> mapped;
-      for (const auto node : match.nodes)
-        mapped.insert(destinations.at(node).begin(), destinations.at(node).end());
-      match.nodes.assign(mapped.begin(), mapped.end());
-    }
-  nodes.clear();
-  for (auto &node : next) {
-    if (!node)
-      throw std::runtime_error("Incomplete rewriting node order.");
-    nodes.push_back(std::move(*node));
-  }
-  return added;
 }
 
 Napi::Object FusionNode(Napi::Env env, const ol::NodeProto &node) {
@@ -289,6 +225,8 @@ public:
         const auto original = snapshot_.SharedCopy();
         operation_ = patterns_[0];
         ApplyTransformation();
+        if (anchors_ && plan_.rewrites().empty())
+          throw std::runtime_error("The selected fusion preview is no longer applicable.");
         if (!anchors_) {
           if (!plan_.rewrites().empty()) {
             const auto &edit = plan_.rewrites(0);
@@ -553,6 +491,36 @@ private:
     }
     if (plan_.rewrites().empty())
       return;
+    if (!plan_.added_functions().empty()) {
+      ol::ModelProto declarations;
+      declarations.mutable_graph()->set_name("Optimization function declarations");
+      declarations.ref_struct_types() = snapshot_.struct_types();
+      declarations.ref_opset_import() = snapshot_.opset_import();
+      declarations.ref_functions() = snapshot_.functions();
+      for (const auto &function : plan_.added_functions()) {
+        auto found = std::find_if(declarations.ref_functions().begin(),
+                                  declarations.ref_functions().end(), [&](const auto &other) {
+                                    return function.name() == other.name() &&
+                                           function.domain() == other.domain() &&
+                                           function.overload() == other.overload();
+                                  });
+        if (found == declarations.ref_functions().end())
+          *declarations.add_functions() = function.SharedCopy();
+        else
+          *found = function.SharedCopy();
+      }
+      const auto normalized = builder::GraphBuilder(declarations).ToModel(original.ir_version());
+      for (auto &function : plan_.ref_added_functions()) {
+        const auto found = std::find_if(
+            normalized.functions().begin(), normalized.functions().end(), [&](const auto &other) {
+              return function.name() == other.name() && function.domain() == other.domain() &&
+                     function.overload() == other.overload();
+            });
+        if (found == normalized.functions().end())
+          throw std::runtime_error("Optimization lost a function declaration.");
+        function = found->SharedCopy();
+      }
+    }
     for (const auto &function : snapshot_.functions()) {
       const auto found = std::find_if(
           plan_.added_functions().begin(), plan_.added_functions().end(), [&](const auto &other) {
@@ -561,8 +529,26 @@ private:
           });
       if (found == plan_.added_functions().end())
         *plan_.add_added_functions() = function.SharedCopy();
-      else if (!function.Equals(*found))
-        throw std::runtime_error("Optimization produced conflicting function declarations.");
+      else {
+        auto expected = function.SharedCopy();
+        auto actual = found->SharedCopy();
+        const auto sort_imports = [](auto &definition) {
+          std::vector<ol::OperatorSetIdProto> imports(definition.opset_import().begin(),
+                                                      definition.opset_import().end());
+          std::vector<std::pair<std::string, size_t>> order;
+          for (size_t i = 0; i < imports.size(); ++i)
+            order.emplace_back(imports[i].domain().value(), i);
+          std::sort(order.begin(), order.end());
+          for (size_t i = 0; i < order.size(); ++i)
+            definition.ref_opset_import()[i] = std::move(imports[order[i].second]);
+        };
+        sort_imports(expected);
+        sort_imports(actual);
+        std::string difference;
+        if (!expected.Equals(actual, &difference))
+          throw std::runtime_error("Optimization produced conflicting function declarations: " +
+                                   function.name().value() + ": " + difference);
+      }
     }
     for (const auto &opset : snapshot_.opset_import()) {
       const auto found = std::find_if(
@@ -573,14 +559,13 @@ private:
       else if (opset.version() != found->version())
         throw std::runtime_error("Optimization produced conflicting opset declarations.");
     }
-    std::vector<FusionNodeKey> order;
-    for (const auto &node : original.graph().node())
-      order.push_back(NodeOrderKey(node));
+    RewritingTrace trace(original.graph());
     history_.emplace_back();
     for (const auto &edit : plan_.rewrites()) {
-      auto nodes = TraceRewriting(edit, order, history_);
+      auto nodes = trace.Apply(edit);
       history_.back().push_back({edit.pattern_name().value(), std::move(nodes)});
     }
+    const auto order = trace.Finish(history_);
     auto replayed = builder::GraphBuilder(original).ApplyRewritings(plan_);
     snapshot_ = replayed.ToModel(original.ir_version());
     ol::VerifyModel(snapshot_);
