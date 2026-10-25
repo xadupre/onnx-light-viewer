@@ -1571,6 +1571,215 @@ function optimizationModel() {
   );
 }
 
+function nestedOptimizationModelBytes(
+  depth,
+  alias = false,
+  lateMetadata = false,
+) {
+  const value = (name, type = 1, dims = [2, 2]) =>
+    Buffer.concat([
+      bytesField(1, name),
+      bytesField(
+        2,
+        bytesField(
+          1,
+          Buffer.concat([
+            varintField(1, type),
+            bytesField(
+              2,
+              Buffer.concat(
+                dims.map((dim) => bytesField(1, varintField(1, dim))),
+              ),
+            ),
+          ]),
+        ),
+      ),
+    ]);
+  const node = (op, inputs, output, attributes = []) =>
+    bytesField(
+      1,
+      Buffer.concat([
+        ...inputs.map((name) => bytesField(1, name)),
+        bytesField(2, output),
+        bytesField(4, op),
+        ...attributes,
+      ]),
+    );
+  const graph = (level, output) =>
+    Buffer.concat([
+      ...(level
+        ? [
+            node(
+              "If",
+              ["cond"],
+              output,
+              ["then_branch", "else_branch"].map((name) =>
+                bytesField(
+                  5,
+                  Buffer.concat([
+                    bytesField(1, name),
+                    bytesField(6, graph(level - 1, "result")),
+                    varintField(20, 5),
+                  ]),
+                ),
+              ),
+            ),
+          ]
+        : [
+            node("Identity", [alias ? "source" : "x"], "copied"),
+            node("MatMul", ["copied", "w"], "product"),
+            node("Add", ["product", "b"], output),
+          ]),
+      bytesField(2, "branch"),
+      bytesField(12, value(output)),
+    ]);
+  return Buffer.concat([
+    varintField(1, 9),
+    bytesField(8, varintField(2, 18)),
+    bytesField(
+      7,
+      Buffer.concat([
+        ...(lateMetadata
+          ? ["xt", "a"].map((output, i) =>
+              node("Transpose", [i ? "xt" : "x"], output, [
+                bytesField(
+                  5,
+                  Buffer.concat([
+                    bytesField(1, "perm"),
+                    varintField(8, 1),
+                    varintField(8, 0),
+                    varintField(20, 7),
+                  ]),
+                ),
+              ]),
+            )
+          : []),
+        ...(alias ? [node("Identity", ["x"], "source")] : []),
+        graph(depth, "y"),
+        ...(lateMetadata
+          ? [
+              node("Shape", ["a"], "metadata"),
+              bytesField(12, value("a")),
+              bytesField(12, value("metadata", 7, [2])),
+            ]
+          : []),
+        ...["x", "w", "b"].map((name) => bytesField(11, value(name))),
+        bytesField(11, value("cond", 9, [])),
+      ]),
+    ),
+  ]);
+}
+
+function inspectScopedGraphs(model, path = []) {
+  const graph = model.graph(false, path);
+  return {
+    graph,
+    children: graph.nodes.flatMap((node) =>
+      node.attributes.flatMap((attribute) =>
+        (attribute.graphs ?? []).map((child) =>
+          inspectScopedGraphs(model, child.path),
+        ),
+      ),
+    ),
+  };
+}
+
+test("preserves nested scope identities through canonicalization, fusion and rewriting replay", async () => {
+  for (const [depth, alias] of [
+    [1, false],
+    [2, true],
+  ]) {
+    const source = loadModel(
+      nestedOptimizationModelBytes(depth, alias),
+      "nested",
+    );
+    const original = inspectScopedGraphs(source);
+    const preview = await source.previewFusion("IdentityRemoval");
+    assert.deepEqual(preview.matches[0].nodes, alias ? [0, 1] : [0]);
+    assert.deepEqual(
+      preview.matches[0].replacement.map((node) => node.opType),
+      ["If"],
+    );
+    const cleaned = await preview.model.applyFusion("IdentityRemoval", [0]);
+    const optimized = await source.optimize(["MatMulAdd"], "Optimize");
+    const continued = await cleaned.optimize(["MatMulAdd"], "Optimize");
+    const result = inspectScopedGraphs(optimized);
+    assert.deepEqual(inspectScopedGraphs(continued), result);
+    const leaves = (tree) =>
+      tree.children.length
+        ? tree.children.flatMap(leaves)
+        : [tree.graph.nodes.map((node) => node.opType)];
+    assert.deepEqual(
+      leaves(result),
+      Array.from({ length: 2 ** depth }, () => ["Gemm"]),
+    );
+    assert.equal(
+      optimized
+        .fusionHistory()[0]
+        .matches.filter((match) => match.pattern === "MatMulAdd").length,
+      2 ** depth,
+    );
+    assert.deepEqual(inspectScopedGraphs(optimized.undoFusion()), original);
+    assert.deepEqual(inspectScopedGraphs(source), original);
+    for (const model of [optimized, continued]) {
+      model.verify();
+      const bytes = Buffer.from(
+        await model.serialize(undefined, undefined, true),
+      );
+      const [plan] = rewritingPlans(bytes);
+      assert.deepEqual(
+        inspectScopedGraphs(loadModel(plan.bytes, "replayed")),
+        result,
+      );
+      const saved = loadModel(bytes, "saved");
+      const replayed = await saved.applyRewritingScenario(
+        saved.rewritingScenarios()[0].name,
+        true,
+      );
+      assert.deepEqual(inspectScopedGraphs(replayed), result);
+    }
+  }
+});
+
+test("replays nested optimization after a fusion finalizes the parent node order", async () => {
+  const source = loadModel(
+    nestedOptimizationModelBytes(1, false, true),
+    "nested-metadata",
+  );
+  const fused = await source.applyFusion("TransposeTranspose", [0]);
+  assert.deepEqual(
+    fused.graph().nodes.map((node) => node.opType),
+    ["Identity", "Shape", "If"],
+  );
+  const optimized = await fused.optimize(["MatMulAdd"], "Optimize");
+  assert.deepEqual(
+    inspectScopedGraphs(optimized).children.map((child) =>
+      child.graph.nodes.map((node) => node.opType),
+    ),
+    [["Gemm"], ["Gemm"]],
+  );
+  assert.deepEqual(
+    inspectScopedGraphs(optimized.undoFusion()),
+    inspectScopedGraphs(fused),
+  );
+  const bytes = Buffer.from(
+    await optimized.serialize(undefined, undefined, true),
+  );
+  const [plan] = rewritingPlans(bytes);
+  assert.deepEqual(
+    inspectScopedGraphs(loadModel(plan.bytes, "replayed")),
+    inspectScopedGraphs(optimized),
+  );
+  const saved = loadModel(bytes, "saved");
+  const scenario = saved.rewritingScenarios()[0];
+  assert.ok(scenario.steps.some((step) => step.pattern.startsWith("Finalize")));
+  const replayed = await saved.applyRewritingScenario(scenario.name, true);
+  assert.deepEqual(
+    inspectScopedGraphs(replayed),
+    inspectScopedGraphs(optimized),
+  );
+});
+
 function rotaryModelBytes() {
   const value = (name, shape) =>
     Buffer.concat([

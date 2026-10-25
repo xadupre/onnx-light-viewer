@@ -41,7 +41,8 @@ std::vector<size_t> FinalizedNodeOrder(const ol::ModelProto &model,
 
 void FinalizeCapturedPlan(const ol::ModelProto &model, ol::RewritingProto &plan,
                           std::vector<std::vector<StoredModel::FusionMatch>> &history,
-                          const std::vector<FusionNodeKey> &inserted_order) {
+                          const std::vector<FusionNodeKey> &inserted_order,
+                          const ol::core::builder::GraphBuilder &builder) {
   const auto permutation = FinalizedNodeOrder(model, inserted_order);
   bool reordered = false;
   for (size_t i = 0; i < permutation.size(); ++i)
@@ -61,6 +62,7 @@ void FinalizeCapturedPlan(const ol::ModelProto &model, ol::RewritingProto &plan,
   for (size_t i = 0; i < final_nodes.size(); ++i) {
     reorder->add_matched_nodes(i);
     *reorder->add_added_nodes() = final_nodes[i].SharedCopy();
+    reorder->ref_added_nodes()[i].ref_attribute() = builder.Nodes()[i].attribute();
     reorder->add_added_nodes_positions(i);
   }
 }
@@ -89,13 +91,38 @@ Napi::Object FusionNode(Napi::Env env, const ol::NodeProto &node) {
   return result;
 }
 
-bool CaptureTransformation(const ol::ModelProto &before, const ol::ModelProto &after,
-                           const std::string &name, ol::RewritingProto &plan) {
+using TransformationScopes = std::map<std::vector<std::string>, ol::GraphProto>;
+
+TransformationScopes CaptureScopes(const ol::core::builder::GraphBuilder &builder) {
+  // Keep native *_ref attributes so parent replacements reuse existing subgraphs.
+  TransformationScopes scopes;
+  const auto visit = [&](const auto &self, const auto &scope,
+                         const std::vector<std::string> &path) -> void {
+    auto &graph = scopes[path];
+    for (const auto &node : scope.Nodes())
+      *graph.add_node() = node.SharedCopy();
+    for (const auto &tensor : scope.Initializers())
+      *graph.add_initializer() = tensor.SharedCopy();
+    for (const auto &tensor : scope.ExtendedInitializers())
+      *graph.add_extended_initializer() = tensor.SharedCopy();
+    for (const auto &child : scope.Subgraphs()) {
+      auto nested = path;
+      nested.push_back(child->name());
+      self(self, *child, nested);
+    }
+  };
+  visit(visit, builder, {});
+  return scopes;
+}
+
+bool CaptureTransformation(const ol::GraphProto &original, const ol::GraphProto &updated,
+                           const std::string &name, ol::RewritingProto &plan,
+                           const std::vector<std::string> &path) {
   ol::LocalRewritingProto edit;
   edit.set_pattern_name(name);
+  for (const auto &scope : path)
+    edit.add_graph_path(scope);
   std::map<FusionNodeKey, std::vector<size_t>> positions;
-  const auto &original = before.graph();
-  const auto &updated = after.graph();
   for (size_t i = 0; i < original.node().size(); ++i)
     positions[NodeOrderKey(original.node(i))].push_back(i);
   std::set<size_t> retained;
@@ -228,15 +255,6 @@ public:
         if (anchors_ && plan_.rewrites().empty())
           throw std::runtime_error("The selected fusion preview is no longer applicable.");
         if (!anchors_) {
-          if (!plan_.rewrites().empty()) {
-            const auto &edit = plan_.rewrites(0);
-            Match match;
-            match.anchor = 0;
-            for (const auto node : edit.matched_nodes())
-              match.nodes.push_back(node);
-            match.replacement = edit.added_nodes();
-            matches_.push_back(std::move(match));
-          }
           snapshot_ = original.SharedCopy();
           history_ = source_->fusion_history;
           operation_.clear();
@@ -376,7 +394,7 @@ public:
       auto rewritten = original.ApplyRewritings(plan);
       snapshot_ = rewritten.ToModel(snapshot_.ir_version());
       ol::VerifyModel(snapshot_);
-      FinalizeCapturedPlan(snapshot_, plan, history_, inserted_order);
+      FinalizeCapturedPlan(snapshot_, plan, history_, inserted_order, rewritten);
       plan_ = std::move(plan);
     } catch (const std::exception &error) {
       SetError(error.what());
@@ -446,10 +464,57 @@ private:
     namespace builder = ol::core::builder;
     const auto original = snapshot_.SharedCopy();
     builder::GraphBuilder graph(snapshot_);
+    auto scopes = CaptureScopes(graph);
     const auto capture = [&](const std::string &name) {
       auto updated = snapshot_.SharedCopy();
       *updated.mutable_graph() = graph.BuildGraph();
-      CaptureTransformation(snapshot_, updated, name, plan_);
+      auto updated_scopes = CaptureScopes(graph);
+      // Rewrite children before removing enclosing values they previously captured.
+      for (auto scope = updated_scopes.rbegin(); scope != updated_scopes.rend(); ++scope) {
+        const auto before = scopes.find(scope->first);
+        if (before == scopes.end())
+          throw std::runtime_error("Global cleanup introduced an unsupported subgraph.");
+        CaptureTransformation(before->second, scope->second, name, plan_, scope->first);
+      }
+      if (!anchors_ && patterns_.size() == 1 && IsGlobalPass(patterns_[0]) &&
+          !plan_.rewrites().empty()) {
+        Match match;
+        match.anchor = 0;
+        std::set<size_t> affected;
+        std::set<FusionNodeKey> replacements;
+        const auto &root = scopes.at({});
+        std::map<std::string, std::vector<size_t>> owners;
+        for (size_t i = 0; i < root.node().size(); ++i)
+          for (const auto &attribute : root.node(i).attribute())
+            if (attribute.name().value().ends_with("_ref")) {
+              if (attribute.type() == ol::AttributeProto::STRING)
+                owners[attribute.s().value()].push_back(i);
+              else if (attribute.type() == ol::AttributeProto::STRINGS)
+                for (const auto &value : attribute.strings())
+                  owners[std::string(value)].push_back(i);
+            }
+        for (const auto &edit : plan_.rewrites()) {
+          if (edit.graph_path().empty()) {
+            affected.insert(edit.matched_nodes().begin(), edit.matched_nodes().end());
+            for (const auto &node : edit.added_nodes())
+              replacements.insert(NodeOrderKey(node));
+          } else {
+            const auto &child = edit.graph_path(0).value();
+            const auto found = owners.find(child);
+            if (found != owners.end())
+              for (const auto i : found->second) {
+                affected.insert(i);
+                replacements.insert(NodeOrderKey(root.node(i)));
+              }
+          }
+        }
+        match.nodes.assign(affected.begin(), affected.end());
+        for (const auto &node : updated.graph().node())
+          if (replacements.contains(NodeOrderKey(node)))
+            match.replacement.push_back(node.SharedCopy());
+        matches_.push_back(std::move(match));
+      }
+      scopes = std::move(updated_scopes);
       snapshot_ = std::move(updated);
       graph = builder::GraphBuilder(snapshot_);
     };
@@ -479,6 +544,7 @@ private:
       for (const auto &edit : rewrites.rewrites())
         *plan_.add_rewrites() = edit.SharedCopy();
       const auto optimized_graph = graph.BuildGraph();
+      scopes = CaptureScopes(graph);
       snapshot_ = graph.ToModel(snapshot_.ir_version());
       *snapshot_.mutable_graph() = optimized_graph;
       PreserveFunctionBodies(snapshot_, original);
@@ -569,7 +635,7 @@ private:
     auto replayed = builder::GraphBuilder(original).ApplyRewritings(plan_);
     snapshot_ = replayed.ToModel(original.ir_version());
     ol::VerifyModel(snapshot_);
-    FinalizeCapturedPlan(snapshot_, plan_, history_, order);
+    FinalizeCapturedPlan(snapshot_, plan_, history_, order, replayed);
   }
 
   void ApplyScenario() {
@@ -608,7 +674,7 @@ private:
     }
     snapshot_ = rewritten.ToModel(snapshot_.ir_version());
     ol::VerifyModel(snapshot_);
-    FinalizeCapturedPlan(snapshot_, plan_, history_, order);
+    FinalizeCapturedPlan(snapshot_, plan_, history_, order, rewritten);
   }
 
   struct Match {
