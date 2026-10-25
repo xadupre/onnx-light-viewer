@@ -4,6 +4,7 @@
 
 # ONNX Light Viewer
 
+[![Uses ONNX](media/onnx-badge.svg)](https://onnx.ai/)
 [![CI](https://github.com/xadupre/onnx-light-viewer/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/xadupre/onnx-light-viewer/actions/workflows/tests.yml)
 [![Code coverage](https://codecov.io/gh/xadupre/onnx-light-viewer/branch/main/graph/badge.svg)](https://codecov.io/gh/xadupre/onnx-light-viewer)
 
@@ -81,5 +82,20 @@ Sphinx documentation: [getting started](docs/getting_started.rst),
 [implemented features and viewer controls](docs/features.rst),
 [application design and source guide](docs/design.rst), and
 [development, tests and documentation build](docs/development.rst).
+
+## Reusable ONNX badge
+
+Applications using ONNX can copy [the SVG badge](media/onnx-badge.svg) into their
+repository and add it to their README:
+
+```markdown
+[![Uses ONNX](media/onnx-badge.svg)](https://onnx.ai/)
+```
+
+The badge is self-contained and includes a miniature of the
+[ONNX logo](https://github.com/onnx/onnx/blob/main/docs/docsgen/source/_static/ONNX-Logo.svg)
+(copyright ONNX Project Contributors, Apache-2.0). Keep the attribution embedded
+in the SVG when reusing it. The badge indicates ONNX usage, not official
+certification or endorsement.
 
 Licensed under [Apache-2.0](LICENSE).
