@@ -1571,6 +1571,96 @@ function optimizationModel() {
   );
 }
 
+test("explains one native pattern/node without changing matching, history or the source model", async () => {
+  const source = loadModel(modelBytes("fusion.onnx"), "fusion");
+  const original = source.graph();
+  const matched = await source.explainFusion("TransposeTranspose", 0);
+  assert.equal(matched.status, "matched");
+  assert.equal(matched.pattern, "TransposeTranspose");
+  assert.equal(matched.anchor, 0);
+  const rejected = await source.explainFusion("TransposeTranspose", 1);
+  assert.equal(rejected.status, "rejected");
+  assert.equal(rejected.anchor, 1);
+  assert.equal(rejected.candidate, 1);
+  assert.match(rejected.reason, /not consumed by another Transpose/);
+  assert.match(rejected.source.file, /transpose_pattern\.cc$/);
+  assert.ok(rejected.source.line > 0);
+  const incompatible = await source.explainFusion("TransposeTranspose", 4);
+  assert.equal(incompatible.status, "op-type-mismatch");
+  assert.match(incompatible.reason, /MatMul.*FastOpType.*Transpose/);
+  assert.equal(incompatible.source, undefined);
+  assert.deepEqual(source.graph(), original);
+  assert.equal(source.fusionCount(), 0);
+  for (const index of [-1, 5, 0.5, NaN, Infinity])
+    assert.throws(
+      () => source.explainFusion("TransposeTranspose", index),
+      /Invalid diagnostic node index/,
+    );
+  assert.throws(() => source.explainFusion("unknown", 0), /Unknown|registered/);
+  const preview = await source.previewFusion("TransposeTranspose");
+  assert.deepEqual(
+    preview.matches.map((match) => match.anchor),
+    [0, 2],
+  );
+  const fused = await preview.model.applyFusion("TransposeTranspose", [0]);
+  assert.equal(fused.fusionCount(), 1);
+});
+
+test("retains native optimizer reports for changed and no-op snapshots, clone and undo", async () => {
+  const source = optimizationModel();
+  assert.equal(source.optimizationReport(), null);
+  const optimized = await source.optimize(["TransposeTranspose"], "Optimize");
+  const report = optimized.optimizationReport();
+  assert.ok(report.iterations > 0);
+  assert.ok(report.rewrites > 0);
+  const transpose = report.patterns.find(
+    (pattern) => pattern.name === "TransposeTranspose",
+  );
+  assert.equal(transpose.matches, 1);
+  assert.ok(transpose.attempts >= transpose.matches);
+  assert.ok(transpose.matchTimeNs >= 0);
+  assert.ok(transpose.applyTimeNs >= 0);
+  assert.ok(
+    transpose.noMatches.some(
+      (reason) =>
+        reason.occurrences > 0 &&
+        reason.sourceLine > 0 &&
+        reason.reason &&
+        reason.sourceFile,
+    ),
+  );
+  assert.equal(
+    report.totalTimeNs,
+    report.matchingTimeNs +
+      report.rewritingTimeNs +
+      report.cleanupTimeNs +
+      report.constantFoldingTimeNs +
+      report.subgraphOptimizationTimeNs,
+  );
+  assert.deepEqual(optimized.clone().optimizationReport(), report);
+  const detached = optimized.optimizationReport();
+  detached.patterns.length = 0;
+  assert.deepEqual(optimized.optimizationReport(), report);
+  assert.equal(optimized.undoFusion().optimizationReport(), null);
+  assert.equal(source.optimizationReport(), null);
+  const preview = await optimized.previewFusion("MatMulAdd");
+  assert.deepEqual(preview.model.optimizationReport(), report);
+  const fused = await preview.model.applyFusion("MatMulAdd", [
+    preview.matches[0].anchor,
+  ]);
+  assert.equal(fused.optimizationReport(), null);
+  assert.deepEqual(fused.undoFusion().optimizationReport(), report);
+  const noop = await optimized.optimize(["TransposeTranspose"], "Optimize");
+  assert.equal(noop.optimizationReport().rewrites, 0);
+  assert.equal(noop.fusionCount(), optimized.fusionCount());
+  assert.deepEqual(noop.graph(), optimized.graph());
+  assert.equal(noop.undoFusion().optimizationReport(), null);
+  const relu = loadModel(modelBytes("relu.onnx"), "relu");
+  const unchanged = await relu.optimize(["TransposeTranspose"], "Optimize");
+  assert.equal(unchanged.optimizationReport().rewrites, 0);
+  assert.equal(unchanged.fusionCount(), 0);
+});
+
 function nestedOptimizationModelBytes(
   depth,
   alias = false,
@@ -1752,6 +1842,25 @@ test("replays nested optimization after a fusion finalizes the parent node order
     ["Identity", "Shape", "If"],
   );
   const optimized = await fused.optimize(["MatMulAdd"], "Optimize");
+  const report = optimized.optimizationReport();
+  assert.equal(report.subgraphs.length, 2);
+  assert.ok(
+    report.subgraphs.every(
+      (subgraph) =>
+        subgraph.path.length === 1 &&
+        subgraph.rewrites > 0 &&
+        subgraph.iterations > 0 &&
+        subgraph.elapsedTimeNs >= 0,
+    ),
+  );
+  assert.ok(
+    report.rewrites >=
+      report.subgraphs.reduce((sum, subgraph) => sum + subgraph.rewrites, 0),
+  );
+  assert.equal(
+    report.patterns.find((pattern) => pattern.name === "MatMulAdd").matches,
+    2,
+  );
   assert.deepEqual(
     inspectScopedGraphs(optimized).children.map((child) =>
       child.graph.nodes.map((node) => node.opType),
@@ -2264,6 +2373,24 @@ test("optimizes one pipeline stage without adding no-op undo entries or changing
   );
   assert.equal(optimized.fusionCount(), 1);
   assert.equal(optimized.fusionHistory()[0].stage, "prefill");
+  assert.ok(
+    optimized
+      .optimizationReport(stagePath)
+      .patterns.some((pattern) => pattern.name === "MatMulAdd"),
+  );
+  assert.equal(optimized.optimizationReport([{ pipeline: "decode" }]), null);
+  const diagnosis = await source.explainFusion(
+    "TransposeTranspose",
+    2,
+    undefined,
+    stagePath,
+  );
+  assert.equal(diagnosis.status, "matched");
+  assert.throws(() => source.optimizationReport(), /Choose a pipeline stage/);
+  await assert.rejects(
+    source.explainFusion("TransposeTranspose", 0),
+    /Choose a pipeline stage/,
+  );
   assert.deepEqual(
     optimized.graph(false, [{ pipeline: "embedding" }]),
     source.graph(false, [{ pipeline: "embedding" }]),
@@ -2281,6 +2408,7 @@ test("optimizes one pipeline stage without adding no-op undo entries or changing
     noop.undoFusion().graph(false, stagePath),
     source.graph(false, stagePath),
   );
+  assert.equal(noop.undoFusion().optimizationReport(stagePath), null);
   const saved = loadModel(
     await optimized.serialize(undefined, undefined, true),
     "saved.pipe-onnx",

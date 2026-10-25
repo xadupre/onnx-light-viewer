@@ -1234,6 +1234,8 @@ test("chooses saved rewriting scenarios, applies next or remaining steps and rec
   const select = document.getElementById("rewriting-scenario");
   const next = document.getElementById("rewriting-next");
   const all = document.getElementById("rewriting-all");
+  const section = document.getElementById("rewriting-scenarios");
+  assert.equal(section.open, false);
   document.getElementById("fuse-pattern").click();
   send({
     type: "fusion-patterns",
@@ -1241,6 +1243,7 @@ test("chooses saved rewriting scenarios, applies next or remaining steps and rec
     patterns: [],
     scenarios,
   });
+  assert.equal(section.open, true);
   assert.deepEqual(
     [...select.options].map((option) => option.value),
     ["a-first", "z-last"],
@@ -1310,6 +1313,7 @@ test("chooses saved rewriting scenarios, applies next or remaining steps and rec
   assert.equal(all.disabled, true);
   load(demoGraph);
   assert.equal(select.options.length, 0);
+  assert.equal(section.open, false);
 });
 
 test("selects saved pattern nodes and automatically reveals the next pattern after applying a step", async (t) => {
@@ -1466,6 +1470,7 @@ test("rejects queued fusion and scenario completions after local close or naviga
           name: "onnx-light-viewer.fusions",
           patterns: edited.fusionPatterns(),
           scenarios: edited.rewritingScenarios(),
+          optimizationReport: edited.optimizationReport(),
         });
         assert.equal(document.getElementById("fusion-panel").hidden, true);
         assert.equal(
@@ -1478,8 +1483,465 @@ test("rejects queued fusion and scenario completions after local close or naviga
           0,
         );
         assert.equal(document.getElementById("fusion-status").textContent, "");
+        assert.equal(
+          document.getElementById("optimization-report").open,
+          false,
+        );
+        assert.equal(
+          document.getElementById("show-optimization-report").disabled,
+          true,
+        );
       });
     }
+  }
+});
+
+test("opens tabular optimization reports only on request, including no-op runs and reopened Optimize", async (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const source = loadModel(
+    readFileSync(require.resolve("../examples/optimization.onnx")),
+    "optimization",
+  );
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  let model = source;
+  load(model.graph());
+  const button = document.getElementById("optimize-model");
+  const report = document.getElementById("optimization-report");
+  const section = document.getElementById("optimization-report-section");
+  const showReport = document.getElementById("show-optimization-report");
+  assert.equal(report.parentElement, document.body);
+  assert.equal(section.contains(report), false);
+  for (const changed of [true, false]) {
+    button.click();
+    send({
+      type: "fusion-patterns",
+      requestId: messages.at(-1).requestId,
+      patterns: model.fusionPatterns(),
+      optimizationPatterns: model.optimizationPatterns(),
+      optimizationReport: model.optimizationReport(),
+    });
+    document.getElementById("run-optimization").click();
+    const request = messages.at(-1);
+    model = await model.optimize(request.patterns, "Optimize");
+    load(model.graph(), request.requestId);
+    send({
+      type: "optimization-info",
+      requestId: request.requestId,
+      operation: "Optimize",
+      changed,
+      matches: changed ? model.fusionHistory().at(-1).matches : [],
+      patterns: model.fusionPatterns(),
+      optimizationPatterns: model.optimizationPatterns(),
+      optimizationReport: model.optimizationReport(),
+    });
+    assert.equal(section.hidden, false);
+    assert.equal(showReport.disabled, false);
+    assert.equal(report.open, false);
+    showReport.click();
+    assert.equal(report.open, true);
+    const data = model.optimizationReport();
+    const rows = [
+      ...document.querySelectorAll("#optimization-report-patterns tbody tr"),
+    ];
+    assert.deepEqual(
+      rows.map((row) =>
+        [...row.cells].slice(0, 3).map((cell) => cell.textContent),
+      ),
+      data.patterns.map((pattern) => [
+        pattern.name,
+        String(pattern.attempts),
+        String(pattern.matches),
+      ]),
+    );
+    assert.equal(
+      document.querySelector(
+        "#optimization-report-summary tbody tr:nth-child(2) td",
+      ).textContent,
+      String(data.rewrites),
+    );
+    assert.equal(
+      document.querySelectorAll("#optimization-report-phases tbody tr").length,
+      5,
+    );
+    const rejections = data.patterns.flatMap((pattern) => pattern.noMatches);
+    if (rejections.length) {
+      const text = document.getElementById(
+        "optimization-report-rejections",
+      ).textContent;
+      assert.ok(text.includes(rejections[0].reason));
+      const link = document.querySelector("#optimization-report-rejections a");
+      assert.ok(
+        link.href.startsWith(
+          `https://github.com/xadupre/onnx-light/blob/${onnxLightVersion}/onnx_light/`,
+        ),
+      );
+      assert.equal(link.hash, `#L${rejections[0].sourceLine}`);
+      assert.equal(
+        link.title,
+        `${rejections[0].sourceFile}:${rejections[0].sourceLine}`,
+      );
+      assert.equal(link.textContent, link.href);
+    } else
+      assert.match(
+        document.getElementById("optimization-report-rejections").textContent,
+        /No rejection diagnostics/,
+      );
+    assert.match(
+      document.getElementById("optimization-report-subgraphs").textContent,
+      /No subgraphs/,
+    );
+    document.getElementById("close-optimization-report").click();
+    assert.equal(report.open, false);
+    button.click();
+    button.click();
+    send({
+      type: "fusion-patterns",
+      requestId: messages.at(-1).requestId,
+      patterns: model.fusionPatterns(),
+      optimizationPatterns: model.optimizationPatterns(),
+      optimizationReport: model.optimizationReport(),
+    });
+    showReport.click();
+    assert.equal(report.open, true);
+    if (changed) {
+      document.getElementById("close-optimization-report").click();
+      button.click();
+    }
+  }
+  load(demoGraph);
+  assert.equal(section.hidden, true);
+  assert.equal(report.open, false);
+  assert.equal(
+    document.getElementById("optimization-report-body").children.length,
+    0,
+  );
+  assert.equal(showReport.disabled, true);
+});
+
+test("renders report details safely and closes the report immediately on navigation", async (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const source = loadModel(
+    readFileSync(require.resolve("../examples/optimization.onnx")),
+    "optimization",
+  );
+  const optimized = await source.optimize(["TransposeTranspose"], "Optimize");
+  const data = optimized.optimizationReport();
+  data.subgraphs = [
+    {
+      path: ["branch <graph>"],
+      iterations: 2,
+      rewrites: 1,
+      elapsedTimeNs: 1500000,
+    },
+  ];
+  data.patterns[0].noMatches = [
+    {
+      reason: "<img src=x> rejected",
+      sourceFile:
+        "C:\\build\\onnx_light\\onnx_extensions\\patterns\\transpose\\transpose_pattern.cc",
+      sourceLine: 7,
+      occurrences: 3,
+    },
+    {
+      reason: "Unknown source",
+      sourceFile: "<source>.cc",
+      sourceLine: 7,
+      occurrences: 1,
+    },
+  ];
+  const send = (value) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data: value }));
+  load({
+    ...optimized.graph(),
+    canFuse: true,
+    breadcrumbs: [
+      { name: "Pipeline", path: [] },
+      { name: "prefill", path: [{ pipeline: "prefill" }] },
+    ],
+  });
+  document.getElementById("optimize-model").click();
+  const response = {
+    type: "fusion-patterns",
+    requestId: messages.at(-1).requestId,
+    patterns: optimized.fusionPatterns(),
+    optimizationPatterns: optimized.optimizationPatterns(),
+    optimizationReport: data,
+  };
+  send(response);
+  document.getElementById("show-optimization-report").click();
+  const dialog = document.getElementById("optimization-report");
+  assert.equal(dialog.open, true);
+  assert.equal(
+    document.getElementById("optimization-report-scope").textContent,
+    "Pipeline / prefill",
+  );
+  const row = document.querySelector("#optimization-report-subgraphs tbody tr");
+  assert.deepEqual(
+    [...row.cells].slice(0, 3).map((cell) => cell.textContent),
+    ["branch <graph>", "2", "1"],
+  );
+  assert.match(row.cells[3].textContent, /^1[.,]5$/);
+  assert.equal(
+    document.querySelector("#optimization-report-rejections tbody td")
+      .textContent,
+    "<img src=x> rejected",
+  );
+  assert.equal(dialog.querySelector("img"), null);
+  const sourceLink = document.querySelector(
+    "#optimization-report-rejections a",
+  );
+  assert.equal(
+    sourceLink.href,
+    `https://github.com/xadupre/onnx-light/blob/${onnxLightVersion}/onnx_light/onnx_extensions/patterns/transpose/transpose_pattern.cc#L7`,
+  );
+  assert.equal(
+    document.querySelectorAll("#optimization-report-rejections a").length,
+    1,
+  );
+  assert.match(dialog.textContent, /<source>\.cc:7/);
+  document.querySelector("#graph-navigation button").click();
+  assert.equal(messages.at(-1).type, "navigate");
+  assert.equal(dialog.open, false);
+  assert.equal(
+    document.getElementById("show-optimization-report").disabled,
+    true,
+  );
+  assert.equal(
+    document.getElementById("optimization-report-body").children.length,
+    0,
+  );
+  send(response);
+  assert.equal(
+    document.getElementById("optimization-report-section").hidden,
+    true,
+  );
+});
+
+test("explains the selected pattern/node and distinguishes rejection, missing diagnostics and matches", async (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const source = loadModel(
+    readFileSync(require.resolve("./models/fusion.onnx")),
+    "fusion",
+  );
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  load(source.graph());
+  document.getElementById("fuse-pattern").click();
+  send({
+    type: "fusion-patterns",
+    requestId: messages.at(-1).requestId,
+    patterns: source.fusionPatterns(),
+    optimizationPatterns: source.optimizationPatterns(),
+  });
+  const picker = document.getElementById("diagnostic-pattern");
+  const explain = document.getElementById("explain-fusion");
+  const feedback = document.getElementById("diagnostic-feedback");
+  assert.equal(
+    document.getElementById("fusion-panel").lastElementChild.id,
+    "fusion-diagnostics",
+  );
+  assert.equal(document.getElementById("diagnostic-source").tagName, "SECTION");
+  assert.equal(document.querySelector("#diagnostic-source summary"), null);
+  assert.equal(picker.options.length, 0);
+  assert.match(
+    feedback.textContent,
+    /Select one or more native patterns above/,
+  );
+  document
+    .querySelector('#fusion-pattern input[value="TransposeTranspose"]')
+    .click();
+  assert.deepEqual(
+    [...picker.options].map((option) => option.value),
+    ["TransposeTranspose"],
+  );
+  document.querySelector('[data-id="node-0"]').dispatchEvent(
+    new window.KeyboardEvent("keydown", {
+      key: "Enter",
+      bubbles: true,
+      ctrlKey: true,
+    }),
+  );
+  assert.equal(explain.disabled, true);
+  picker.value = "TransposeTranspose";
+  picker.dispatchEvent(new window.Event("change"));
+  for (const [anchor, status, label] of [
+    [1, "rejected", "Pattern does not match"],
+    [4, "op-type-mismatch", "Pattern cannot match this operator type"],
+    [0, "matched", "Match found"],
+    [0, "unavailable", "No match (reason unavailable)"],
+  ]) {
+    document
+      .querySelector(`[data-id="node-${anchor}"]`)
+      .dispatchEvent(
+        new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+      );
+    assert.equal(explain.disabled, false);
+    explain.click();
+    const request = messages.at(-1);
+    assert.equal(request.type, "explain-fusion");
+    assert.equal(request.anchor, anchor);
+    assert.equal(request.pattern, "TransposeTranspose");
+    assert.equal(explain.disabled, true);
+    const diagnostic =
+      status === "unavailable"
+        ? {
+            pattern: request.pattern,
+            anchor,
+            status,
+            reason: "No match. Native diagnostic unavailable.",
+          }
+        : await source.explainFusion(request.pattern, anchor);
+    send({
+      type: "fusion-diagnostic",
+      requestId: request.requestId,
+      diagnostic,
+    });
+    assert.ok(feedback.textContent.startsWith(`${label}:`));
+    assert.equal(explain.disabled, false);
+    assert.equal(
+      document.getElementById("diagnostic-source").hidden,
+      !diagnostic.source,
+    );
+    if (diagnostic.source) {
+      const link = document.querySelector("#diagnostic-location a");
+      assert.equal(
+        link.href,
+        `https://github.com/xadupre/onnx-light/blob/${onnxLightVersion}/onnx_light/onnx_extensions/patterns/transpose/transpose_pattern.cc#L${diagnostic.source.line}`,
+      );
+      assert.equal(link.textContent, link.href);
+      assert.equal(
+        link.title,
+        `${diagnostic.source.file}:${diagnostic.source.line}`,
+      );
+    }
+  }
+  explain.click();
+  send({
+    type: "fusion-diagnostic-error",
+    requestId: messages.at(-1).requestId,
+    error: "<unreadable weights>",
+  });
+  assert.equal(feedback.textContent, "Diagnosis failed: <unreadable weights>");
+  assert.equal(feedback.children.length, 0);
+  assert.equal(explain.disabled, false);
+  document.querySelector('[data-id="node-1"]').dispatchEvent(
+    new window.KeyboardEvent("keydown", {
+      key: "Enter",
+      bubbles: true,
+      ctrlKey: true,
+    }),
+  );
+  assert.equal(explain.disabled, true);
+  assert.match(
+    document.getElementById("diagnostic-node").textContent,
+    /Select exactly one/,
+  );
+  document.getElementById("select-patterns").click();
+  assert.deepEqual(
+    [...picker.options].map((option) => option.value),
+    source
+      .fusionPatterns()
+      .filter((name) =>
+        source.optimizationPatterns().some((pattern) => pattern.name === name),
+      )
+      .sort(),
+  );
+  document.getElementById("clear-patterns").click();
+  assert.equal(picker.options.length, 0);
+  assert.equal(explain.disabled, true);
+  assert.match(
+    feedback.textContent,
+    /Select one or more native patterns above/,
+  );
+});
+
+test("invalidates pending diagnostics after selection, pattern, close, navigation and model changes", async (t) => {
+  for (const invalidate of [
+    "selection",
+    "pattern",
+    "checked-patterns",
+    "close",
+    "navigate",
+    "replace",
+  ]) {
+    const { document, window, messages, load } = openViewer(t);
+    const source = loadModel(
+      readFileSync(require.resolve("./models/fusion.onnx")),
+      "fusion",
+    );
+    const send = (data) =>
+      window.dispatchEvent(new window.MessageEvent("message", { data }));
+    const graph = source.graph();
+    load(
+      invalidate === "navigate"
+        ? {
+            ...graph,
+            canFuse: true,
+            breadcrumbs: [
+              { name: "Pipeline", path: [] },
+              { name: "prefill", path: [{ pipeline: "prefill" }] },
+            ],
+          }
+        : graph,
+    );
+    document.getElementById("fuse-pattern").click();
+    send({
+      type: "fusion-patterns",
+      requestId: messages.at(-1).requestId,
+      patterns: source.fusionPatterns(),
+      optimizationPatterns: source.optimizationPatterns(),
+    });
+    const picker = document.getElementById("diagnostic-pattern");
+    for (const pattern of ["TransposeTranspose", "SameChildren"])
+      document
+        .querySelector(`#fusion-pattern input[value="${pattern}"]`)
+        .click();
+    picker.value = "TransposeTranspose";
+    picker.dispatchEvent(new window.Event("change"));
+    document
+      .querySelector('[data-id="node-1"]')
+      .dispatchEvent(
+        new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+      );
+    document.getElementById("explain-fusion").click();
+    const request = messages.at(-1);
+    assert.equal(request.type, "explain-fusion", invalidate);
+    if (invalidate === "selection")
+      document
+        .querySelector('[data-id="node-0"]')
+        .dispatchEvent(
+          new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+        );
+    else if (invalidate === "pattern") {
+      picker.value = "SameChildren";
+      picker.dispatchEvent(new window.Event("change"));
+    } else if (invalidate === "checked-patterns") {
+      document
+        .querySelector('#fusion-pattern input[value="TransposeTranspose"]')
+        .click();
+    } else if (invalidate === "close")
+      document.getElementById("fuse-pattern").click();
+    else if (invalidate === "navigate")
+      document.querySelector("#graph-navigation button").click();
+    else load(demoGraph);
+    const feedback = document.getElementById("diagnostic-feedback").textContent;
+    assert.ok(feedback.length);
+    send({
+      type: "fusion-diagnostic",
+      requestId: request.requestId,
+      diagnostic: await source.explainFusion(request.pattern, request.anchor),
+    });
+    send({
+      type: "fusion-diagnostic-error",
+      requestId: request.requestId,
+      error: "Obsolete failure",
+    });
+    assert.equal(
+      document.getElementById("diagnostic-feedback").textContent,
+      feedback,
+    );
+    assert.equal(document.getElementById("diagnostic-source").hidden, true);
   }
 });
 
@@ -2195,7 +2657,7 @@ test("selects multiple patterns, reruns matching from scratch and ignores old pr
   });
   assert.match(
     document.getElementById("fusion-feedback").textContent,
-    /0 selected \/ 0 matches/,
+    /No matching candidates/,
   );
   document.getElementById("preview-fusion").click();
   assert.notEqual(messages.at(-1).requestId, current);

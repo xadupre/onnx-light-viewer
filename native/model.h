@@ -16,6 +16,10 @@ namespace ONNX_LIGHT_NAMESPACE::core::backend_test {
 struct TestCase;
 }
 
+namespace ONNX_LIGHT_NAMESPACE::core::builder {
+struct OptimizationReport;
+}
+
 namespace onnx_light_viewer {
 namespace ol = ONNX_LIGHT_NAMESPACE;
 
@@ -60,6 +64,7 @@ struct StoredModel {
   std::shared_ptr<StoredModel> fusion_previous;
   std::vector<ol::RewritingProto> fusion_plans;
   std::vector<std::vector<FusionMatch>> fusion_history;
+  std::shared_ptr<const ol::core::builder::OptimizationReport> optimization_report;
   std::shared_ptr<StoredModel> rewriting_base;
   std::string rewriting_name;
   std::vector<size_t> rewriting_batches;

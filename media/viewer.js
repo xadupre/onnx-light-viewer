@@ -112,6 +112,8 @@ const fusionPanel = createFusionPanel({
     selected = new Set();
     updateSelection();
   },
+  selectedNode: () =>
+    selected.size === 1 ? nodeViews.get([...selected][0])?.node : undefined,
   focusNodes,
 });
 
@@ -682,6 +684,7 @@ function updateSelection(activeId, forceInspect = false) {
   renderedSelection = new Set(selected);
   const view = nodeViews.get(activeId ?? [...selected].at(-1));
   if (forceInspect || view !== inspectedView) inspect(view);
+  fusionPanel.selectionChanged();
 }
 
 function updateNodeSelection({ group, node, subgraphs }, isSelected) {

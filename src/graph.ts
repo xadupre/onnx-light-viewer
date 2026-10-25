@@ -174,6 +174,45 @@ export interface OptimizationPattern {
   device: string;
 }
 
+export interface FusionDiagnostic {
+  pattern: string;
+  anchor: number;
+  candidate?: number;
+  status: "matched" | "rejected" | "unavailable" | "op-type-mismatch";
+  reason: string;
+  source?: { file: string; line: number };
+}
+
+export interface OptimizationReport {
+  iterations: number;
+  rewrites: number;
+  totalTimeNs: number;
+  matchingTimeNs: number;
+  rewritingTimeNs: number;
+  cleanupTimeNs: number;
+  constantFoldingTimeNs: number;
+  subgraphOptimizationTimeNs: number;
+  patterns: {
+    name: string;
+    attempts: number;
+    matches: number;
+    matchTimeNs: number;
+    applyTimeNs: number;
+    noMatches: {
+      reason: string;
+      sourceFile: string;
+      sourceLine: number;
+      occurrences: number;
+    }[];
+  }[];
+  subgraphs: {
+    path: string[];
+    iterations: number;
+    rewrites: number;
+    elapsedTimeNs: number;
+  }[];
+}
+
 export type OptimizationOperation =
   "Optimize" | "IdentityRemoval" | "ConstantFolding" | "RemoveUnusedNodes";
 
@@ -207,6 +246,15 @@ export interface NativeModel {
   /** Pipeline fusions require the path of a stage root; ordinary models use []. */
   fusionPatterns(path?: GraphPath): string[];
   optimizationPatterns(path?: GraphPath): OptimizationPattern[];
+  /** Native report for the last optimization of this snapshot, including no-op runs. */
+  optimizationReport(path?: GraphPath): OptimizationReport | null;
+  /** Inspects one native pattern/node without applying it or collecting other failures. */
+  explainFusion(
+    pattern: string,
+    anchor: number,
+    sourceFilePath?: string,
+    path?: GraphPath,
+  ): Promise<FusionDiagnostic>;
   /** Runs a global pass or the native iterative optimizer on an independent snapshot. */
   optimize(
     patterns: string[],

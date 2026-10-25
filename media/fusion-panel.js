@@ -6,6 +6,7 @@ function createFusionPanel({
   fit,
   canFuse,
   clearSelection,
+  selectedNode,
   focusNodes,
 }) {
   let fusionGraph;
@@ -14,9 +15,214 @@ function createFusionPanel({
   let fusionPreview;
   let fusionBusy = false;
   let optimizationSelection;
+  let optimizationReport;
   let selectedOptimizationResult = false;
   let scenarios = [];
   let selectedStep;
+  let diagnosticRequest = 0;
+  let diagnosticBusy = false;
+  let diagnosticNode;
+  let diagnosticResult;
+  let nativePatterns = new Set();
+  function diagnosticControls() {
+    const picker = byId("diagnostic-pattern");
+    picker.disabled = fusionBusy || !canFuse() || !picker.options.length;
+    byId("explain-fusion").disabled =
+      picker.disabled || diagnosticBusy || !diagnosticNode;
+    byId("fusion-diagnostics").setAttribute(
+      "aria-busy",
+      String(diagnosticBusy),
+    );
+    byId("diagnostic-node").textContent = diagnosticNode
+      ? `Node #${diagnosticNode.id.slice(5)}: ${diagnosticNode.name || diagnosticNode.opType} (${diagnosticNode.opType})`
+      : "Select exactly one operator in the graph.";
+    byId("diagnostic-feedback").textContent = diagnosticBusy
+      ? "Checking why this pattern did not match the selected node…"
+      : (diagnosticResult ??
+        (!picker.options.length
+          ? "Select one or more native patterns above to investigate a failed match."
+          : !diagnosticNode
+            ? "Select exactly one operator in the graph where you expected a match."
+            : `Click Explain failed match to find why ${picker.value} did not match this node.`));
+  }
+  function clearDiagnostic() {
+    diagnosticRequest++;
+    if (diagnosticBusy) postMessage({ type: "cancel-fusion-diagnostic" });
+    diagnosticBusy = false;
+    diagnosticResult = undefined;
+    byId("diagnostic-source").hidden = true;
+    byId("diagnostic-location").textContent = "";
+    diagnosticControls();
+  }
+  function selectionChanged() {
+    const node = selectedNode();
+    if (node?.id === diagnosticNode?.id) return;
+    diagnosticNode = node;
+    clearDiagnostic();
+  }
+  function updateDiagnosticPatterns() {
+    const picker = byId("diagnostic-pattern");
+    const previous = picker.value;
+    picker.replaceChildren();
+    for (const input of byId("fusion-pattern").querySelectorAll(
+      "input:checked",
+    )) {
+      if (!nativePatterns.has(input.value)) continue;
+      const option = document.createElement("option");
+      option.value = option.textContent = input.value;
+      picker.append(option);
+    }
+    if ([...picker.options].some((option) => option.value === previous))
+      picker.value = previous;
+    clearDiagnostic();
+  }
+  function showOptimizationReport(report) {
+    optimizationReport = report;
+    if (byId("optimization-report").open) byId("optimization-report").close();
+    byId("optimization-report-body").replaceChildren();
+    byId("optimization-report-scope").textContent = "";
+    byId("optimization-report-section").hidden = !report;
+    byId("show-optimization-report").disabled = fusionBusy || !report;
+  }
+  function nativeSourceLocation(file, line) {
+    const location = `${file}${line ? `:${line}` : ""}`;
+    const normalized = file.replaceAll("\\", "/");
+    const marker = normalized.lastIndexOf("/onnx_light/");
+    const path = marker >= 0 ? normalized.slice(marker + 1) : normalized;
+    const parts = path.split("/");
+    if (
+      !path.startsWith("onnx_light/") ||
+      parts.some((part) => !part || part === "." || part === "..")
+    )
+      return document.createTextNode(location);
+    const version = byId("onnx-light-version").dataset.version;
+    const link = document.createElement("a");
+    link.className = "native-source-link";
+    link.href = `https://github.com/xadupre/onnx-light/blob/${encodeURIComponent(version)}/${parts.map(encodeURIComponent).join("/")}${line ? `#L${line}` : ""}`;
+    link.textContent = link.href;
+    link.title = location;
+    return link;
+  }
+  function reportTable(id, title, headers, rows, emptyMessage) {
+    const table = document.createElement("table");
+    table.id = id;
+    const caption = table.createCaption();
+    caption.textContent = title;
+    const heading = table.createTHead().insertRow();
+    for (const name of headers) {
+      const cell = document.createElement("th");
+      cell.scope = "col";
+      cell.textContent = name;
+      heading.append(cell);
+    }
+    const body = table.createTBody();
+    for (const values of rows) {
+      const row = body.insertRow();
+      for (const [index, value] of values.entries()) {
+        const cell = document.createElement(index ? "td" : "th");
+        if (!index) cell.scope = "row";
+        if (value instanceof Node) cell.append(value);
+        else cell.textContent = String(value);
+        row.append(cell);
+      }
+    }
+    if (!rows.length) {
+      const cell = body.insertRow().insertCell();
+      cell.colSpan = headers.length;
+      cell.textContent = emptyMessage;
+    }
+    byId("optimization-report-body").append(table);
+  }
+  function openOptimizationReport() {
+    if (byId("show-optimization-report").disabled) return;
+    const report = optimizationReport;
+    const formatter = new Intl.NumberFormat(undefined, {
+      maximumFractionDigits: 6,
+    });
+    const milliseconds = (ns) => formatter.format(ns / 1e6);
+    byId("optimization-report-body").replaceChildren();
+    byId("optimization-report-scope").textContent = fusionGraph.breadcrumbs
+      .map((item) => item.name)
+      .join(" / ");
+    reportTable(
+      "optimization-report-summary",
+      "Optimization counters",
+      ["Metric", "Value"],
+      [
+        ["Iterations (including subgraphs)", report.iterations],
+        ["Rewrites (including subgraphs)", report.rewrites],
+        ["Total native phase time (ms)", milliseconds(report.totalTimeNs)],
+      ],
+    );
+    reportTable(
+      "optimization-report-phases",
+      "Native phase timings",
+      ["Phase", "Time (ms)"],
+      [
+        ["Matching (root)", milliseconds(report.matchingTimeNs)],
+        ["Rewriting (root)", milliseconds(report.rewritingTimeNs)],
+        ["Cleanup (root)", milliseconds(report.cleanupTimeNs)],
+        ["Constant folding (root)", milliseconds(report.constantFoldingTimeNs)],
+        [
+          "Subgraph optimization",
+          milliseconds(report.subgraphOptimizationTimeNs),
+        ],
+      ],
+    );
+    reportTable(
+      "optimization-report-patterns",
+      "Pattern matches (root and subgraphs)",
+      [
+        "Pattern",
+        "Attempts",
+        "Accepted matches",
+        "Matching (ms)",
+        "Applying (ms)",
+      ],
+      report.patterns.map((pattern) => [
+        pattern.name,
+        pattern.attempts,
+        pattern.matches,
+        milliseconds(pattern.matchTimeNs),
+        milliseconds(pattern.applyTimeNs),
+      ]),
+      "No pattern statistics.",
+    );
+    reportTable(
+      "optimization-report-rejections",
+      "Rejected candidates",
+      ["Pattern", "Reason", "Occurrences", "Native source"],
+      report.patterns.flatMap((pattern) =>
+        pattern.noMatches.map((reason) => [
+          pattern.name,
+          reason.reason,
+          reason.occurrences,
+          reason.sourceFile
+            ? nativeSourceLocation(reason.sourceFile, reason.sourceLine)
+            : "Not supplied",
+        ]),
+      ),
+      "No rejection diagnostics were reported.",
+    );
+    reportTable(
+      "optimization-report-subgraphs",
+      "Optimized subgraphs",
+      [
+        "Graph path",
+        "Iterations (including descendants)",
+        "Rewrites (including descendants)",
+        "Elapsed (ms)",
+      ],
+      report.subgraphs.map((subgraph) => [
+        subgraph.path.join(" / "),
+        subgraph.iterations,
+        subgraph.rewrites,
+        milliseconds(subgraph.elapsedTimeNs),
+      ]),
+      "No subgraphs were optimized.",
+    );
+    byId("optimization-report").showModal();
+  }
   function currentScenario() {
     return scenarios.find(
       (item) => item.name === byId("rewriting-scenario").value,
@@ -67,7 +273,10 @@ function createFusionPanel({
   }
   function showScenarios(values, name) {
     const previous = name ?? byId("rewriting-scenario").value;
+    const hadScenarios = scenarios.length > 0;
     scenarios = values ?? [];
+    if (!scenarios.length || !hadScenarios)
+      byId("rewriting-scenarios").open = scenarios.length > 0;
     byId("rewriting-scenario").replaceChildren();
     for (const scenario of [...scenarios].sort((a, b) =>
       a.name.localeCompare(b.name),
@@ -82,7 +291,10 @@ function createFusionPanel({
     updateScenario();
   }
   function fusionControls(busy, message = "") {
+    if (busy && diagnosticBusy) clearDiagnostic();
     fusionBusy = busy;
+    diagnosticControls();
+    byId("show-optimization-report").disabled = busy || !optimizationReport;
     for (const control of byId("fusion-matches").querySelectorAll(
       "input, button",
     ))
@@ -146,7 +358,11 @@ function createFusionPanel({
         ? "Apply a global pass individually."
         : overlap
           ? "Selected matches overlap. Select disjoint matches."
-          : `${candidates.size} selected / ${fusionPreview?.matches.length ?? 0} matches. Check candidates, then click Fuse selected.`;
+          : !fusionPreview?.matches.length
+            ? byId("diagnostic-pattern").options.length
+              ? "No matching candidates. Select the operator where you expected a match, then use Why did matching fail? below."
+              : "No matching candidates. The selected patterns or passes do not produce a rewrite."
+            : `${candidates.size} selected / ${fusionPreview.matches.length} matches. Check candidates, then click Fuse selected.`;
   }
 
   function clearFusionPreview() {
@@ -162,6 +378,7 @@ function createFusionPanel({
 
   function showOptimizationPatterns(patterns) {
     if (!patterns) return;
+    nativePatterns = new Set(patterns.map((pattern) => pattern.name));
     const fieldset = byId("optimization-patterns");
     fieldset.replaceChildren();
     const priorities = [
@@ -356,9 +573,12 @@ function createFusionPanel({
     }
     fusionControls(false);
     updateFusionSelection();
+    if (!data.matches.length && byId("diagnostic-pattern").options.length)
+      byId("fusion-diagnostics").open = true;
   }
   byId("fuse-pattern").addEventListener("click", () => {
     if (!byId("fusion-panel").hidden) {
+      clearDiagnostic();
       fusionRequest++;
       byId("fusion-panel").hidden = true;
       byId("fuse-pattern").setAttribute("aria-expanded", "false");
@@ -374,6 +594,7 @@ function createFusionPanel({
     byId("fuse-pattern").setAttribute("aria-expanded", "true");
     clearFusionPreview();
     byId("fusion-pattern").replaceChildren();
+    updateDiagnosticPatterns();
     fusionControls(true, "Listing applicable pattern anchors…");
     fit();
     requestAction("fusion-patterns", "List fusion patterns", {
@@ -425,9 +646,29 @@ function createFusionPanel({
       patterns: [...optimizationSelection],
     });
   });
+  byId("diagnostic-pattern").addEventListener("change", clearDiagnostic);
+  byId("show-optimization-report").addEventListener(
+    "click",
+    openOptimizationReport,
+  );
+  byId("close-optimization-report").addEventListener("click", () =>
+    byId("optimization-report").close(),
+  );
+  byId("explain-fusion").addEventListener("click", () => {
+    if (byId("explain-fusion").disabled) return;
+    clearDiagnostic();
+    diagnosticBusy = true;
+    diagnosticControls();
+    requestAction("explain-fusion", "Explain fusion match", {
+      requestId: ++diagnosticRequest,
+      pattern: byId("diagnostic-pattern").value,
+      anchor: Number(diagnosticNode.id.slice(5)),
+    });
+  });
   function changeFusionPatterns() {
     fusionRequest++;
     clearFusionPreview();
+    updateDiagnosticPatterns();
     byId("fusion-feedback").textContent =
       "Click Run Matching to find candidates for the selected patterns.";
     postMessage({ type: "cancel-fusion" });
@@ -492,6 +733,44 @@ function createFusionPanel({
 
   function handleMessage(data) {
     if (
+      data?.type === "fusion-diagnostic" ||
+      data?.type === "fusion-diagnostic-error"
+    ) {
+      if (!diagnosticBusy || data.requestId !== diagnosticRequest) return true;
+      if (data.type === "fusion-diagnostic-error") {
+        diagnosticBusy = false;
+        diagnosticResult = `Diagnosis failed: ${data.error}`;
+        diagnosticControls();
+        return true;
+      }
+      const result = data.diagnostic;
+      if (
+        result.pattern !== byId("diagnostic-pattern").value ||
+        result.anchor !== Number(diagnosticNode?.id.slice(5))
+      )
+        return true;
+      const labels = {
+        matched: "Match found",
+        rejected: "Pattern does not match",
+        unavailable: "No match (reason unavailable)",
+        "op-type-mismatch": "Pattern cannot match this operator type",
+      };
+      const candidate =
+        result.candidate !== undefined && result.candidate !== result.anchor
+          ? ` (native candidate #${result.candidate})`
+          : "";
+      diagnosticBusy = false;
+      diagnosticResult = `${labels[result.status]}${candidate}: ${result.reason}`;
+      diagnosticControls();
+      if (result.source) {
+        byId("diagnostic-source").hidden = false;
+        byId("diagnostic-location").replaceChildren(
+          nativeSourceLocation(result.source.file, result.source.line),
+        );
+      }
+      return true;
+    }
+    if (
       data?.type === "fusion-patterns" ||
       data?.type === "optimization-info" ||
       data?.type === "rewriting-info" ||
@@ -516,6 +795,7 @@ function createFusionPanel({
       }
       showScenarios(data.scenarios, data.name);
       showOptimizationPatterns(data.optimizationPatterns);
+      showOptimizationReport(data.optimizationReport);
       if (data.type === "fusion-patterns")
         byId("optimization-status").textContent = "";
       byId("fusion-pattern").replaceChildren();
@@ -527,6 +807,7 @@ function createFusionPanel({
         label.append(checkbox, document.createTextNode(pattern));
         byId("fusion-pattern").append(label);
       }
+      updateDiagnosticPatterns();
       fusionControls(
         false,
         data.patterns.length
@@ -584,6 +865,12 @@ function createFusionPanel({
     byId("optimization-panel").hidden = true;
     byId("optimize-model").setAttribute("aria-expanded", "false");
     clearFusionPreview();
+    clearDiagnostic();
+    diagnosticNode = undefined;
+    nativePatterns = new Set();
+    byId("diagnostic-pattern").replaceChildren();
+    diagnosticControls();
+    showOptimizationReport(null);
     byId("fusion-status").textContent = "";
     showScenarios([]);
     byId("optimization-patterns").replaceChildren();
@@ -594,17 +881,21 @@ function createFusionPanel({
   function setEnabled(enabled) {
     byId("fuse-pattern").disabled = !enabled;
     byId("optimize-model").disabled = !enabled;
+    diagnosticControls();
   }
 
   return {
     handleMessage,
     reset,
     setEnabled,
+    selectionChanged,
     refresh: () => fusionControls(false),
     invalidate: () => {
       fusionRequest++;
       fusionCompletion = undefined;
       clearFusionPreview();
+      clearDiagnostic();
+      showOptimizationReport(null);
     },
   };
 }

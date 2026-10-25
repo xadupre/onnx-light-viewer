@@ -1,4 +1,5 @@
 import type {
+  FusionDiagnostic,
   FusionMatch,
   FusionOperation,
   Graph,
@@ -8,6 +9,7 @@ import type {
   NativeModel,
   OptimizationOperation,
   OptimizationPattern,
+  OptimizationReport,
   PipelineRole,
   RewritingScenario,
 } from "./graph";
@@ -252,6 +254,23 @@ export class PipelineModel implements NativeModel {
     const stage = this.select(path);
     this.fusionPatterns(path);
     return stage.model.optimizationPatterns();
+  };
+
+  optimizationReport = (path: GraphPath = []): OptimizationReport | null => {
+    const stage = this.select(path);
+    this.fusionPatterns(path);
+    return stage.model.optimizationReport();
+  };
+
+  explainFusion = async (
+    pattern: string,
+    anchor: number,
+    sourceFilePath?: string,
+    path: GraphPath = [],
+  ): Promise<FusionDiagnostic> => {
+    const stage = this.select(path);
+    this.fusionPatterns(path);
+    return stage.model.explainFusion(pattern, anchor, sourceFilePath);
   };
 
   optimize = async (

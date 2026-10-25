@@ -201,12 +201,64 @@ bool IsGlobalPass(const std::string &name) {
   return name == "IdentityRemoval" || name == "ConstantFolding" || name == "RemoveUnusedNodes";
 }
 
+Napi::Object OptimizationReportValue(Napi::Env env,
+                                     const ol::core::builder::OptimizationReport &report) {
+  auto result = Napi::Object::New(env);
+  result.Set("iterations", Napi::Number::New(env, report.iterations));
+  result.Set("rewrites", Napi::Number::New(env, report.rewrites));
+  result.Set("totalTimeNs", Napi::Number::New(env, report.TotalTimeNs()));
+  result.Set("matchingTimeNs", Napi::Number::New(env, report.matching_time_ns));
+  result.Set("rewritingTimeNs", Napi::Number::New(env, report.rewriting_time_ns));
+  result.Set("cleanupTimeNs", Napi::Number::New(env, report.cleanup_time_ns));
+  result.Set("constantFoldingTimeNs", Napi::Number::New(env, report.constant_folding_time_ns));
+  result.Set("subgraphOptimizationTimeNs",
+             Napi::Number::New(env, report.subgraph_optimization_time_ns));
+  auto patterns = Napi::Array::New(env, report.patterns.size());
+  for (uint32_t i = 0; i < report.patterns.size(); ++i) {
+    const auto &pattern = report.patterns[i];
+    auto item = Napi::Object::New(env);
+    item.Set("name", pattern.pattern_name);
+    item.Set("attempts", Napi::Number::New(env, pattern.attempts));
+    item.Set("matches", Napi::Number::New(env, pattern.matches));
+    item.Set("matchTimeNs", Napi::Number::New(env, pattern.match_time_ns));
+    item.Set("applyTimeNs", Napi::Number::New(env, pattern.apply_time_ns));
+    auto reasons = Napi::Array::New(env, pattern.no_matches.size());
+    for (uint32_t j = 0; j < pattern.no_matches.size(); ++j) {
+      const auto &rejection = pattern.no_matches[j];
+      auto reason = Napi::Object::New(env);
+      reason.Set("reason", rejection.reason);
+      reason.Set("sourceFile", rejection.source_file);
+      reason.Set("sourceLine", rejection.source_line);
+      reason.Set("occurrences", Napi::Number::New(env, rejection.occurrences));
+      reasons.Set(j, reason);
+    }
+    item.Set("noMatches", reasons);
+    patterns.Set(i, item);
+  }
+  result.Set("patterns", patterns);
+  auto subgraphs = Napi::Array::New(env, report.subgraphs.size());
+  for (uint32_t i = 0; i < report.subgraphs.size(); ++i) {
+    const auto &subgraph = report.subgraphs[i];
+    auto item = Napi::Object::New(env);
+    auto path = Napi::Array::New(env, subgraph.graph_path.size());
+    for (uint32_t j = 0; j < subgraph.graph_path.size(); ++j)
+      path.Set(j, subgraph.graph_path[j]);
+    item.Set("path", path);
+    item.Set("iterations", Napi::Number::New(env, subgraph.iterations));
+    item.Set("rewrites", Napi::Number::New(env, subgraph.rewrites));
+    item.Set("elapsedTimeNs", Napi::Number::New(env, subgraph.elapsed_time_ns));
+    subgraphs.Set(i, item);
+  }
+  result.Set("subgraphs", subgraphs);
+  return result;
+}
+
 class FusionWorker : public Napi::AsyncWorker {
 public:
   FusionWorker(Napi::Env env, std::shared_ptr<StoredModel> source,
                std::vector<std::string> patterns, std::optional<std::vector<size_t>> anchors,
                std::string path, std::string scenario = "", bool all = false,
-               std::string operation = "")
+               std::string operation = "", std::optional<size_t> diagnostic_anchor = std::nullopt)
       : Napi::AsyncWorker(env), deferred_(Napi::Promise::Deferred::New(env)),
         source_(std::move(source)),
         canonical_(!scenario.empty() && source_->rewriting_base ? source_->rewriting_base
@@ -214,10 +266,24 @@ public:
         snapshot_(canonical_->model->SharedCopy()), patterns_(std::move(patterns)),
         anchors_(std::move(anchors)), path_(std::move(path)),
         weights_(canonical_->external_weights), history_(source_->fusion_history),
-        scenario_(std::move(scenario)), all_(all), operation_(std::move(operation)) {}
+        scenario_(std::move(scenario)), all_(all), operation_(std::move(operation)),
+        diagnostic_anchor_(diagnostic_anchor) {}
   Napi::Promise Promise() const { return deferred_.Promise(); }
   void Execute() override {
     try {
+      if (diagnostic_anchor_) {
+        const auto &node = snapshot_.graph().node(*diagnostic_anchor_);
+        const auto pattern = ol::core::builder::CreateRegisteredPattern(patterns_[0]);
+        const auto fast = pattern->FastOpType();
+        if (!fast.empty() && !fast.contains(node.op_type().value())) {
+          diagnostic_status_ = "op-type-mismatch";
+          diagnostic_reason_ = "Operator " + node.op_type().value() +
+                               " is incompatible with this pattern's FastOpType anchors:";
+          for (const auto &name : fast)
+            diagnostic_reason_ += " " + name;
+          return;
+        }
+      }
       RestoreModelPayloads(snapshot_, *canonical_, path_);
       std::vector<ol::EncodedValueProto *> encoded;
       std::set<const ol::TensorProto *> layout_tensors;
@@ -282,6 +348,27 @@ public:
       }
       builder::GraphGraph index(graph,
                                 std::vector<std::unique_ptr<builder::PatternOptimization>>{});
+      if (diagnostic_anchor_) {
+        const auto match =
+            patterns.at(patterns_[0])->Match(index, graph.Nodes()[*diagnostic_anchor_]);
+        if (match.pattern) {
+          diagnostic_status_ = "matched";
+          diagnostic_reason_ = "The pattern matches this node.";
+        } else if (match.no_match) {
+          diagnostic_status_ = match.no_match->reason.empty() ? "unavailable" : "rejected";
+          diagnostic_reason_ = match.no_match->reason.empty()
+                                   ? "No match. This pattern did not supply a rejection reason."
+                                   : match.no_match->reason;
+          diagnostic_file_ = match.no_match->source_file;
+          diagnostic_line_ = match.no_match->source_line;
+          if (match.no_match->candidate)
+            diagnostic_candidate_ = index.Position(*match.no_match->candidate);
+        } else {
+          diagnostic_status_ = "unavailable";
+          diagnostic_reason_ = "No match. This pattern did not supply a rejection diagnostic.";
+        }
+        return;
+      }
       std::vector<std::pair<builder::PatternOptimization *, builder::MatchResult>> accepted;
       std::set<size_t> removed;
       std::set<std::pair<std::string, size_t>> requested;
@@ -401,8 +488,28 @@ public:
     }
   }
   void OnOK() override {
+    if (diagnostic_anchor_) {
+      auto result = Napi::Object::New(Env());
+      result.Set("pattern", patterns_[0]);
+      result.Set("anchor", Napi::Number::New(Env(), *diagnostic_anchor_));
+      result.Set("status", diagnostic_status_);
+      result.Set("reason", diagnostic_reason_);
+      if (diagnostic_candidate_)
+        result.Set("candidate", Napi::Number::New(Env(), *diagnostic_candidate_));
+      if (!diagnostic_file_.empty()) {
+        auto source = Napi::Object::New(Env());
+        source.Set("file", diagnostic_file_);
+        source.Set("line", diagnostic_line_);
+        result.Set("source", source);
+      }
+      deferred_.Resolve(result);
+      return;
+    }
     if (!operation_.empty() && plan_.rewrites().empty()) {
-      deferred_.Resolve(ModelHandle(Env(), CloneStoredModel(source_)));
+      auto stored = CloneStoredModel(source_);
+      if (optimization_report_)
+        stored->optimization_report = std::move(optimization_report_);
+      deferred_.Resolve(ModelHandle(Env(), stored));
       return;
     }
     auto stored = std::make_shared<StoredModel>();
@@ -414,6 +521,7 @@ public:
     stored->fusion_base = source_->fusion_base;
     stored->fusion_previous = source_->fusion_previous;
     stored->fusion_history = std::move(history_);
+    stored->optimization_report = std::move(optimization_report_);
     if (!scenario_.empty()) {
       stored->fusion_base = canonical_;
       stored->fusion_previous = source_;
@@ -436,6 +544,7 @@ public:
     stored->rewriting_base = source_->rewriting_base;
     stored->rewriting_name = source_->rewriting_name;
     stored->rewriting_batches = source_->rewriting_batches;
+    stored->optimization_report = source_->optimization_report;
     auto result = Napi::Object::New(Env());
     result.Set("model", ModelHandle(Env(), stored));
     auto matches = Napi::Array::New(Env(), matches_.size());
@@ -538,7 +647,8 @@ private:
       for (const auto &name : patterns_)
         chosen.push_back(builder::CreateRegisteredPattern(name));
       builder::GraphGraph optimizer(graph, std::move(chosen));
-      auto rewrites = optimizer.Optimize();
+      optimization_report_ = std::make_shared<builder::OptimizationReport>();
+      auto rewrites = optimizer.Optimize(-1, optimization_report_.get());
       plan_.ref_added_functions() = rewrites.added_functions();
       plan_.ref_required_opset_imports() = rewrites.required_opset_imports();
       for (const auto &edit : rewrites.rewrites())
@@ -697,11 +807,55 @@ private:
   bool all_;
   std::vector<size_t> batches_;
   std::string operation_;
+  std::shared_ptr<ol::core::builder::OptimizationReport> optimization_report_;
+  std::optional<size_t> diagnostic_anchor_;
+  std::optional<size_t> diagnostic_candidate_;
+  std::string diagnostic_status_;
+  std::string diagnostic_reason_;
+  std::string diagnostic_file_;
+  uint_least32_t diagnostic_line_ = 0;
 };
 
 } // namespace
 
 void AddFusionMethods(Napi::Env env, Napi::Object result, std::shared_ptr<StoredModel> model) {
+  result.Set("optimizationReport",
+             Napi::Function::New(env, [model](const Napi::CallbackInfo &call) -> Napi::Value {
+               if (!model->optimization_report)
+                 return call.Env().Null();
+               return OptimizationReportValue(call.Env(), *model->optimization_report);
+             }));
+  result.Set("explainFusion",
+             Napi::Function::New(env, [model](const Napi::CallbackInfo &call) -> Napi::Value {
+               try {
+                 if (!call[0].IsString() || !call[1].IsNumber() ||
+                     (!call[2].IsUndefined() && !call[2].IsString()))
+                   throw std::runtime_error(
+                       "Expected a native pattern, node index and optional source path.");
+                 const auto anchor = call[1].As<Napi::Number>().DoubleValue();
+                 if (!std::isfinite(anchor) || anchor < 0 || std::floor(anchor) != anchor ||
+                     anchor >= model->model->graph().node().size())
+                   throw std::runtime_error("Invalid diagnostic node index.");
+                 ol::onnx_patterns::RegisterPatterns();
+                 ol::onnx_shapes::RegisterShapeFunctions();
+                 const auto pattern = call[0].As<Napi::String>().Utf8Value();
+                 ol::core::builder::CreateRegisteredPattern(pattern);
+                 const auto path =
+                     call[2].IsString() ? call[2].As<Napi::String>().Utf8Value() : model->file_path;
+                 if (path.find('\0') != std::string::npos)
+                   throw std::runtime_error("Invalid source model file path.");
+                 auto worker = std::make_unique<FusionWorker>(
+                     call.Env(), model, std::vector<std::string>{pattern}, std::nullopt, path, "",
+                     false, "", static_cast<size_t>(anchor));
+                 const auto promise = worker->Promise();
+                 worker->Queue();
+                 worker.release();
+                 return promise;
+               } catch (const std::exception &error) {
+                 Napi::Error::New(call.Env(), error.what()).ThrowAsJavaScriptException();
+                 return call.Env().Undefined();
+               }
+             }));
   result.Set("optimizationPatterns", Napi::Function::New(env, [](const Napi::CallbackInfo &call) {
                ol::onnx_patterns::RegisterPatterns();
                auto values = Napi::Array::New(call.Env());
