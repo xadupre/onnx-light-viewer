@@ -6114,6 +6114,64 @@ test("zooms large graphs to a readable scale beyond four times Fit with buttons 
   }
 });
 
+test("keeps operator types visible in regular and virtualized overviews", (t) => {
+  const { document, window, load, pointer } = openViewer(t);
+  const graph = document.getElementById("graph");
+  const overview = document.getElementById("graph-overview");
+  const labels = document.getElementById("overview-labels");
+  for (const length of [6, 250]) {
+    const model = chainGraph(length);
+    model.nodes[0].opType = "<CustomOperator>";
+    load(model);
+    document.getElementById("zoom-readable").click();
+    const group = document.querySelector('[data-id="node-0"]');
+    const type = group.querySelector(".operator-label");
+    const name = group.querySelector(".operator-name");
+    const position = {
+      x: Number(type.getAttribute("x")),
+      y: Number(type.getAttribute("y")),
+    };
+    pointer(type, "pointerdown", position.x, position.y);
+    pointer(graph, "pointermove", position.x + 20, position.y + 10);
+    pointer(graph, "pointerup", position.x + 20, position.y + 10);
+    assert.notEqual(window.getComputedStyle(name).display, "none");
+    document.getElementById("zoom-fit").click();
+    assert.equal(graph.classList.contains("overview"), true);
+    const types =
+      length === 6
+        ? document.querySelectorAll(".graph-node .operator-label")
+        : labels.querySelectorAll(".operator-label");
+    assert.equal(types.length, length);
+    assert.equal(types[0].textContent, "<CustomOperator>");
+    assert.equal(types[0].children.length, 0);
+    const dx = length === 6 ? 0 : 20;
+    const dy = length === 6 ? 0 : 10;
+    assert.ok(
+      Math.abs(Number(types[0].getAttribute("x")) - position.x - dx) < 1e-9,
+    );
+    assert.ok(
+      Math.abs(Number(types[0].getAttribute("y")) - position.y - dy) < 1e-9,
+    );
+    assert.equal(types[0].style.fontSize, type.style.fontSize);
+    for (const text of types)
+      assert.notEqual(window.getComputedStyle(text).display, "none");
+    if (length === 250) {
+      assert.equal(overview.getAttribute("display"), "inline");
+      assert.equal(document.querySelectorAll(".graph-node").length, 0);
+      assert.equal(name.isConnected, false);
+    } else assert.equal(window.getComputedStyle(name).display, "none");
+    document.getElementById("zoom-in").click();
+    assert.equal(graph.classList.contains("overview"), true);
+    if (length === 250) assert.equal(labels.firstChild, types[0]);
+    document.getElementById("zoom-readable").click();
+    assert.equal(graph.classList.contains("overview"), false);
+    assert.equal(overview.getAttribute("display"), "none");
+    assert.notEqual(window.getComputedStyle(name).display, "none");
+  }
+  load(demoGraph);
+  assert.equal(labels.children.length, 0);
+});
+
 test("keeps graph outlines visible when zooming out in regular and virtualized overviews", (t) => {
   const { document, window, load } = openViewer(t);
   const style = document.createElement("style");

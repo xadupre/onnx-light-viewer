@@ -457,7 +457,7 @@ body.resizing-sidebar {
 #graph.zoom-area .port {
   cursor: crosshair;
 }
-#graph.overview text {
+#graph.overview text:not(.operator-label) {
   display: none;
 }
 #graph.overview .graph-node rect,
@@ -528,7 +528,7 @@ li > .tensor-info {
   stroke-width: 2;
   fill: #193b3a;
 }
-.graph-node .operator-label {
+.operator-label {
   fill: #effff9;
   font-size: 16px;
   font-weight: 600;
@@ -1208,6 +1208,7 @@ button:disabled {
     stroke: Highlight;
   }
   .graph-node text,
+  .operator-label,
   .graph-node .node-parameter,
   .port text,
   .tensor-label {
