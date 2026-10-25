@@ -1,6 +1,10 @@
 ONNX Light Viewer
 =================
 
+.. image:: ../media/onnx-badge.svg
+   :target: https://onnx.ai/
+   :alt: Uses ONNX
+
 .. image:: https://github.com/xadupre/onnx-light-viewer/actions/workflows/tests.yml/badge.svg?branch=main
    :target: https://github.com/xadupre/onnx-light-viewer/actions/workflows/tests.yml
    :alt: CI
