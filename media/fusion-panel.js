@@ -399,6 +399,7 @@ function createFusionPanel({
     invalidate: () => {
       fusionRequest++;
       fusionCompletion = undefined;
+      clearFusionPreview();
     },
   };
 }
