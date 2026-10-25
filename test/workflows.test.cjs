@@ -22,6 +22,27 @@ test("CI runs unit tests on Linux and Windows without building documentation", (
   assert.doesNotMatch(source, /sphinx|setup-python/);
 });
 
+test("CodeQL analysis waits for the complete test matrix to succeed", () => {
+  const source = workflow("tests.yml");
+  const analyze = source.slice(source.indexOf("\n  analyze:"));
+  assert.match(analyze, /^\s+needs: tests$/m);
+  assert.doesNotMatch(analyze, /^\s+if:/m);
+  assert.match(
+    analyze,
+    /language: \[actions, c-cpp, javascript-typescript, python\]/,
+  );
+  assert.match(analyze, /languages: \$\{\{ matrix\.language \}\}/);
+  assert.match(analyze, /build-mode: none/);
+  assert.match(analyze, /uses: github\/codeql-action\/init@v4\.39\.1/);
+  assert.match(analyze, /uses: github\/codeql-action\/analyze@v4\.39\.1/);
+  assert.match(analyze, /persist-credentials: false/);
+  assert.match(
+    analyze,
+    /permissions:\n      contents: read\n      security-events: write/,
+  );
+  assert.match(source, /^permissions:\n  contents: read\n/m);
+});
+
 test("documentation runs weekly or manually in a Linux-only workflow", () => {
   assert.match(documentation, /cron: "0 3 \* \* 1"/);
   assert.match(documentation, /^  workflow_dispatch:/m);

@@ -29,3 +29,25 @@ jobs:
       - if: runner.os == 'Linux'
         run: clang-format --dry-run --Werror native/*.cc native/*.h
       - run: npm test
+
+  # Disable CodeQL default setup in repository settings when enabling this job.
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    needs: tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [actions, c-cpp, javascript-typescript, python]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: github/codeql-action/init@v4.39.1
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+      - uses: github/codeql-action/analyze@v4.39.1
