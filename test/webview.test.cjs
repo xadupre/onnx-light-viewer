@@ -1,7 +1,58 @@
 const assert = require("node:assert/strict");
+const { readFileSync } = require("node:fs");
 const { test } = require("node:test");
+const { JSDOM } = require("jsdom");
 const { huggingFaceTasks } = require("../dist/huggingFaceTasks");
 const { webviewHtml } = require("../dist/webview");
+
+test("action buttons use rounded neutral surfaces and distinct typography", (t) => {
+  const dom = new JSDOM(
+    webviewHtml((name) => name, "test-source", "test-nonce", "test"),
+  );
+  t.after(() => dom.window.close());
+  const { document } = dom.window;
+  const stylesheet = document.createElement("style");
+  stylesheet.textContent = readFileSync(
+    require.resolve("../media/viewer.css"),
+    "utf8",
+  );
+  document.head.append(stylesheet);
+  const rules = [...stylesheet.sheet.cssRules];
+  const rule = (selector) =>
+    rules.find((entry) => entry.selectorText === selector).style;
+  for (const id of [
+    "rewriting-next",
+    "rewriting-all",
+    "run-optimization",
+    "preview-fusion",
+    "apply-fusion",
+    "open-submit",
+    "save-submit",
+  ]) {
+    const button = document.getElementById(id);
+    const style = dom.window.getComputedStyle(button);
+    assert.equal(style.borderRadius, "10px", id);
+    assert.equal(style.fontFamily, "system-ui, sans-serif", id);
+    assert.ok(Number(style.fontWeight) >= 600, id);
+  }
+  assert.equal(rule("button").border, "1px solid var(--muted)");
+  assert.equal(rule("button").background, "var(--panel)");
+  assert.equal(rule("button").color, "var(--text)");
+  assert.equal(rule(".primary").background, "");
+  assert.equal(rule(".primary").color, "");
+  assert.equal(rule("button:hover:not(:disabled)").background, "var(--border)");
+  assert.equal(
+    rule("button:focus-visible,\n[tabindex]:focus-visible").outline,
+    "2px solid var(--mint)",
+  );
+  assert.equal(rule("button:disabled").cursor, "default");
+  assert.equal(rule("button:disabled").opacity, "0.5");
+  assert.equal(
+    dom.window.getComputedStyle(document.getElementById("model-tab"))
+      .backgroundColor,
+    "rgba(0, 0, 0, 0)",
+  );
+});
 
 test("keeps Hugging Face task choices and ordering unchanged in the shell", () => {
   const expected = [

@@ -22,8 +22,18 @@ body {
   font: 13px/1.6 var(--vscode-font-family, system-ui, sans-serif);
 }
 button {
-  font: inherit;
+  font:
+    600 12px/1.6 system-ui,
+    sans-serif;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--muted);
+  border-radius: 10px;
+  padding: 5px 12px;
   cursor: pointer;
+}
+button:hover:not(:disabled) {
+  background: var(--border);
 }
 button:focus-visible,
 [tabindex]:focus-visible {
@@ -31,15 +41,8 @@ button:focus-visible,
   outline-offset: 4px;
 }
 .primary {
-  color: #102a28;
-  background: var(--mint);
-  border: 1px solid var(--mint);
-  border-radius: 7px;
-  font-weight: 600;
+  font-weight: 700;
   padding: 4px 10px;
-}
-.primary:hover {
-  background: #b1f5e3;
 }
 .eyebrow {
   font-size: 10px;
