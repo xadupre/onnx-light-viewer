@@ -1034,6 +1034,24 @@ function drawOverview() {
       )
       .join(" "),
   );
+  const labels = byId("overview-labels");
+  labels.replaceChildren();
+  for (const {
+    node,
+    position,
+    halfHeight,
+    typeFontSize,
+  } of nodeViews.values()) {
+    if (!node) continue;
+    const text = label(
+      labels,
+      position.x,
+      position.y - halfHeight + 52,
+      node.opType,
+      "operator-label",
+    );
+    text.style.fontSize = `${typeFontSize}px`;
+  }
   overviewDirty = false;
 }
 
@@ -1242,6 +1260,7 @@ function render(graph, metadata) {
   byId("graph-overview").setAttribute("display", "none");
   byId("overview-edges").removeAttribute("d");
   byId("overview-nodes").removeAttribute("d");
+  byId("overview-labels").replaceChildren();
   graphMetadata = undefined;
   nodeMetadata = new Map();
   valueMetadata = new Map();
@@ -1512,6 +1531,7 @@ function render(graph, metadata) {
       position,
       halfWidth: size.width / 2,
       halfHeight: size.height / 2,
+      typeFontSize: size.typeFontSize,
       subgraphs: size.subgraphs,
     });
     if (!virtualized) nodes.append(nodeViews.get(node.id).group);
