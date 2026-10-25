@@ -75,15 +75,17 @@ ONNX and ONNX Runtime
 Exporters
 ----------
 
-Create an ONNX model with an external exporter, then open its ``.onnx`` file
-in the viewer. Supported models, operators and target runtimes vary by tool.
+Use **Convert** to run an installed mbext, modelbuilder or Mobius exporter, or
+open a model exported separately. See :doc:`features/exporting_models`.
+Supported models, operators and target runtimes vary by tool.
 
 .. figure:: _static/onnx-exporters.svg
    :alt: External exporters write an ONNX model and optional external weight
          files. ONNX Light Viewer opens the resulting model for inspection.
    :width: 100%
 
-   Export happens outside the viewer; opening a model does not execute it.
+   Conversion runs in a separate Python process; opening the resulting model does
+   not execute its graph.
 
 * `Mobius <https://github.com/onnxruntime/mobius>`_:
   builds ONNX graphs with ONNX Script and pretrained weights rather than
@@ -129,6 +131,5 @@ in the viewer. Supported models, operators and target runtimes vary by tool.
   **Specialized for:** XGBoost, LightGBM, CatBoost, Core ML and other ML toolkits.
   `Documentation <https://onnx.ai/onnxmltools/>`__.
 
-These links do not imply built-in export commands. Viewer-side exporter
-integration is planned in `issue #131
-<https://github.com/xadupre/onnx-light-viewer/issues/131>`_.
+The **Convert** panel supports mbext, modelbuilder and Mobius. Other project links
+do not imply built-in export integration.

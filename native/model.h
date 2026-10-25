@@ -65,6 +65,7 @@ struct StoredModel {
   std::vector<ol::RewritingProto> fusion_plans;
   std::vector<std::vector<FusionMatch>> fusion_history;
   std::shared_ptr<const ol::core::builder::OptimizationReport> optimization_report;
+  int64_t optimization_wall_time_ns = 0;
   std::shared_ptr<StoredModel> rewriting_base;
   std::string rewriting_name;
   std::vector<size_t> rewriting_batches;

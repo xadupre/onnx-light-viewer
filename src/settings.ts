@@ -45,6 +45,7 @@ export const pythonPackages = [
   "transformers",
   "diffusers",
   "modelbuilder",
+  "mobius-onnx",
   "yet-another-onnx-builder",
   "skl2onnx",
   "tf2onnx",
@@ -135,6 +136,7 @@ for distribution in metadata.distributions(path=paths):
     if name:
         installed.setdefault(normalize(name), distribution.version)
 modules = {
+    "mobius-onnx": "mobius",
     "yet-another-onnx-builder": "yobx",
     "scikit-learn": "sklearn",
     "scikit-survival": "sksurv",

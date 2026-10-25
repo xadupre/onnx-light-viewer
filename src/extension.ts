@@ -4,8 +4,8 @@
  */
 import * as vscode from "vscode";
 import { randomBytes } from "node:crypto";
-import { open, stat } from "node:fs/promises";
-import { dirname, isAbsolute, join, posix } from "node:path";
+import { mkdir, open, stat } from "node:fs/promises";
+import { dirname, isAbsolute, join, posix, relative } from "node:path";
 import { homedir } from "node:os";
 import {
   listBackendTests,
@@ -23,6 +23,13 @@ import {
 } from "./graph";
 import { webviewHtml } from "./webview";
 import { applicationSettings, inspectPythonPackages } from "./settings";
+import {
+  defaultExportDirectory,
+  ExportHistory,
+  exportPlan,
+  prepareExportPlan,
+  runExport,
+} from "./export";
 import { ActionLog, LogEntry } from "./log";
 import {
   PathHistory,
@@ -150,6 +157,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const pathHistory = new PathHistory(context.globalState, (message) => {
     void vscode.window.showErrorMessage(message);
   });
+  const exportHistory = new ExportHistory(context.globalState);
   let current: { panel: vscode.WebviewPanel; showLogs: () => void } | undefined;
   const openViewer = async (
     uri?: vscode.Uri,
@@ -167,6 +175,7 @@ export function activate(context: vscode.ExtensionContext): void {
       uri,
       initialTab,
       pathHistory,
+      exportHistory,
       (showLogs) => {
         if (showLogs) current = { panel, showLogs };
         else if (current?.panel === panel) current = undefined;
@@ -205,6 +214,7 @@ export function activate(context: vscode.ExtensionContext): void {
           document.uri,
           "model",
           pathHistory,
+          exportHistory,
           (showLogs) => {
             if (showLogs) current = { panel, showLogs };
             else if (current?.panel === panel) current = undefined;
@@ -382,6 +392,7 @@ function isGraphPath(path: unknown): path is GraphPath {
  * @param uri Optional model to load initially; omitted leaves the viewer empty.
  * @param initialTab Tab selected in the initial HTML shell.
  * @param pathHistory Shared persistent history of successful Open/Save paths.
+ * @param exportHistory Shared persistent history of validated export inputs.
  * @param activatePanel Registers this panel's Show Logs callback, or clears it on disposal.
  */
 async function configurePanel(
@@ -390,6 +401,7 @@ async function configurePanel(
   uri: vscode.Uri | undefined,
   initialTab: "model" | "logs",
   pathHistory: PathHistory,
+  exportHistory: ExportHistory,
   activatePanel: (showLogs: (() => void) | undefined) => void,
 ): Promise<void> {
   panelSessions.get(panel)?.();
@@ -496,10 +508,14 @@ async function configurePanel(
         pythonPath: process.platform === "win32" ? "python" : "python3",
       },
     );
-  const sendSettings = () =>
-    postMessage({
+  const sendSettings = async () => {
+    const application = getApplicationSettings();
+    await mkdir(application.downloadDirectory, { recursive: true });
+    return postMessage({
       type: "settings-info",
-      application: getApplicationSettings(),
+      application,
+      exportHistory: exportHistory.snapshot(),
+      exportDirectory: defaultExportDirectory(application.downloadDirectory),
       viewer: viewerSettings(
         context.globalState.get<unknown>("viewerSettings") ?? {
           panels: { operator: true, find: true, metadata: false },
@@ -510,7 +526,23 @@ async function configurePanel(
       platform: `${process.platform} / ${process.arch}`,
       trusted: vscode.workspace.isTrusted,
     });
+  };
+  const getExportPlan = (value: unknown) => {
+    const settings = getApplicationSettings();
+    if (
+      value &&
+      typeof value === "object" &&
+      "directory" in value &&
+      value.directory === ""
+    )
+      value = {
+        ...value,
+        directory: defaultExportDirectory(settings.downloadDirectory),
+      };
+    return exportPlan(value, settings.pythonPath, settings.downloadDirectory);
+  };
   let inspectingPackages = false;
+  let exporting: AbortController | undefined;
   const locationUri = (value: unknown) => {
     if (typeof value !== "string" || !value.trim() || value.includes("\0"))
       throw new Error("Enter a file or directory path.");
@@ -619,6 +651,7 @@ async function configurePanel(
         historyEntry?: unknown;
         query?: unknown;
         task?: unknown;
+        exportOptions?: unknown;
       } | null,
     ) => {
       if (!active) return;
@@ -631,10 +664,9 @@ async function configurePanel(
       ) {
         try {
           if (message.type === "application-settings") {
-            await context.globalState.update(
-              "applicationSettings",
-              applicationSettings(message.settings),
-            );
+            const settings = applicationSettings(message.settings);
+            await mkdir(settings.downloadDirectory, { recursive: true });
+            await context.globalState.update("applicationSettings", settings);
           }
           if (message.type === "inspect-python") {
             if (!vscode.workspace.isTrusted)
@@ -679,6 +711,175 @@ async function configurePanel(
         }
       } else if (message?.type === "interaction") {
         log.interaction(message.entry);
+      } else if (message?.type === "export-preview") {
+        try {
+          const plan = getExportPlan(message.exportOptions);
+          await postMessage({
+            type: "export-preview",
+            requestId: message.requestId,
+            command: plan.command,
+            script: plan.script,
+            directory: plan.directory,
+            directoryTemplate: plan.directoryTemplate,
+          });
+        } catch (error) {
+          await postMessage({
+            type: "export-preview",
+            requestId: message.requestId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      } else if (message?.type === "cancel-export") {
+        exporting?.abort();
+      } else if (message?.type === "export") {
+        try {
+          await log.run(
+            "Convert ONNX model",
+            async (id) => {
+              if (!vscode.workspace.isTrusted)
+                throw new Error(
+                  "Trust this workspace before running an exporter.",
+                );
+              if (exporting)
+                throw new Error(
+                  "A conversion is already running in this panel.",
+                );
+              let plan = getExportPlan(message.exportOptions);
+              const controller = new AbortController();
+              exporting = controller;
+              const originalModel = model;
+              const revision = graphRevision;
+              let cancellation: string | undefined;
+              try {
+                plan = await prepareExportPlan(plan, controller.signal);
+                await postMessage({
+                  type: "export-progress",
+                  actionId: message.actionId,
+                  stage: "Starting conversion",
+                  command: plan.command,
+                  script: plan.script,
+                  directory: plan.directory,
+                  directoryTemplate: plan.directoryTemplate,
+                  output: "",
+                });
+                log.record(
+                  "SUCCEEDED",
+                  "Conversion command",
+                  undefined,
+                  `${plan.command}\nScript: ${plan.script}`,
+                );
+                await exportHistory.remember(plan);
+                await postMessage({
+                  type: "export-history",
+                  history: exportHistory.snapshot(),
+                });
+                const files = await runExport(
+                  plan,
+                  controller.signal,
+                  (output) => {
+                    if (!active || controller.signal.aborted) return;
+                    void postMessage({
+                      type: "export-progress",
+                      actionId: message.actionId,
+                      stage: "Converting ONNX model",
+                      output,
+                    });
+                  },
+                );
+                if (!active) return;
+                controller.signal.throwIfAborted();
+                const selected =
+                  files.length === 1
+                    ? files[0]
+                    : (
+                        await vscode.window.showQuickPick(
+                          files.map((path) => ({
+                            label: relative(plan.directory, path),
+                            path,
+                          })),
+                          {
+                            title: "Choose exported ONNX model",
+                            placeHolder:
+                              "Choose the exported model or pipeline to open",
+                          },
+                        )
+                      )?.path;
+                if (!selected) {
+                  cancellation =
+                    "Files saved; opening the exported model was cancelled.";
+                  await postMessage({
+                    type: "export-info",
+                    actionId: message.actionId,
+                    script: plan.script,
+                    loaded: false,
+                  });
+                  return;
+                }
+                controller.signal.throwIfAborted();
+                await postMessage({
+                  type: "export-progress",
+                  actionId: message.actionId,
+                  stage: "Opening exported model",
+                });
+                const loaded = await readGraph(vscode.Uri.file(selected), log);
+                controller.signal.throwIfAborted();
+                if (!active) return;
+                if (model !== originalModel || graphRevision !== revision)
+                  throw new Error(
+                    "The displayed model changed during conversion. Open the saved model manually.",
+                  );
+                if (!loaded)
+                  throw new Error("Opening the exported model was cancelled.");
+                model = loaded;
+                panel.title = `ONNX: ${posix.basename(selected.replaceAll("\\", "/"))}`;
+                await sendGraph();
+                await updateHistory("open", {
+                  action: "remember",
+                  entries: historyEntries("local", selected, dirname(selected)),
+                });
+                await postMessage({
+                  type: "export-info",
+                  actionId: message.actionId,
+                  path: selected,
+                  script: plan.script,
+                  loaded: true,
+                });
+              } catch (error) {
+                if (
+                  controller.signal.aborted &&
+                  error instanceof Error &&
+                  error.name === "AbortError"
+                ) {
+                  cancellation = "";
+                  return;
+                }
+                throw error;
+              } finally {
+                // Release before ActionLog publishes a terminal status.
+                if (exporting === controller) exporting = undefined;
+                if (cancellation !== undefined)
+                  log.record(
+                    "CANCELLED",
+                    "Convert ONNX model",
+                    id,
+                    cancellation,
+                  );
+              }
+            },
+            message.actionId,
+          );
+        } catch (error) {
+          if (!active) return;
+          const detail = error instanceof Error ? error.message : String(error);
+          await postMessage({
+            type: "export-error",
+            actionId: message.actionId,
+            error: detail,
+          });
+          await vscode.window.showErrorMessage(
+            `Could not convert ONNX model: ${detail}`,
+          );
+        }
       } else if (message?.type === "path-history-edit") {
         if (
           (message.target === "open" || message.target === "save") &&
@@ -2062,6 +2263,7 @@ async function configurePanel(
   const dispose = () => {
     active = false;
     hubSearch?.abort();
+    exporting?.abort();
     model = undefined;
     stopHistory();
     messages.dispose();

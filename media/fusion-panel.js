@@ -151,6 +151,7 @@ function createFusionPanel({
       [
         ["Iterations (including subgraphs)", report.iterations],
         ["Rewrites (including subgraphs)", report.rewrites],
+        ["Full native operation elapsed (ms)", milliseconds(report.wallTimeNs)],
         ["Total native phase time (ms)", milliseconds(report.totalTimeNs)],
       ],
     );

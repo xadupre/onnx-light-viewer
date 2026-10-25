@@ -26,6 +26,11 @@ underlying onnx-light libraries. Start with the worked example in
    * - Backend catalog
      - Search bundled onnx-light cases and inspect their model graphs.
      - :doc:`features/backend_tests`. Opens graphs, not a test runner.
+   * - Converting models
+     - Run installed mbext, modelbuilder or Mobius exporters with visible commands,
+       live output, cancellation and a saved reproduction script; open their output.
+     - :doc:`features/exporting_models`. Requires Python and a trusted workspace;
+       exporter packages and checkpoints are not installed automatically.
    * - Navigation
      - Zoom, pan, area zoom, readable-size views, multi-selection, dragging and
        sidebar node/operator search with live suggestions.
@@ -92,6 +97,7 @@ Detailed guides
    :maxdepth: 1
 
    features/opening_models
+   features/exporting_models
    features/navigation
    features/inspection
    features/subgraphs
