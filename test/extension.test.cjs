@@ -1343,6 +1343,8 @@ test("lists saved scenarios and applies one or all remaining steps with host und
     requestId: 2,
   });
   assert.equal(extension.messages.at(-1).type, "rewriting-info");
+  assert.equal(extension.messages.at(-1).requestId, 2);
+  assert.equal(latestGraph().fusionRequestId, 2);
   assert.equal(extension.messages.at(-1).scenarios[0].applied, 1);
   assert.deepEqual(
     extension.messages.at(-1).scenarios[0].steps[1].nodes,
@@ -1419,6 +1421,12 @@ test("unfuses the last operation or all successive native fusions atomically", a
       requestId: ++requestId,
     });
     assert.equal(extension.messages.at(-1).type, "fusion-info");
+    assert.equal(extension.messages.at(-1).requestId, requestId);
+    assert.equal(
+      extension.messages.findLast((message) => message.type === "graph")
+        .fusionRequestId,
+      requestId,
+    );
     assert.equal(
       extension.messages.at(-1).patterns.includes("TransposeTranspose"),
       latestGraph().graph.nodes.some((node) => node.opType === "Transpose"),

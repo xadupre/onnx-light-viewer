@@ -483,8 +483,11 @@ void AddFusionMethods(Napi::Env env, Napi::Object result, std::shared_ptr<Stored
                      for (size_t i = 0; i < applied; ++i)
                        TraceRewriting(plan.rewrites(i), order, history);
                      const auto permutation = FinalizedNodeOrder(*model->model, order);
-                     for (const auto node : plan.rewrites(applied).matched_nodes())
-                       selections[applied].push_back(permutation.at(node));
+                     const auto &matched = plan.rewrites(applied).matched_nodes();
+                     if (std::all_of(matched.begin(), matched.end(),
+                                     [&](const auto node) { return node < permutation.size(); }))
+                       for (const auto node : matched)
+                         selections[applied].push_back(permutation[node]);
                      std::sort(selections[applied].begin(), selections[applied].end());
                    }
                    auto steps = Napi::Array::New(call.Env(), plan.rewrites_size());

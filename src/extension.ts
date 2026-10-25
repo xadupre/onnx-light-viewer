@@ -524,7 +524,7 @@ async function configurePanel(
       directory: false,
       ...(file.size === undefined ? {} : { size: file.size }),
     }));
-  const sendGraph = (selectedNodes?: number[]) => {
+  const sendGraph = (selectedNodes?: number[], fusionRequestId?: unknown) => {
     fusionPreview = undefined;
     fusionRequest++;
     const current = requireModel();
@@ -532,6 +532,7 @@ async function configurePanel(
     return postMessage({
       type: "graph",
       graph: current.graph,
+      ...(fusionRequestId === undefined ? {} : { fusionRequestId }),
       ...(selectedNodes ? { selectedNodes } : {}),
       file: {
         fusionCount: current.fusionCount ?? 0,
@@ -1299,7 +1300,7 @@ async function configurePanel(
                 graphRevision++;
                 navigationRequest++;
                 panel.title = `ONNX: ${current.fileName ?? graph.name} (modified)`;
-                await sendGraph();
+                await sendGraph(undefined, message.requestId);
                 if (
                   !active ||
                   model !== replacement ||
@@ -1308,6 +1309,7 @@ async function configurePanel(
                   return;
                 await postMessage({
                   type: "rewriting-info",
+                  requestId: message.requestId,
                   name: message.scenario,
                   patterns: edited.fusionPatterns(path),
                   scenarios: edited.rewritingScenarios(path),
@@ -1378,7 +1380,7 @@ async function configurePanel(
                 graphRevision++;
                 navigationRequest++;
                 panel.title = `ONNX: ${current.fileName ?? graph.name} (modified)`;
-                await sendGraph();
+                await sendGraph(undefined, message.requestId);
                 if (
                   !active ||
                   model !== replacement ||
@@ -1387,6 +1389,7 @@ async function configurePanel(
                   return;
                 await postMessage({
                   type: "fusion-info",
+                  requestId: message.requestId,
                   count: anchors.length,
                   patterns: edited.fusionPatterns(path),
                   scenarios: edited.rewritingScenarios(path),

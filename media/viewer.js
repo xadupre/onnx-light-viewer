@@ -198,6 +198,8 @@ function newAction(action) {
 }
 
 function requestAction(type, action, parameters = {}) {
+  if (["open", "navigate", "undo-fusion", "select-fusion"].includes(type))
+    fusionPanel.invalidate();
   const entry = newAction(action);
   pendingActions.set(entry.id, type);
   if (type === "open") {
@@ -1870,7 +1872,7 @@ window.addEventListener("message", (event) => {
     }
     filePanels.reset();
     displayedGraph = event.data.graph;
-    fusionPanel.reset(displayedGraph);
+    fusionPanel.reset(displayedGraph, event.data.fusionRequestId);
     render(event.data.graph, event.data.metadata);
     filePanels.setFile(event.data.file);
     fusionPanel.refresh();

@@ -1698,7 +1698,7 @@ test("replays stored prefixes from canonical order despite Shape/Size finalizati
     );
   }
   const malformed = Buffer.concat([
-    modelBytes("fusion.onnx"),
+    (await savedFusionScenario()).bytes,
     bytesField(
       1001,
       Buffer.concat([
@@ -1709,9 +1709,26 @@ test("replays stored prefixes from canonical order despite Shape/Size finalizati
   ]);
   const invalid = loadModel(malformed, "invalid");
   const original = invalid.graph();
+  const scenarios = invalid.rewritingScenarios();
+  assert.deepEqual(
+    scenarios.find((scenario) => scenario.name === "bad").steps[0].nodes,
+    [],
+  );
+  assert.deepEqual(
+    scenarios.find((scenario) => scenario.name === "onnx-light-viewer.fusions")
+      .steps[0].nodes,
+    [0, 1],
+  );
+  assert.ok(invalid.fusionPatterns().includes("TransposeTranspose"));
   await assert.rejects(invalid.applyRewritingScenario("bad", true));
   assert.deepEqual(invalid.graph(), original);
   assert.equal(invalid.fusionCount(), 0);
+  const valid = await invalid.applyRewritingScenario(
+    "onnx-light-viewer.fusions",
+    true,
+  );
+  valid.verify();
+  assert.equal(valid.graph().nodes.length, original.nodes.length - 2);
 });
 
 test("maps the next saved pattern to current nodes after Shape/Size reordering", async () => {

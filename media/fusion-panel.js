@@ -10,6 +10,7 @@ function createFusionPanel({
 }) {
   let fusionGraph;
   let fusionRequest = 0;
+  let fusionCompletion;
   let fusionPreview;
   let fusionBusy = false;
   let scenarios = [];
@@ -243,6 +244,8 @@ function createFusionPanel({
       fusionRequest++;
       byId("fusion-panel").hidden = true;
       byId("fuse-pattern").setAttribute("aria-expanded", "false");
+      if (selectedStep) clearSelection();
+      selectedStep = undefined;
       clearFusionPreview();
       fit();
       postMessage({ type: "cancel-fusion" });
@@ -324,6 +327,13 @@ function createFusionPanel({
       if (data.type === "fusion-patterns" && data.requestId !== fusionRequest)
         return true;
       if (data.type !== "fusion-patterns") {
+        if (
+          fusionCompletion === undefined ||
+          data.requestId !== fusionCompletion ||
+          fusionRequest !== fusionCompletion + 1
+        )
+          return true;
+        fusionCompletion = undefined;
         byId("fusion-panel").hidden = false;
         byId("fuse-pattern").setAttribute("aria-expanded", "true");
       }
@@ -365,9 +375,11 @@ function createFusionPanel({
     }
     return true;
   }
-  function reset(graph) {
+  function reset(graph, operationRequestId) {
     fusionGraph = graph;
     selectedStep = undefined;
+    fusionCompletion =
+      operationRequestId === fusionRequest ? operationRequestId : undefined;
     fusionRequest++;
     byId("fusion-panel").hidden = true;
     byId("fuse-pattern").setAttribute("aria-expanded", "false");
@@ -384,5 +396,9 @@ function createFusionPanel({
     reset,
     setEnabled,
     refresh: () => fusionControls(false),
+    invalidate: () => {
+      fusionRequest++;
+      fusionCompletion = undefined;
+    },
   };
 }
