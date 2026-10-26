@@ -45,6 +45,7 @@ function memoryTestModel(
     initializers = [],
     outputType = 1,
     outputDimensions = dimensions,
+    opset = 18,
   } = {},
 ) {
   const tensor = (type, shape) =>
@@ -74,7 +75,7 @@ function memoryTestModel(
   return loadModel(
     Buffer.concat([
       varintField(1, 9),
-      bytesField(8, varintField(2, 18)),
+      bytesField(8, varintField(2, opset)),
       bytesField(
         7,
         Buffer.concat([
@@ -287,6 +288,87 @@ test("memory estimates reject unsupported and unresolved intermediate, output an
     outputDimensions: [1, "nonzero_count"],
   });
   await assert.rejects(unresolved.memoryProfile({}), /unresolved.*y/);
+});
+
+function attentionMemoryModel(shape, { linear = false, past = false } = {}) {
+  const integerAttribute = (name, value) =>
+    bytesField(
+      5,
+      Buffer.concat([
+        bytesField(1, name),
+        varintField(3, value),
+        varintField(20, 2),
+      ]),
+    );
+  const stateShape = [shape[0], 2, shape[2] / 2, shape[2] / 2];
+  return memoryTestModel(shape, {
+    opset: linear ? 27 : 23,
+    nodes: [
+      Buffer.concat([
+        bytesField(1, "x"),
+        bytesField(1, "x"),
+        bytesField(1, "x"),
+        ...(past ? [bytesField(1, "state")] : []),
+        bytesField(2, "y"),
+        bytesField(4, linear ? "LinearAttention" : "Attention"),
+        ...(linear
+          ? [
+              integerAttribute("q_num_heads", 2),
+              integerAttribute("kv_num_heads", 2),
+            ]
+          : []),
+      ]),
+    ],
+    initializers: past
+      ? [
+          Buffer.concat([
+            ...stateShape.map((dimension) => varintField(1, dimension)),
+            varintField(2, 1),
+            bytesField(8, "state"),
+          ]),
+        ]
+      : [],
+  });
+}
+
+test("memory estimates include registered Attention scratch in device totals and peaks", async () => {
+  const model = attentionMemoryModel([1, 2, 4, 8]);
+  const original = model.graph();
+  const profile = await model.memoryProfile({});
+  assert.equal(profile.events[0].scratchBytes, 128);
+  assert.equal(profile.events[0].deviceBytes, 640);
+  assert.equal(profile.peakBytes, 640);
+  assert.deepEqual(model.graph(), original);
+});
+
+test("memory estimates reject Attention scratch overflow and unsafe combined totals", async () => {
+  for (const sequence of [2 ** 26, 2 ** 31, 2 ** 33]) {
+    const model = attentionMemoryModel([1, 1, sequence, 1]);
+    await assert.rejects(model.memoryProfile({}), /too large.*scratch/);
+  }
+  const sequence = Math.floor(Math.sqrt(Number.MAX_SAFE_INTEGER / 4));
+  const model = attentionMemoryModel([1, 1, sequence, 1]);
+  await assert.rejects(
+    model.memoryProfile({}),
+    /exceeds the exact integer range/,
+  );
+});
+
+test("memory estimates include LinearAttention scratch with and without past state", async () => {
+  for (const past of [false, true]) {
+    const model = attentionMemoryModel([1, 4, 8], { linear: true, past });
+    const original = model.graph();
+    const profile = await model.memoryProfile({});
+    assert.equal(profile.events[0].scratchBytes, past ? 128 : 256);
+    assert.equal(profile.events[0].deviceBytes, 512);
+    assert.equal(profile.peakBytes, 512);
+    assert.deepEqual(model.graph(), original);
+  }
+});
+
+test("memory estimates reject oversized LinearAttention scratch before estimation", async () => {
+  const model = attentionMemoryModel([1, 1, 2 ** 31], { linear: true });
+  await assert.rejects(model.memoryProfile({}), /too large.*scratch/);
 });
 
 function varint(value) {

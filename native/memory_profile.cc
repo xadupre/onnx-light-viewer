@@ -113,6 +113,36 @@ void ValidateAllocations(const ol::GraphProto &graph,
     require_tensor(output.name());
 }
 
+void ValidateScratchAllocations(const ol::GraphProto &graph,
+                                const ol::core::shapes::ShapesContext &shapes) {
+  // Mirror the pinned SDK's two estimators before their unchecked products run.
+  for (const auto &node : graph.node()) {
+    if ((!node.domain().empty() && node.domain() != "ai.onnx") ||
+        (node.op_type() != "Attention" && node.op_type() != "LinearAttention"))
+      continue;
+    const ol::core::symbolic::SymShape empty;
+    const auto input = [&](int index) -> const ol::core::symbolic::SymShape & {
+      if (index >= node.input_size())
+        return empty;
+      const std::string name(node.input(index));
+      return shapes.Has(name) ? shapes.Get(name).Shape() : empty;
+    };
+    const auto &query = input(0);
+    const auto &key = input(1);
+    const std::string name = "scratch for " + std::string(node.op_type());
+    if (node.op_type() == "Attention") {
+      if (query.Rank() == 4 && key.Rank() == 4)
+        AllocationBytes(name, ol::TensorProto::FLOAT, {query[0], query[1], query[2], key[2]});
+    } else if (query.Rank() == 3 && key.Rank() == 3 && input(2).Rank() == 3) {
+      const auto &state = input(3);
+      if (state.Rank() == 4)
+        AllocationBytes(name, ol::TensorProto::FLOAT, state);
+      else
+        AllocationBytes(name, ol::TensorProto::FLOAT, {query[0], key[2], input(2)[2]});
+    }
+  }
+}
+
 class MemoryWorker : public Napi::AsyncWorker {
 public:
   MemoryWorker(Napi::Env env, std::shared_ptr<StoredModel> source,
@@ -167,6 +197,7 @@ public:
       context.ComputeShapes(snapshot_);
       // Native memory arithmetic assumes concrete, bounded allocations.
       ValidateAllocations(graph, context.Shapes());
+      ValidateScratchAllocations(graph, context.Shapes());
       context.ComputeValueAndNodeTags(graph);
       context.ComputeInPlaceReuseGraph(graph, context.Shapes(), false, context.ValueTags());
       context.ComputePeakMemory(graph, ol::core::symbolic::Device::kCPU);
@@ -269,6 +300,7 @@ void AddMemoryProfileMethods(Napi::Env env, Napi::Object result,
             dimensions.emplace(dimension.key, static_cast<int64_t>(number));
           }
           ol::onnx_shapes::RegisterShapeFunctions();
+          ol::onnx_shapes::RegisterPeakMemoryFunctions();
           ol::onnx_kernels::RegisterKernelFunctions();
           auto worker = new MemoryWorker(call.Env(), model, std::move(dimensions));
           const auto promise = worker->Promise();
