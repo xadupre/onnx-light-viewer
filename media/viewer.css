@@ -1156,6 +1156,7 @@ button:disabled {
 .save-grid label,
 .file-panel form > label,
 .file-panel fieldset > label,
+.file-panel #export-layer-options > label,
 .file-panel #open-file-list > label,
 .file-panel > label {
   display: block;

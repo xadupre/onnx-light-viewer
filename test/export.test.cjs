@@ -291,6 +291,75 @@ test("defaults to model/exporter folders and passes every listed precision/devic
       }
 });
 
+test("preserves the mbext layer limit through download, output retries and reproduction scripts", async (t) => {
+  const root = await directory(t);
+  const hub = await exportHub(t);
+  const previous = process.env.HF_ENDPOINT;
+  process.env.HF_ENDPOINT = hub.endpoint;
+  t.after(() => {
+    if (previous === undefined) delete process.env.HF_ENDPOINT;
+    else process.env.HF_ENDPOINT = previous;
+  });
+  const plan = exportPlan({ ...options(root), layerCount: 2 }, python);
+  assert.deepEqual(plan.args.slice(-3), [
+    "--extra_options",
+    "hf_remote=false",
+    "num_hidden_layers=2",
+  ]);
+  assert.match(plan.command, /num_hidden_layers=2/);
+  await writeFile(path.join(root, "existing.txt"), "Keep this output");
+  const retry = await prepareExportPlan(plan, new AbortController().signal);
+  assert.notEqual(retry.directory, root);
+  const local = await downloadExportSource(
+    retry,
+    path.join(root, "cache"),
+    new AbortController().signal,
+    () => {},
+  );
+  assert.equal(local.layerCount, 2);
+  assert.deepEqual(local.args.slice(-3), plan.args.slice(-3));
+  assert.equal(local.script, retry.script);
+  local.args = [
+    "-u",
+    "-c",
+    `import pathlib, shutil, sys
+assert sys.argv[-3:] == ["--extra_options", "hf_remote=false", "num_hidden_layers=2"]
+shutil.copyfile(sys.argv[1], pathlib.Path(sys.argv[2]) / "model.onnx")
+`,
+    path.join(__dirname, "models", "relu.onnx"),
+    local.directory,
+    ...local.args,
+  ];
+  assert.deepEqual(
+    await runExport(local, new AbortController().signal, () => {}),
+    [path.join(local.directory, "model.onnx")],
+  );
+  assert.match(await readFile(local.script, "utf8"), /num_hidden_layers=2/);
+});
+
+test("rejects invalid or unsupported exporter layer limits", () => {
+  const destination = path.join(tmpdir(), "layer-limit");
+  for (const layerCount of [0, -1, 1.5, NaN, Infinity, 2 ** 53, "2", null])
+    assert.throws(
+      () => exportPlan({ ...options(destination), layerCount }, python),
+      /layer limit must be a positive integer/,
+    );
+  for (const exporter of ["modelbuilder", "mobius"])
+    assert.throws(
+      () =>
+        exportPlan(
+          { ...options(destination, exporter), layerCount: 2 },
+          python,
+        ),
+      /mbext layer limit/,
+    );
+  assert.ok(
+    !exportPlan(options(destination), python).args.some((arg) =>
+      arg.startsWith("num_hidden_layers="),
+    ),
+  );
+});
+
 test("expands model and exporter directory templates without allowing model path traversal", async (t) => {
   const root = await directory(t);
   const template = path.join("base", "<model_id>", "<exporter>");

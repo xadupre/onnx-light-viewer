@@ -144,6 +144,7 @@ async function pathExists(path: string): Promise<boolean> {
 
 export interface ExportPlan {
   exporter: Exporter;
+  layerCount?: number;
   model: string;
   precision: string;
   provider: "cpu" | "cuda";
@@ -186,6 +187,15 @@ export function exportPlan(
       "Choose an exporter, model, absolute output directory, precision and device.",
     );
   const model = value.model.trim();
+  const layerCount = "layerCount" in value ? value.layerCount : undefined;
+  if (
+    layerCount !== undefined &&
+    (value.exporter !== "mbext" ||
+      typeof layerCount !== "number" ||
+      !Number.isSafeInteger(layerCount) ||
+      layerCount < 1)
+  )
+    throw new Error("The mbext layer limit must be a positive integer.");
   let directory = value.directory;
   if (directory.includes("<model_id>")) {
     const parts = isAbsolute(model) ? [basename(model)] : model.split(/[\\/]/);
@@ -244,8 +254,10 @@ export function exportPlan(
         "-e",
         value.provider,
       ];
-  if (value.exporter === "mbext")
+  if (value.exporter === "mbext") {
     args.push("--extra_options", "hf_remote=false");
+    if (layerCount !== undefined) args.push(`num_hidden_layers=${layerCount}`);
+  }
   const quote = (argument: string) => {
     const safe =
       process.platform === "win32" ? /^[\w./\\:=-]+$/ : /^[\w@%+=:,./-]+$/;
@@ -256,6 +268,7 @@ export function exportPlan(
   };
   return {
     exporter: value.exporter,
+    ...(layerCount === undefined ? {} : { layerCount }),
     model,
     precision,
     provider: value.provider,

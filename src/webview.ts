@@ -90,6 +90,10 @@ export function webviewHtml(
               <fieldset id="export-fields">
                 <label for="export-tool">Exporter</label>
                 <select id="export-tool"><option value="modelbuilder">modelbuilder (ONNX Runtime GenAI)</option><option value="mobius">Mobius</option><option value="mbext">mbext (fast export)</option></select>
+                <div id="export-layer-options" hidden>
+                  <label for="export-layer-count">Layer limit (test model)</label>
+                  <input id="export-layer-count" type="number" min="1" step="1" placeholder="All layers" disabled>
+                </div>
                 <label for="export-source">Hugging Face model ID or absolute local model directory</label>
                 <input id="export-source" required placeholder="Qwen/Qwen3-0.6B" autocomplete="off" list="export-source-history"><datalist id="export-source-history"></datalist>
                 <label for="export-directory">Output directory or template</label>

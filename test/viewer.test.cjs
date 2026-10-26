@@ -5466,6 +5466,74 @@ test("renders the demo, inspects its operator and requests a real file", (t) => 
   assert.equal(graph.getAttribute("viewBox"), initialViewBox);
 });
 
+test("mbext layer limits reach previews and submissions without affecting other exporters", async (t) => {
+  const { document, window, messages } = openViewer(t);
+  const byId = (id) => document.getElementById(id);
+  const change = (id, value) => {
+    byId(id).value = value;
+    byId(id).dispatchEvent(new window.Event("change", { bubbles: true }));
+  };
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: { type: "load-state", pending: false },
+    }),
+  );
+  byId("export-model").click();
+  assert.equal(byId("export-layer-options").hidden, true);
+  assert.equal(byId("export-layer-count").disabled, true);
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: {
+        type: "settings-info",
+        application: { downloadDirectory: "/downloads", pythonPath: "python3" },
+        viewer: { panels: { operator: true, find: true, metadata: false } },
+        trusted: true,
+        exportHistory: { exporter: "mbext", models: [], directories: [] },
+      },
+    }),
+  );
+  assert.equal(byId("export-layer-options").hidden, false);
+  assert.equal(byId("export-layer-count").disabled, false);
+  change("export-source", "owner/model");
+  change("export-directory", "/tmp/layer-limit");
+  change("export-layer-count", "2");
+  await new Promise((resolve) => window.setTimeout(resolve, 180));
+  assert.equal(
+    messages.findLast((message) => message.type === "export-preview")
+      .exportOptions.layerCount,
+    2,
+  );
+  for (const exporter of ["modelbuilder", "mobius"]) {
+    change("export-tool", exporter);
+    assert.equal(byId("export-layer-options").hidden, true);
+    assert.equal(byId("export-layer-count").disabled, true);
+    await new Promise((resolve) => window.setTimeout(resolve, 180));
+    assert.equal(
+      messages.findLast((message) => message.type === "export-preview")
+        .exportOptions.layerCount,
+      undefined,
+    );
+  }
+  change("export-tool", "mbext");
+  assert.equal(byId("export-layer-count").value, "2");
+  change("export-layer-count", "");
+  await new Promise((resolve) => window.setTimeout(resolve, 180));
+  assert.equal(
+    messages.findLast((message) => message.type === "export-preview")
+      .exportOptions.layerCount,
+    undefined,
+  );
+  change("export-layer-count", "2");
+  byId("export-form").dispatchEvent(
+    new window.Event("submit", { cancelable: true }),
+  );
+  assert.equal(
+    messages.findLast((message) => message.type === "export").exportOptions
+      .layerCount,
+    2,
+  );
+});
+
 test("export defaults follow the download directory without replacing chosen paths, and histories fill safe suggestions", async (t) => {
   const { document, window, messages } = openViewer(t);
   const byId = (id) => document.getElementById(id);

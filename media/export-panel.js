@@ -40,7 +40,16 @@ function createExportPanel({ byId, postMessage, requestAction, revealPanel }) {
     directory: defaultDirectory ? "" : byId("export-directory").value,
     precision: byId("export-precision").value,
     provider: byId("export-provider").value,
+    ...(byId("export-tool").value === "mbext" &&
+    byId("export-layer-count").value !== ""
+      ? { layerCount: Number(byId("export-layer-count").value) }
+      : {}),
   });
+  function updateLayerOptions() {
+    const mbext = byId("export-tool").value === "mbext";
+    byId("export-layer-options").hidden = !mbext;
+    byId("export-layer-count").disabled = !mbext;
+  }
   function historySuggestions(history) {
     for (const [id, entries] of [
       ["export-source-history", history.models],
@@ -62,6 +71,7 @@ function createExportPanel({ byId, postMessage, requestAction, revealPanel }) {
   byId("export-directory").addEventListener("change", directoryChanged);
   byId("export-tool").addEventListener("change", () => {
     exporterChosen = true;
+    updateLayerOptions();
   });
   const enabled = () => {
     byId("export-submit").disabled = running || loading;
@@ -156,6 +166,7 @@ function createExportPanel({ byId, postMessage, requestAction, revealPanel }) {
           historySuggestions(data.exportHistory);
           if (!exporterChosen && !running && data.exportHistory.exporter) {
             byId("export-tool").value = data.exportHistory.exporter;
+            updateLayerOptions();
           }
         }
         if (defaultDirectory && data.exportDirectory && !running) {
