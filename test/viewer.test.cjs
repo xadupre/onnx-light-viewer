@@ -5425,14 +5425,15 @@ test("exports from the right panel without a loaded model and shows commands, pr
     path: "/tmp/export-model/model.onnx",
     script: "/tmp/export-model/export_model.py",
     loaded: true,
+    durationMs: 1234,
   });
   const running = events.find(
     (event) => event.type === "interaction" && event.entry.id === next.actionId,
   ).entry;
   send({ type: "log-entry", entry: { ...running, status: "SUCCEEDED" } });
-  assert.match(
+  assert.equal(
     document.getElementById("export-status").textContent,
-    /Converted and opened/,
+    "Converted and opened /tmp/export-model/model.onnx Conversion time: 1.23 s.",
   );
   assert.match(
     document.getElementById("export-script").textContent,
@@ -5440,6 +5441,33 @@ test("exports from the right panel without a loaded model and shows commands, pr
   );
   assert.equal(document.getElementById("export-progress").hidden, true);
   assert.equal(document.getElementById("save-model").disabled, false);
+  document.getElementById("export-form").requestSubmit();
+  const saved = messages.at(-1);
+  send({
+    type: "export-info",
+    actionId: next.actionId,
+    loaded: false,
+    durationMs: 99999,
+  });
+  assert.equal(
+    document.getElementById("export-status").textContent,
+    "Starting conversion…",
+  );
+  send({
+    type: "export-info",
+    actionId: saved.actionId,
+    loaded: false,
+    durationMs: 0,
+  });
+  const saving = events.find(
+    (event) =>
+      event.type === "interaction" && event.entry.id === saved.actionId,
+  ).entry;
+  send({ type: "log-entry", entry: { ...saving, status: "CANCELLED" } });
+  assert.equal(
+    document.getElementById("export-status").textContent,
+    "Conversion saved; opening cancelled. Conversion time: 0.00 s.",
+  );
 });
 
 test("shows stored encoded field values and folds nested layouts without dequantizing weights", (t) => {
