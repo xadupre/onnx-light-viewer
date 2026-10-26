@@ -303,12 +303,13 @@ export function webviewHtml(
           <table id="statistics-stage-table" aria-label="Pipeline stage statistics"></table>
         </section>
         <section>
-          <h3>Operator type distribution</h3>
-          <table id="statistics-operators" aria-label="Operator type distribution"></table>
+          <h3>Model and external files</h3>
+          <p>Physical file sizes are refreshed when this tab opens. Unavailable files remain listed with a reason.</p>
+          <table id="statistics-files" aria-label="Model and external files"></table>
         </section>
         <section>
-          <h3>Model and external files</h3>
-          <table id="statistics-files" aria-label="Model and external files"></table>
+          <h3>Operator type distribution</h3>
+          <table id="statistics-operators" aria-label="Operator type distribution"></table>
         </section>
       </div>
     </section>

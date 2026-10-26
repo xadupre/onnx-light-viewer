@@ -525,10 +525,10 @@ function renderStatistics(graph, files) {
       : "No operators.";
   }
 
-  const fileRows = (files ?? []).map(({ name, size, external }) => [
+  const fileRows = (files ?? []).map(({ name, size, external, error }) => [
     external ? "External data" : "Model",
     name,
-    formatFileSize(size),
+    error ? `Unavailable: ${error}` : formatFileSize(size),
   ]);
   statisticsTable(
     "statistics-files",
