@@ -178,13 +178,14 @@ export class PipelineModel implements NativeModel {
         | "sparseInitializerCount"
         | "encodedInitializerCount"
         | "operatorTypes"
+        | "statisticsAvailable"
       > = {};
       const operators = new Map<
         string,
         { domain: string; opType: string; count: number }
       >();
       try {
-        const snapshot = model.graph(inferShapes);
+        const snapshot = model.graph(false);
         for (const node of snapshot.nodes) {
           const key = JSON.stringify([node.domain, node.opType]);
           const current = operators.get(key);
@@ -201,6 +202,7 @@ export class PipelineModel implements NativeModel {
           denseInitializerCount: snapshot.initializers.length,
           sparseInitializerCount: snapshot.sparseInitializers.length,
           encodedInitializerCount: snapshot.encodedInitializers.length,
+          statisticsAvailable: true,
           operatorTypes: [...operators.values()].sort(
             (left, right) =>
               right.count - left.count ||
@@ -209,7 +211,7 @@ export class PipelineModel implements NativeModel {
           ),
         };
       } catch {
-        details = { operatorTypes: [] };
+        details = { operatorTypes: [], statisticsAvailable: false };
       }
       return {
         role,

@@ -172,6 +172,7 @@ export type GraphSummary = Pick<
   sparseInitializerCount?: number;
   encodedInitializerCount?: number;
   operatorTypes?: { domain: string; opType: string; count: number }[];
+  statisticsAvailable?: boolean;
 };
 
 export interface FusionMatch {

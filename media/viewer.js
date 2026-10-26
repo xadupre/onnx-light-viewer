@@ -354,14 +354,28 @@ function renderStatistics(graph, files) {
 
   const stages = graph.pipeline
     ? graph.nodes.flatMap((node) =>
-        node.pipelineModel ? [{ name: node.name, ...node.pipelineModel }] : [],
+        node.pipelineModel ? [{ ...node.pipelineModel, name: node.name }] : [],
       )
     : [];
   const pipeline = stages.length > 0;
+  const availableStages = stages.filter(
+    (stage) => stage.statisticsAvailable !== false,
+  );
   const total = (field, fallback) =>
     pipeline
       ? stages.reduce((sum, stage) => sum + (stage[field] ?? 0), 0)
       : fallback;
+  const detailedTotal = (field, fallback) => {
+    if (!pipeline) return fallback;
+    const count = availableStages.reduce(
+      (sum, stage) => sum + (stage[field] ?? 0),
+      0,
+    );
+    if (availableStages.length === stages.length) return count;
+    return availableStages.length
+      ? `Partial: ${count.toLocaleString()}`
+      : "Unavailable";
+  };
   const summary = byId("statistics-summary");
   summary.replaceChildren();
   const entries = [
@@ -369,19 +383,25 @@ function renderStatistics(graph, files) {
     ["Initializers", graph.initializerCount],
     [
       "Dense initializers",
-      total("denseInitializerCount", graph.initializers?.length ?? 0),
+      detailedTotal("denseInitializerCount", graph.initializers?.length ?? 0),
     ],
     [
       "Sparse initializers",
-      total("sparseInitializerCount", graph.sparseInitializers?.length ?? 0),
+      detailedTotal(
+        "sparseInitializerCount",
+        graph.sparseInitializers?.length ?? 0,
+      ),
     ],
     [
       "Encoded initializers",
-      total("encodedInitializerCount", graph.encodedInitializers?.length ?? 0),
+      detailedTotal(
+        "encodedInitializerCount",
+        graph.encodedInitializers?.length ?? 0,
+      ),
     ],
     [
       "Local functions",
-      total("functionCount", graph.localFunctions?.length ?? 0),
+      detailedTotal("functionCount", graph.localFunctions?.length ?? 0),
     ],
     ["Inputs", graph.inputs.length],
     ["Outputs", graph.outputs.length],
@@ -390,7 +410,8 @@ function renderStatistics(graph, files) {
     const term = document.createElement("dt");
     const description = document.createElement("dd");
     term.textContent = key;
-    description.textContent = Number(value).toLocaleString();
+    description.textContent =
+      typeof value === "number" ? value.toLocaleString() : value;
     summary.append(term, description);
   }
   byId("statistics-model-name").textContent = graph.name || "Unnamed model";
@@ -404,7 +425,9 @@ function renderStatistics(graph, files) {
         stage.name,
         Number(stage.nodeCount ?? 0).toLocaleString(),
         Number(stage.initializerCount ?? 0).toLocaleString(),
-        Number(stage.functionCount ?? 0).toLocaleString(),
+        stage.statisticsAvailable === false
+          ? "Unavailable"
+          : Number(stage.functionCount ?? 0).toLocaleString(),
         Number(stage.inputs?.length ?? 0).toLocaleString(),
         Number(stage.outputs?.length ?? 0).toLocaleString(),
       ]),
@@ -419,7 +442,7 @@ function renderStatistics(graph, files) {
     else operatorCounts.set(key, { domain, opType, count });
   };
   if (pipeline) {
-    for (const stage of stages)
+    for (const stage of availableStages)
       for (const operator of stage.operatorTypes ?? [])
         addOperator(operator.domain, operator.opType, operator.count);
   } else {
@@ -444,7 +467,15 @@ function renderStatistics(graph, files) {
     const row = byId("statistics-operators").createTBody().insertRow();
     const cell = row.insertCell();
     cell.colSpan = 3;
-    cell.textContent = "No operators.";
+    cell.textContent = availableStages.length
+      ? "No operators."
+      : "Operator statistics unavailable.";
+  } else if (availableStages.length < stages.length) {
+    const row = byId("statistics-operators").createTBody().insertRow();
+    const cell = row.insertCell();
+    cell.colSpan = 3;
+    cell.textContent =
+      "Partial operator statistics: some stages are unavailable.";
   }
 
   const fileRows = (files ?? []).map(({ name, size, external }) => [

@@ -1235,6 +1235,7 @@ test("opens pipeline files, navigates stages, applies stage fusions and saves th
   const latestGraph = () =>
     extension.messages.findLast(({ type }) => type === "graph");
   assert.equal(latestGraph().graph.pipeline, true);
+  assert.equal(latestGraph().statistics, undefined);
   assert.match(latestGraph().file.savePath, /source-copy\.pipe-onnx$/);
   await extension.receive({
     type: "browse-files",
@@ -1253,6 +1254,7 @@ test("opens pipeline files, navigates stages, applies stage fusions and saves th
   const stagePath = [{ pipeline: "prefill" }];
   await extension.receive({ type: "navigate", path: stagePath });
   assert.equal(latestGraph().graph.breadcrumbs[1].name, "prefill");
+  assert.ok(latestGraph().statistics);
   await extension.receive({ type: "refresh-shapes" });
   assert.equal(extension.messages.at(-1).type, "shape-info");
   await extension.receive({ type: "metadata" });
@@ -1298,6 +1300,7 @@ test("opens pipeline files, navigates stages, applies stage fusions and saves th
   assert.deepEqual(await readFile(source), bytes);
   await extension.receive({ type: "navigate", path: [] });
   assert.equal(latestGraph().graph.canFuse, false);
+  assert.equal(latestGraph().statistics, undefined);
   await extension.receive({
     type: "select-fusion",
     operation: 0,

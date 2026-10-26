@@ -32,6 +32,7 @@ const {
   loadBackendTest,
   isEncryptedModel,
 } = require("../dist/graph");
+const { PipelineModel } = require("../dist/pipeline");
 
 function modelBytes(name) {
   return readFileSync(path.join(__dirname, "models", name));
@@ -223,6 +224,68 @@ test("opens and transforms the bundled three-stage pipeline through native file 
     model.graph(false, decodePath),
   );
   assert.deepEqual(restored.metadata(), model.metadata());
+});
+
+test("pipeline statistics avoid repeated inference and report unavailable projections", () => {
+  const summaryCalls = [];
+  const graphCalls = [];
+  const model = {
+    summary(inferShapes) {
+      summaryCalls.push(inferShapes);
+      return {
+        name: "main_graph",
+        inputs: [],
+        outputs: [],
+        initializerCount: 0,
+        tensors: [],
+        opsets: [],
+        nodeCount: 0,
+      };
+    },
+    graph(inferShapes) {
+      graphCalls.push(inferShapes);
+      return {
+        nodes: [],
+        localFunctions: [],
+        initializers: [],
+        sparseInitializers: [],
+        encodedInitializers: [],
+      };
+    },
+  };
+  const pipeline = new PipelineModel(
+    {
+      name: "pipeline",
+      metadata: [],
+      models: { embedding: model },
+      assemble: async () => new Uint8Array(),
+    },
+    "pipeline.pipe-onnx",
+  );
+  pipeline.summary(true);
+  assert.deepEqual(summaryCalls, [true]);
+  assert.deepEqual(graphCalls, [false]);
+
+  const unavailable = new PipelineModel(
+    {
+      name: "pipeline",
+      metadata: [],
+      models: {
+        embedding: {
+          ...model,
+          graph() {
+            throw new Error("Projection unavailable.");
+          },
+        },
+      },
+      assemble: async () => new Uint8Array(),
+    },
+    "pipeline.pipe-onnx",
+  );
+  assert.equal(
+    unavailable.graph().nodes[0].pipelineModel.statisticsAvailable,
+    false,
+  );
 });
 
 test("opens PipelineProto stages, rebases nested links and preserves settings on save", async () => {

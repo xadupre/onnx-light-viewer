@@ -226,6 +226,9 @@ test("statistics tab aggregates operator and node counts for each pipeline stage
     "tiny.pipe-onnx",
   );
   const graph = model.graph();
+  graph.nodes.forEach((node) => {
+    node.pipelineModel.name = "main_graph";
+  });
   window.dispatchEvent(
     new window.MessageEvent("message", {
       data: { type: "graph", graph, statistics: graph, file: { files: [] } },
@@ -235,6 +238,12 @@ test("statistics tab aggregates operator and node counts for each pipeline stage
   assert.equal(
     document.querySelectorAll("#statistics-stage-table tbody tr").length,
     3,
+  );
+  assert.deepEqual(
+    [...document.querySelectorAll("#statistics-stage-table tbody th")].map(
+      (cell) => cell.textContent,
+    ),
+    ["embedding", "prefill", "decode"],
   );
   const stages = graph.nodes.map((node) => node.pipelineModel);
   const expectedNodeCount = stages.reduce(
@@ -261,6 +270,51 @@ test("statistics tab aggregates operator and node counts for each pipeline stage
   assert.match(
     document.getElementById("statistics-files").textContent,
     /No source file available/,
+  );
+});
+
+test("statistics identify unavailable pipeline projections instead of showing zero counts", (t) => {
+  const { document, window } = openViewer(t);
+  const graph = loadModel(
+    readFileSync(require.resolve("./models/tiny.pipe-onnx")),
+    "tiny.pipe-onnx",
+  ).graph();
+  graph.nodes[0].pipelineModel.statisticsAvailable = false;
+  graph.nodes[0].pipelineModel.operatorTypes = [
+    { domain: "test", opType: "Unavailable", count: 42 },
+  ];
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: { type: "graph", graph, file: { files: [] } },
+    }),
+  );
+  document.getElementById("statistics-tab").click();
+
+  const summary = new Map(
+    [...document.querySelectorAll("#statistics-summary dt")].map((term) => [
+      term.textContent,
+      term.nextElementSibling.textContent,
+    ]),
+  );
+  assert.match(summary.get("Dense initializers"), /^Partial:/);
+  assert.match(summary.get("Local functions"), /^Partial:/);
+  assert.equal(
+    document.querySelector("#statistics-stage-table tbody tr th").textContent,
+    "embedding",
+  );
+  assert.equal(
+    document
+      .querySelector("#statistics-stage-table tbody tr")
+      .textContent.includes("Unavailable"),
+    true,
+  );
+  assert.match(
+    document.getElementById("statistics-operators").textContent,
+    /Partial operator statistics/,
+  );
+  assert.doesNotMatch(
+    document.getElementById("statistics-operators").textContent,
+    /Unavailable/,
   );
 });
 

@@ -554,12 +554,12 @@ async function configurePanel(
     const statistics =
       current.graph.breadcrumbs.length > 1
         ? (current.native?.graph() ?? current.graph)
-        : current.graph;
+        : undefined;
     void sendStatus();
     return postMessage({
       type: "graph",
       graph: current.graph,
-      statistics,
+      ...(statistics ? { statistics } : {}),
       ...(fusionRequestId === undefined ? {} : { fusionRequestId }),
       ...(selectedNodes ? { selectedNodes } : {}),
       file: {
