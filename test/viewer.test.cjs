@@ -116,6 +116,22 @@ function submitOpen(document, window) {
     .dispatchEvent(new window.Event("submit", { cancelable: true }));
 }
 
+function showStatistics(
+  { document, window, messages },
+  statistics,
+  files = [],
+) {
+  document.getElementById("statistics-tab").click();
+  const { requestId } = messages.findLast(
+    ({ type }) => type === "get-statistics",
+  );
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: { type: "statistics-info", requestId, statistics, files },
+    }),
+  );
+}
+
 test("Verify reports success and errors, prevents duplicate requests and resets on navigation", (t) => {
   const { document, window, messages, load } = openViewer(t);
   const button = document.getElementById("verify-model");
@@ -155,6 +171,331 @@ test("Verify reports success and errors, prevents duplicate requests and resets 
   assert.equal(button.disabled, true);
   send({ type: "load-state", pending: false });
   assert.equal(button.disabled, false);
+});
+
+test("statistics tab shows model counts, operator distribution and file sizes", (t) => {
+  const viewer = openViewer(t);
+  const { document, window } = viewer;
+  const graph = structuredClone(demoGraph);
+  graph.nodes.push({
+    ...graph.nodes[0],
+    id: "node-1",
+    name: "addition",
+    opType: "Add",
+  });
+  graph.initializerCount = 3;
+  graph.initializers = [{ name: "dense" }, { name: "weights" }];
+  graph.sparseInitializers = [{ name: "sparse" }];
+  graph.encodedInitializers = [];
+  graph.localFunctions = [{ name: "local-function" }];
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: {
+        type: "graph",
+        graph,
+        file: {
+          files: [
+            { name: "model.onnx", size: 2048, external: false },
+            { name: "weights.bin", size: 1024, external: true },
+          ],
+        },
+      },
+    }),
+  );
+  showStatistics(viewer, graph, [
+    { name: "model.onnx", size: 2048, external: false },
+    { name: "weights.bin", size: 1024, external: true },
+  ]);
+  assert.equal(document.getElementById("statistics-view").hidden, false);
+  assert.equal(document.getElementById("status-view").hidden, true);
+  const summary = new Map(
+    [...document.querySelectorAll("#statistics-summary dt")].map((term) => [
+      term.textContent,
+      term.nextElementSibling.textContent,
+    ]),
+  );
+  assert.equal(summary.get("Nodes"), "2");
+  assert.equal(summary.get("Initializers"), "3");
+  assert.equal(summary.get("Dense initializers"), "2");
+  assert.equal(summary.get("Sparse initializers"), "1");
+  assert.equal(summary.get("Local functions"), "1");
+  assert.equal(
+    [...document.querySelectorAll("#statistics-operators tbody tr")]
+      .map((row) => row.textContent)
+      .join(" "),
+    "ai.onnxAdd1 ai.onnxRelu1",
+  );
+  const files = document.getElementById("statistics-files").textContent;
+  assert.match(files, /model\.onnx/);
+  assert.match(files, /2\.0 KiB/);
+  assert.match(files, /weights\.bin/);
+  assert.match(files, /1\.0 KiB/);
+  document.getElementById("statistics-tab").focus();
+  document
+    .getElementById("statistics-tab")
+    .dispatchEvent(new window.KeyboardEvent("keydown", { key: "ArrowRight" }));
+  assert.equal(document.getElementById("status-view").hidden, false);
+  assert.equal(document.getElementById("statistics-view").hidden, true);
+});
+
+test("statistics tab aggregates operator and node counts for each pipeline stage", (t) => {
+  const viewer = openViewer(t);
+  const { document, window } = viewer;
+  const model = loadModel(
+    readFileSync(require.resolve("./models/tiny.pipe-onnx")),
+    "tiny.pipe-onnx",
+  );
+  const graph = model.graph();
+  graph.nodes.forEach((node) => {
+    node.pipelineModel.name = "main_graph";
+  });
+  graph.initializerCount = 0;
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: { type: "graph", graph },
+    }),
+  );
+  showStatistics(viewer, graph);
+  assert.equal(
+    document.querySelectorAll("#statistics-stage-table tbody tr").length,
+    3,
+  );
+  assert.deepEqual(
+    [...document.querySelectorAll("#statistics-stage-table tbody th")].map(
+      (cell) => cell.textContent,
+    ),
+    ["embedding", "prefill", "decode"],
+  );
+  const stages = graph.nodes.map((node) => node.pipelineModel);
+  const expectedNodeCount = stages.reduce(
+    (count, stage) => count + stage.nodeCount,
+    0,
+  );
+  const summary = new Map(
+    [...document.querySelectorAll("#statistics-summary dt")].map((term) => [
+      term.textContent,
+      term.nextElementSibling.textContent,
+    ]),
+  );
+  assert.equal(
+    summary.get("Initializers"),
+    String(stages.reduce((count, stage) => count + stage.initializerCount, 0)),
+  );
+  assert.equal(summary.get("Nodes"), String(expectedNodeCount));
+  assert.equal(
+    [...document.querySelectorAll("#statistics-operators tbody tr")].length,
+    new Set(
+      stages.flatMap((stage) =>
+        stage.operatorTypes.map(({ domain, opType }) =>
+          JSON.stringify([domain, opType]),
+        ),
+      ),
+    ).size,
+  );
+  assert.match(
+    document.getElementById("statistics-files").textContent,
+    /No source file available/,
+  );
+});
+
+test("statistics identify unavailable pipeline projections instead of showing zero counts", (t) => {
+  const viewer = openViewer(t);
+  const { document, window } = viewer;
+  const graph = loadModel(
+    readFileSync(require.resolve("./models/tiny.pipe-onnx")),
+    "tiny.pipe-onnx",
+  ).graph();
+  graph.nodes[0].pipelineModel.statisticsAvailable = false;
+  graph.nodes[0].pipelineModel.operatorTypes = [
+    { domain: "test", opType: "Unavailable", count: 42 },
+  ];
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: { type: "graph", graph, file: { files: [] } },
+    }),
+  );
+  showStatistics(viewer, graph);
+
+  const summary = new Map(
+    [...document.querySelectorAll("#statistics-summary dt")].map((term) => [
+      term.textContent,
+      term.nextElementSibling.textContent,
+    ]),
+  );
+  assert.match(summary.get("Dense initializers"), /^Partial:/);
+  assert.match(summary.get("Local functions"), /^Partial:/);
+  assert.equal(
+    document.querySelector("#statistics-stage-table tbody tr th").textContent,
+    "embedding",
+  );
+  assert.equal(
+    document
+      .querySelector("#statistics-stage-table tbody tr")
+      .textContent.includes("Unavailable"),
+    true,
+  );
+  assert.match(
+    document.getElementById("statistics-operators").textContent,
+    /Partial operator statistics/,
+  );
+  assert.doesNotMatch(
+    document.getElementById("statistics-operators").textContent,
+    /Unavailable/,
+  );
+});
+
+test("statistics accept compact model summaries while viewing a function", (t) => {
+  const viewer = openViewer(t);
+  const { document, window } = viewer;
+  const model = loadModel(
+    readFileSync(require.resolve("./models/functions.onnx")),
+    "functions.onnx",
+  );
+  const root = model.graph();
+  const graph = model.graph(false, root.localFunctions[0].path);
+  const statistics = model.summary();
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: { type: "graph", graph },
+    }),
+  );
+  showStatistics(viewer, statistics);
+  const summary = new Map(
+    [...document.querySelectorAll("#statistics-summary dt")].map((term) => [
+      term.textContent,
+      term.nextElementSibling.textContent,
+    ]),
+  );
+  assert.equal(summary.get("Nodes"), String(root.nodes.length));
+  assert.equal(
+    summary.get("Local functions"),
+    String(root.localFunctions.length),
+  );
+  assert.equal(
+    summary.get("Dense initializers"),
+    String(root.initializers.length),
+  );
+  assert.equal(
+    [
+      ...document.querySelectorAll("#statistics-operators tbody td:last-child"),
+    ].reduce((sum, cell) => sum + Number(cell.textContent), 0),
+    root.nodes.length,
+  );
+});
+
+test("statistics distinguish empty operator distributions from partial and unavailable data", (t) => {
+  const viewer = openViewer(t);
+  const { document, window } = viewer;
+  const empty = { ...demoGraph, nodes: [] };
+  const pipeline = loadModel(
+    readFileSync(require.resolve("./models/tiny.pipe-onnx")),
+    "tiny.pipe-onnx",
+  ).graph();
+  const partial = structuredClone(pipeline);
+  for (const [index, node] of partial.nodes.entries()) {
+    node.pipelineModel.statisticsAvailable = index === 0;
+    node.pipelineModel.operatorTypes = [];
+    if (index === 0) node.pipelineModel.nodeCount = 0;
+  }
+  const unavailable = structuredClone(partial);
+  unavailable.nodes[0].pipelineModel.statisticsAvailable = false;
+  const emptyPipeline = structuredClone(partial);
+  for (const node of emptyPipeline.nodes) {
+    node.pipelineModel.statisticsAvailable = true;
+    node.pipelineModel.nodeCount = 0;
+  }
+  for (const [graph, message] of [
+    [empty, "No operators."],
+    [emptyPipeline, "No operators."],
+    [partial, "Partial operator statistics: some stages are unavailable."],
+    [unavailable, "Operator statistics unavailable."],
+  ]) {
+    document.getElementById("model-tab").click();
+    window.dispatchEvent(
+      new window.MessageEvent("message", {
+        data: { type: "graph", graph, file: { files: [] } },
+      }),
+    );
+    showStatistics(viewer, graph);
+    assert.equal(
+      document.querySelector("#statistics-operators tbody td").textContent,
+      message,
+    );
+    assert.equal(
+      document.querySelectorAll("#statistics-operators tbody").length,
+      1,
+    );
+  }
+});
+
+test("statistics refresh on opening the tab and reject stale results and errors", (t) => {
+  const viewer = openViewer(t);
+  const { document, window, messages, load } = viewer;
+  const requests = () =>
+    messages.filter(({ type }) => type === "get-statistics");
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  const content = document.getElementById("statistics-content");
+  const status = document.getElementById("statistics-empty");
+  document.getElementById("statistics-tab").click();
+  assert.equal(requests().length, 0);
+  document.getElementById("model-tab").click();
+  load(demoGraph);
+  assert.equal(requests().length, 0);
+  showStatistics(viewer, demoGraph);
+  assert.equal(requests().length, 1);
+  assert.equal(content.hidden, false);
+
+  document.getElementById("model-tab").click();
+  document.getElementById("statistics-tab").click();
+  const { requestId } = requests().at(-1);
+  assert.equal(requests().length, 2);
+  assert.equal(content.hidden, true);
+  assert.match(status.textContent, /Updating model statistics/);
+  send({
+    type: "statistics-info",
+    requestId: requests()[0].requestId,
+    statistics: demoGraph,
+  });
+  assert.equal(content.hidden, true);
+  send({ type: "statistics-error", requestId, error: "Root analysis failed." });
+  assert.equal(content.hidden, true);
+  assert.match(
+    status.textContent,
+    /Statistics unavailable: Root analysis failed/,
+  );
+
+  document.getElementById("model-tab").click();
+  document.getElementById("statistics-tab").click();
+  const retry = requests().at(-1);
+  send({ type: "statistics-error", requestId, error: "Stale failure." });
+  assert.match(status.textContent, /Updating model statistics/);
+  send({
+    type: "statistics-info",
+    requestId: retry.requestId,
+    statistics: demoGraph,
+  });
+  assert.equal(content.hidden, false);
+
+  load({ ...demoGraph, name: "Replacement" });
+  const replacement = requests().at(-1);
+  assert.equal(requests().length, 4);
+  assert.equal(content.hidden, true);
+  send({
+    type: "statistics-info",
+    requestId: retry.requestId,
+    statistics: demoGraph,
+  });
+  assert.equal(content.hidden, true);
+  send({
+    type: "statistics-info",
+    requestId: replacement.requestId,
+    statistics: { ...demoGraph, name: "Replacement" },
+  });
+  assert.equal(
+    document.getElementById("statistics-model-name").textContent,
+    "Replacement",
+  );
 });
 
 test("pipeline navigation enables stage fusions and disables unsupported encrypted saves", (t) => {

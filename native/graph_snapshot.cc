@@ -750,6 +750,9 @@ Napi::Object ModelSummary(Napi::Env env, const ol::ModelProto &model,
   for (const auto &declaration : model.struct_types())
     declarations.emplace(declaration.type_id(), &declaration);
   std::unordered_set<std::string> initializers;
+  size_t dense_initializer_count = 0;
+  size_t sparse_initializer_count = 0;
+  size_t encoded_initializer_count = 0;
   std::map<std::string, Napi::Object> ports;
   for (const auto *values : {&graph.input(), &graph.output()})
     for (const auto &value : *values)
@@ -767,6 +770,7 @@ Napi::Object ModelSummary(Napi::Env env, const ol::ModelProto &model,
   for (const auto &tensor : graph.initializer()) {
     if (tensor.name().empty())
       continue;
+    ++dense_initializer_count;
     initializers.emplace(tensor.name());
     if (ports.contains(std::string(tensor.name())))
       ports.insert_or_assign(
@@ -776,6 +780,7 @@ Napi::Object ModelSummary(Napi::Env env, const ol::ModelProto &model,
   for (const auto &tensor : graph.sparse_initializer()) {
     if (!tensor.has_values() || tensor.values().name().empty())
       continue;
+    ++sparse_initializer_count;
     const std::string name(tensor.values().name());
     initializers.emplace(name);
     if (ports.contains(name))
@@ -785,6 +790,7 @@ Napi::Object ModelSummary(Napi::Env env, const ol::ModelProto &model,
   for (const auto &tensor : graph.extended_initializer()) {
     if (!tensor.has_encoded_value() || tensor.encoded_value().name().empty())
       continue;
+    ++encoded_initializer_count;
     const auto &value = tensor.encoded_value();
     const std::string name(value.name());
     initializers.emplace(name);
@@ -807,6 +813,30 @@ Napi::Object ModelSummary(Napi::Env env, const ol::ModelProto &model,
   result.Set("nodeCount", graph.node_size());
   result.Set("opsets", OpsetImports(env, model.opset_import()));
   result.Set("initializerCount", Napi::Number::New(env, initializers.size()));
+  result.Set("denseInitializerCount", Napi::Number::New(env, dense_initializer_count));
+  result.Set("sparseInitializerCount", Napi::Number::New(env, sparse_initializer_count));
+  result.Set("encodedInitializerCount", Napi::Number::New(env, encoded_initializer_count));
+  result.Set("functionCount", model.functions_size());
+  using OperatorKey = std::pair<std::string, std::string>;
+  const auto operator_hash = [](const OperatorKey &key) {
+    const auto domain_hash = std::hash<std::string>{}(key.first);
+    const auto type_hash = std::hash<std::string>{}(key.second);
+    return domain_hash ^ (type_hash + 0x9e3779b9 + (domain_hash << 6) + (domain_hash >> 2));
+  };
+  std::unordered_map<OperatorKey, size_t, decltype(operator_hash)> operator_counts(0,
+                                                                                   operator_hash);
+  for (const auto &node : graph.node())
+    ++operator_counts[{Domain(node.domain()), std::string(node.op_type())}];
+  auto operators = Napi::Array::New(env);
+  for (const auto &[key, count] : operator_counts) {
+    auto entry = Napi::Object::New(env);
+    entry.Set("domain", Text(env, key.first));
+    entry.Set("opType", Text(env, key.second));
+    entry.Set("count", Napi::Number::New(env, count));
+    operators.Set(operators.Length(), entry);
+  }
+  result.Set("operatorTypes", operators);
+  result.Set("statisticsAvailable", true);
   result.Set("inputs", ValueNames(env, graph.input(), initializers));
   result.Set("outputs", ValueNames(env, graph.output()));
   result.Set("tensors", tensors);

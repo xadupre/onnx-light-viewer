@@ -100,6 +100,7 @@ interface LoadedModel {
   fusionHistory?: FusionOperation[];
   source?: { uri: vscode.Uri };
   fileName?: string;
+  files?: { name: string; size?: number; external: boolean }[];
 }
 
 function copyFileName(model: LoadedModel, encrypted = false): string {
@@ -282,7 +283,25 @@ async function readGraph(
       ? () => loadModel(retainedBytes, fileName, password)
       : () => loadModelFile(source.uri.fsPath, fileName, password);
     const native = await reload();
-    return { graph: native.graph(), native, reload, source, fileName };
+    const fileDetails = async (
+      fileUri: vscode.Uri,
+      name: string,
+      external: boolean,
+    ) => {
+      try {
+        const { size } = await vscode.workspace.fs.stat(fileUri);
+        return { name, size, external };
+      } catch {
+        return { name, external };
+      }
+    };
+    const files = await Promise.all([
+      fileDetails(uri, fileName, false),
+      ...[...new Set(native.externalDataLocations())].map((location) =>
+        fileDetails(vscode.Uri.joinPath(uri, "..", location), location, true),
+      ),
+    ]);
+    return { graph: native.graph(), native, reload, source, fileName, files };
   });
 }
 
@@ -423,6 +442,7 @@ async function configurePanel(
   let model: LoadedModel | undefined;
   let graphRevision = 0;
   let navigationRequest = 0;
+  let statisticsRequest = 0;
   let fusionRequest = 0;
   let diagnosticRequest = 0;
   let undoRequest = 0;
@@ -717,6 +737,52 @@ async function configurePanel(
         }
       } else if (message?.type === "interaction") {
         log.interaction(message.entry);
+      } else if (message?.type === "get-statistics") {
+        const requestedModel = model;
+        const revision = graphRevision;
+        const generation = ++statisticsRequest;
+        const isCurrent = () =>
+          active &&
+          model === requestedModel &&
+          graphRevision === revision &&
+          statisticsRequest === generation;
+        try {
+          const statistics = await log.run(
+            "Refresh model statistics",
+            async () => {
+              if (
+                typeof message.requestId !== "number" ||
+                !Number.isSafeInteger(message.requestId) ||
+                message.requestId <= 0
+              )
+                throw new Error("Invalid statistics request.");
+              const current = requireModel();
+              const native = await nativeModel(current, log, () => {
+                void sendStatus();
+              });
+              if (!isCurrent()) return;
+              return current.graph.pipeline ? native.graph() : native.summary();
+            },
+          );
+          if (!isCurrent() || !statistics) return;
+          await postMessage({
+            type: "statistics-info",
+            requestId: message.requestId,
+            statistics,
+            files: requestedModel?.files ?? [],
+          });
+        } catch (error) {
+          if (!isCurrent()) return;
+          const detail = error instanceof Error ? error.message : String(error);
+          await postMessage({
+            type: "statistics-error",
+            requestId: message.requestId,
+            error: detail,
+          });
+          await vscode.window.showErrorMessage(
+            `Could not refresh ONNX statistics: ${detail}`,
+          );
+        }
       } else if (message?.type === "export-preview") {
         try {
           const plan = getExportPlan(message.exportOptions);

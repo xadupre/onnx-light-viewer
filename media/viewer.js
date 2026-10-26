@@ -38,6 +38,7 @@ let unusedLabels = [];
 let hasModel = false;
 let fusionUndoCount = 0;
 let displayedGraph;
+let statisticsRequest = 0;
 let replacementPending = false;
 let nextAction = 0;
 const logSession = crypto.randomUUID();
@@ -60,6 +61,7 @@ const RefreshStatus = Object.freeze({
 const tabs = [
   "model",
   "logs",
+  "statistics",
   "status",
   "controls",
   "repositories",
@@ -139,6 +141,7 @@ function showTab(name, focus = false) {
   }
   if (focus) byId(`${name}-tab`).focus();
   if (name === "model") fit();
+  else if (name === "statistics") requestStatistics();
   else if (name === "settings") vscode.postMessage({ type: "get-settings" });
   else if (name === "logs")
     byId("logs-view").scrollTop = byId("logs-view").scrollHeight;
@@ -322,6 +325,210 @@ function displayStatus(status) {
     byId("status-failure-details").textContent =
       status.lastFailure.details ?? "";
   }
+}
+
+function statisticsStatus(message, pending = false) {
+  byId("statistics-view").setAttribute("aria-busy", String(pending));
+  byId("statistics-empty").textContent = message;
+  byId("statistics-empty").hidden = false;
+  byId("statistics-content").hidden = true;
+}
+
+function requestStatistics() {
+  const requestId = ++statisticsRequest;
+  statisticsStatus(
+    hasModel
+      ? "Updating model statistics…"
+      : "Open a model to see its statistics.",
+    hasModel,
+  );
+  if (hasModel) vscode.postMessage({ type: "get-statistics", requestId });
+}
+
+function statisticsTable(id, columns, rows) {
+  const table = byId(id);
+  table.replaceChildren();
+  const head = table.createTHead().insertRow();
+  for (const column of columns) {
+    const cell = document.createElement("th");
+    cell.scope = "col";
+    cell.textContent = column;
+    head.append(cell);
+  }
+  const body = table.createTBody();
+  for (const values of rows) {
+    const row = body.insertRow();
+    for (const [index, value] of values.entries()) {
+      const cell = document.createElement(index === 0 ? "th" : "td");
+      if (index === 0) cell.scope = "row";
+      cell.textContent = value;
+      row.append(cell);
+    }
+  }
+}
+
+function formatFileSize(size) {
+  if (!Number.isSafeInteger(size) || size < 0) return "Unavailable";
+  if (size < 1024) return `${size.toLocaleString()} bytes`;
+  const units = ["KiB", "MiB", "GiB", "TiB"];
+  let value = size;
+  let unit = -1;
+  do {
+    value /= 1024;
+    unit++;
+  } while (value >= 1024 && unit < units.length - 1);
+  return `${value.toFixed(1)} ${units[unit]} (${size.toLocaleString()} bytes)`;
+}
+
+function renderStatistics(graph, files) {
+  byId("statistics-empty").hidden = Boolean(graph);
+  byId("statistics-content").hidden = !graph;
+  if (!graph) return;
+
+  const stages = graph.pipeline
+    ? graph.nodes.flatMap((node) =>
+        node.pipelineModel ? [{ ...node.pipelineModel, name: node.name }] : [],
+      )
+    : [];
+  const pipeline = stages.length > 0;
+  const availableStages = stages.filter(
+    (stage) => stage.statisticsAvailable !== false,
+  );
+  const total = (field, fallback) =>
+    pipeline
+      ? stages.reduce((sum, stage) => sum + (stage[field] ?? 0), 0)
+      : fallback;
+  const detailedTotal = (field, fallback) => {
+    if (!pipeline) return fallback;
+    const count = availableStages.reduce(
+      (sum, stage) => sum + (stage[field] ?? 0),
+      0,
+    );
+    if (availableStages.length === stages.length) return count;
+    return availableStages.length
+      ? `Partial: ${count.toLocaleString()}`
+      : "Unavailable";
+  };
+  const summary = byId("statistics-summary");
+  summary.replaceChildren();
+  const entries = [
+    ["Nodes", total("nodeCount", graph.nodeCount ?? graph.nodes.length)],
+    ["Initializers", total("initializerCount", graph.initializerCount)],
+    [
+      "Dense initializers",
+      detailedTotal(
+        "denseInitializerCount",
+        graph.denseInitializerCount ?? graph.initializers?.length ?? 0,
+      ),
+    ],
+    [
+      "Sparse initializers",
+      detailedTotal(
+        "sparseInitializerCount",
+        graph.sparseInitializerCount ?? graph.sparseInitializers?.length ?? 0,
+      ),
+    ],
+    [
+      "Encoded initializers",
+      detailedTotal(
+        "encodedInitializerCount",
+        graph.encodedInitializerCount ?? graph.encodedInitializers?.length ?? 0,
+      ),
+    ],
+    [
+      "Local functions",
+      detailedTotal(
+        "functionCount",
+        graph.functionCount ?? graph.localFunctions?.length ?? 0,
+      ),
+    ],
+    ["Inputs", graph.inputs.length],
+    ["Outputs", graph.outputs.length],
+  ];
+  for (const [key, value] of entries) {
+    const term = document.createElement("dt");
+    const description = document.createElement("dd");
+    term.textContent = key;
+    description.textContent =
+      typeof value === "number" ? value.toLocaleString() : value;
+    summary.append(term, description);
+  }
+  byId("statistics-model-name").textContent = graph.name || "Unnamed model";
+
+  byId("statistics-stages").hidden = !pipeline;
+  if (pipeline) {
+    statisticsTable(
+      "statistics-stage-table",
+      ["Stage", "Nodes", "Initializers", "Functions", "Inputs", "Outputs"],
+      stages.map((stage) => [
+        stage.name,
+        Number(stage.nodeCount ?? 0).toLocaleString(),
+        Number(stage.initializerCount ?? 0).toLocaleString(),
+        stage.statisticsAvailable === false
+          ? "Unavailable"
+          : Number(stage.functionCount ?? 0).toLocaleString(),
+        Number(stage.inputs?.length ?? 0).toLocaleString(),
+        Number(stage.outputs?.length ?? 0).toLocaleString(),
+      ]),
+    );
+  }
+
+  const operatorCounts = new Map();
+  const addOperator = (domain, opType, count = 1) => {
+    const key = JSON.stringify([domain, opType]);
+    const current = operatorCounts.get(key);
+    if (current) current.count += count;
+    else operatorCounts.set(key, { domain, opType, count });
+  };
+  if (pipeline) {
+    for (const stage of availableStages)
+      for (const operator of stage.operatorTypes ?? [])
+        addOperator(operator.domain, operator.opType, operator.count);
+  } else if (graph.operatorTypes) {
+    for (const operator of graph.operatorTypes)
+      addOperator(operator.domain, operator.opType, operator.count);
+  } else {
+    for (const node of graph.nodes) addOperator(node.domain, node.opType);
+  }
+  const operators = [...operatorCounts.values()].sort(
+    (left, right) =>
+      right.count - left.count ||
+      left.domain.localeCompare(right.domain) ||
+      left.opType.localeCompare(right.opType),
+  );
+  statisticsTable(
+    "statistics-operators",
+    ["Domain", "Operator", "Count"],
+    operators.map(({ domain, opType, count }) => [
+      domain || "(default)",
+      opType,
+      count.toLocaleString(),
+    ]),
+  );
+  const partial = availableStages.length < stages.length;
+  if (!operators.length || partial) {
+    const row = byId("statistics-operators").tBodies[0].insertRow();
+    const cell = row.insertCell();
+    cell.colSpan = 3;
+    cell.textContent = partial
+      ? availableStages.length
+        ? "Partial operator statistics: some stages are unavailable."
+        : "Operator statistics unavailable."
+      : "No operators.";
+  }
+
+  const fileRows = (files ?? []).map(({ name, size, external }) => [
+    external ? "External data" : "Model",
+    name,
+    formatFileSize(size),
+  ]);
+  statisticsTable(
+    "statistics-files",
+    ["File", "Name", "Size"],
+    fileRows.length
+      ? fileRows
+      : [["Source", "No source file available", "Unavailable"]],
+  );
 }
 
 function element(tag, attributes, text) {
@@ -1857,6 +2064,21 @@ window.addEventListener("message", (event) => {
     else setLoading(event.data.pending);
   } else if (event.data?.type === "load-error") {
     showLoadError(event.data.error);
+  } else if (
+    event.data?.type === "statistics-info" ||
+    event.data?.type === "statistics-error"
+  ) {
+    if (
+      event.data.requestId !== statisticsRequest ||
+      byId("statistics-view").hidden
+    )
+      return;
+    if (event.data.type === "statistics-error") {
+      statisticsStatus(`Statistics unavailable: ${event.data.error}`);
+    } else {
+      byId("statistics-view").setAttribute("aria-busy", "false");
+      renderStatistics(event.data.statistics, event.data.files);
+    }
   } else if (event.data?.type === "graph") {
     fusionUndoCount = event.data.file?.fusionCount ?? 0;
     byId("undo-fusion").setAttribute("aria-busy", "false");
@@ -1915,6 +2137,11 @@ window.addEventListener("message", (event) => {
     displayedGraph = event.data.graph;
     fusionPanel.reset(displayedGraph, event.data.fusionRequestId);
     render(event.data.graph, event.data.metadata);
+    if (!byId("statistics-view").hidden) requestStatistics();
+    else {
+      statisticsRequest++;
+      statisticsStatus("Open Statistics to update model statistics.");
+    }
     filePanels.setFile(event.data.file);
     fusionPanel.refresh();
     if (event.data.selectedNodes) focusNodes(event.data.selectedNodes);

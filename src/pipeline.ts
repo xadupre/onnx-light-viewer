@@ -109,6 +109,9 @@ export class PipelineModel implements NativeModel {
   summary = (inferShapes = false): GraphSummary => {
     const { name, inputs, outputs, initializerCount, tensors, nodes, opsets } =
       this.graph(inferShapes);
+    const stages = nodes.flatMap((node) =>
+      node.pipelineModel ? [node.pipelineModel] : [],
+    );
     return {
       name,
       inputs,
@@ -116,7 +119,17 @@ export class PipelineModel implements NativeModel {
       initializerCount,
       tensors,
       opsets,
-      nodeCount: nodes.length,
+      nodeCount: stages.length
+        ? stages.reduce((count, stage) => count + stage.nodeCount, 0)
+        : nodes.length,
+      ...(stages.length
+        ? {
+            functionCount: stages.reduce(
+              (count, stage) => count + (stage.functionCount ?? 0),
+              0,
+            ),
+          }
+        : {}),
     };
   };
 

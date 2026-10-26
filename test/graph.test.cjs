@@ -32,6 +32,7 @@ const {
   loadBackendTest,
   isEncryptedModel,
 } = require("../dist/graph");
+const { PipelineModel } = require("../dist/pipeline");
 
 function modelBytes(name) {
   return readFileSync(path.join(__dirname, "models", name));
@@ -165,6 +166,27 @@ test("opens and transforms the bundled three-stage pipeline through native file 
     model.graph().nodes.map((node) => node.name),
     ["embedding", "prefill", "decode"],
   );
+  for (const stage of model.graph().nodes) {
+    const stageGraph = model.graph(false, [{ pipeline: stage.name }]);
+    assert.equal(stage.pipelineModel.nodeCount, stageGraph.nodes.length);
+    assert.equal(
+      stage.pipelineModel.functionCount,
+      stageGraph.localFunctions.length,
+    );
+    assert.equal(
+      stage.pipelineModel.operatorTypes.reduce(
+        (count, operator) => count + operator.count,
+        0,
+      ),
+      stageGraph.nodes.length,
+    );
+  }
+  assert.equal(
+    model.summary().nodeCount,
+    model
+      .graph()
+      .nodes.reduce((count, stage) => count + stage.pipelineModel.nodeCount, 0),
+  );
   const embeddingPath = [{ pipeline: "embedding" }];
   const prefillPath = [{ pipeline: "prefill" }];
   const decodePath = [{ pipeline: "decode" }];
@@ -202,6 +224,77 @@ test("opens and transforms the bundled three-stage pipeline through native file 
     model.graph(false, decodePath),
   );
   assert.deepEqual(restored.metadata(), model.metadata());
+});
+
+test("pipeline statistics use summaries without projecting stages or repeating inference", () => {
+  const summaryCalls = [];
+  const graphCalls = [];
+  const model = {
+    summary(inferShapes) {
+      summaryCalls.push(inferShapes);
+      return {
+        name: "main_graph",
+        inputs: [],
+        outputs: [],
+        initializerCount: 0,
+        tensors: [],
+        opsets: [],
+        nodeCount: 0,
+        functionCount: 0,
+        denseInitializerCount: 0,
+        sparseInitializerCount: 0,
+        encodedInitializerCount: 0,
+        operatorTypes: [],
+        statisticsAvailable: true,
+      };
+    },
+    graph(inferShapes) {
+      graphCalls.push(inferShapes);
+      return {
+        nodes: [],
+        localFunctions: [],
+        initializers: [],
+        sparseInitializers: [],
+        encodedInitializers: [],
+      };
+    },
+  };
+  const pipeline = new PipelineModel(
+    {
+      name: "pipeline",
+      metadata: [],
+      models: { embedding: model },
+      assemble: async () => new Uint8Array(),
+    },
+    "pipeline.pipe-onnx",
+  );
+  pipeline.summary(true);
+  assert.deepEqual(summaryCalls, [true]);
+  assert.deepEqual(graphCalls, []);
+
+  const unavailable = new PipelineModel(
+    {
+      name: "pipeline",
+      metadata: [],
+      models: {
+        embedding: {
+          ...model,
+          summary(inferShapes) {
+            return {
+              ...model.summary(inferShapes),
+              statisticsAvailable: false,
+            };
+          },
+        },
+      },
+      assemble: async () => new Uint8Array(),
+    },
+    "pipeline.pipe-onnx",
+  );
+  assert.equal(
+    unavailable.graph().nodes[0].pipelineModel.statisticsAvailable,
+    false,
+  );
 });
 
 test("opens PipelineProto stages, rebases nested links and preserves settings on save", async () => {
@@ -342,23 +435,52 @@ test("projects all declared opsets, including unused domains and function-specif
   );
 });
 
-test("projects stage summaries without inspecting stage operators", () => {
+test("projects stage statistics without inspecting operator attributes or schemas", () => {
   for (const bytes of [
     modelBytes("relu.onnx"),
     modelBytes("parameters.onnx"),
     encodedModel(),
     encodedModel({ structured: true, logical: false }),
+    modelBytes("functions.onnx"),
   ]) {
     const model = loadModel(bytes, "stage.onnx");
     const graph = model.graph();
     const ports = new Set([...graph.inputs, ...graph.outputs]);
-    assert.deepEqual(model.summary(), {
+    const operators = new Map();
+    for (const node of graph.nodes) {
+      const key = JSON.stringify([node.domain, node.opType]);
+      const operator = operators.get(key);
+      if (operator) operator.count++;
+      else
+        operators.set(key, {
+          domain: node.domain,
+          opType: node.opType,
+          count: 1,
+        });
+    }
+    const summary = model.summary();
+    summary.operatorTypes.sort(
+      (left, right) =>
+        left.domain.localeCompare(right.domain) ||
+        left.opType.localeCompare(right.opType),
+    );
+    assert.deepEqual(summary, {
       name: graph.name,
       opsets: graph.opsets,
       inputs: graph.inputs,
       outputs: graph.outputs,
       initializerCount: graph.initializerCount,
       nodeCount: graph.nodes.length,
+      functionCount: graph.localFunctions.length,
+      denseInitializerCount: graph.initializers.length,
+      sparseInitializerCount: graph.sparseInitializers.length,
+      encodedInitializerCount: graph.encodedInitializers.length,
+      operatorTypes: [...operators.values()].sort(
+        (left, right) =>
+          left.domain.localeCompare(right.domain) ||
+          left.opType.localeCompare(right.opType),
+      ),
+      statisticsAvailable: true,
       tensors: graph.tensors.filter(({ name }) => ports.has(name)),
     });
   }

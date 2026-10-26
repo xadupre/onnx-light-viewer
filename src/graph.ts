@@ -161,11 +161,19 @@ export interface Graph {
   tensors: TensorInformation[];
 }
 
-/** Root ports and counts without projecting operators, attributes or schemas. */
+/** Root ports and counts without projecting individual operators, attributes or schemas. */
 export type GraphSummary = Pick<
   Graph,
   "name" | "inputs" | "outputs" | "initializerCount" | "tensors" | "opsets"
-> & { nodeCount: number };
+> & {
+  nodeCount: number;
+  functionCount?: number;
+  denseInitializerCount?: number;
+  sparseInitializerCount?: number;
+  encodedInitializerCount?: number;
+  operatorTypes?: { domain: string; opType: string; count: number }[];
+  statisticsAvailable?: boolean;
+};
 
 export interface FusionMatch {
   /** Global passes transform the entire scope and cannot be combined with other candidates. */
