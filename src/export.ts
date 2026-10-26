@@ -324,9 +324,11 @@ async function terminateExport(child: ChildProcess): Promise<void> {
             error.code === 128 &&
             (child.exitCode !== null || child.signalCode !== null)
           )
-        )
-          reject(error);
-        else resolve();
+        ) {
+          if (child.exitCode !== null || child.signalCode !== null) resolve();
+          else if (child.kill()) resolve();
+          else reject(error);
+        } else resolve();
       });
     });
     return;
