@@ -7,66 +7,165 @@ or executed, and viewer actions do not save or modify the source file.
 Available in the viewer
 -----------------------
 
-This checklist describes the default branch, not every capability of the
+This overview describes the default branch, not every capability of the
 underlying onnx-light libraries. Start with the worked example in
 :doc:`getting_started`; the linked guides explain each control in detail.
 
-.. list-table::
-   :header-rows: 1
-   :widths: 22 48 30
+Opening models
+^^^^^^^^^^^^^^
 
-   * - Area
-     - Implemented
-     - Guide / boundary
-   * - Opening models
-     - Local ``.onnx`` and ``.pipe-onnx`` files, bundled demos, public Hugging Face downloads and
-       persistent caching.
-     - :doc:`features/opening_models`. No authentication or automatic external
-       weight downloads.
-   * - Backend catalog
-     - Search bundled onnx-light cases and inspect their model graphs.
-     - :doc:`features/backend_tests`. Opens graphs, not a test runner.
-   * - Converting models
-     - Run installed mbext, modelbuilder or Mobius exporters with visible commands,
-       live output, cancellation and a saved reproduction script; open their output.
-     - :doc:`features/exporting_models`. Requires Python and a trusted workspace;
-       exporter packages and checkpoints are not installed automatically.
-   * - Navigation
-     - Zoom, pan, area zoom, readable-size views, multi-selection, dragging and
-       sidebar node/operator search with live suggestions.
-     - :doc:`features/navigation`. Moving a node changes only its display position.
-   * - Inspection
-     - Types, symbolic shapes, attributes/schema defaults, dense/sparse/encoded
-       initializer metadata, opaque/structured types, bounded previews and
-       Markdown operator documentation.
-     - :doc:`features/inspection`. External or omitted payloads are not read for
-       previews; this is not a full tensor-data browser.
-   * - Subgraphs and functions
-     - Graph/list attributes, captured inputs, model-local function definitions,
-       nested navigation and breadcrumbs.
-     - :doc:`features/subgraphs`. Function bodies are definitions, not specialized
-       executions of the selected call.
-   * - PipelineProto
-     - Stage navigation, generation-settings previews, per-stage inference and
-       fusion, and whole-container saving with embedded or external weights.
-     - :doc:`features/opening_models`. No pipeline execution or encryption.
-   * - Shape/type inference
-     - Explicit **Refresh shapes**, visible update counts and refreshed labels
-       without resetting the camera or selection.
-     - :doc:`features/inspection`. In-memory only; unsupported operators may fail.
-   * - Static metadata
-     - Constants, tags, lifetimes, last reads, releasable/unused outputs and stored
-       model/graph/node/tensor metadata.
-     - :doc:`features/metadata`. Static analysis, not measured runtime memory usage.
-   * - Memory profiling
-     - Dynamic dimension inputs, estimated CPU memory curve and paginated
-       per-node allocation/scratch events.
-     - :doc:`features/memory_profiling`. Native estimation, not model execution
-       or measured RAM/GPU usage.
-   * - Diagnostics and help
-     - Action history, progress/errors, native-library status, recovery after
-       caught exceptions, keyboard/mouse controls and ONNX repository links.
-     - :doc:`features/action_logs`, :doc:`features/navigation` and :doc:`links`.
+Open local ``.onnx`` and ``.pipe-onnx`` files, bundled demos or public Hugging Face
+models with persistent caching. See :doc:`features/opening_models`.
+No authentication or automatic external weight downloads.
+
+.. figure:: _static/feature-opening.png
+   :alt: Open panel listing local ONNX models and their file sizes.
+   :width: 100%
+
+   Browse local models without leaving the viewer.
+
+Backend catalog
+^^^^^^^^^^^^^^^
+
+Search bundled onnx-light cases and inspect their model graphs.
+See :doc:`features/backend_tests`; this opens graphs, not a test runner.
+
+.. figure:: _static/feature-backend.png
+   :alt: Backend test catalog filtered to Attention cases.
+   :width: 100%
+
+   Find a bundled case by name.
+
+Converting models
+^^^^^^^^^^^^^^^^^
+
+Run installed mbext, modelbuilder or Mobius exporters with visible commands,
+live output, cancellation and a saved reproduction script; open their output.
+See :doc:`features/exporting_models`. Requires Python and a trusted workspace;
+exporter packages and checkpoints are not installed automatically.
+
+.. figure:: _static/feature-conversion.png
+   :alt: Convert panel with exporter, model source, output directory and precision controls.
+   :width: 100%
+
+   Configure an exporter before launching conversion.
+
+Navigation
+^^^^^^^^^^
+
+Zoom, pan, area zoom, readable-size views, multi-selection, dragging and sidebar
+node/operator search with live suggestions. See :doc:`features/navigation`.
+Moving a node changes only its display position.
+
+.. figure:: _static/feature-navigation.png
+   :alt: Selected Reshape node at readable zoom with graph navigation controls.
+   :width: 100%
+
+   Inspect a selected node at readable size.
+
+Inspection
+^^^^^^^^^^
+
+Inspect types, symbolic shapes, attributes/schema defaults, dense/sparse/encoded
+initializer metadata, opaque/structured types, bounded previews and Markdown
+operator documentation. See :doc:`features/inspection`. External or omitted
+payloads are not read for previews; this is not a full tensor-data browser.
+
+.. figure:: _static/feature-inspection.png
+   :alt: Reshape inspector showing input and output tensors, attributes and initializer details.
+   :width: 100%
+
+   Operator details accompany the selected graph node.
+
+Subgraphs and functions
+^^^^^^^^^^^^^^^^^^^^^^^
+
+Browse graph/list attributes, captured inputs, model-local function definitions
+and nested graphs with breadcrumbs. See :doc:`features/subgraphs`.
+Function bodies are definitions, not specialized executions of the selected call.
+
+.. figure:: _static/feature-functions.png
+   :alt: Local Transform function body with breadcrumbs back to the containing model.
+   :width: 100%
+
+   Navigate into a model-local function definition.
+
+PipelineProto
+^^^^^^^^^^^^^
+
+Navigate stages and generation-settings previews, run per-stage inference and
+fusion, and save whole containers with embedded or external weights.
+See :doc:`features/opening_models`. No pipeline execution or encryption.
+
+.. figure:: _static/feature-pipeline.png
+   :alt: Pipeline overview showing embedding, prefill and decode model stages.
+   :width: 100%
+
+   Inspect the models contained in a pipeline.
+
+Shape/type inference
+^^^^^^^^^^^^^^^^^^^^
+
+Choose **Refresh shapes** for visible update counts and refreshed labels without
+resetting the camera or selection. See :doc:`features/inspection`.
+In-memory only; unsupported operators may fail.
+
+.. figure:: _static/feature-inference.png
+   :alt: Graph after Refresh shapes with inferred tensor labels and a visible update count.
+   :width: 100%
+
+   Refresh inferred shapes without modifying the source file.
+
+Static metadata
+^^^^^^^^^^^^^^^
+
+Inspect constants, tags, lifetimes, last reads, releasable/unused outputs and
+stored model/graph/node/tensor metadata. See :doc:`features/metadata`.
+This is static analysis, not measured runtime memory usage.
+
+.. figure:: _static/feature-metadata.png
+   :alt: Data panel displaying native tensor tags and lifetime information for a selected node.
+   :width: 100%
+
+   Inspect native metadata alongside operator details.
+
+Statistics
+^^^^^^^^^^
+
+Open **Statistics** to refresh complete-model counts, operator/type distributions
+and referenced file sizes, independently of nested navigation.
+
+.. figure:: _static/feature-statistics.png
+   :alt: Statistics tab with model counts, file size and operator distribution.
+   :width: 100%
+
+   Review the complete model rather than just the displayed subgraph.
+
+Memory profiling
+^^^^^^^^^^^^^^^^
+
+Set dynamic dimensions and view the estimated CPU memory curve with paginated
+per-node allocation/scratch events. See :doc:`features/memory_profiling`.
+Native estimation, not model execution or measured RAM/GPU usage.
+
+.. figure:: _static/feature-memory.png
+   :alt: Memory tab with a dynamic dimension set to two, CPU peak estimate, curve and node events.
+   :width: 100%
+
+   Estimate memory for concrete input dimensions without executing the model.
+
+Diagnostics and help
+^^^^^^^^^^^^^^^^^^^^
+
+View action history, progress/errors, native-library status, recovery after caught
+exceptions, keyboard/mouse controls and ONNX repository links.
+See :doc:`features/action_logs`, :doc:`features/navigation` and :doc:`links`.
+
+.. figure:: _static/feature-help.png
+   :alt: Controls tab listing the viewer's mouse gestures and keyboard shortcuts.
+   :width: 100%
+
+   Find the navigation and selection controls.
 
 Not yet available
 -----------------
