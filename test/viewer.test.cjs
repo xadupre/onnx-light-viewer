@@ -229,6 +229,7 @@ test("statistics tab aggregates operator and node counts for each pipeline stage
   graph.nodes.forEach((node) => {
     node.pipelineModel.name = "main_graph";
   });
+  graph.initializerCount = 0;
   window.dispatchEvent(
     new window.MessageEvent("message", {
       data: { type: "graph", graph, statistics: graph, file: { files: [] } },
@@ -255,6 +256,10 @@ test("statistics tab aggregates operator and node counts for each pipeline stage
       term.textContent,
       term.nextElementSibling.textContent,
     ]),
+  );
+  assert.equal(
+    summary.get("Initializers"),
+    String(stages.reduce((count, stage) => count + stage.initializerCount, 0)),
   );
   assert.equal(summary.get("Nodes"), String(expectedNodeCount));
   assert.equal(
@@ -389,6 +394,10 @@ test("statistics distinguish empty operator distributions from partial and unava
     assert.equal(
       document.querySelector("#statistics-operators tbody td").textContent,
       message,
+    );
+    assert.equal(
+      document.querySelectorAll("#statistics-operators tbody").length,
+      1,
     );
   }
 });

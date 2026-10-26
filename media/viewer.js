@@ -380,7 +380,7 @@ function renderStatistics(graph, files) {
   summary.replaceChildren();
   const entries = [
     ["Nodes", total("nodeCount", graph.nodeCount ?? graph.nodes.length)],
-    ["Initializers", graph.initializerCount],
+    ["Initializers", total("initializerCount", graph.initializerCount)],
     [
       "Dense initializers",
       detailedTotal(
@@ -474,7 +474,7 @@ function renderStatistics(graph, files) {
   );
   const partial = availableStages.length < stages.length;
   if (!operators.length || partial) {
-    const row = byId("statistics-operators").createTBody().insertRow();
+    const row = byId("statistics-operators").tBodies[0].insertRow();
     const cell = row.insertCell();
     cell.colSpan = 3;
     cell.textContent = partial

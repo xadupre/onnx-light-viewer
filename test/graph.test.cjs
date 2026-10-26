@@ -458,7 +458,13 @@ test("projects stage statistics without inspecting operator attributes or schema
           count: 1,
         });
     }
-    assert.deepEqual(model.summary(), {
+    const summary = model.summary();
+    summary.operatorTypes.sort(
+      (left, right) =>
+        left.domain.localeCompare(right.domain) ||
+        left.opType.localeCompare(right.opType),
+    );
+    assert.deepEqual(summary, {
       name: graph.name,
       opsets: graph.opsets,
       inputs: graph.inputs,

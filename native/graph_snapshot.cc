@@ -817,7 +817,15 @@ Napi::Object ModelSummary(Napi::Env env, const ol::ModelProto &model,
   result.Set("sparseInitializerCount", Napi::Number::New(env, sparse_initializer_count));
   result.Set("encodedInitializerCount", Napi::Number::New(env, encoded_initializer_count));
   result.Set("functionCount", model.functions_size());
-  std::map<std::pair<std::string, std::string>, size_t> operator_counts;
+  using OperatorKey = std::pair<std::string, std::string>;
+  const auto operator_hash = [](const OperatorKey &key) {
+    const auto domain_hash = std::hash<std::string>{}(key.first);
+    const auto type_hash = std::hash<std::string>{}(key.second);
+    return domain_hash ^ (type_hash + 0x9e3779b9 + (domain_hash << 6) +
+                          (domain_hash >> 2));
+  };
+  std::unordered_map<OperatorKey, size_t, decltype(operator_hash)> operator_counts(
+      0, operator_hash);
   for (const auto &node : graph.node())
     ++operator_counts[{Domain(node.domain()), std::string(node.op_type())}];
   auto operators = Napi::Array::New(env);
