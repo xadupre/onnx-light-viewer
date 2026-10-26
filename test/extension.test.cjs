@@ -1254,7 +1254,11 @@ test("opens pipeline files, navigates stages, applies stage fusions and saves th
   const stagePath = [{ pipeline: "prefill" }];
   await extension.receive({ type: "navigate", path: stagePath });
   assert.equal(latestGraph().graph.breadcrumbs[1].name, "prefill");
-  assert.ok(latestGraph().statistics);
+  assert.equal(latestGraph().statistics, undefined);
+  await extension.receive({ type: "get-statistics", requestId: 1 });
+  const originalStatistics = extension.messages.at(-1);
+  assert.equal(originalStatistics.type, "statistics-info");
+  assert.equal(originalStatistics.statistics.nodes.length, 2);
   await extension.receive({ type: "refresh-shapes" });
   assert.equal(extension.messages.at(-1).type, "shape-info");
   await extension.receive({ type: "metadata" });
@@ -1284,6 +1288,17 @@ test("opens pipeline files, navigates stages, applies stage fusions and saves th
   ]);
   assert.equal(stage.nodes[0].opType, "Identity");
   assert.deepEqual(stage.breadcrumbs.at(-1).path, stagePath);
+  await extension.receive({ type: "get-statistics", requestId: 2 });
+  const updatedStatistics = extension.messages.at(-1);
+  assert.equal(updatedStatistics.type, "statistics-info");
+  assert.equal(
+    updatedStatistics.statistics.nodes[0].pipelineModel.nodeCount,
+    stage.nodes.length,
+  );
+  assert.ok(
+    updatedStatistics.statistics.nodes[0].pipelineModel.nodeCount <
+      originalStatistics.statistics.nodes[0].pipelineModel.nodeCount,
+  );
   const destination = path.join(directory, "copy.pipe-onnx");
   await extension.save(destination);
   assert.deepEqual(extension.saveDialogs.at(-1).filters, {
@@ -2450,9 +2465,94 @@ test("streams local custom-editor files and replacements without reading whole f
   assert.deepEqual(extension.reads, []);
 });
 
+test("statistics recover complete model totals on demand after nested refresh failures", async (t) => {
+  for (const name of ["nested-if.onnx", "functions.onnx", "tiny.pipe-onnx"]) {
+    for (const type of ["refresh-shapes", "metadata"]) {
+      const extension = await openExtension(name, undefined, true);
+      t.after(() => extension.dispose());
+      await extension.receive({ type: "ready" });
+      const root = extension.messages.at(-1).graph;
+      const native = extension.nativeModels.at(-1);
+      const expected = root.pipeline ? root : native.summary();
+      const graph = native.graph;
+      const summary = native.summary;
+      let statisticsCalls = 0;
+      native.summary = (...args) => {
+        statisticsCalls++;
+        return summary(...args);
+      };
+      native.graph = (infer, path = []) => {
+        if (infer && type === "refresh-shapes")
+          throw new Error("Nested inference failed.");
+        if (root.pipeline && !path.length) statisticsCalls++;
+        return graph(infer, path);
+      };
+      if (type === "metadata")
+        native.metadata = () => {
+          throw new Error("Nested metadata failed.");
+        };
+      const path = root.pipeline
+        ? root.pipelineStages[0].path
+        : name === "functions.onnx"
+          ? root.localFunctions[0].path
+          : root.nodes[0].attributes.find(({ name }) => name === "then_branch")
+              .graphs[0].path;
+      await extension.receive({ type: "navigate", path });
+      assert.equal(extension.messages.at(-1).statistics, undefined);
+      assert.equal(statisticsCalls, 0);
+      await extension.receive({ type });
+      assert.equal(
+        extension.messages.at(-1).type,
+        type === "metadata" ? "metadata-error" : "shape-error",
+      );
+      const loaded = extension.nativeModels.length;
+      await extension.receive({ type: "ready" });
+      assert.equal(extension.messages.at(-1).statistics, undefined);
+      assert.equal(extension.nativeModels.length, loaded);
+      await extension.receive({ type: "get-statistics", requestId: 1 });
+      const result = extension.messages.at(-1);
+      assert.equal(result.type, "statistics-info");
+      assert.equal(result.requestId, 1);
+      assert.deepEqual(result.statistics, expected);
+      assert.equal(extension.nativeModels.length, loaded + 1);
+      assert.ok(result.files.some((file) => file.name === name));
+    }
+  }
+});
+
+test("statistics failures are explicit and can be retried without using nested counts", async (t) => {
+  const extension = await openExtension("functions.onnx");
+  t.after(() => extension.dispose());
+  const native = extension.nativeModels.at(-1);
+  const root = native.graph();
+  await extension.receive({
+    type: "navigate",
+    path: root.localFunctions[0].path,
+  });
+  const summary = native.summary;
+  native.summary = () => {
+    throw new Error("Root statistics failed.");
+  };
+  await extension.receive({ type: "get-statistics", requestId: 1 });
+  assert.deepEqual(extension.messages.at(-1), {
+    type: "statistics-error",
+    requestId: 1,
+    error: "Root statistics failed.",
+  });
+  assert.match(extension.errors.at(-1), /Root statistics failed/);
+  native.summary = summary;
+  await extension.receive({ type: "get-statistics", requestId: 2 });
+  assert.equal(extension.messages.at(-1).type, "statistics-info");
+  assert.equal(
+    extension.messages.at(-1).statistics.nodeCount,
+    root.nodes.length,
+  );
+});
+
 test("ignores stale recovery results and errors after replacing a local model", async () => {
   for (const type of [
     "navigate",
+    "get-statistics",
     "metadata",
     "refresh-shapes",
     "verify",
@@ -2467,6 +2567,7 @@ test("ignores stale recovery results and errors after replacing a local model", 
       const resume = extension.pauseNextFileLoad();
       const recovery = extension.receive({
         type,
+        requestId: 1,
         path,
         scenario: "scenario",
         all: false,
@@ -2532,6 +2633,7 @@ test("shares concurrent native recovery and keeps inferred state for navigation"
 test("ignores delayed recovery results and errors after disposing the panel", async () => {
   for (const message of [
     { type: "navigate", path: [] },
+    { type: "get-statistics", requestId: 1 },
     { type: "navigate", path: [{ node: 9999, attribute: 0, graph: 0 }] },
     { type: "metadata" },
     { type: "refresh-shapes" },
@@ -3521,6 +3623,8 @@ test("navigates retained subgraphs, scopes refreshes and reports invalid paths w
   const reads = extension.reads.length;
   await extension.receive({ type: "navigate", path });
   const child = extension.messages.at(-1).graph;
+  assert.equal(extension.messages.at(-1).statistics, undefined);
+  await extension.receive({ type: "get-statistics", requestId: 1 });
   const statistics = extension.messages.at(-1).statistics;
   assert.equal(statistics.nodeCount, root.nodes.length);
   assert.equal(statistics.nodes, undefined);

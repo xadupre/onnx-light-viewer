@@ -424,6 +424,7 @@ async function configurePanel(
   let model: LoadedModel | undefined;
   let graphRevision = 0;
   let navigationRequest = 0;
+  let statisticsRequest = 0;
   let fusionRequest = 0;
   let diagnosticRequest = 0;
   let undoRequest = 0;
@@ -551,23 +552,15 @@ async function configurePanel(
     fusionRequest++;
     diagnosticRequest++;
     const current = requireModel();
-    const statistics =
-      current.graph.breadcrumbs.length > 1
-        ? ((current.graph.pipeline
-            ? current.native?.graph()
-            : current.native?.summary()) ?? current.graph)
-        : undefined;
     void sendStatus();
     return postMessage({
       type: "graph",
       graph: current.graph,
-      ...(statistics ? { statistics } : {}),
       ...(fusionRequestId === undefined ? {} : { fusionRequestId }),
       ...(selectedNodes ? { selectedNodes } : {}),
       file: {
         fusionCount: current.fusionCount ?? 0,
         fusionHistory: current.fusionHistory ?? [],
-        files: current.files ?? [],
         ...(current.graph.pipeline ? { pipeline: true } : {}),
         directory: locationText(directoryUri()),
         savePath: locationText(
@@ -706,6 +699,52 @@ async function configurePanel(
         }
       } else if (message?.type === "interaction") {
         log.interaction(message.entry);
+      } else if (message?.type === "get-statistics") {
+        const requestedModel = model;
+        const revision = graphRevision;
+        const generation = ++statisticsRequest;
+        const isCurrent = () =>
+          active &&
+          model === requestedModel &&
+          graphRevision === revision &&
+          statisticsRequest === generation;
+        try {
+          const statistics = await log.run(
+            "Refresh model statistics",
+            async () => {
+              if (
+                typeof message.requestId !== "number" ||
+                !Number.isSafeInteger(message.requestId) ||
+                message.requestId <= 0
+              )
+                throw new Error("Invalid statistics request.");
+              const current = requireModel();
+              const native = await nativeModel(current, log, () => {
+                void sendStatus();
+              });
+              if (!isCurrent()) return;
+              return current.graph.pipeline ? native.graph() : native.summary();
+            },
+          );
+          if (!isCurrent() || !statistics) return;
+          await postMessage({
+            type: "statistics-info",
+            requestId: message.requestId,
+            statistics,
+            files: requestedModel?.files ?? [],
+          });
+        } catch (error) {
+          if (!isCurrent()) return;
+          const detail = error instanceof Error ? error.message : String(error);
+          await postMessage({
+            type: "statistics-error",
+            requestId: message.requestId,
+            error: detail,
+          });
+          await vscode.window.showErrorMessage(
+            `Could not refresh ONNX statistics: ${detail}`,
+          );
+        }
       } else if (message?.type === "path-history-edit") {
         if (
           (message.target === "open" || message.target === "save") &&

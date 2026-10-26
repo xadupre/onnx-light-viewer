@@ -38,6 +38,7 @@ let unusedLabels = [];
 let hasModel = false;
 let fusionUndoCount = 0;
 let displayedGraph;
+let statisticsRequest = 0;
 let replacementPending = false;
 let nextAction = 0;
 const logSession = crypto.randomUUID();
@@ -134,6 +135,7 @@ function showTab(name, focus = false) {
   }
   if (focus) byId(`${name}-tab`).focus();
   if (name === "model") fit();
+  else if (name === "statistics") requestStatistics();
   else if (name === "settings") vscode.postMessage({ type: "get-settings" });
   else if (name === "logs")
     byId("logs-view").scrollTop = byId("logs-view").scrollHeight;
@@ -310,6 +312,24 @@ function displayStatus(status) {
     byId("status-failure-details").textContent =
       status.lastFailure.details ?? "";
   }
+}
+
+function statisticsStatus(message, pending = false) {
+  byId("statistics-view").setAttribute("aria-busy", String(pending));
+  byId("statistics-empty").textContent = message;
+  byId("statistics-empty").hidden = false;
+  byId("statistics-content").hidden = true;
+}
+
+function requestStatistics() {
+  const requestId = ++statisticsRequest;
+  statisticsStatus(
+    hasModel
+      ? "Updating model statistics…"
+      : "Open a model to see its statistics.",
+    hasModel,
+  );
+  if (hasModel) vscode.postMessage({ type: "get-statistics", requestId });
 }
 
 function statisticsTable(id, columns, rows) {
@@ -2030,6 +2050,21 @@ window.addEventListener("message", (event) => {
     else setLoading(event.data.pending);
   } else if (event.data?.type === "load-error") {
     showLoadError(event.data.error);
+  } else if (
+    event.data?.type === "statistics-info" ||
+    event.data?.type === "statistics-error"
+  ) {
+    if (
+      event.data.requestId !== statisticsRequest ||
+      byId("statistics-view").hidden
+    )
+      return;
+    if (event.data.type === "statistics-error") {
+      statisticsStatus(`Statistics unavailable: ${event.data.error}`);
+    } else {
+      byId("statistics-view").setAttribute("aria-busy", "false");
+      renderStatistics(event.data.statistics, event.data.files);
+    }
   } else if (event.data?.type === "graph") {
     fusionUndoCount = event.data.file?.fusionCount ?? 0;
     byId("undo-fusion").setAttribute("aria-busy", "false");
@@ -2088,10 +2123,11 @@ window.addEventListener("message", (event) => {
     displayedGraph = event.data.graph;
     fusionPanel.reset(displayedGraph, event.data.fusionRequestId);
     render(event.data.graph, event.data.metadata);
-    renderStatistics(
-      event.data.statistics ?? event.data.graph,
-      event.data.file?.files,
-    );
+    if (!byId("statistics-view").hidden) requestStatistics();
+    else {
+      statisticsRequest++;
+      statisticsStatus("Open Statistics to update model statistics.");
+    }
     filePanels.setFile(event.data.file);
     fusionPanel.refresh();
     if (event.data.selectedNodes) focusNodes(event.data.selectedNodes);

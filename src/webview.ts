@@ -260,7 +260,8 @@ export function webviewHtml(
     </section>
     <section id="statistics-view" role="tabpanel" aria-labelledby="statistics-tab" tabindex="0" hidden>
       <h2>Model statistics</h2>
-      <p id="statistics-empty">Open a model to see its statistics.</p>
+      <p>Statistics cover the complete model, regardless of the displayed subgraph, and are updated whenever this tab is opened.</p>
+      <p id="statistics-empty" role="status">Open a model to see its statistics.</p>
       <div id="statistics-content" hidden>
         <h3 id="statistics-model-name"></h3>
         <dl id="statistics-summary" class="status-details"></dl>

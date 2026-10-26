@@ -116,6 +116,22 @@ function submitOpen(document, window) {
     .dispatchEvent(new window.Event("submit", { cancelable: true }));
 }
 
+function showStatistics(
+  { document, window, messages },
+  statistics,
+  files = [],
+) {
+  document.getElementById("statistics-tab").click();
+  const { requestId } = messages.findLast(
+    ({ type }) => type === "get-statistics",
+  );
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: { type: "statistics-info", requestId, statistics, files },
+    }),
+  );
+}
+
 test("Verify reports success and errors, prevents duplicate requests and resets on navigation", (t) => {
   const { document, window, messages, load } = openViewer(t);
   const button = document.getElementById("verify-model");
@@ -158,7 +174,8 @@ test("Verify reports success and errors, prevents duplicate requests and resets 
 });
 
 test("statistics tab shows model counts, operator distribution and file sizes", (t) => {
-  const { document, window } = openViewer(t);
+  const viewer = openViewer(t);
+  const { document, window } = viewer;
   const graph = structuredClone(demoGraph);
   graph.nodes.push({
     ...graph.nodes[0],
@@ -176,7 +193,6 @@ test("statistics tab shows model counts, operator distribution and file sizes", 
       data: {
         type: "graph",
         graph,
-        statistics: graph,
         file: {
           files: [
             { name: "model.onnx", size: 2048, external: false },
@@ -186,7 +202,10 @@ test("statistics tab shows model counts, operator distribution and file sizes", 
       },
     }),
   );
-  document.getElementById("statistics-tab").click();
+  showStatistics(viewer, graph, [
+    { name: "model.onnx", size: 2048, external: false },
+    { name: "weights.bin", size: 1024, external: true },
+  ]);
   assert.equal(document.getElementById("statistics-view").hidden, false);
   assert.equal(document.getElementById("status-view").hidden, true);
   const summary = new Map(
@@ -220,7 +239,8 @@ test("statistics tab shows model counts, operator distribution and file sizes", 
 });
 
 test("statistics tab aggregates operator and node counts for each pipeline stage", (t) => {
-  const { document, window } = openViewer(t);
+  const viewer = openViewer(t);
+  const { document, window } = viewer;
   const model = loadModel(
     readFileSync(require.resolve("./models/tiny.pipe-onnx")),
     "tiny.pipe-onnx",
@@ -232,10 +252,10 @@ test("statistics tab aggregates operator and node counts for each pipeline stage
   graph.initializerCount = 0;
   window.dispatchEvent(
     new window.MessageEvent("message", {
-      data: { type: "graph", graph, statistics: graph, file: { files: [] } },
+      data: { type: "graph", graph },
     }),
   );
-  document.getElementById("statistics-tab").click();
+  showStatistics(viewer, graph);
   assert.equal(
     document.querySelectorAll("#statistics-stage-table tbody tr").length,
     3,
@@ -279,7 +299,8 @@ test("statistics tab aggregates operator and node counts for each pipeline stage
 });
 
 test("statistics identify unavailable pipeline projections instead of showing zero counts", (t) => {
-  const { document, window } = openViewer(t);
+  const viewer = openViewer(t);
+  const { document, window } = viewer;
   const graph = loadModel(
     readFileSync(require.resolve("./models/tiny.pipe-onnx")),
     "tiny.pipe-onnx",
@@ -293,7 +314,7 @@ test("statistics identify unavailable pipeline projections instead of showing ze
       data: { type: "graph", graph, file: { files: [] } },
     }),
   );
-  document.getElementById("statistics-tab").click();
+  showStatistics(viewer, graph);
 
   const summary = new Map(
     [...document.querySelectorAll("#statistics-summary dt")].map((term) => [
@@ -324,7 +345,8 @@ test("statistics identify unavailable pipeline projections instead of showing ze
 });
 
 test("statistics accept compact model summaries while viewing a function", (t) => {
-  const { document, window } = openViewer(t);
+  const viewer = openViewer(t);
+  const { document, window } = viewer;
   const model = loadModel(
     readFileSync(require.resolve("./models/functions.onnx")),
     "functions.onnx",
@@ -334,9 +356,10 @@ test("statistics accept compact model summaries while viewing a function", (t) =
   const statistics = model.summary();
   window.dispatchEvent(
     new window.MessageEvent("message", {
-      data: { type: "graph", graph, statistics, file: { files: [] } },
+      data: { type: "graph", graph },
     }),
   );
+  showStatistics(viewer, statistics);
   const summary = new Map(
     [...document.querySelectorAll("#statistics-summary dt")].map((term) => [
       term.textContent,
@@ -361,7 +384,8 @@ test("statistics accept compact model summaries while viewing a function", (t) =
 });
 
 test("statistics distinguish empty operator distributions from partial and unavailable data", (t) => {
-  const { document, window } = openViewer(t);
+  const viewer = openViewer(t);
+  const { document, window } = viewer;
   const empty = { ...demoGraph, nodes: [] };
   const pipeline = loadModel(
     readFileSync(require.resolve("./models/tiny.pipe-onnx")),
@@ -386,11 +410,13 @@ test("statistics distinguish empty operator distributions from partial and unava
     [partial, "Partial operator statistics: some stages are unavailable."],
     [unavailable, "Operator statistics unavailable."],
   ]) {
+    document.getElementById("model-tab").click();
     window.dispatchEvent(
       new window.MessageEvent("message", {
         data: { type: "graph", graph, file: { files: [] } },
       }),
     );
+    showStatistics(viewer, graph);
     assert.equal(
       document.querySelector("#statistics-operators tbody td").textContent,
       message,
@@ -400,6 +426,76 @@ test("statistics distinguish empty operator distributions from partial and unava
       1,
     );
   }
+});
+
+test("statistics refresh on opening the tab and reject stale results and errors", (t) => {
+  const viewer = openViewer(t);
+  const { document, window, messages, load } = viewer;
+  const requests = () =>
+    messages.filter(({ type }) => type === "get-statistics");
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  const content = document.getElementById("statistics-content");
+  const status = document.getElementById("statistics-empty");
+  document.getElementById("statistics-tab").click();
+  assert.equal(requests().length, 0);
+  document.getElementById("model-tab").click();
+  load(demoGraph);
+  assert.equal(requests().length, 0);
+  showStatistics(viewer, demoGraph);
+  assert.equal(requests().length, 1);
+  assert.equal(content.hidden, false);
+
+  document.getElementById("model-tab").click();
+  document.getElementById("statistics-tab").click();
+  const { requestId } = requests().at(-1);
+  assert.equal(requests().length, 2);
+  assert.equal(content.hidden, true);
+  assert.match(status.textContent, /Updating model statistics/);
+  send({
+    type: "statistics-info",
+    requestId: requests()[0].requestId,
+    statistics: demoGraph,
+  });
+  assert.equal(content.hidden, true);
+  send({ type: "statistics-error", requestId, error: "Root analysis failed." });
+  assert.equal(content.hidden, true);
+  assert.match(
+    status.textContent,
+    /Statistics unavailable: Root analysis failed/,
+  );
+
+  document.getElementById("model-tab").click();
+  document.getElementById("statistics-tab").click();
+  const retry = requests().at(-1);
+  send({ type: "statistics-error", requestId, error: "Stale failure." });
+  assert.match(status.textContent, /Updating model statistics/);
+  send({
+    type: "statistics-info",
+    requestId: retry.requestId,
+    statistics: demoGraph,
+  });
+  assert.equal(content.hidden, false);
+
+  load({ ...demoGraph, name: "Replacement" });
+  const replacement = requests().at(-1);
+  assert.equal(requests().length, 4);
+  assert.equal(content.hidden, true);
+  send({
+    type: "statistics-info",
+    requestId: retry.requestId,
+    statistics: demoGraph,
+  });
+  assert.equal(content.hidden, true);
+  send({
+    type: "statistics-info",
+    requestId: replacement.requestId,
+    statistics: { ...demoGraph, name: "Replacement" },
+  });
+  assert.equal(
+    document.getElementById("statistics-model-name").textContent,
+    "Replacement",
+  );
 });
 
 test("pipeline navigation enables stage fusions and disables unsupported encrypted saves", (t) => {
