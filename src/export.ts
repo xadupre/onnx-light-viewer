@@ -41,9 +41,7 @@ checkpoint = next((name for name in (
     "pytorch_model.bin.index.json", "pytorch_model.bin",
 ) if name in files), None)
 if checkpoint is None:
-    weights = {name for name in files if "/" not in name and name.endswith(".safetensors")}
-    if not weights:
-        raise ValueError("No supported root checkpoint found; use an absolute local model directory.")
+    raise ValueError("No supported root checkpoint found; use an absolute local model directory.")
 elif checkpoint.endswith(".index.json"):
     index = hf_hub_download(model, checkpoint, revision=info.sha, cache_dir=cache)
     with open(index, encoding="utf-8") as stream:
