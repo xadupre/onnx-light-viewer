@@ -75,7 +75,15 @@ export function webviewHtml(
           </nav>
           <section id="export-panel" class="inspector-panel file-panel" aria-labelledby="export-title" hidden>
             <h2 id="export-title" class="eyebrow panel-title">Convert to ONNX</h2>
-            <p>Run an installed exporter, save its files and open the exported model. No packages are installed automatically.</p>
+            <table id="export-timings" aria-label="Download and conversion times" hidden>
+              <thead><tr><th scope="col">Step</th><th scope="col">Elapsed time</th></tr></thead>
+              <tbody>
+                <tr><th scope="row">Download</th><td id="export-download-time">Not started</td></tr>
+                <tr><th scope="row">Conversion</th><td id="export-conversion-time">Not started</td></tr>
+              </tbody>
+            </table>
+            <p>Download the source into the application's cache, then convert it offline with an installed exporter. Local sources need no download. No packages are installed automatically.</p>
+            <p id="export-cache"></p>
             <p id="export-python">Uses the Python executable configured in Settings.</p>
             <p id="export-trust" hidden>Trust this workspace before running an exporter.</p>
             <form id="export-form">

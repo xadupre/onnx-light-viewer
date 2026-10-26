@@ -29,6 +29,7 @@ jobs:
       - name: Install coverage and Python dependencies
         run: |
           python -m pip install coverage==7.17.0 gcovr==8.7 -r docs/requirements.txt \
+            -r test/requirements.txt \
             "https://github.com/xadupre/onnx-light/releases/download/0.2.0/onnx_light-0.2.0-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl#sha256=3fe8ed7d34589cd9305894bc2081c9753227fd7d0cf0dd21de7b49a1fa5226df"
       - name: Collect Python coverage
         env:

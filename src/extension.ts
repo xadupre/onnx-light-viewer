@@ -26,6 +26,7 @@ import { applicationSettings, inspectPythonPackages } from "./settings";
 import {
   defaultExportDirectory,
   ExportHistory,
+  downloadExportSource,
   exportPlan,
   prepareExportPlan,
   runExport,
@@ -923,6 +924,21 @@ async function configurePanel(
               const originalModel = model;
               const revision = graphRevision;
               let cancellation: string | undefined;
+              const needsDownload = !isAbsolute(plan.model);
+              const timings: {
+                downloadSkipped: boolean;
+                downloadDurationMs?: number;
+                durationMs?: number;
+              } = { downloadSkipped: !needsDownload };
+              let phase: "download" | "conversion" | undefined;
+              let phaseStarted = 0;
+              const finishPhase = () => {
+                if (phase)
+                  timings[
+                    phase === "download" ? "downloadDurationMs" : "durationMs"
+                  ] = performance.now() - phaseStarted;
+                phase = undefined;
+              };
               try {
                 plan = await prepareExportPlan(plan, controller.signal);
                 await postMessage({
@@ -935,18 +951,61 @@ async function configurePanel(
                   directoryTemplate: plan.directoryTemplate,
                   output: "",
                 });
+                await exportHistory.remember(plan);
+                await postMessage({
+                  type: "export-history",
+                  history: exportHistory.snapshot(),
+                });
+                if (needsDownload) {
+                  const cacheDirectory = join(
+                    getApplicationSettings().downloadDirectory,
+                    "huggingface",
+                  );
+                  phase = "download";
+                  phaseStarted = performance.now();
+                  await postMessage({
+                    type: "export-progress",
+                    actionId: message.actionId,
+                    stage: "Downloading source model",
+                    phase,
+                    cacheDirectory,
+                    ...timings,
+                  });
+                  plan = await downloadExportSource(
+                    plan,
+                    cacheDirectory,
+                    controller.signal,
+                    (output) => {
+                      if (!active || controller.signal.aborted) return;
+                      void postMessage({
+                        type: "export-progress",
+                        actionId: message.actionId,
+                        stage: "Downloading source model",
+                        phase: "download",
+                        output,
+                      });
+                    },
+                  );
+                  finishPhase();
+                }
+                controller.signal.throwIfAborted();
+                phase = "conversion";
+                phaseStarted = performance.now();
+                await postMessage({
+                  type: "export-progress",
+                  actionId: message.actionId,
+                  stage: "Converting local model (offline)",
+                  phase,
+                  command: plan.command,
+                  output: "",
+                  ...timings,
+                });
                 log.record(
                   "SUCCEEDED",
                   "Conversion command",
                   undefined,
                   `${plan.command}\nScript: ${plan.script}`,
                 );
-                await exportHistory.remember(plan);
-                await postMessage({
-                  type: "export-history",
-                  history: exportHistory.snapshot(),
-                });
-                const conversionStarted = performance.now();
                 const files = await runExport(
                   plan,
                   controller.signal,
@@ -955,13 +1014,27 @@ async function configurePanel(
                     void postMessage({
                       type: "export-progress",
                       actionId: message.actionId,
-                      stage: "Converting ONNX model",
+                      stage: "Converting local model (offline)",
+                      phase: "conversion",
                       output,
                     });
                   },
                 );
-                const durationMs = performance.now() - conversionStarted;
+                finishPhase();
                 if (!active) return;
+                await postMessage({
+                  type: "export-progress",
+                  actionId: message.actionId,
+                  stage: "Conversion completed",
+                  phase: "finished",
+                  ...timings,
+                });
+                log.record(
+                  "SUCCEEDED",
+                  "Download and conversion timings",
+                  undefined,
+                  JSON.stringify(timings),
+                );
                 controller.signal.throwIfAborted();
                 const selected =
                   files.length === 1
@@ -987,7 +1060,7 @@ async function configurePanel(
                     actionId: message.actionId,
                     script: plan.script,
                     loaded: false,
-                    durationMs,
+                    ...timings,
                   });
                   return;
                 }
@@ -1019,9 +1092,19 @@ async function configurePanel(
                   path: selected,
                   script: plan.script,
                   loaded: true,
-                  durationMs,
+                  ...timings,
                 });
               } catch (error) {
+                const interrupted = phase;
+                finishPhase();
+                if (active)
+                  await postMessage({
+                    type: "export-progress",
+                    actionId: message.actionId,
+                    stage: `${interrupted === "download" ? "Download" : "Conversion"} ${controller.signal.aborted ? "cancelled" : "failed"}.`,
+                    phase: "finished",
+                    ...timings,
+                  });
                 if (
                   controller.signal.aborted &&
                   error instanceof Error &&
