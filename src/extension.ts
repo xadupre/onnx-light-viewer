@@ -465,6 +465,7 @@ async function configurePanel(
   let graphRevision = 0;
   let navigationRequest = 0;
   let statisticsRequest = 0;
+  let memoryRequest = 0;
   let fusionRequest = 0;
   let diagnosticRequest = 0;
   let undoRequest = 0;
@@ -677,6 +678,7 @@ async function configurePanel(
         maxExternalFileSize?: unknown;
         includeRewritings?: unknown;
         requestId?: unknown;
+        dimensions?: unknown;
         previewId?: unknown;
         pattern?: unknown;
         scenario?: unknown;
@@ -759,6 +761,84 @@ async function configurePanel(
         }
       } else if (message?.type === "interaction") {
         log.interaction(message.entry);
+      } else if (
+        message?.type === "memory-inputs" ||
+        message?.type === "memory-profile"
+      ) {
+        const requestedModel = model;
+        const revision = graphRevision;
+        const generation = ++memoryRequest;
+        let setup:
+          | { stages: NonNullable<Graph["pipelineStages"]>; path: GraphPath }
+          | undefined;
+        const isCurrent = () =>
+          active &&
+          model === requestedModel &&
+          graphRevision === revision &&
+          memoryRequest === generation;
+        try {
+          const result = await log.run("Estimate model memory", async () => {
+            if (
+              typeof message.requestId !== "number" ||
+              !Number.isSafeInteger(message.requestId) ||
+              message.requestId <= 0
+            )
+              throw new Error("Invalid memory profiling request.");
+            const current = requireModel();
+            const native = await nativeModel(current, log, () => {
+              void sendStatus();
+            });
+            if (!isCurrent()) return;
+            const stages = current.graph.pipeline
+              ? (native.graph().pipelineStages ?? [])
+              : [];
+            const path = message.path ?? stages[0]?.path ?? [];
+            if (!isGraphPath(path))
+              throw new Error("Invalid memory profiling path.");
+            setup = { stages, path };
+            if (message.type === "memory-inputs")
+              return {
+                dimensions: native.memoryProfileInputs(path),
+                stages,
+                path,
+              };
+            const values = message.dimensions;
+            if (!values || typeof values !== "object" || Array.isArray(values))
+              throw new Error("Expected dynamic dimension values.");
+            const dimensions = Object.fromEntries(
+              Object.entries(values).map(([key, value]): [string, number] => {
+                if (
+                  typeof value !== "number" ||
+                  !Number.isSafeInteger(value) ||
+                  value <= 0
+                )
+                  throw new Error(
+                    `Expected a positive safe integer for ${key}.`,
+                  );
+                return [key, value];
+              }),
+            );
+            return { profile: await native.memoryProfile(dimensions, path) };
+          });
+          if (isCurrent() && result)
+            await postMessage({
+              type: message.type,
+              requestId: message.requestId,
+              ...result,
+            });
+        } catch (error) {
+          if (!isCurrent()) return;
+          const detail = error instanceof Error ? error.message : String(error);
+          await postMessage({
+            type: "memory-error",
+            requestId: message.requestId,
+            error: detail,
+            ...setup,
+          });
+          await vscode.window.showErrorMessage(
+            `Could not estimate ONNX memory: ${detail}`,
+          );
+        }
       } else if (message?.type === "get-statistics") {
         const requestedModel = model;
         const revision = graphRevision;

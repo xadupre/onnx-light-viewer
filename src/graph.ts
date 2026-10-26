@@ -244,6 +244,27 @@ export interface OptimizationReport {
 export type OptimizationOperation =
   "Optimize" | "IdentityRemoval" | "ConstantFolding" | "RemoveUnusedNodes";
 
+export interface MemoryDimension {
+  key: string;
+  label: string;
+  defaultValue: number;
+}
+
+export interface MemoryProfile {
+  name: string;
+  device: string;
+  peakBytes: number | null;
+  events: {
+    index: number;
+    node: string;
+    opType: string;
+    existingBytes: number;
+    outputBytes: number;
+    scratchBytes: number;
+    deviceBytes: number;
+  }[];
+}
+
 export interface RewritingScenario {
   name: string;
   steps: { pattern: string; path: string[]; nodes: number[] }[];
@@ -256,6 +277,12 @@ export interface RewritingScenario {
  * Methods do not execute the model or write files.
  */
 export interface NativeModel {
+  memoryProfileInputs(path?: GraphPath): MemoryDimension[];
+  /** Estimates CPU memory on an independent snapshot, without executing kernels. */
+  memoryProfile(
+    dimensions: Record<string, number>,
+    path?: GraphPath,
+  ): Promise<MemoryProfile>;
   clone(): NativeModel;
   /** Number of applied Fuse operations available for session-local undo. */
   fusionCount(): number;

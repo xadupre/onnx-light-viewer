@@ -39,6 +39,7 @@ export function webviewHtml(
       <button id="model-tab" role="tab" aria-controls="model-view" aria-selected="${initialTab === "model"}" tabindex="${initialTab === "model" ? 0 : -1}">Model</button>
       <button id="logs-tab" role="tab" aria-controls="logs-view" aria-selected="${initialTab === "logs"}" tabindex="${initialTab === "logs" ? 0 : -1}">Logs</button>
       <button id="statistics-tab" role="tab" aria-controls="statistics-view" aria-selected="false" tabindex="-1">Statistics</button>
+      <button id="memory-tab" role="tab" aria-controls="memory-view" aria-selected="false" tabindex="-1">Memory</button>
       <button id="status-tab" role="tab" aria-controls="status-view" aria-selected="false" tabindex="-1">Status</button>
       <button id="controls-tab" role="tab" aria-controls="controls-view" aria-selected="false" tabindex="-1">Controls</button>
       <button id="repositories-tab" role="tab" aria-controls="repositories-view" aria-selected="false" tabindex="-1">ONNX</button>
@@ -310,6 +311,32 @@ export function webviewHtml(
           <h3>Operator type distribution</h3>
           <table id="statistics-operators" aria-label="Operator type distribution"></table>
         </section>
+      </div>
+    </section>
+    <section id="memory-view" role="tabpanel" aria-labelledby="memory-tab" tabindex="0" hidden>
+      <h2>Memory profiling</h2>
+      <p>Estimate CPU tensor memory without executing the model. Profiling covers the complete root graph, or one selected pipeline stage, independently of the displayed subgraph.</p>
+      <p>One event per node in execution order, accounting for native lifetime and potential in-place reuse decisions. Function/control-flow internals and allocator overhead are not included. Scratch estimates depend on registered estimators; zero can mean unavailable.</p>
+      <form id="memory-form">
+        <div id="memory-stage-field" hidden><label for="memory-stage">Pipeline stage</label><select id="memory-stage"></select></div>
+        <fieldset><legend>Dynamic dimensions (default: 1)</legend><div id="memory-dimensions"></div><p id="memory-no-dimensions" hidden>No dynamic dimensions to fill.</p></fieldset>
+        <button id="memory-run" type="submit" disabled>Estimate memory</button>
+      </form>
+      <p id="memory-status" role="status">Open a model to estimate its memory.</p>
+      <div id="memory-results" hidden>
+        <h3 id="memory-model-name"></h3>
+        <dl class="status-details"><dt>Estimated peak</dt><dd id="memory-peak"></dd><dt>Device</dt><dd id="memory-device"></dd></dl>
+        <svg id="memory-chart" viewBox="0 0 1000 280" role="img" aria-labelledby="memory-chart-title memory-chart-description">
+          <title id="memory-chart-title">Estimated device memory by execution event</title>
+          <desc id="memory-chart-description">Each point shows the estimated CPU tensor and registered scratch memory while a node runs. Exact values are in the table below.</desc>
+          <path class="memory-axis" d="M60,20V240H980"></path>
+          <text id="memory-chart-peak" x="60" y="16"></text><text x="10" y="244">0</text>
+          <text x="60" y="265">Event 1</text><text id="memory-chart-last" x="980" y="265" text-anchor="end"></text>
+          <path id="memory-curve"></path>
+        </svg>
+        <h3>Estimated execution events</h3>
+        <div class="memory-table"><table><thead><tr><th scope="col">Event</th><th scope="col">Node</th><th scope="col">Operator</th><th scope="col">Already allocated</th><th scope="col">New outputs</th><th scope="col">Scratch</th><th scope="col">Device memory</th></tr></thead><tbody id="memory-events"></tbody></table></div>
+        <nav aria-label="Memory events"><button id="memory-previous" type="button" disabled>Previous</button><span id="memory-range" role="status"></span><button id="memory-next" type="button" disabled>Next</button></nav>
       </div>
     </section>
     <section id="status-view" role="tabpanel" aria-labelledby="status-tab" tabindex="0" hidden>
@@ -585,6 +612,7 @@ export function webviewHtml(
   <script nonce="${nonce}" src="${resource("metadata-panel.js")}"></script>
   <script nonce="${nonce}" src="${resource("fusion-panel.js")}"></script>
   <script nonce="${nonce}" src="${resource("settings-panel.js")}"></script>
+  <script nonce="${nonce}" src="${resource("memory-panel.js")}"></script>
   <script nonce="${nonce}" src="${resource("graph-layout.js")}"></script>
   <script nonce="${nonce}" src="${resource("viewer.js")}"></script>
 </body>
