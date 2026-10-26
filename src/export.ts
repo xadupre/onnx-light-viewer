@@ -199,7 +199,7 @@ export function exportPlan(
     args.push("--extra_options", "hf_remote=false");
   const quote = (argument: string) => {
     const safe =
-      process.platform === "win32" ? /^[\w./\\:-]+$/ : /^[\w@%+=:,./-]+$/;
+      process.platform === "win32" ? /^[\w./\\:=-]+$/ : /^[\w@%+=:,./-]+$/;
     if (safe.test(argument)) return argument;
     return process.platform === "win32"
       ? `'${argument.replaceAll("'", "''")}'`
