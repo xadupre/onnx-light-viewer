@@ -88,6 +88,7 @@ p {
   min-height: 0;
 }
 #logs-view,
+#statistics-view,
 #status-view,
 #controls-view,
 #settings-view,
@@ -97,6 +98,7 @@ p {
   min-height: 0;
 }
 #logs-view h2,
+#statistics-view h2,
 #status-view h2,
 #controls-view h2,
 #settings-view h2,
@@ -274,6 +276,30 @@ p {
   margin: 0;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+#statistics-view h3 {
+  margin: 24px 0 8px;
+}
+#statistics-view table {
+  width: 100%;
+  max-width: 960px;
+  margin: 8px 0 20px;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+#statistics-view th,
+#statistics-view td {
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+#statistics-view thead {
+  background: var(--border);
+}
+#statistics-view tbody tr:nth-child(even) {
+  background: var(--bg);
 }
 .graph-toolbar {
   min-height: 44px;

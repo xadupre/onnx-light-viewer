@@ -165,6 +165,27 @@ test("opens and transforms the bundled three-stage pipeline through native file 
     model.graph().nodes.map((node) => node.name),
     ["embedding", "prefill", "decode"],
   );
+  for (const stage of model.graph().nodes) {
+    const stageGraph = model.graph(false, [{ pipeline: stage.name }]);
+    assert.equal(stage.pipelineModel.nodeCount, stageGraph.nodes.length);
+    assert.equal(
+      stage.pipelineModel.functionCount,
+      stageGraph.localFunctions.length,
+    );
+    assert.equal(
+      stage.pipelineModel.operatorTypes.reduce(
+        (count, operator) => count + operator.count,
+        0,
+      ),
+      stageGraph.nodes.length,
+    );
+  }
+  assert.equal(
+    model.summary().nodeCount,
+    model
+      .graph()
+      .nodes.reduce((count, stage) => count + stage.pipelineModel.nodeCount, 0),
+  );
   const embeddingPath = [{ pipeline: "embedding" }];
   const prefillPath = [{ pipeline: "prefill" }];
   const decodePath = [{ pipeline: "decode" }];

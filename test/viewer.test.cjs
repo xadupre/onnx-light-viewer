@@ -157,6 +157,113 @@ test("Verify reports success and errors, prevents duplicate requests and resets 
   assert.equal(button.disabled, false);
 });
 
+test("statistics tab shows model counts, operator distribution and file sizes", (t) => {
+  const { document, window } = openViewer(t);
+  const graph = structuredClone(demoGraph);
+  graph.nodes.push({
+    ...graph.nodes[0],
+    id: "node-1",
+    name: "addition",
+    opType: "Add",
+  });
+  graph.initializerCount = 3;
+  graph.initializers = [{ name: "dense" }, { name: "weights" }];
+  graph.sparseInitializers = [{ name: "sparse" }];
+  graph.encodedInitializers = [];
+  graph.localFunctions = [{ name: "local-function" }];
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: {
+        type: "graph",
+        graph,
+        statistics: graph,
+        file: {
+          files: [
+            { name: "model.onnx", size: 2048, external: false },
+            { name: "weights.bin", size: 1024, external: true },
+          ],
+        },
+      },
+    }),
+  );
+  document.getElementById("statistics-tab").click();
+  assert.equal(document.getElementById("statistics-view").hidden, false);
+  assert.equal(document.getElementById("status-view").hidden, true);
+  const summary = new Map(
+    [...document.querySelectorAll("#statistics-summary dt")].map((term) => [
+      term.textContent,
+      term.nextElementSibling.textContent,
+    ]),
+  );
+  assert.equal(summary.get("Nodes"), "2");
+  assert.equal(summary.get("Initializers"), "3");
+  assert.equal(summary.get("Dense initializers"), "2");
+  assert.equal(summary.get("Sparse initializers"), "1");
+  assert.equal(summary.get("Local functions"), "1");
+  assert.equal(
+    [...document.querySelectorAll("#statistics-operators tbody tr")]
+      .map((row) => row.textContent)
+      .join(" "),
+    "ai.onnxAdd1 ai.onnxRelu1",
+  );
+  const files = document.getElementById("statistics-files").textContent;
+  assert.match(files, /model\.onnx/);
+  assert.match(files, /2\.0 KiB/);
+  assert.match(files, /weights\.bin/);
+  assert.match(files, /1\.0 KiB/);
+  document.getElementById("statistics-tab").focus();
+  document
+    .getElementById("statistics-tab")
+    .dispatchEvent(new window.KeyboardEvent("keydown", { key: "ArrowRight" }));
+  assert.equal(document.getElementById("status-view").hidden, false);
+  assert.equal(document.getElementById("statistics-view").hidden, true);
+});
+
+test("statistics tab aggregates operator and node counts for each pipeline stage", (t) => {
+  const { document, window } = openViewer(t);
+  const model = loadModel(
+    readFileSync(require.resolve("./models/tiny.pipe-onnx")),
+    "tiny.pipe-onnx",
+  );
+  const graph = model.graph();
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: { type: "graph", graph, statistics: graph, file: { files: [] } },
+    }),
+  );
+  document.getElementById("statistics-tab").click();
+  assert.equal(
+    document.querySelectorAll("#statistics-stage-table tbody tr").length,
+    3,
+  );
+  const stages = graph.nodes.map((node) => node.pipelineModel);
+  const expectedNodeCount = stages.reduce(
+    (count, stage) => count + stage.nodeCount,
+    0,
+  );
+  const summary = new Map(
+    [...document.querySelectorAll("#statistics-summary dt")].map((term) => [
+      term.textContent,
+      term.nextElementSibling.textContent,
+    ]),
+  );
+  assert.equal(summary.get("Nodes"), String(expectedNodeCount));
+  assert.equal(
+    [...document.querySelectorAll("#statistics-operators tbody tr")].length,
+    new Set(
+      stages.flatMap((stage) =>
+        stage.operatorTypes.map(({ domain, opType }) =>
+          JSON.stringify([domain, opType]),
+        ),
+      ),
+    ).size,
+  );
+  assert.match(
+    document.getElementById("statistics-files").textContent,
+    /No source file available/,
+  );
+});
+
 test("pipeline navigation enables stage fusions and disables unsupported encrypted saves", (t) => {
   const { document, window, messages } = openViewer(t);
   const send = (graph, file) =>

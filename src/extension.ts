@@ -93,6 +93,7 @@ interface LoadedModel {
   fusionHistory?: FusionOperation[];
   source?: { uri: vscode.Uri };
   fileName?: string;
+  files?: { name: string; size?: number; external: boolean }[];
 }
 
 function copyFileName(model: LoadedModel, encrypted = false): string {
@@ -266,7 +267,25 @@ async function readGraph(
       ? () => loadModel(retainedBytes, fileName, password)
       : () => loadModelFile(source.uri.fsPath, fileName, password);
     const native = await reload();
-    return { graph: native.graph(), native, reload, source, fileName };
+    const fileDetails = async (
+      fileUri: vscode.Uri,
+      name: string,
+      external: boolean,
+    ) => {
+      try {
+        const { size } = await vscode.workspace.fs.stat(fileUri);
+        return { name, size, external };
+      } catch {
+        return { name, external };
+      }
+    };
+    const files = await Promise.all([
+      fileDetails(uri, fileName, false),
+      ...[...new Set(native.externalDataLocations())].map((location) =>
+        fileDetails(vscode.Uri.joinPath(uri, "..", location), location, true),
+      ),
+    ]);
+    return { graph: native.graph(), native, reload, source, fileName, files };
   });
 }
 
@@ -532,15 +551,21 @@ async function configurePanel(
     fusionRequest++;
     diagnosticRequest++;
     const current = requireModel();
+    const statistics =
+      current.graph.breadcrumbs.length > 1
+        ? (current.native?.graph() ?? current.graph)
+        : current.graph;
     void sendStatus();
     return postMessage({
       type: "graph",
       graph: current.graph,
+      statistics,
       ...(fusionRequestId === undefined ? {} : { fusionRequestId }),
       ...(selectedNodes ? { selectedNodes } : {}),
       file: {
         fusionCount: current.fusionCount ?? 0,
         fusionHistory: current.fusionHistory ?? [],
+        files: current.files ?? [],
         ...(current.graph.pipeline ? { pipeline: true } : {}),
         directory: locationText(directoryUri()),
         savePath: locationText(

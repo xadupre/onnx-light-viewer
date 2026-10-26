@@ -38,6 +38,7 @@ export function webviewHtml(
     <nav class="viewer-tabs" role="tablist" aria-label="Viewer">
       <button id="model-tab" role="tab" aria-controls="model-view" aria-selected="${initialTab === "model"}" tabindex="${initialTab === "model" ? 0 : -1}">Model</button>
       <button id="logs-tab" role="tab" aria-controls="logs-view" aria-selected="${initialTab === "logs"}" tabindex="${initialTab === "logs" ? 0 : -1}">Logs</button>
+      <button id="statistics-tab" role="tab" aria-controls="statistics-view" aria-selected="false" tabindex="-1">Statistics</button>
       <button id="status-tab" role="tab" aria-controls="status-view" aria-selected="false" tabindex="-1">Status</button>
       <button id="controls-tab" role="tab" aria-controls="controls-view" aria-selected="false" tabindex="-1">Controls</button>
       <button id="repositories-tab" role="tab" aria-controls="repositories-view" aria-selected="false" tabindex="-1">ONNX</button>
@@ -256,6 +257,26 @@ export function webviewHtml(
       <p>Model operations and errors only. Operations show Running, OK, Failed or Cancelled.</p>
       <p id="logs-empty">No actions yet.</p>
       <ol id="log-entries" aria-label="Action history"></ol>
+    </section>
+    <section id="statistics-view" role="tabpanel" aria-labelledby="statistics-tab" tabindex="0" hidden>
+      <h2>Model statistics</h2>
+      <p id="statistics-empty">Open a model to see its statistics.</p>
+      <div id="statistics-content" hidden>
+        <h3 id="statistics-model-name"></h3>
+        <dl id="statistics-summary" class="status-details"></dl>
+        <section id="statistics-stages" hidden>
+          <h3>Pipeline stages</h3>
+          <table id="statistics-stage-table" aria-label="Pipeline stage statistics"></table>
+        </section>
+        <section>
+          <h3>Operator type distribution</h3>
+          <table id="statistics-operators" aria-label="Operator type distribution"></table>
+        </section>
+        <section>
+          <h3>Model and external files</h3>
+          <table id="statistics-files" aria-label="Model and external files"></table>
+        </section>
+      </div>
     </section>
     <section id="status-view" role="tabpanel" aria-labelledby="status-tab" tabindex="0" hidden>
       <h2>Application status</h2>

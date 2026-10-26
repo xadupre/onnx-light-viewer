@@ -60,6 +60,7 @@ const RefreshStatus = Object.freeze({
 const tabs = [
   "model",
   "logs",
+  "statistics",
   "status",
   "controls",
   "repositories",
@@ -309,6 +310,155 @@ function displayStatus(status) {
     byId("status-failure-details").textContent =
       status.lastFailure.details ?? "";
   }
+}
+
+function statisticsTable(id, columns, rows) {
+  const table = byId(id);
+  table.replaceChildren();
+  const head = table.createTHead().insertRow();
+  for (const column of columns) {
+    const cell = document.createElement("th");
+    cell.scope = "col";
+    cell.textContent = column;
+    head.append(cell);
+  }
+  const body = table.createTBody();
+  for (const values of rows) {
+    const row = body.insertRow();
+    for (const [index, value] of values.entries()) {
+      const cell = document.createElement(index === 0 ? "th" : "td");
+      if (index === 0) cell.scope = "row";
+      cell.textContent = value;
+      row.append(cell);
+    }
+  }
+}
+
+function formatFileSize(size) {
+  if (!Number.isSafeInteger(size) || size < 0) return "Unavailable";
+  if (size < 1024) return `${size.toLocaleString()} bytes`;
+  const units = ["KiB", "MiB", "GiB", "TiB"];
+  let value = size;
+  let unit = -1;
+  do {
+    value /= 1024;
+    unit++;
+  } while (value >= 1024 && unit < units.length - 1);
+  return `${value.toFixed(1)} ${units[unit]} (${size.toLocaleString()} bytes)`;
+}
+
+function renderStatistics(graph, files) {
+  byId("statistics-empty").hidden = Boolean(graph);
+  byId("statistics-content").hidden = !graph;
+  if (!graph) return;
+
+  const stages = graph.pipeline
+    ? graph.nodes.flatMap((node) =>
+        node.pipelineModel ? [{ name: node.name, ...node.pipelineModel }] : [],
+      )
+    : [];
+  const pipeline = stages.length > 0;
+  const total = (field, fallback) =>
+    pipeline
+      ? stages.reduce((sum, stage) => sum + (stage[field] ?? 0), 0)
+      : fallback;
+  const summary = byId("statistics-summary");
+  summary.replaceChildren();
+  const entries = [
+    ["Nodes", total("nodeCount", graph.nodes.length)],
+    ["Initializers", graph.initializerCount],
+    [
+      "Dense initializers",
+      total("denseInitializerCount", graph.initializers?.length ?? 0),
+    ],
+    [
+      "Sparse initializers",
+      total("sparseInitializerCount", graph.sparseInitializers?.length ?? 0),
+    ],
+    [
+      "Encoded initializers",
+      total("encodedInitializerCount", graph.encodedInitializers?.length ?? 0),
+    ],
+    [
+      "Local functions",
+      total("functionCount", graph.localFunctions?.length ?? 0),
+    ],
+    ["Inputs", graph.inputs.length],
+    ["Outputs", graph.outputs.length],
+  ];
+  for (const [key, value] of entries) {
+    const term = document.createElement("dt");
+    const description = document.createElement("dd");
+    term.textContent = key;
+    description.textContent = Number(value).toLocaleString();
+    summary.append(term, description);
+  }
+  byId("statistics-model-name").textContent = graph.name || "Unnamed model";
+
+  byId("statistics-stages").hidden = !pipeline;
+  if (pipeline) {
+    statisticsTable(
+      "statistics-stage-table",
+      ["Stage", "Nodes", "Initializers", "Functions", "Inputs", "Outputs"],
+      stages.map((stage) => [
+        stage.name,
+        Number(stage.nodeCount ?? 0).toLocaleString(),
+        Number(stage.initializerCount ?? 0).toLocaleString(),
+        Number(stage.functionCount ?? 0).toLocaleString(),
+        Number(stage.inputs?.length ?? 0).toLocaleString(),
+        Number(stage.outputs?.length ?? 0).toLocaleString(),
+      ]),
+    );
+  }
+
+  const operatorCounts = new Map();
+  const addOperator = (domain, opType, count = 1) => {
+    const key = JSON.stringify([domain, opType]);
+    const current = operatorCounts.get(key);
+    if (current) current.count += count;
+    else operatorCounts.set(key, { domain, opType, count });
+  };
+  if (pipeline) {
+    for (const stage of stages)
+      for (const operator of stage.operatorTypes ?? [])
+        addOperator(operator.domain, operator.opType, operator.count);
+  } else {
+    for (const node of graph.nodes) addOperator(node.domain, node.opType);
+  }
+  const operators = [...operatorCounts.values()].sort(
+    (left, right) =>
+      right.count - left.count ||
+      left.domain.localeCompare(right.domain) ||
+      left.opType.localeCompare(right.opType),
+  );
+  statisticsTable(
+    "statistics-operators",
+    ["Domain", "Operator", "Count"],
+    operators.map(({ domain, opType, count }) => [
+      domain || "(default)",
+      opType,
+      count.toLocaleString(),
+    ]),
+  );
+  if (!operators.length) {
+    const row = byId("statistics-operators").createTBody().insertRow();
+    const cell = row.insertCell();
+    cell.colSpan = 3;
+    cell.textContent = "No operators.";
+  }
+
+  const fileRows = (files ?? []).map(({ name, size, external }) => [
+    external ? "External data" : "Model",
+    name,
+    formatFileSize(size),
+  ]);
+  statisticsTable(
+    "statistics-files",
+    ["File", "Name", "Size"],
+    fileRows.length
+      ? fileRows
+      : [["Source", "No source file available", "Unavailable"]],
+  );
 }
 
 function element(tag, attributes, text) {
@@ -1901,6 +2051,10 @@ window.addEventListener("message", (event) => {
     displayedGraph = event.data.graph;
     fusionPanel.reset(displayedGraph, event.data.fusionRequestId);
     render(event.data.graph, event.data.metadata);
+    renderStatistics(
+      event.data.statistics ?? event.data.graph,
+      event.data.file?.files,
+    );
     filePanels.setFile(event.data.file);
     fusionPanel.refresh();
     if (event.data.selectedNodes) focusNodes(event.data.selectedNodes);
