@@ -129,11 +129,78 @@ test("native memory estimates concretize symbolic inputs without editing the mod
       event.deviceBytes,
       event.existingBytes + event.outputBytes + event.scratchBytes,
     );
+  assert.deepEqual(
+    profile.events.map((event) => event.afterBytes),
+    [...profile.events.slice(1).map((event) => event.existingBytes), null],
+  );
+  assert.ok(
+    profile.events[1].decisions.some(
+      (decision) =>
+        decision.action === "inplace" &&
+        decision.input === "hidden" &&
+        decision.output === "reshaped" &&
+        decision.kind === "equal",
+    ),
+  );
+  assert.ok(
+    profile.events[1].decisions.some(
+      (decision) => decision.action === "release" && decision.name === "hidden",
+    ),
+  );
+  assert.deepEqual(profile.events[0].inputs[0], {
+    name: "x",
+    type: "FLOAT",
+    shape: "[2,3]",
+    tag: "weight",
+  });
+  assert.deepEqual(profile.events[1].outputs[0], {
+    name: "reshaped",
+    type: "FLOAT",
+    shape: "[2,3,1]",
+    tag: "weight",
+  });
   const larger = await model.memoryProfile({ "symbol:N": 4 });
   assert.ok(larger.peakBytes > profile.peakBytes);
   assert.deepEqual(model.graph(), original);
   const relu = loadModel(modelBytes("relu.onnx"), "relu.onnx");
   assert.equal((await relu.memoryProfile({})).peakBytes, 24);
+});
+
+test("memory profiles transport SDK shape-release decisions and concrete scalar shapes", async () => {
+  const node = (opType, inputs, output) =>
+    Buffer.concat([
+      ...inputs.map((name) => bytesField(1, name)),
+      bytesField(2, output),
+      bytesField(4, opType),
+    ]);
+  const model = memoryTestModel([2, 3], {
+    nodes: [
+      node("Relu", ["x"], "hidden"),
+      node("Shape", ["hidden"], "target"),
+      node("Reshape", ["hidden", "target"], "reshaped"),
+      node("Identity", ["reshaped"], "y"),
+    ],
+  });
+  const original = model.graph();
+  const profile = await model.memoryProfile({});
+  assert.ok(
+    profile.events[2].decisions.some(
+      (decision) =>
+        decision.action === "release_shape_tag" && decision.name === "target",
+    ),
+  );
+  assert.ok(
+    profile.events[2].decisions.some(
+      (decision) => decision.action === "release" && decision.name === "target",
+    ),
+  );
+  assert.deepEqual(profile.events[1].outputs, [
+    { name: "target", type: "INT64", shape: "[2]", tag: "shape" },
+  ]);
+  assert.deepEqual(model.graph(), original);
+  const scalar = await memoryTestModel([]).memoryProfile({});
+  assert.equal(scalar.events[0].outputs[0].shape, "[]");
+  assert.equal(scalar.events[0].afterBytes, null);
 });
 
 test("native memory estimates reject missing, invalid and unresolved dimensions explicitly", async () => {

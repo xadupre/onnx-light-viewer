@@ -245,12 +245,24 @@ test("memory estimates are lazy, accept dimensions, and discard stale results an
           outputBytes: 12,
           scratchBytes: 0,
           deviceBytes: 24,
+          afterBytes: null,
+          decisions: [],
+          inputs: [],
+          outputs: [],
         },
       ],
     },
   });
   assert.equal(document.getElementById("memory-results").hidden, false);
   assert.equal(document.getElementById("memory-peak").textContent, "24 bytes");
+  assert.match(
+    document.getElementById("memory-node-intervals").getAttribute("d"),
+    /^M.*Z$/,
+  );
+  assert.equal(
+    document.getElementById("memory-operator-intervals").getAttribute("d"),
+    "",
+  );
   assert.equal(document.querySelector("#memory-events img"), null);
   assert.match(
     document.querySelector("#memory-events").textContent,
@@ -317,11 +329,15 @@ test("memory chart batches 20,000 events and paginates every row", (t) => {
   const events = Array.from({ length: 20_000 }, (_, index) => ({
     index,
     node: `node${index}`,
-    opType: "Relu",
+    opType: index % 2 ? "Attention" : "MatMul",
     existingBytes: 16,
     outputBytes: 0,
     scratchBytes: 0,
     deviceBytes: index === 12345 ? 32 : 16,
+    afterBytes: index === 19_999 ? null : 16,
+    decisions: [],
+    inputs: [],
+    outputs: [],
   }));
   send({
     type: "memory-profile",
@@ -329,17 +345,190 @@ test("memory chart batches 20,000 events and paginates every row", (t) => {
     profile: { name: "Large", device: "CPU", peakBytes: 32, events },
   });
   assert.equal(document.querySelectorAll("#memory-events tr").length, 100);
-  assert.equal(document.querySelectorAll("#memory-chart path").length, 2);
+  assert.equal(document.querySelectorAll("#memory-chart path").length, 4);
+  const ticks = document.querySelectorAll(".memory-node-number");
+  assert.ok(ticks.length >= 2 && ticks.length <= 12);
+  assert.equal(ticks[0].textContent, "1");
+  assert.equal(ticks[ticks.length - 1].textContent, "20000");
   assert.equal(
-    document.getElementById("memory-curve").getAttribute("d").match(/[ML]/g)
-      .length,
+    document
+      .getElementById("memory-operator-intervals")
+      .getAttribute("d")
+      .match(/M/g).length,
     20_000,
   );
+  const labels = document.querySelectorAll("#memory-operator-labels > g");
+  assert.ok(labels.length > 0 && labels.length < 30);
+  assert.ok(document.querySelectorAll("#memory-chart *").length < 150);
+  const path = document.getElementById("memory-curve").getAttribute("d");
+  assert.equal(path.match(/M/g).length, 1);
+  assert.equal(path.match(/V/g).length, 39_999);
+  assert.equal(path.includes("L"), false);
+  assert.equal(/NaN|Infinity/.test(path), false);
   document.getElementById("memory-next").click();
   assert.match(document.getElementById("memory-range").textContent, /101–200/);
   assert.equal(document.querySelector("#memory-events th").textContent, "101");
   document.getElementById("memory-previous").click();
   assert.equal(document.querySelector("#memory-events th").textContent, "1");
+});
+
+test("memory steps allocate before each two-interval node and release into one-interval gaps", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  load(demoGraph);
+  document.getElementById("memory-tab").click();
+  send({
+    type: "memory-inputs",
+    requestId: messages.at(-1).requestId,
+    dimensions: [],
+    stages: [],
+    path: [],
+  });
+  document
+    .getElementById("memory-form")
+    .dispatchEvent(new window.Event("submit", { cancelable: true }));
+  const profile = {
+    name: "Two nodes",
+    device: "CPU",
+    peakBytes: 100,
+    events: [
+      {
+        index: 0,
+        node: "first",
+        opType: "MatMul",
+        existingBytes: 20,
+        outputBytes: 60,
+        scratchBytes: 20,
+        deviceBytes: 100,
+        afterBytes: 40,
+        decisions: [],
+        inputs: [],
+        outputs: [],
+      },
+      {
+        index: 1,
+        node: "second",
+        opType: "Attention",
+        existingBytes: 40,
+        outputBytes: 0,
+        scratchBytes: 10,
+        deviceBytes: 50,
+        afterBytes: null,
+        decisions: [
+          {
+            action: "inplace",
+            input: "a",
+            output: "b",
+            kind: "equal",
+            name: "",
+          },
+          { action: "release", name: "<img src=x>" },
+          { action: "release_shape_tag", name: "target" },
+        ],
+        inputs: [{ name: "target", type: "INT64", shape: "[2]", tag: "shape" }],
+        outputs: [{ name: "b", type: "FLOAT", shape: "[2,3]", tag: null }],
+      },
+    ],
+  };
+  const display = () =>
+    send({
+      type: "memory-profile",
+      requestId: messages.at(-1).requestId,
+      profile,
+    });
+  display();
+  const path = document.getElementById("memory-curve").getAttribute("d");
+  const coordinates = path.match(/-?\d+(?:\.\d+)?/g).map(Number);
+  const x = (step) => Number((60 + (920 * step) / 7).toFixed(5));
+  assert.deepEqual(coordinates, [
+    x(0),
+    198,
+    x(1),
+    30,
+    x(3),
+    156,
+    x(4),
+    x(4),
+    135,
+    x(6),
+  ]);
+  const ticks = document.querySelectorAll(".memory-node-number text");
+  assert.deepEqual(
+    Array.from(ticks, (tick) => tick.textContent),
+    ["1", "2"],
+  );
+  assert.deepEqual(
+    Array.from(ticks, (tick) => Number(tick.getAttribute("x"))),
+    [x(2), x(5)],
+  );
+  const intervals = document
+    .getElementById("memory-node-intervals")
+    .getAttribute("d");
+  assert.equal(
+    intervals,
+    `M${x(1).toFixed(5)},242 H${x(3).toFixed(5)} V252 H${x(1).toFixed(5)}Z M${x(4).toFixed(5)},242 H${x(6).toFixed(5)} V252 H${x(4).toFixed(5)}Z`,
+  );
+  assert.equal(
+    document.getElementById("memory-operator-intervals").getAttribute("d"),
+    intervals,
+  );
+  assert.equal(document.querySelector("#memory-node-numbers line"), null);
+  assert.deepEqual(
+    Array.from(
+      document.querySelectorAll("#memory-operator-labels text"),
+      (label) => label.textContent,
+    ),
+    ["#1 MatMul", "#2 Attention"],
+  );
+  assert.equal(document.getElementById("memory-final-status").hidden, false);
+  const cells = document.querySelectorAll("#memory-events tr")[1].cells;
+  assert.match(cells[7].textContent, /Unavailable/);
+  assert.equal(cells[8].textContent, "a → b (equal)");
+  assert.equal(cells[9].textContent, "<img src=x>");
+  assert.equal(cells[10].textContent, "target");
+  assert.match(cells[11].textContent, /target: INT64 \[2\] \(shape\)/);
+  assert.match(cells[11].textContent, /b: FLOAT \[2,3\]/);
+  assert.equal(document.querySelector("#memory-events img"), null);
+
+  profile.events = [profile.events[0]];
+  profile.events[0].afterBytes = 40;
+  display();
+  assert.equal(document.getElementById("memory-final-status").hidden, true);
+  assert.equal(document.querySelectorAll(".memory-node-number").length, 1);
+  assert.equal(
+    document.querySelectorAll("#memory-operator-labels > g").length,
+    1,
+  );
+  assert.match(
+    document.getElementById("memory-curve").getAttribute("d"),
+    /V156\.00000 H980\.00000$/,
+  );
+  profile.events = [];
+  profile.peakBytes = null;
+  display();
+  assert.equal(
+    document.getElementById("memory-chart").hasAttribute("hidden"),
+    true,
+  );
+  assert.equal(document.getElementById("memory-final-status").hidden, true);
+  assert.equal(document.getElementById("memory-curve").getAttribute("d"), "");
+  assert.equal(
+    document.getElementById("memory-node-numbers").children.length,
+    0,
+  );
+  assert.equal(
+    document.getElementById("memory-operator-labels").children.length,
+    0,
+  );
+  assert.equal(
+    document.getElementById("memory-operator-intervals").getAttribute("d"),
+    "",
+  );
+  assert.equal(
+    document.getElementById("memory-node-intervals").getAttribute("d"),
+    "",
+  );
 });
 
 test("statistics tab shows model counts, operator distribution and file sizes", (t) => {
@@ -4686,10 +4875,10 @@ test("counts metadata changes and replaces cached analysis and graph markers on 
   const changed = structuredClone(metadata);
   changed.model.push({ key: "new", value: "updated model" });
   changed.graph.push({ key: "new", value: "updated graph" });
-  changed.nodes[0].constant = !changed.nodes[0].constant;
-  changed.nodes[0].tag = "updated tag";
+  changed.nodes[1].constant = !changed.nodes[1].constant;
+  changed.nodes[1].tag = "updated tag";
   changed.values.find(
-    (value) => value.name === model.graph().nodes[0].outputs[0],
+    (value) => value.name === model.graph().nodes[1].outputs[0],
   ).tag = "updated value";
   const unused = changed.nodes.find((node) => node.unusedOutputs.length);
   unused.unusedOutputs = [];
@@ -4717,7 +4906,7 @@ test("counts metadata changes and replaces cached analysis and graph markers on 
   assert.equal(status.textContent, "Metadata refreshed: 5 updates");
   assert.equal(document.querySelectorAll(".unused-label").length, 2);
   const oneChange = structuredClone(metadata);
-  oneChange.nodes[0].tag = "one update";
+  oneChange.nodes[1].tag = "one update";
   send(oneChange);
   assert.equal(status.textContent, "Metadata refreshed: 1 update");
   send(oneChange);
@@ -4909,7 +5098,7 @@ test("shows native metadata in the sidebar and marks released and never-used res
   assert.equal(document.getElementById("metadata-unused-section").hidden, true);
   assert.equal(
     document.getElementById("metadata-releases-section").hidden,
-    true,
+    false,
   );
   assert.equal(
     document.getElementById("metadata-node").parentElement.hidden,
@@ -4941,8 +5130,8 @@ test("shows native metadata in the sidebar and marks released and never-used res
     metadata.graph,
   );
   assertMetadataTable(document.getElementById("metadata-analysis"), [
-    { key: "Name", value: model.graph().nodes[0].name },
-    { key: "Tag", value: metadata.nodes[0].tag },
+    { key: "Name", value: model.graph().nodes[1].name },
+    { key: "Tag", value: metadata.nodes[1].tag },
     { key: "Constant", value: "Yes" },
   ]);
   assert.equal(document.querySelectorAll(".unused-label").length, 2);
@@ -4969,7 +5158,10 @@ test("shows native metadata in the sidebar and marks released and never-used res
   }
   const select = (index) => {
     const group = document.querySelector(`[data-id="node-${index}"]`);
-    const point = positions[index];
+    const point = nodePositions(
+      document,
+      `[data-id="node-${index}"] > rect`,
+    )[0];
     pointer(group, "pointerdown", point.x, point.y);
     pointer(graph, "pointerup", point.x, point.y);
   };
@@ -5036,7 +5228,7 @@ test("shows native metadata in the sidebar and marks released and never-used res
     );
   }
   select(1);
-  assert.equal(document.querySelectorAll(".edge.released").length, 1);
+  assert.equal(document.querySelectorAll(".edge.released").length, 0);
   assert.equal(
     document.getElementById("metadata-last-use").textContent,
     "bias",
@@ -5057,7 +5249,7 @@ test("shows native metadata in the sidebar and marks released and never-used res
     messages.filter(({ type }) => type === "metadata").length,
     count,
   );
-  assert.equal(document.querySelectorAll(".edge.released").length, 1);
+  assert.equal(document.querySelectorAll(".edge.released").length, 0);
 });
 
 test("reports metadata errors, allows retry and clears stale metadata and release markers on replacement", (t) => {
@@ -6192,6 +6384,144 @@ test("model inspection lists dense, sparse and encoded weights and clears them o
   );
 });
 
+test("keeps inspector sections independently folded across selection and model replacement", (t) => {
+  const { document, window, load, pointer } = openViewer(t);
+  const graph = decodeGraph(
+    readFileSync(require.resolve("./models/initializers.onnx")),
+    "initializers.onnx",
+  );
+  load(graph);
+  const ids = [
+    "node-inputs",
+    "node-outputs",
+    "node-attributes",
+    "node-initializers",
+    "scope-dense-initializers",
+    "scope-sparse-initializers",
+    "scope-encoded-initializers",
+    "local-functions",
+    "captured-inputs",
+    "constant-nodes",
+  ];
+  const sections = ids.map((id) =>
+    document.getElementById(id).closest("details.inspector-section"),
+  );
+  assert.ok(sections.every(Boolean));
+  for (const section of sections) {
+    assert.equal(section.open, true);
+    section.querySelector("summary").click();
+    assert.equal(section.open, false);
+  }
+  const svg = document.getElementById("graph");
+  pointer(svg, "pointerdown", 0, 0);
+  pointer(svg, "pointerup", 0, 0);
+  assert.equal(document.getElementById("scope-initializers").hidden, false);
+  assert.ok(
+    document.getElementById("scope-dense-initializers").children.length,
+  );
+  document
+    .querySelector(".graph-node")
+    .dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter" }));
+  load(demoGraph);
+  assert.ok(sections.every((section) => !section.open));
+  sections[0].querySelector("summary").click();
+  assert.equal(sections[0].open, true);
+  assert.ok(sections.slice(1).every((section) => !section.open));
+  assert.equal(document.getElementById("node-inputs").children.length, 1);
+});
+
+test("moves standard Constant nodes into the inspector without changing the model or unrelated operators", (t) => {
+  const { document, window, load, pointer } = openViewer(t);
+  const graph = chainGraph(2);
+  const literal = '<img src=x onerror="alert(1)">';
+  const constant = (id, output, domain = "") => ({
+    ...demoGraph.nodes[0],
+    id,
+    name: output,
+    opType: "Constant",
+    domain,
+    inputs: [],
+    outputs: [output],
+    attributes: [{ name: "value", type: "TENSOR", value: literal }],
+  });
+  graph.nodes[0].inputs = ["input", "weight", "weight"];
+  graph.nodes[0].captures = ["captured"];
+  graph.nodes = [
+    constant("node-2", "weight"),
+    ...graph.nodes,
+    constant("node-3", "captured", "ai.onnx"),
+    constant("node-4", "unused"),
+    constant("node-5", "custom", "custom.domain"),
+    {
+      ...constant("node-6", "local"),
+      function: { name: "Constant", path: [{ function: 0 }], nodeCount: 1 },
+    },
+  ];
+  graph.outputs = ["output", "weight"];
+  load(graph);
+  assert.equal(document.querySelectorAll(".graph-node").length, 4);
+  for (const id of ["node-2", "node-3", "node-4"])
+    assert.equal(document.querySelector(`[data-id="${id}"]`), null);
+  assert.ok(document.querySelector('[data-id="node-5"]'));
+  assert.ok(document.querySelector('[data-id="node-6"]'));
+  assert.equal(graph.nodes.length, 7);
+  assert.equal(document.getElementById("constant-count").textContent, "2");
+  const list = document.getElementById("constant-nodes");
+  assert.equal(list.children.length, 2);
+  assert.match(list.textContent, /weight.*value \(TENSOR\)/);
+  assert.match(list.textContent, /captured/);
+  assert.ok(list.textContent.includes(literal));
+  assert.equal(list.querySelector("img"), null);
+  assert.equal(
+    document.querySelector('[aria-label="Connection: weight"]'),
+    null,
+  );
+  document
+    .querySelector('[data-id="node-1"]')
+    .dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter" }));
+  assert.equal(document.getElementById("node-constants").hidden, true);
+  assert.equal(list.children.length, 0);
+  document
+    .querySelector('[data-id="output-1"]')
+    .dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter" }));
+  assert.equal(document.getElementById("constant-count").textContent, "1");
+  assert.match(list.textContent, /weight/);
+  const svg = document.getElementById("graph");
+  pointer(svg, "pointerdown", 0, 0);
+  pointer(svg, "pointerup", 0, 0);
+  assert.equal(document.getElementById("constant-count").textContent, "3");
+  assert.match(list.textContent, /unused/);
+  load(demoGraph);
+  assert.equal(document.getElementById("node-constants").hidden, true);
+  assert.equal(list.children.length, 0);
+});
+
+test("shows constants-only models in the inspector and ignores hidden constants in requested selections", (t) => {
+  const { document, window, load, pointer } = openViewer(t);
+  const constant = {
+    ...demoGraph.nodes[0],
+    opType: "Constant",
+    inputs: [],
+    outputs: ["output"],
+    attributes: [{ name: "value_int", type: "INT", value: "42" }],
+  };
+  const graph = { ...demoGraph, inputs: [], nodes: [constant] };
+  load(graph);
+  assert.equal(document.querySelectorAll(".graph-node").length, 0);
+  assert.equal(document.getElementById("constant-count").textContent, "1");
+  assert.match(document.getElementById("constant-nodes").textContent, /42/);
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: { type: "graph", graph, selectedNodes: [0] },
+    }),
+  );
+  const svg = document.getElementById("graph");
+  pointer(svg, "pointerdown", 0, 0);
+  pointer(svg, "pointerup", 0, 0);
+  assert.equal(document.querySelectorAll(".selected").length, 0);
+  assert.equal(document.getElementById("constant-count").textContent, "1");
+});
+
 test("opens native LightOpSchema docs and clears stale docs and parameters on selection or model changes", (t) => {
   const { document, load, window } = openViewer(t);
   const docButton = document.getElementById("show-doc");
@@ -6905,10 +7235,16 @@ test("keeps residual routes attached while dragging and restores their bends wit
   const connection = [...document.querySelectorAll("#edges > g")].find(
     (group) =>
       group.querySelector(".tensor-label").textContent === "tensor_0" &&
-      group.querySelector(".edge").getAttribute("d").includes("L"),
+      group.querySelector(".edge").getAttribute("d").includes("Q"),
   );
   assert.ok(connection, "Residual edge must follow the layout's routed bends");
   const path = connection.querySelector(".edge");
+  assert.ok(path.getAttribute("d").includes("Q"), "Bends must be rounded");
+  assert.ok(!path.getAttribute("d").includes("L"), "No square detour segments");
+  assert.equal(
+    connection.querySelector(".edge-hit").getAttribute("d"),
+    path.getAttribute("d"),
+  );
   const coordinates = () =>
     path
       .getAttribute("d")
@@ -6969,10 +7305,44 @@ test("orders graph ports with their independent branches instead of crossing the
       Number(rect.getAttribute("x")) + Number(rect.getAttribute("width")) / 2
     );
   };
-  assert.ok(x("Input: left") < x("Input: right"));
-  assert.ok(x("Output: left_result") < x("Output: right_result"));
   const positions = nodePositions(document);
-  assert.ok(positions[0].x < positions[1].x);
+  const direction = positions[1].x - positions[0].x;
+  assert.ok((x("Input: right") - x("Input: left")) * direction > 0);
+  assert.ok(
+    (x("Output: right_result") - x("Output: left_result")) * direction > 0,
+  );
+});
+
+test("places late inputs and early outputs locally and restores port positions after dragging", (t) => {
+  const { document, load, pointer } = openViewer(t);
+  const model = chainGraph(8);
+  model.inputs = [...model.inputs, "late"];
+  model.nodes[7].inputs.push("late");
+  model.outputs = [...model.outputs, "tensor_0"];
+  load(model);
+  const at = (label) =>
+    nodePositions(document, `[aria-label="${label}"] > rect`)[0];
+  const positions = nodePositions(document);
+  const input = at("Input: late");
+  const output = at("Output: tensor_0");
+  assert.ok(input.y > positions[0].y);
+  assert.ok(input.y < positions[7].y);
+  assert.ok(output.y > positions[0].y);
+  assert.ok(output.y < positions[7].y);
+  const port = document.querySelector('[aria-label="Input: late"]');
+  const edge = [...document.querySelectorAll("#edges > g")].find(
+    (group) => group.querySelector(".tensor-label").textContent === "late",
+  );
+  const before = edge.querySelector(".edge").getAttribute("d");
+  const graph = document.getElementById("graph");
+  pointer(port, "pointerdown", input.x, input.y);
+  pointer(graph, "pointermove", input.x + 30, input.y + 20);
+  pointer(graph, "pointerup", input.x + 30, input.y + 20);
+  assert.notEqual(edge.querySelector(".edge").getAttribute("d"), before);
+  document.getElementById("refresh-positions").click();
+  assert.deepEqual(at("Input: late"), input);
+  assert.deepEqual(at("Output: tensor_0"), output);
+  assert.equal(edge.querySelector(".edge").getAttribute("d"), before);
 });
 
 test("renders a portrait graph with inputs above operators and outputs below", (t) => {
@@ -7017,7 +7387,7 @@ test("renders a portrait graph with inputs above operators and outputs below", (
   }
 });
 
-test("fits complete operator types and names without redundant node or port badges", (t) => {
+test("fits operator types and middle-truncates long names without reducing their font", (t) => {
   const { document, load, pointer } = openViewer(t);
   const nodes = [
     {
@@ -7030,7 +7400,11 @@ test("fits complete operator types and names without redundant node or port badg
       id: "long-type",
       opType: "VeryLongCustomNormalizationOperatorNameThatCannotFitAtFullSize",
     },
-    { ...demoGraph.nodes[0], id: "long-name", name: "model_layer_".repeat(10) },
+    {
+      ...demoGraph.nodes[0],
+      id: "long-name",
+      name: `/model/${"decoder_layer_".repeat(10)}/MatMul_123`,
+    },
   ];
   load({ ...demoGraph, nodes });
   assert.equal(document.querySelector(".operator-tag, .port-type"), null);
@@ -7040,9 +7414,18 @@ test("fits complete operator types and names without redundant node or port badg
       group.querySelector(".operator-label").textContent,
       nodes[index].opType,
     );
-    assert.equal(
-      group.querySelector(".operator-name").textContent,
-      nodes[index].name,
+    const displayed = group.querySelector(".operator-name").textContent;
+    if (index === 2) {
+      const [start, end] = displayed.split("…");
+      assert.ok(start && end);
+      assert.ok(nodes[index].name.startsWith(start));
+      assert.ok(nodes[index].name.endsWith(end));
+      assert.ok(displayed.length < nodes[index].name.length);
+      assert.ok(displayed.startsWith("/model/"));
+      assert.ok(displayed.endsWith("/MatMul_123"));
+    } else assert.equal(displayed, nodes[index].name);
+    assert.ok(
+      group.querySelector("title").textContent.includes(nodes[index].name),
     );
     const width = Number(group.querySelector("rect").getAttribute("width"));
     assert.ok(width > 140 && width <= 280);
@@ -7069,8 +7452,9 @@ test("fits complete operator types and names without redundant node or port badg
   assert.ok(
     parseFloat(groups[1].querySelector(".operator-label").style.fontSize) < 16,
   );
-  assert.ok(
-    parseFloat(groups[2].querySelector(".operator-name").style.fontSize) < 10,
+  assert.equal(
+    groups[2].querySelector(".operator-name").style.fontSize,
+    "10px",
   );
   assert.match(
     document.querySelector(".port").getAttribute("aria-label"),
@@ -7090,6 +7474,123 @@ test("fits complete operator types and names without redundant node or port badg
   pointer(graph, "pointermove", right - 2, y + 10);
   pointer(graph, "pointerup", right - 2, y + 10);
   assert.equal(groups[1].getAttribute("aria-pressed"), "true");
+});
+
+test("clicking an arc highlights its full route and both endpoints without starting a drag", (t) => {
+  const { document, window, load, pointer } = openViewer(t);
+  const model = chainGraph(5);
+  model.nodes[4].inputs.push("tensor_0");
+  load(model);
+  const graph = document.getElementById("graph");
+  const connection = [...document.querySelectorAll(".connection")].find(
+    (group) =>
+      group.querySelector(".tensor-label").textContent === "tensor_0" &&
+      group.querySelector(".edge").getAttribute("d").includes("Q"),
+  );
+  const positions = nodePositions(document);
+  const start = positions[0];
+  pointer(
+    connection.querySelector(".edge-hit"),
+    "pointerdown",
+    start.x,
+    start.y + 60,
+  );
+  assert.equal(connection.getAttribute("aria-pressed"), "true");
+  assert.equal(graph.classList.contains("selecting"), false);
+  assert.equal(graph.classList.contains("dragging"), false);
+  assert.equal(
+    document
+      .querySelector("#connection-highlight .selected-edge")
+      .getAttribute("d"),
+    connection.querySelector(".edge").getAttribute("d"),
+  );
+  const ends = nodePositions(document, "#connection-highlight rect");
+  assert.deepEqual(ends, [positions[0], positions[4]]);
+  assert.equal(
+    document.getElementById("node-name").textContent,
+    "activation_0",
+  );
+  const style = window.getComputedStyle(
+    document.querySelector(".selected-edge"),
+  );
+  assert.ok(parseFloat(style.strokeWidth) >= 3);
+  const other = document.querySelector(".connection");
+  other.dispatchEvent(
+    new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+  );
+  assert.equal(connection.getAttribute("aria-pressed"), "false");
+  assert.equal(other.getAttribute("aria-pressed"), "true");
+  graph.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape" }));
+  assert.equal(document.getElementById("connection-highlight"), null);
+  assert.equal(other.getAttribute("aria-pressed"), "false");
+  other.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  assert.ok(document.getElementById("connection-highlight"));
+  load(demoGraph);
+  assert.equal(document.getElementById("connection-highlight"), null);
+});
+
+test("arc selection preserves area zoom gestures and works on virtualized connections", (t) => {
+  const { document, window, load, pointer } = openViewer(t);
+  load(chainGraph(600));
+  const graph = document.getElementById("graph");
+  const connection = document.querySelector(".connection");
+  const position = nodePositions(document)[0];
+  pointer(
+    connection.querySelector(".edge"),
+    "pointerdown",
+    position.x,
+    position.y - 60,
+  );
+  assert.ok(document.querySelector("#connection-highlight .selected-edge"));
+  document.getElementById("zoom-fit").click();
+  assert.equal(document.querySelectorAll(".connection").length, 0);
+  assert.ok(document.querySelector("#connection-highlight .selected-edge"));
+  document.getElementById("zoom-readable").click();
+  const mounted = document.querySelector('.connection[aria-pressed="true"]');
+  assert.ok(mounted);
+  pointer(
+    mounted.querySelector(".edge"),
+    "pointerdown",
+    position.x,
+    position.y - 60,
+    { altKey: true },
+  );
+  assert.equal(graph.classList.contains("selecting"), true);
+  graph.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape" }));
+  assert.equal(graph.classList.contains("selecting"), false);
+  const port = document.querySelector(".port");
+  port.dispatchEvent(
+    new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+  );
+  assert.equal(document.getElementById("connection-highlight"), null);
+});
+
+test("selects a nearby arc from the background with a screen-space tolerance at different zooms", (t) => {
+  const { document, window, load, pointer } = openViewer(t);
+  load(chainGraph(6));
+  const graph = document.getElementById("graph");
+  document.getElementById("zoom-readable").click();
+  const source = nodePositions(document)[0];
+  const target = nodePositions(document)[1];
+  const y = (source.y + 44 + target.y - 44) / 2;
+  for (const action of ["zoom-in", "zoom-out", "zoom-out"]) {
+    document.getElementById(action).click();
+    const width = Number(graph.getAttribute("viewBox").split(" ")[2]);
+    const dx = (8 * width) / 1060;
+    pointer(graph, "pointerdown", source.x + dx, y);
+    assert.ok(document.getElementById("connection-highlight"));
+    assert.equal(
+      document.querySelector('.connection[aria-pressed="true"] .tensor-label')
+        .textContent,
+      "tensor_0",
+    );
+    assert.equal(graph.classList.contains("selecting"), false);
+    graph.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape" }));
+    pointer(graph, "pointerdown", source.x + (14 * width) / 1060, y);
+    assert.equal(document.getElementById("connection-highlight"), null);
+    assert.equal(graph.classList.contains("selecting"), true);
+    pointer(graph, "pointerup", source.x + (14 * width) / 1060, y);
+  }
 });
 
 test("changes only affected selections and edges, and preserves an unchanged inspector during dragging", (t) => {
@@ -7213,8 +7714,10 @@ test("aligns a dependency chain deterministically on each model load", (t) => {
   const model = chainGraph();
   load(model);
   const positions = nodePositions(document);
+  const step = positions[1].y - positions[0].y;
+  assert.ok(step >= 148);
   positions.forEach((position, index) => {
-    assert.equal(position.y, 177 + index * 124);
+    assert.equal(position.y - positions[0].y, index * step);
     const margin =
       Number(
         document

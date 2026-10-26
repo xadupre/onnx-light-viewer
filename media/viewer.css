@@ -301,7 +301,7 @@ p {
 }
 #memory-chart {
   width: 100%;
-  max-height: 320px;
+  max-height: 360px;
   margin: 12px 0;
 }
 #memory-chart text {
@@ -317,12 +317,24 @@ p {
   stroke: var(--mint);
   stroke-width: 2;
 }
+.memory-node-interval {
+  fill: var(--muted);
+  fill-opacity: 0.3;
+}
+.memory-operator-interval {
+  fill: var(--mint);
+  fill-opacity: 0.7;
+}
+#memory-operator-labels text {
+  fill: var(--mint);
+}
 .memory-table {
   overflow: auto;
 }
 .memory-table table {
   border-collapse: collapse;
   width: 100%;
+  min-width: 1400px;
 }
 .memory-table th,
 .memory-table td {
@@ -330,6 +342,11 @@ p {
   border: 1px solid var(--border);
   text-align: left;
   overflow-wrap: anywhere;
+  vertical-align: top;
+  white-space: pre-line;
+}
+.memory-table td:last-child {
+  min-width: 240px;
 }
 #memory-range {
   margin: 0 12px;
@@ -552,11 +569,40 @@ body.resizing-sidebar {
   pointer-events: none;
 }
 .edge,
-.crossing-edge {
+.crossing-edge,
+.selected-edge {
   fill: none;
   stroke: #536e83;
   stroke-width: 1.5;
   marker-end: url(#arrow);
+}
+.connection,
+.crossing-edge,
+#overview-edges {
+  cursor: pointer;
+}
+.edge-hit {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 20;
+  vector-effect: non-scaling-stroke;
+  pointer-events: stroke;
+}
+#connection-highlight {
+  pointer-events: none;
+}
+.selected-edge,
+.connected-node {
+  fill: none;
+  stroke: #ffd166;
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+.connection:focus-visible .edge {
+  stroke: #ffd166;
+  stroke-width: 3;
 }
 #overview-edges {
   fill: none;
@@ -826,6 +872,20 @@ h3 span {
   font-size: 10px;
   color: var(--muted);
 }
+.inspector-section {
+  margin-top: 18px;
+}
+.inspector-section > summary {
+  margin-bottom: 8px;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 500;
+}
+.inspector-section > summary > span {
+  float: right;
+  font-size: 10px;
+  color: var(--muted);
+}
 ul {
   list-style: none;
   padding: 0;
@@ -858,6 +918,7 @@ button:disabled {
   opacity: 0.5;
 }
 #node-parameters pre,
+#node-constants pre,
 #scope-initializers pre {
   margin: 5px 0 0;
   white-space: pre-wrap;
@@ -1413,5 +1474,10 @@ button:disabled {
   }
   .edge {
     stroke: CanvasText;
+  }
+  .selected-edge,
+  .connected-node,
+  .connection:focus-visible .edge {
+    stroke: Highlight;
   }
 }

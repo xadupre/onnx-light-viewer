@@ -122,21 +122,22 @@ export function webviewHtml(
             <div class="inspector-heading"><h2 id="node-title">No model loaded</h2><button id="show-doc" disabled aria-haspopup="dialog">Doc</button></div><p id="node-description">Open an ONNX model to explore its connections.</p>
             <button id="open-function" class="icon-button" hidden>Open function</button>
             <div id="node-details"><dl><dt id="node-name-label">NODE NAME</dt><dd id="node-name">—</dd><dt>DOMAIN</dt><dd id="node-domain">—</dd><dt>OPSET</dt><dd id="node-opset">—</dd></dl>
-            <h3>Inputs <span id="input-count">0</span></h3><ul id="node-inputs"></ul>
-            <h3>Outputs <span id="output-count">0</span></h3><ul id="node-outputs"></ul>
-            <section id="node-captures" hidden><h3>Captured inputs</h3><ul id="captured-inputs"></ul></section>
+            <details class="inspector-section" open><summary>Inputs <span id="input-count">0</span></summary><ul id="node-inputs"></ul></details>
+            <details class="inspector-section" open><summary>Outputs <span id="output-count">0</span></summary><ul id="node-outputs"></ul></details>
+            <details id="node-captures" class="inspector-section" open hidden><summary>Captured inputs</summary><ul id="captured-inputs"></ul></details>
             <section id="node-parameters" hidden>
-              <h3>Attributes <span id="attribute-count">0</span></h3><ul id="node-attributes"></ul>
-              <h3>Initializers <span id="parameter-count">0</span></h3><ul id="node-initializers"></ul>
+              <details class="inspector-section" open><summary>Attributes <span id="attribute-count">0</span></summary><ul id="node-attributes"></ul></details>
+              <details class="inspector-section" open><summary>Initializers <span id="parameter-count">0</span></summary><ul id="node-initializers"></ul></details>
             </section>
+            <details id="node-constants" class="inspector-section" open hidden><summary>Constants <span id="constant-count">0</span></summary><ul id="constant-nodes"></ul></details>
             <section id="scope-initializers" hidden>
-              <h3>Initializers <span id="dense-initializer-count">0</span></h3><ul id="scope-dense-initializers"></ul>
-              <h3>Sparse initializers <span id="sparse-initializer-count">0</span></h3><ul id="scope-sparse-initializers"></ul>
-              <h3>Encoded initializers <span id="encoded-initializer-count">0</span></h3><ul id="scope-encoded-initializers"></ul>
+              <details class="inspector-section" open><summary>Initializers <span id="dense-initializer-count">0</span></summary><ul id="scope-dense-initializers"></ul></details>
+              <details class="inspector-section" open><summary>Sparse initializers <span id="sparse-initializer-count">0</span></summary><ul id="scope-sparse-initializers"></ul></details>
+              <details class="inspector-section" open><summary>Encoded initializers <span id="encoded-initializer-count">0</span></summary><ul id="scope-encoded-initializers"></ul></details>
             </section>
-            <section id="scope-functions" hidden>
-              <h3>Local functions <span id="function-count">0</span></h3><ul id="local-functions"></ul>
-            </section></div>
+            <details id="scope-functions" class="inspector-section" open hidden>
+              <summary>Local functions <span id="function-count">0</span></summary><ul id="local-functions"></ul>
+            </details></div>
           </section>
           <section id="metadata-panel" class="inspector-panel" aria-labelledby="metadata-title" hidden>
             <h2 id="metadata-title" class="eyebrow panel-title">Data</h2>
@@ -328,16 +329,20 @@ export function webviewHtml(
       <div id="memory-results" hidden>
         <h3 id="memory-model-name"></h3>
         <dl class="status-details"><dt>Estimated peak</dt><dd id="memory-peak"></dd><dt>Device</dt><dd id="memory-device"></dd></dl>
-        <svg id="memory-chart" viewBox="0 0 1000 280" role="img" aria-labelledby="memory-chart-title memory-chart-description">
+        <svg id="memory-chart" viewBox="0 0 1000 330" role="img" aria-labelledby="memory-chart-title memory-chart-description">
           <title id="memory-chart-title">Estimated device memory by execution event</title>
-          <desc id="memory-chart-description">Each point shows the estimated CPU tensor and registered scratch memory while a node runs. Exact values are in the table below.</desc>
+          <desc id="memory-chart-description">Step plot: one interval between nodes, two intervals during each node. Outputs and scratch are allocated before execution; releases happen after execution. Rectangles span each node's two-interval execution window, with a gap between nodes. Highlighted rectangles identify common compute-heavy operations, not measured timings. Exact values and SDK decisions are in the table below.</desc>
           <path class="memory-axis" d="M60,20V240H980"></path>
           <text id="memory-chart-peak" x="60" y="16"></text><text x="10" y="244">0</text>
-          <text x="60" y="265">Event 1</text><text id="memory-chart-last" x="980" y="265" text-anchor="end"></text>
+          <path id="memory-node-intervals" class="memory-node-interval"></path>
+          <path id="memory-operator-intervals" class="memory-operator-interval"></path>
+          <g id="memory-node-numbers"></g>
+          <g id="memory-operator-labels"></g>
           <path id="memory-curve"></path>
         </svg>
+        <p id="memory-final-status" role="status" hidden>Final post-release memory is unavailable in onnx-light. The curve stops before that unknown value.</p>
         <h3>Estimated execution events</h3>
-        <div class="memory-table"><table><thead><tr><th scope="col">Event</th><th scope="col">Node</th><th scope="col">Operator</th><th scope="col">Already allocated</th><th scope="col">New outputs</th><th scope="col">Scratch</th><th scope="col">Device memory</th></tr></thead><tbody id="memory-events"></tbody></table></div>
+        <div class="memory-table"><table><thead><tr><th scope="col">Event</th><th scope="col">Node</th><th scope="col">Operator</th><th scope="col">Before allocation</th><th scope="col">New outputs</th><th scope="col">Scratch</th><th scope="col">During execution</th><th scope="col">After release</th><th scope="col">In-place</th><th scope="col">Release</th><th scope="col">Release shape</th><th scope="col">Tensor shapes</th></tr></thead><tbody id="memory-events"></tbody></table></div>
         <nav aria-label="Memory events"><button id="memory-previous" type="button" disabled>Previous</button><span id="memory-range" role="status"></span><button id="memory-next" type="button" disabled>Next</button></nav>
       </div>
     </section>
