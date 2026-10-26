@@ -35,9 +35,13 @@ Run from the repository root:
 
 .. code-block:: bash
 
+   python3 -m pip install -r test/requirements.txt
    npm test
    npm run format:check
    clang-format --dry-run --Werror native/*.cc native/*.h
+
+Export tests use the real Hugging Face client against a local HTTP fixture.
+They do not download public models or require installed exporters.
 
 The **Tests** GitHub Actions workflow builds the binding, runs the tests and
 checks JavaScript/C++ formatting on pull requests and pushes to ``main``.

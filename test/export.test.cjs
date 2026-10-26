@@ -14,11 +14,13 @@ const { promisify } = require("node:util");
 const { test } = require("node:test");
 const {
   defaultExportDirectory,
+  downloadExportSource,
   ExportHistory,
   exportPlan,
   prepareExportPlan,
   runExport,
 } = require("../dist/export");
+const { exportHub } = require("./helpers/export-hub.cjs");
 
 const python = process.platform === "win32" ? "python" : "python3";
 const options = (directory, exporter = "mbext") => ({
@@ -33,6 +35,154 @@ async function directory(t) {
   t.after(() => rm(root, { recursive: true, force: true }));
   return root;
 }
+
+test("downloads a pinned source into the application cache once and converts it offline for every exporter", async (t) => {
+  const root = await directory(t);
+  const hub = await exportHub(t);
+  const previous = process.env.HF_ENDPOINT;
+  process.env.HF_ENDPOINT = hub.endpoint;
+  t.after(() => {
+    if (previous === undefined) delete process.env.HF_ENDPOINT;
+    else process.env.HF_ENDPOINT = previous;
+  });
+  const cache = path.join(root, "downloads", "huggingface");
+  for (const exporter of ["mbext", "modelbuilder", "mobius"]) {
+    const plan = await prepareExportPlan(
+      exportPlan(options(path.join(root, exporter), exporter), python),
+      new AbortController().signal,
+    );
+    const output = [];
+    const local = await downloadExportSource(
+      plan,
+      cache,
+      new AbortController().signal,
+      (text) => output.push(text),
+    );
+    assert.equal(
+      local.model,
+      path.join(cache, "models--owner--model", "snapshots", hub.revision),
+    );
+    assert.ok(local.args.includes(exporter === "mobius" ? "--config" : "-i"));
+    assert.equal(local.script, plan.script);
+    assert.match(output.at(-1), /Source ready/);
+    assert.deepEqual(await readdir(local.model), [
+      "config.json",
+      "model.safetensors",
+    ]);
+    local.args = [
+      "-u",
+      "-c",
+      `
+import os
+import pathlib
+import shutil
+import sys
+assert os.environ["HF_HUB_OFFLINE"] == "1"
+assert os.environ["TRANSFORMERS_OFFLINE"] == "1"
+assert (pathlib.Path(sys.argv[1]) / "model.safetensors").read_bytes() == b"source weights"
+pathlib.Path(sys.argv[2]).mkdir(parents=True, exist_ok=True)
+shutil.copyfile(sys.argv[3], pathlib.Path(sys.argv[2]) / "model.onnx")
+`,
+      local.model,
+      local.directory,
+      path.join(__dirname, "models", "relu.onnx"),
+    ];
+    await runExport(local, new AbortController().signal, () => {});
+    await promisify(execFile)(python, [local.script]);
+    assert.match(await readFile(local.script, "utf8"), /HF_HUB_OFFLINE/);
+  }
+  assert.equal(
+    hub.requests.filter(
+      ({ method, pathname }) =>
+        method === "GET" && pathname.includes("/resolve/"),
+    ).length,
+    2,
+  );
+  assert.ok(
+    hub.requests
+      .filter(({ pathname }) => pathname.includes("/resolve/"))
+      .every(({ pathname }) => pathname.includes(hub.revision)),
+  );
+  assert.ok(
+    (await readdir(cache)).every((name) => !name.startsWith(".request-")),
+  );
+  const sharded = await downloadExportSource(
+    exportPlan(
+      { ...options(path.join(root, "sharded")), model: "owner/sharded" },
+      python,
+    ),
+    cache,
+    new AbortController().signal,
+    () => {},
+  );
+  assert.deepEqual(await readdir(sharded.model), [
+    "config.json",
+    "model-00001.safetensors",
+    "model-00002.safetensors",
+    "model.safetensors.index.json",
+  ]);
+  const failure = exportPlan(
+    { ...options(path.join(root, "failure")), model: "download-fail" },
+    python,
+  );
+  await assert.rejects(
+    downloadExportSource(
+      failure,
+      cache,
+      new AbortController().signal,
+      () => {},
+    ),
+    /404|Repository not found/i,
+  );
+  const local = exportPlan(
+    { ...options(path.join(root, "local")), model: root },
+    python,
+  );
+  const count = hub.requests.length;
+  assert.equal(
+    await downloadExportSource(
+      local,
+      cache,
+      new AbortController().signal,
+      () => {},
+    ),
+    local,
+  );
+  assert.equal(hub.requests.length, count);
+});
+
+test("cancels an active source download and cleans only its request metadata", async (t) => {
+  const root = await directory(t);
+  const controller = new AbortController();
+  let downloading = false;
+  const hub = await exportHub(t, (method, pathname) => {
+    if (method === "GET" && pathname.endsWith("/model.safetensors")) {
+      downloading = true;
+      controller.abort();
+    }
+  });
+  const previous = process.env.HF_ENDPOINT;
+  process.env.HF_ENDPOINT = hub.endpoint;
+  t.after(() => {
+    if (previous === undefined) delete process.env.HF_ENDPOINT;
+    else process.env.HF_ENDPOINT = previous;
+  });
+  const cache = path.join(root, "cache");
+  await assert.rejects(
+    downloadExportSource(
+      exportPlan(options(path.join(root, "output")), python),
+      cache,
+      controller.signal,
+      () => {},
+    ),
+    { name: "AbortError" },
+  );
+  assert.equal(downloading, true);
+  assert.ok((await readdir(cache)).includes("models--owner--model"));
+  assert.ok(
+    (await readdir(cache)).every((name) => !name.startsWith(".request-")),
+  );
+});
 
 test("persists bounded, deduplicated export suggestions", async () => {
   const root = path.join(tmpdir(), "downloads");

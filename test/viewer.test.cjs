@@ -5347,6 +5347,8 @@ test("exports from the right panel without a loaded model and shows commands, pr
     type: "export-progress",
     actionId: request.actionId,
     stage: "Exporting",
+    phase: "download",
+    cacheDirectory: "/tmp/downloads/huggingface",
     command: "python3 -u -m modelbuilder.builder",
     output: "<img src=x> 50%",
   });
@@ -5359,6 +5361,30 @@ test("exports from the right panel without a loaded model and shows commands, pr
     "python3 -u -m modelbuilder.builder\n\n<img src=x> 50%",
   );
   assert.equal(document.querySelector("#export-output img"), null);
+  assert.equal(document.getElementById("export-timings").hidden, false);
+  await new Promise((resolve) => window.setTimeout(resolve, 150));
+  assert.match(
+    document.getElementById("export-download-time").textContent,
+    /s \(running\)/,
+  );
+  assert.ok(
+    parseFloat(document.getElementById("export-download-time").textContent) > 0,
+  );
+  send({
+    type: "export-progress",
+    actionId: request.actionId,
+    stage: "Converting local model (offline)",
+    phase: "conversion",
+    downloadDurationMs: 2500,
+  });
+  assert.equal(
+    document.getElementById("export-download-time").textContent,
+    "2.50 s",
+  );
+  assert.match(
+    document.getElementById("export-cache").textContent,
+    /downloads\/huggingface/,
+  );
   assert.equal(output.scrollTop, output.scrollHeight);
   output.scrollTop = 0;
   const stdout = [
@@ -5405,6 +5431,14 @@ test("exports from the right panel without a loaded model and shows commands, pr
     document.getElementById("export-status").textContent,
     /cancelled/,
   );
+  assert.equal(
+    document.getElementById("export-download-time").textContent,
+    "2.50 s",
+  );
+  assert.doesNotMatch(
+    document.getElementById("export-conversion-time").textContent,
+    /running|Not started/,
+  );
   assert.equal(document.getElementById("open-model").disabled, false);
   field("export-precision", "int2");
   field("export-tool", "mobius");
@@ -5418,6 +5452,7 @@ test("exports from the right panel without a loaded model and shows commands, pr
   const next = messages.at(-1);
   assert.equal(next.exportOptions.exporter, "mobius");
   assert.equal(next.exportOptions.precision, "int2");
+  button.click();
   load(demoGraph);
   send({
     type: "export-info",
@@ -5426,6 +5461,7 @@ test("exports from the right panel without a loaded model and shows commands, pr
     script: "/tmp/export-model/export_model.py",
     loaded: true,
     durationMs: 1234,
+    downloadSkipped: true,
   });
   const running = events.find(
     (event) => event.type === "interaction" && event.entry.id === next.actionId,
@@ -5434,6 +5470,15 @@ test("exports from the right panel without a loaded model and shows commands, pr
   assert.equal(
     document.getElementById("export-status").textContent,
     "Converted and opened /tmp/export-model/model.onnx Conversion time: 1.23 s.",
+  );
+  assert.equal(document.getElementById("export-panel").hidden, false);
+  assert.equal(
+    document.getElementById("export-conversion-time").textContent,
+    "1.23 s",
+  );
+  assert.equal(
+    document.getElementById("export-download-time").textContent,
+    "Not needed (local source)",
   );
   assert.match(
     document.getElementById("export-script").textContent,

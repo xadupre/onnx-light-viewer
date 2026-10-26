@@ -7,6 +7,33 @@ function createExportPanel({ byId, postMessage, requestAction, revealPanel }) {
   let loading = false;
   let defaultDirectory = true;
   let exporterChosen = false;
+  let clock;
+  let phase;
+  let phaseStarted;
+  let times = {};
+  let downloadSkipped = false;
+  function renderTimes() {
+    for (const [key, id] of [
+      ["download", "export-download-time"],
+      ["conversion", "export-conversion-time"],
+    ]) {
+      const elapsed =
+        phase === key ? performance.now() - phaseStarted : times[key];
+      byId(id).textContent =
+        key === "download" && downloadSkipped
+          ? "Not needed (local source)"
+          : elapsed === undefined
+            ? "Not started"
+            : `${(elapsed / 1000).toFixed(2)} s${phase === key ? " (running)" : ""}`;
+    }
+  }
+  function stopClock() {
+    if (phase && times[phase] === undefined)
+      times[phase] = performance.now() - phaseStarted;
+    phase = undefined;
+    clearInterval(clock);
+    renderTimes();
+  }
   const options = () => ({
     exporter: byId("export-tool").value,
     model: byId("export-source").value,
@@ -86,18 +113,27 @@ function createExportPanel({ byId, postMessage, requestAction, revealPanel }) {
   });
   return {
     start(id) {
+      stopClock();
       actionId = id;
       running = true;
       converted = false;
       exporterChosen = true;
       clearTimeout(timer);
       request++;
+      times = {};
+      downloadSkipped = false;
+      byId("export-timings").hidden = false;
+      byId("export-cache").textContent = "";
+      renderTimes();
+      clock = setInterval(renderTimes, 100);
       byId("export-stdout").textContent = "";
       byId("export-progress").hidden = false;
       byId("export-status").textContent = "Starting conversion…";
+      revealPanel(byId("export-panel"));
       enabled();
     },
     finish(status) {
+      stopClock();
       running = false;
       byId("export-progress").hidden = true;
       if (status === "CANCELLED" && !converted)
@@ -148,6 +184,22 @@ function createExportPanel({ byId, postMessage, requestAction, revealPanel }) {
       )
         return false;
       if (data.actionId !== actionId) return true;
+      if (data.phase !== undefined && data.phase !== phase) {
+        if (phase) times[phase] = performance.now() - phaseStarted;
+        phase = ["download", "conversion"].includes(data.phase)
+          ? data.phase
+          : undefined;
+        phaseStarted = performance.now();
+      }
+      if (data.downloadSkipped !== undefined)
+        downloadSkipped = data.downloadSkipped;
+      if (data.downloadDurationMs !== undefined)
+        times.download = data.downloadDurationMs;
+      if (data.durationMs !== undefined) times.conversion = data.durationMs;
+      if (data.cacheDirectory !== undefined)
+        byId("export-cache").textContent =
+          `Source cache: ${data.cacheDirectory}`;
+      renderTimes();
       if (defaultDirectory && data.directoryTemplate)
         byId("export-directory").value = data.directoryTemplate;
       if (data.command !== undefined)
@@ -168,12 +220,16 @@ function createExportPanel({ byId, postMessage, requestAction, revealPanel }) {
         byId("export-status").textContent =
           "Conversion failed. See the output and Logs.";
       } else {
+        stopClock();
         converted = true;
         byId("export-status").textContent = data.loaded
           ? `Converted and opened ${data.path}`
           : "Conversion saved; opening cancelled.";
         byId("export-status").textContent +=
           ` Conversion time: ${(data.durationMs / 1000).toFixed(2)} s.`;
+        byId("export-panel").hidden = false;
+        byId("export-model").setAttribute("aria-expanded", "true");
+        revealPanel(byId("export-panel"));
       }
       return true;
     },
