@@ -1704,8 +1704,9 @@ test("opens pipeline files, navigates stages, applies stage fusions and saves th
   await extension.receive({ type: "fusion-patterns", requestId: 2 });
   assert.equal(extension.messages.at(-1).type, "fusion-error");
   const stagePath = [{ pipeline: "prefill" }];
-  await extension.receive({ type: "navigate", path: stagePath });
+  await extension.receive({ type: "navigate", path: stagePath, nodeIndex: 0 });
   assert.equal(latestGraph().graph.breadcrumbs[1].name, "prefill");
+  assert.deepEqual(latestGraph().selectedNodes, [0]);
   assert.equal(latestGraph().statistics, undefined);
   await extension.receive({ type: "get-statistics", requestId: 1 });
   const originalStatistics = extension.messages.at(-1);
@@ -3193,6 +3194,26 @@ test("ignores stale recovery results and errors after replacing a local model", 
       assert.equal(extension.nativeModels.length, nativeCount + 1);
     }
   }
+});
+
+test("navigation selects a requested node index and rejects invalid indices", async (t) => {
+  const extension = await openExtension("relu.onnx", undefined, true);
+  t.after(() => extension.dispose());
+  await extension.receive({ type: "navigate", path: [], nodeIndex: 0 });
+  const graph = extension.messages.at(-1);
+  assert.equal(graph.type, "graph");
+  assert.deepEqual(graph.selectedNodes, [0]);
+  for (const nodeIndex of [-1, 0.5, 9999, "0", null]) {
+    await extension.receive({ type: "navigate", path: [], nodeIndex });
+    assert.equal(extension.messages.at(-1).type, "navigation-error");
+    assert.match(
+      extension.messages.at(-1).error,
+      /Invalid navigation node index/,
+    );
+  }
+  await extension.receive({ type: "navigate", path: [] });
+  assert.equal(extension.messages.at(-1).type, "graph");
+  assert.equal(extension.messages.at(-1).selectedNodes, undefined);
 });
 
 test("shares concurrent native recovery and keeps inferred state for navigation", async () => {

@@ -342,6 +342,8 @@ export function webviewHtml(
         </svg>
         <p id="memory-final-status" role="status" hidden>Final post-release memory is unavailable in onnx-light. The curve stops before that unknown value.</p>
         <h3>Estimated execution events</h3>
+        <p id="memory-peaks-count"></p>
+        <label><input id="memory-peaks-only" type="checkbox"> Local peaks only</label>
         <div class="memory-table"><table><thead><tr><th scope="col">Event</th><th scope="col">Node</th><th scope="col">Operator</th><th scope="col">Before allocation</th><th scope="col">New outputs</th><th scope="col">Scratch</th><th scope="col">During execution</th><th scope="col">After release</th><th scope="col">In-place</th><th scope="col">Release</th><th scope="col">Release shape</th><th scope="col">Tensor shapes</th></tr></thead><tbody id="memory-events"></tbody></table></div>
         <nav aria-label="Memory events"><button id="memory-previous" type="button" disabled>Previous</button><span id="memory-range" role="status"></span><button id="memory-next" type="button" disabled>Next</button></nav>
       </div>
