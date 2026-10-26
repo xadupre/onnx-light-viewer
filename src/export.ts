@@ -1,4 +1,4 @@
-import { execFile, spawn } from "node:child_process";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
 import {
   lstat,
   mkdir,
@@ -312,11 +312,22 @@ export async function prepareExportPlan(
   };
 }
 
-async function terminateExport(pid: number): Promise<void> {
+async function terminateExport(child: ChildProcess): Promise<void> {
+  const pid = child.pid;
+  if (pid === undefined) return;
   if (process.platform === "win32") {
+    if (child.exitCode !== null || child.signalCode !== null) return;
     await new Promise<void>((resolve, reject) => {
       execFile("taskkill", ["/PID", String(pid), "/T", "/F"], (error) => {
-        if (error) reject(error);
+        // taskkill returns 128 if the target exited before termination.
+        if (
+          error &&
+          !(
+            error.code === 128 &&
+            (child.exitCode !== null || child.signalCode !== null)
+          )
+        )
+          reject(error);
         else resolve();
       });
     });
@@ -379,7 +390,7 @@ async function runProcess(
     };
     const abort = () => {
       if (termination || child.pid === undefined) return;
-      termination = terminateExport(child.pid);
+      termination = terminateExport(child);
       void termination.catch(finish);
     };
     for (const stream of [child.stdout, child.stderr]) {

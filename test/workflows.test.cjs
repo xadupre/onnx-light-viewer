@@ -19,7 +19,9 @@ test("CI runs unit tests on Linux and Windows without building documentation", (
   assert.doesNotMatch(source, /macos-/);
   assert.match(source, /run: npm test/);
   assert.match(source, /if: runner\.os == 'Linux'\s+run: clang-format/);
-  assert.doesNotMatch(source, /sphinx|setup-python/);
+  assert.doesNotMatch(source, /sphinx/);
+  assert.match(source, /uses: actions\/setup-python@/);
+  assert.match(source, /python -m pip install -r test\/requirements\.txt/);
 });
 
 test("documentation runs weekly or manually in a Linux-only workflow", () => {

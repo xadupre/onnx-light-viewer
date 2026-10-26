@@ -5,6 +5,7 @@ const {
   mkdir,
   readFile,
   readdir,
+  realpath,
   rm,
   writeFile,
 } = require("node:fs/promises");
@@ -59,8 +60,10 @@ test("downloads a pinned source into the application cache once and converts it 
       (text) => output.push(text),
     );
     assert.equal(
-      local.model,
-      path.join(cache, "models--owner--model", "snapshots", hub.revision),
+      await realpath(local.model),
+      await realpath(
+        path.join(cache, "models--owner--model", "snapshots", hub.revision),
+      ),
     );
     assert.ok(local.args.includes(exporter === "mobius" ? "--config" : "-i"));
     assert.equal(local.script, plan.script);
