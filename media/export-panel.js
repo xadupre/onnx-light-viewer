@@ -3,6 +3,7 @@ function createExportPanel({ byId, postMessage, requestAction, revealPanel }) {
   let timer;
   let actionId;
   let running = false;
+  let converted = false;
   let loading = false;
   let defaultDirectory = true;
   let exporterChosen = false;
@@ -87,6 +88,7 @@ function createExportPanel({ byId, postMessage, requestAction, revealPanel }) {
     start(id) {
       actionId = id;
       running = true;
+      converted = false;
       exporterChosen = true;
       clearTimeout(timer);
       request++;
@@ -98,7 +100,7 @@ function createExportPanel({ byId, postMessage, requestAction, revealPanel }) {
     finish(status) {
       running = false;
       byId("export-progress").hidden = true;
-      if (status === "CANCELLED")
+      if (status === "CANCELLED" && !converted)
         byId("export-status").textContent =
           "Conversion cancelled; any generated files are kept.";
       if (status === "FAILED")
@@ -166,9 +168,12 @@ function createExportPanel({ byId, postMessage, requestAction, revealPanel }) {
         byId("export-status").textContent =
           "Conversion failed. See the output and Logs.";
       } else {
+        converted = true;
         byId("export-status").textContent = data.loaded
           ? `Converted and opened ${data.path}`
           : "Conversion saved; opening cancelled.";
+        byId("export-status").textContent +=
+          ` Conversion time: ${(data.durationMs / 1000).toFixed(2)} s.`;
       }
       return true;
     },

@@ -845,6 +845,7 @@ async function configurePanel(
                   type: "export-history",
                   history: exportHistory.snapshot(),
                 });
+                const conversionStarted = performance.now();
                 const files = await runExport(
                   plan,
                   controller.signal,
@@ -858,6 +859,7 @@ async function configurePanel(
                     });
                   },
                 );
+                const durationMs = performance.now() - conversionStarted;
                 if (!active) return;
                 controller.signal.throwIfAborted();
                 const selected =
@@ -884,6 +886,7 @@ async function configurePanel(
                     actionId: message.actionId,
                     script: plan.script,
                     loaded: false,
+                    durationMs,
                   });
                   return;
                 }
@@ -915,6 +918,7 @@ async function configurePanel(
                   path: selected,
                   script: plan.script,
                   loaded: true,
+                  durationMs,
                 });
               } catch (error) {
                 if (

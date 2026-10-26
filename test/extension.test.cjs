@@ -674,6 +674,7 @@ print("Saved model.onnx", flush=True)
     const result = extension.messages.at(-1);
     assert.equal(result.type, "export-info", result.error);
     assert.equal(result.loaded, true);
+    assert.ok(Number.isFinite(result.durationMs) && result.durationMs > 0);
     assert.equal(preferences.get("exportHistory").exporter, exporter);
     assert.equal(result.path, path.join(exportOptions.directory, "model.onnx"));
     assert.equal(
@@ -831,6 +832,10 @@ print("Saved model.onnx", flush=True)
   });
   assert.equal(extension.messages.at(-1).type, "export-info");
   assert.equal(extension.messages.at(-1).loaded, false);
+  assert.ok(
+    Number.isFinite(extension.messages.at(-1).durationMs) &&
+      extension.messages.at(-1).durationMs > 0,
+  );
   extension.selectExportedFile("second.onnx");
   await extension.receive({
     type: "export",
