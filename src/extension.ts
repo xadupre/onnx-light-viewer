@@ -672,6 +672,7 @@ async function configurePanel(
       message: {
         type?: string;
         path?: unknown;
+        nodeIndex?: unknown;
         actionId?: string;
         entry?: unknown;
         storage?: unknown;
@@ -2369,7 +2370,23 @@ async function configurePanel(
               const native = await nativeModel(current, log, () => {
                 void sendStatus();
               });
-              return native.graph(false, path);
+              const graph = native.graph(false, path);
+              if (
+                message.type === "navigate" &&
+                message.nodeIndex !== undefined
+              ) {
+                if (
+                  typeof message.nodeIndex !== "number" ||
+                  !Number.isSafeInteger(message.nodeIndex) ||
+                  message.nodeIndex < 0 ||
+                  !graph.nodes.some(
+                    (node) => node.id === `node-${message.nodeIndex}`,
+                  )
+                )
+                  throw new Error("Invalid navigation node index.");
+                selectedNodes = [message.nodeIndex];
+              }
+              return graph;
             },
             message.actionId,
           );
