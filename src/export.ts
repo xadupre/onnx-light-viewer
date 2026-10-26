@@ -31,7 +31,7 @@ import pathlib
 import sys
 from huggingface_hub import HfApi, hf_hub_download, snapshot_download
 
-model, cache, result = sys.argv[1:]
+model, cache, result, include_weights = sys.argv[1:]
 info = HfApi().model_info(model)
 if not info.sha:
     raise ValueError("The repository did not provide an immutable revision.")
@@ -40,7 +40,9 @@ checkpoint = next((name for name in (
     "model.safetensors.index.json", "model.safetensors",
     "pytorch_model.bin.index.json", "pytorch_model.bin",
 ) if name in files), None)
-if checkpoint is None:
+if include_weights == "0":
+    weights = set()
+elif checkpoint is None:
     raise ValueError("No supported root checkpoint found; use an absolute local model directory.")
 elif checkpoint.endswith(".index.json"):
     index = hf_hub_download(model, checkpoint, revision=info.sha, cache_dir=cache)
@@ -142,9 +144,138 @@ async function pathExists(path: string): Promise<boolean> {
   }
 }
 
+interface ExportAdvancedOptions {
+  excludeEmbeds?: boolean;
+  excludeLmHead?: boolean;
+  includeHiddenStates?: boolean;
+  pruneLmHead?: boolean;
+  useQdq?: boolean;
+  blockSize?: number;
+  quantizationAlgorithm?: string;
+  opset?: number;
+  maxShardSize?: string;
+  noWeights?: boolean;
+  optimize?: string;
+  externalData?: string;
+  staticCache?: boolean;
+  maxSequenceLength?: number;
+  runtime?: string;
+}
+
+function exportAdvancedOptions(
+  value: unknown,
+  exporter: Exporter,
+): ExportAdvancedOptions {
+  if (value === undefined) return {};
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    throw new Error("Invalid advanced export options.");
+  const options: ExportAdvancedOptions = {};
+  const mobius = exporter === "mobius";
+  for (const [key, entry] of Object.entries(value)) {
+    switch (key) {
+      case "excludeEmbeds":
+      case "excludeLmHead":
+      case "includeHiddenStates":
+      case "pruneLmHead":
+      case "useQdq":
+        if (mobius || typeof entry !== "boolean")
+          throw new Error(`Invalid ${key} option for ${exporter}.`);
+        options[key] = entry;
+        break;
+      case "noWeights":
+      case "staticCache":
+        if (!mobius || typeof entry !== "boolean")
+          throw new Error(`Invalid ${key} option for ${exporter}.`);
+        options[key] = entry;
+        break;
+      case "opset":
+      case "maxSequenceLength":
+        if (
+          (key === "opset" ? exporter !== "mbext" : !mobius) ||
+          typeof entry !== "number" ||
+          !Number.isSafeInteger(entry) ||
+          entry < 1
+        )
+          throw new Error(`${key} must be a supported positive integer.`);
+        options[key] = entry;
+        break;
+      case "blockSize":
+        if (
+          mobius ||
+          typeof entry !== "number" ||
+          ![16, 32, 64, 128, 256].includes(entry)
+        )
+          throw new Error("Choose a supported quantization block size.");
+        options.blockSize = entry;
+        break;
+      case "quantizationAlgorithm":
+        if (
+          mobius ||
+          typeof entry !== "string" ||
+          ![
+            "rtn",
+            "rtn_last",
+            "k_quant",
+            "k_quant_mixed",
+            "k_quant_last",
+          ].includes(entry)
+        )
+          throw new Error("Choose a supported quantization algorithm.");
+        options.quantizationAlgorithm = entry;
+        break;
+      case "maxShardSize":
+        if (
+          exporter === "modelbuilder" ||
+          typeof entry !== "string" ||
+          !/^[1-9]\d*(?:B|KB|MB|GB)?$/i.test(entry)
+        )
+          throw new Error("Shard size must be positive bytes, KB, MB or GB.");
+        options.maxShardSize = entry.toUpperCase();
+        break;
+      case "optimize":
+        if (
+          !mobius ||
+          typeof entry !== "string" ||
+          ![
+            "all",
+            "group_query_attention",
+            "packed_attention",
+            "skip_norm",
+          ].includes(entry)
+        )
+          throw new Error("Choose a supported Mobius optimization.");
+        options.optimize = entry;
+        break;
+      case "externalData":
+        if (!mobius || (entry !== "onnx" && entry !== "safetensors"))
+          throw new Error("Choose a supported Mobius external data format.");
+        options.externalData = entry;
+        break;
+      case "runtime":
+        if (!mobius || (entry !== "ort-genai" && entry !== "onnx-genai"))
+          throw new Error("Choose a supported Mobius runtime.");
+        options.runtime = entry;
+        break;
+      default:
+        throw new Error(`Unknown advanced export option: ${key}.`);
+    }
+  }
+  if (
+    options.excludeLmHead &&
+    (options.includeHiddenStates || options.pruneLmHead)
+  )
+    throw new Error(
+      "Hidden-state outputs and head pruning require the language modeling head.",
+    );
+  if (options.maxSequenceLength !== undefined && !options.staticCache)
+    throw new Error("Maximum sequence length requires static cache.");
+  return options;
+}
+
 export interface ExportPlan {
   exporter: Exporter;
   layerCount?: number;
+  advancedOptions?: ExportAdvancedOptions;
   model: string;
   precision: string;
   provider: "cpu" | "cuda";
@@ -190,12 +321,23 @@ export function exportPlan(
   const layerCount = "layerCount" in value ? value.layerCount : undefined;
   if (
     layerCount !== undefined &&
-    (value.exporter !== "mbext" ||
+    (value.exporter === "mobius" ||
       typeof layerCount !== "number" ||
       !Number.isSafeInteger(layerCount) ||
       layerCount < 1)
   )
-    throw new Error("The mbext layer limit must be a positive integer.");
+    throw new Error("The builder layer limit must be a positive integer.");
+  const advancedOptions = exportAdvancedOptions(
+    "advancedOptions" in value ? value.advancedOptions : undefined,
+    value.exporter,
+  );
+  if (
+    !["int2", "int4"].includes(value.precision) &&
+    (advancedOptions.useQdq ||
+      advancedOptions.blockSize !== undefined ||
+      advancedOptions.quantizationAlgorithm !== undefined)
+  )
+    throw new Error("Quantization options require INT2 or INT4 precision.");
   let directory = value.directory;
   if (directory.includes("<model_id>")) {
     const parts = isAbsolute(model) ? [basename(model)] : model.split(/[\\/]/);
@@ -254,10 +396,38 @@ export function exportPlan(
         "-e",
         value.provider,
       ];
-  if (value.exporter === "mbext") {
-    args.push("--extra_options", "hf_remote=false");
-    if (layerCount !== undefined) args.push(`num_hidden_layers=${layerCount}`);
+  if (mobius) {
+    if (advancedOptions.noWeights) args.push("--no-weights");
+    if (advancedOptions.staticCache) args.push("--features", "static-cache");
+    for (const [key, flag] of [
+      ["optimize", "--optimize"],
+      ["externalData", "--external-data"],
+      ["maxSequenceLength", "--max-seq-len"],
+      ["runtime", "--runtime"],
+    ] as const)
+      if (advancedOptions[key] !== undefined)
+        args.push(flag, String(advancedOptions[key]));
+  } else {
+    if (advancedOptions.opset !== undefined)
+      args.push("--onnx_opset", String(advancedOptions.opset));
+    const extra = value.exporter === "mbext" ? ["hf_remote=false"] : [];
+    if (layerCount !== undefined) extra.push(`num_hidden_layers=${layerCount}`);
+    for (const [key, flag] of [
+      ["excludeEmbeds", "exclude_embeds"],
+      ["excludeLmHead", "exclude_lm_head"],
+      ["includeHiddenStates", "include_hidden_states"],
+      ["pruneLmHead", "prune_lm_head"],
+      ["useQdq", "use_qdq"],
+    ] as const)
+      if (advancedOptions[key]) extra.push(`${flag}=true`);
+    if (advancedOptions.blockSize !== undefined)
+      extra.push(`int4_block_size=${advancedOptions.blockSize}`);
+    if (advancedOptions.quantizationAlgorithm !== undefined)
+      extra.push(`int4_algo_config=${advancedOptions.quantizationAlgorithm}`);
+    if (extra.length) args.push("--extra_options", ...extra);
   }
+  if (advancedOptions.maxShardSize !== undefined)
+    args.push("--max-shard-size", advancedOptions.maxShardSize);
   const quote = (argument: string) => {
     const safe =
       process.platform === "win32" ? /^[\w./\\:=-]+$/ : /^[\w@%+=:,./-]+$/;
@@ -269,6 +439,7 @@ export function exportPlan(
   return {
     exporter: value.exporter,
     ...(layerCount === undefined ? {} : { layerCount }),
+    ...(Object.keys(advancedOptions).length ? { advancedOptions } : {}),
     model,
     precision,
     provider: value.provider,
@@ -431,7 +602,7 @@ async function runProcess(
   signal.throwIfAborted();
 }
 
-/** Downloads one pinned source checkpoint into the application's reusable Hub cache. */
+/** Caches pinned source metadata and weights, unless graph-only export omits weights. */
 export async function downloadExportSource(
   plan: ExportPlan,
   cacheDirectory: string,
@@ -447,7 +618,15 @@ export async function downloadExportSource(
     await runProcess(
       {
         executable: plan.executable,
-        args: ["-u", "-c", downloadSource, plan.model, cacheDirectory, result],
+        args: [
+          "-u",
+          "-c",
+          downloadSource,
+          plan.model,
+          cacheDirectory,
+          result,
+          plan.advancedOptions?.noWeights ? "0" : "1",
+        ],
       },
       signal,
       progress,

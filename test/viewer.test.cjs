@@ -5466,7 +5466,7 @@ test("renders the demo, inspects its operator and requests a real file", (t) => 
   assert.equal(graph.getAttribute("viewBox"), initialViewBox);
 });
 
-test("mbext layer limits reach previews and submissions without affecting other exporters", async (t) => {
+test("builder layer limits reach previews and submissions without leaking into Mobius", async (t) => {
   const { document, window, messages } = openViewer(t);
   const byId = (id) => document.getElementById(id);
   const change = (id, value) => {
@@ -5479,8 +5479,9 @@ test("mbext layer limits reach previews and submissions without affecting other 
     }),
   );
   byId("export-model").click();
-  assert.equal(byId("export-layer-options").hidden, true);
-  assert.equal(byId("export-layer-count").disabled, true);
+  assert.equal(byId("export-advanced").open, false);
+  assert.equal(byId("export-layer-options").hidden, false);
+  assert.equal(byId("export-layer-count").disabled, false);
   window.dispatchEvent(
     new window.MessageEvent("message", {
       data: {
@@ -5505,13 +5506,13 @@ test("mbext layer limits reach previews and submissions without affecting other 
   );
   for (const exporter of ["modelbuilder", "mobius"]) {
     change("export-tool", exporter);
-    assert.equal(byId("export-layer-options").hidden, true);
-    assert.equal(byId("export-layer-count").disabled, true);
+    assert.equal(byId("export-layer-options").hidden, exporter === "mobius");
+    assert.equal(byId("export-layer-count").disabled, exporter === "mobius");
     await new Promise((resolve) => window.setTimeout(resolve, 180));
     assert.equal(
       messages.findLast((message) => message.type === "export-preview")
         .exportOptions.layerCount,
-      undefined,
+      exporter === "mobius" ? undefined : 2,
     );
   }
   change("export-tool", "mbext");
@@ -5531,6 +5532,129 @@ test("mbext layer limits reach previews and submissions without affecting other 
     messages.findLast((message) => message.type === "export").exportOptions
       .layerCount,
     2,
+  );
+});
+
+test("advanced export options stay folded and omit hidden, unsupported or conflicting fields", async (t) => {
+  const { document, window, messages } = openViewer(t);
+  const byId = (id) => document.getElementById(id);
+  const change = (id, value) => {
+    if (typeof value === "boolean") byId(id).checked = value;
+    else byId(id).value = value;
+    byId(id).dispatchEvent(new window.Event("change", { bubbles: true }));
+  };
+  const preview = async () => {
+    await new Promise((resolve) => window.setTimeout(resolve, 180));
+    return structuredClone(
+      messages.findLast((message) => message.type === "export-preview")
+        .exportOptions,
+    );
+  };
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: { type: "load-state", pending: false },
+    }),
+  );
+  byId("export-model").click();
+  assert.equal(byId("export-advanced").open, false);
+  change("export-source", "owner/model");
+  change("export-directory", "/tmp/advanced-export");
+  assert.equal((await preview()).advancedOptions, undefined);
+  byId("export-advanced").open = true;
+  change("export-tool", "mbext");
+  change("export-precision", "int4");
+  change("export-exclude-embeds", true);
+  change("export-include-hidden-states", true);
+  change("export-prune-lm-head", true);
+  change("export-use-qdq", true);
+  change("export-block-size", "64");
+  change("export-quantization-algorithm", "k_quant");
+  change("export-opset", "20");
+  change("export-max-shard-size", "2GB");
+  const builderOptions = {
+    excludeEmbeds: true,
+    includeHiddenStates: true,
+    pruneLmHead: true,
+    useQdq: true,
+    blockSize: 64,
+    quantizationAlgorithm: "k_quant",
+  };
+  assert.deepEqual((await preview()).advancedOptions, {
+    ...builderOptions,
+    opset: 20,
+    maxShardSize: "2GB",
+  });
+  change("export-exclude-lm-head", true);
+  assert.equal(
+    byId("export-include-hidden-states").closest(".export-option").hidden,
+    true,
+  );
+  assert.equal(byId("export-prune-lm-head").disabled, true);
+  const headless = (await preview()).advancedOptions;
+  assert.equal(headless.excludeLmHead, true);
+  assert.equal(headless.includeHiddenStates, undefined);
+  assert.equal(headless.pruneLmHead, undefined);
+  change("export-exclude-lm-head", false);
+  assert.equal(byId("export-include-hidden-states").checked, true);
+  change("export-tool", "modelbuilder");
+  assert.equal(byId("export-opset").disabled, true);
+  assert.equal(byId("export-max-shard-size").disabled, true);
+  assert.deepEqual((await preview()).advancedOptions, builderOptions);
+  change("export-precision", "fp32");
+  assert.equal(
+    byId("export-block-size").closest(".export-option").hidden,
+    true,
+  );
+  assert.equal(byId("export-use-qdq").disabled, true);
+  assert.deepEqual((await preview()).advancedOptions, {
+    excludeEmbeds: true,
+    includeHiddenStates: true,
+    pruneLmHead: true,
+  });
+  change("export-tool", "mobius");
+  assert.equal(byId("export-exclude-embeds").disabled, true);
+  assert.equal(byId("export-no-weights").disabled, false);
+  assert.equal(byId("export-max-sequence-length").disabled, true);
+  change("export-no-weights", true);
+  change("export-optimize", "all");
+  change("export-external-data", "safetensors");
+  change("export-runtime", "ort-genai");
+  change("export-static-cache", true);
+  assert.equal(byId("export-max-sequence-length").disabled, false);
+  change("export-max-sequence-length", "128");
+  const mobiusOptions = {
+    maxShardSize: "2GB",
+    noWeights: true,
+    optimize: "all",
+    externalData: "safetensors",
+    runtime: "ort-genai",
+    staticCache: true,
+    maxSequenceLength: 128,
+  };
+  assert.deepEqual((await preview()).advancedOptions, mobiusOptions);
+  change("export-max-sequence-length", "-1");
+  assert.equal(byId("export-form").checkValidity(), false);
+  change("export-static-cache", false);
+  assert.equal(
+    byId("export-max-sequence-length").closest(".export-option").hidden,
+    true,
+  );
+  assert.equal(byId("export-max-sequence-length").disabled, true);
+  assert.equal(byId("export-form").checkValidity(), true);
+  assert.equal((await preview()).advancedOptions.maxSequenceLength, undefined);
+  change("export-static-cache", true);
+  change("export-max-sequence-length", "128");
+  byId("export-advanced").open = false;
+  assert.deepEqual((await preview()).advancedOptions, mobiusOptions);
+  byId("export-form").dispatchEvent(
+    new window.Event("submit", { cancelable: true }),
+  );
+  assert.deepEqual(
+    {
+      ...messages.findLast((message) => message.type === "export").exportOptions
+        .advancedOptions,
+    },
+    mobiusOptions,
   );
 });
 

@@ -34,21 +34,53 @@ function createExportPanel({ byId, postMessage, requestAction, revealPanel }) {
     clearInterval(clock);
     renderTimes();
   }
-  const options = () => ({
-    exporter: byId("export-tool").value,
-    model: byId("export-source").value,
-    directory: defaultDirectory ? "" : byId("export-directory").value,
-    precision: byId("export-precision").value,
-    provider: byId("export-provider").value,
-    ...(byId("export-tool").value === "mbext" &&
-    byId("export-layer-count").value !== ""
-      ? { layerCount: Number(byId("export-layer-count").value) }
-      : {}),
-  });
-  function updateLayerOptions() {
-    const mbext = byId("export-tool").value === "mbext";
-    byId("export-layer-options").hidden = !mbext;
-    byId("export-layer-count").disabled = !mbext;
+  const advancedFields = [
+    ...byId("export-advanced").querySelectorAll(".export-option"),
+  ];
+  const advancedControls = [
+    ...byId("export-advanced").querySelectorAll("[data-export-option]"),
+  ];
+  const options = () => {
+    const advancedOptions = {};
+    for (const control of advancedControls) {
+      if (control.disabled) continue;
+      if (control.type === "checkbox") {
+        if (control.checked)
+          advancedOptions[control.dataset.exportOption] = true;
+      } else if (control.value !== "") {
+        advancedOptions[control.dataset.exportOption] =
+          control.type === "number" || control.hasAttribute("data-number")
+            ? Number(control.value)
+            : control.value;
+      }
+    }
+    return {
+      exporter: byId("export-tool").value,
+      model: byId("export-source").value,
+      directory: defaultDirectory ? "" : byId("export-directory").value,
+      precision: byId("export-precision").value,
+      provider: byId("export-provider").value,
+      ...(!byId("export-layer-count").disabled &&
+      byId("export-layer-count").value !== ""
+        ? { layerCount: Number(byId("export-layer-count").value) }
+        : {}),
+      ...(Object.keys(advancedOptions).length ? { advancedOptions } : {}),
+    };
+  };
+  function updateAdvancedOptions() {
+    const exporter = byId("export-tool").value;
+    const precision = byId("export-precision").value;
+    for (const field of advancedFields) {
+      const { exporters, precisions, requires, excludes } = field.dataset;
+      field.hidden =
+        !exporters.split(" ").includes(exporter) ||
+        (precisions !== undefined &&
+          !precisions.split(" ").includes(precision)) ||
+        (requires !== undefined && !byId(requires).checked) ||
+        (excludes !== undefined && byId(excludes).checked);
+      for (const control of field.querySelectorAll("input, select"))
+        control.disabled = field.hidden;
+    }
   }
   function historySuggestions(history) {
     for (const [id, entries] of [
@@ -71,7 +103,7 @@ function createExportPanel({ byId, postMessage, requestAction, revealPanel }) {
   byId("export-directory").addEventListener("change", directoryChanged);
   byId("export-tool").addEventListener("change", () => {
     exporterChosen = true;
-    updateLayerOptions();
+    updateAdvancedOptions();
   });
   const enabled = () => {
     byId("export-submit").disabled = running || loading;
@@ -97,8 +129,12 @@ function createExportPanel({ byId, postMessage, requestAction, revealPanel }) {
       150,
     );
   }
-  byId("export-fields").addEventListener("input", preview);
-  byId("export-fields").addEventListener("change", preview);
+  const fieldsChanged = () => {
+    updateAdvancedOptions();
+    preview();
+  };
+  byId("export-fields").addEventListener("input", fieldsChanged);
+  byId("export-fields").addEventListener("change", fieldsChanged);
   byId("export-model").addEventListener("click", () => {
     const panel = byId("export-panel");
     panel.hidden = !panel.hidden;
@@ -121,6 +157,7 @@ function createExportPanel({ byId, postMessage, requestAction, revealPanel }) {
     byId("export-error").textContent = "";
     requestAction("export", "Convert ONNX model", { exportOptions: options() });
   });
+  updateAdvancedOptions();
   return {
     start(id) {
       stopClock();
@@ -166,7 +203,7 @@ function createExportPanel({ byId, postMessage, requestAction, revealPanel }) {
           historySuggestions(data.exportHistory);
           if (!exporterChosen && !running && data.exportHistory.exporter) {
             byId("export-tool").value = data.exportHistory.exporter;
-            updateLayerOptions();
+            updateAdvancedOptions();
           }
         }
         if (defaultDirectory && data.exportDirectory && !running) {
