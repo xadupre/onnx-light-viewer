@@ -1,5 +1,13 @@
-import { execFile, spawn } from "node:child_process";
-import { lstat, mkdir, mkdtemp, readdir, writeFile } from "node:fs/promises";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
+import {
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -11,6 +19,47 @@ const exportEnvironment = {
   HF_HUB_DISABLE_PROGRESS_BARS: "0",
   TQDM_POSITION: "-1",
 };
+
+const offlineEnvironment = {
+  HF_HUB_OFFLINE: "1",
+  TRANSFORMERS_OFFLINE: "1",
+};
+
+const downloadSource = `
+import json
+import pathlib
+import sys
+from huggingface_hub import HfApi, hf_hub_download, snapshot_download
+
+model, cache, result = sys.argv[1:]
+info = HfApi().model_info(model)
+if not info.sha:
+    raise ValueError("The repository did not provide an immutable revision.")
+files = {entry.rfilename for entry in info.siblings}
+checkpoint = next((name for name in (
+    "model.safetensors.index.json", "model.safetensors",
+    "pytorch_model.bin.index.json", "pytorch_model.bin",
+) if name in files), None)
+if checkpoint is None:
+    raise ValueError("No supported root checkpoint found; use an absolute local model directory.")
+elif checkpoint.endswith(".index.json"):
+    index = hf_hub_download(model, checkpoint, revision=info.sha, cache_dir=cache)
+    with open(index, encoding="utf-8") as stream:
+        weights = set(json.load(stream)["weight_map"].values())
+    if not weights or not weights <= files:
+        raise ValueError("The checkpoint index references missing weight files.")
+else:
+    weights = {checkpoint}
+metadata = {name for name in files if name.endswith((
+    ".json", ".model", ".txt", ".tiktoken", ".jinja", ".vocab", ".merges",
+))}
+print(f"Downloading {model}@{info.sha} into {cache}", flush=True)
+source = snapshot_download(model, revision=info.sha, cache_dir=cache,
+                           allow_patterns=sorted(metadata | weights))
+with open(result, "w", encoding="utf-8") as stream:
+    json.dump(str(pathlib.Path(source).resolve()), stream)
+print(f"Source ready: {source}", flush=True)
+`;
 
 type Exporter = "mbext" | "modelbuilder" | "mobius";
 
@@ -261,12 +310,25 @@ export async function prepareExportPlan(
   };
 }
 
-async function terminateExport(pid: number): Promise<void> {
+async function terminateExport(child: ChildProcess): Promise<void> {
+  const pid = child.pid;
+  if (pid === undefined) return;
   if (process.platform === "win32") {
+    if (child.exitCode !== null || child.signalCode !== null) return;
     await new Promise<void>((resolve, reject) => {
       execFile("taskkill", ["/PID", String(pid), "/T", "/F"], (error) => {
-        if (error) reject(error);
-        else resolve();
+        // taskkill returns 128 if the target exited before termination.
+        if (
+          error &&
+          !(
+            error.code === 128 &&
+            (child.exitCode !== null || child.signalCode !== null)
+          )
+        ) {
+          if (child.exitCode !== null || child.signalCode !== null) resolve();
+          else if (child.kill()) resolve();
+          else reject(error);
+        } else resolve();
       });
     });
     return;
@@ -288,33 +350,18 @@ async function terminateExport(pid: number): Promise<void> {
   killGroup("SIGKILL");
 }
 
-/** Runs the selected CLI with bounded, throttled output and explicit cancellation. */
-export async function runExport(
-  plan: ExportPlan,
+async function runProcess(
+  plan: Pick<ExportPlan, "executable" | "args">,
   signal: AbortSignal,
   progress: (output: string) => void,
-): Promise<string[]> {
-  signal.throwIfAborted();
-  if (plan.exporter === "mobius") {
-    await mkdir(dirname(plan.directory), { recursive: true });
-    if (await pathExists(plan.directory))
-      throw new Error(
-        "The Mobius package path already exists. Retry to create a new subfolder.",
-      );
-  } else {
-    await mkdir(plan.directory, { recursive: true });
-    if ((await readdir(plan.directory)).length)
-      throw new Error(
-        "The conversion directory is no longer empty. Retry to create a new subfolder.",
-      );
-  }
-  const script = `import os\nimport subprocess\n\nsubprocess.run(${JSON.stringify([plan.executable, ...plan.args])}, cwd=${JSON.stringify(homedir())}, env={**os.environ, **${JSON.stringify(exportEnvironment)}}, check=True)\n`;
-  await writeFile(plan.script, script, { flag: "wx" });
+  environment: NodeJS.ProcessEnv,
+  label: string,
+): Promise<void> {
   signal.throwIfAborted();
   await new Promise<void>((resolve, reject) => {
     const child = spawn(plan.executable, plan.args, {
       cwd: homedir(),
-      env: { ...process.env, ...exportEnvironment },
+      env: { ...process.env, ...environment },
       stdio: ["ignore", "pipe", "pipe"],
       detached: process.platform !== "win32",
     });
@@ -343,7 +390,7 @@ export async function runExport(
     };
     const abort = () => {
       if (termination || child.pid === undefined) return;
-      termination = terminateExport(child.pid);
+      termination = terminateExport(child);
       void termination.catch(finish);
     };
     for (const stream of [child.stdout, child.stderr]) {
@@ -361,7 +408,7 @@ export async function runExport(
           : code === 0
             ? undefined
             : new Error(
-                `Exporter exited with ${termination ? `signal ${termination}` : `code ${code}`}.\n${readableOutput()}`,
+                `${label} exited with ${termination ? `signal ${termination}` : `code ${code}`}.\n${readableOutput()}`,
               ),
       ),
     );
@@ -369,6 +416,77 @@ export async function runExport(
     if (signal.aborted) abort();
   });
   signal.throwIfAborted();
+}
+
+/** Downloads one pinned source checkpoint into the application's reusable Hub cache. */
+export async function downloadExportSource(
+  plan: ExportPlan,
+  cacheDirectory: string,
+  signal: AbortSignal,
+  progress: (output: string) => void,
+): Promise<ExportPlan> {
+  signal.throwIfAborted();
+  if (isAbsolute(plan.model)) return plan;
+  await mkdir(cacheDirectory, { recursive: true });
+  const request = await mkdtemp(join(cacheDirectory, ".request-"));
+  try {
+    const result = join(request, "source.json");
+    await runProcess(
+      {
+        executable: plan.executable,
+        args: ["-u", "-c", downloadSource, plan.model, cacheDirectory, result],
+      },
+      signal,
+      progress,
+      exportEnvironment,
+      "Downloader",
+    );
+    const source: unknown = JSON.parse(await readFile(result, "utf8"));
+    if (
+      typeof source !== "string" ||
+      !isAbsolute(source) ||
+      !(await lstat(source)).isDirectory()
+    )
+      throw new Error("The downloader did not return a local model directory.");
+    return {
+      ...exportPlan({ ...plan, model: source }, plan.executable),
+      script: plan.script,
+      ...(plan.directoryTemplate === undefined
+        ? {}
+        : { directoryTemplate: plan.directoryTemplate }),
+    };
+  } finally {
+    await rm(request, { recursive: true, force: true });
+  }
+}
+
+/** Runs the selected CLI with bounded, throttled output and explicit cancellation. */
+export async function runExport(
+  plan: ExportPlan,
+  signal: AbortSignal,
+  progress: (output: string) => void,
+): Promise<string[]> {
+  signal.throwIfAborted();
+  if (plan.exporter === "mobius") {
+    await mkdir(dirname(plan.directory), { recursive: true });
+    if (await pathExists(plan.directory))
+      throw new Error(
+        "The Mobius package path already exists. Retry to create a new subfolder.",
+      );
+  } else {
+    await mkdir(plan.directory, { recursive: true });
+    if ((await readdir(plan.directory)).length)
+      throw new Error(
+        "The conversion directory is no longer empty. Retry to create a new subfolder.",
+      );
+  }
+  const environment = {
+    ...exportEnvironment,
+    ...(isAbsolute(plan.model) ? offlineEnvironment : {}),
+  };
+  const script = `import os\nimport subprocess\n\nsubprocess.run(${JSON.stringify([plan.executable, ...plan.args])}, cwd=${JSON.stringify(homedir())}, env={**os.environ, **${JSON.stringify(environment)}}, check=True)\n`;
+  await writeFile(plan.script, script, { flag: "wx" });
+  await runProcess(plan, signal, progress, environment, "Exporter");
   const models: string[] = [];
   const visit = async (directory: string) => {
     for (const entry of await readdir(directory, { withFileTypes: true })) {

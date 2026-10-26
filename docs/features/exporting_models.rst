@@ -1,14 +1,15 @@
 Converting models
 =================
 
-Choose **Convert** in the right panel to create an ONNX model with an installed
-exporter, then open the result. An already loaded model is not required or
-modified.
+Choose **Convert** to download a source checkpoint into the application's cache,
+convert it offline with an installed exporter and open the ONNX result.
+**Download time** and **Conversion time** are shown separately at the top of the
+panel, update while running and remain visible after success, failure or cancellation.
 
 .. figure:: ../_static/export-flow.svg
-   :alt: The Convert panel starts an installed Python CLI, which writes the model,
-         weights and reproduction script to the chosen folder. The viewer opens
-         the resulting model for inspection.
+   :alt: The application downloads a pinned source checkpoint into its cache.
+         An offline Python exporter reads that snapshot and saves ONNX files.
+         The viewer opens the result without executing it.
    :width: 100%
 
    Conversion is a separate process; inspection never executes the exported graph.
@@ -32,13 +33,15 @@ modified.
    are saved across sessions and suggested in their respective fields.
    Suggestions only fill the field; existing files are never overwritten.
    Review the displayed command, then choose **Convert and open**.
-4. The output window shows the command followed by live standard output/error
-   and Hugging Face download progress, and scrolls automatically to the latest line.
+4. The application first downloads the checkpoint, then starts conversion.
+   Separate clocks measure these phases, excluding model selection and opening.
+   The output window shows live standard output/error and download progress,
+   and scrolls automatically to the latest line.
    The subprocess enables progress bars even without a terminal; terminal control
    sequences are removed and carriage-return updates appear as readable lines.
    **Cancel conversion** stops the
-   exporter process; closing the viewer also stops it. Any generated files
-   remain available for diagnosis.
+   active download or exporter process; closing the viewer also stops it.
+   Cached sources and generated files remain available.
 
 After a successful process exit, the viewer opens the exported ``.onnx`` or
 ``.pipe-onnx`` file. If several models were produced, choose which one to open.
@@ -46,6 +49,26 @@ Failures leave the previously displayed model unchanged and appear in the panel
 and **Logs**. You can retry immediately, without dismissing the error notification.
 Moving to another model while export is running prevents automatic
 replacement; the saved files remain available.
+
+Source cache
+------------
+
+Sources are kept in ``<Settings download directory>/huggingface``, independently
+of conversion output directories. Repeating a conversion or changing exporters
+reuses downloaded weights. The application resolves the repository's current
+commit before downloading and converts that pinned local snapshot.
+
+The selected Python environment must provide ``huggingface_hub``.
+Downloads prefer the standard root safetensors checkpoint, including its
+indexed shards, and otherwise use the standard PyTorch checkpoint. Tokenizer
+and configuration files are included; alternative weight formats and precision
+variants are not downloaded. For repositories with a custom layout, provide
+an absolute local checkpoint directory instead.
+
+Local sources skip downloading. Conversion uses local exporter arguments
+(``-i`` or Mobius ``--config``) with ``HF_HUB_OFFLINE=1`` and
+``TRANSFORMERS_OFFLINE=1``: a missing dependency or file fails explicitly rather
+than silently downloading during the conversion phase.
 
 Output directory templates
 --------------------------
@@ -69,8 +92,10 @@ Reproducing a conversion
 The chosen folder contains ``export_model.py`` alongside the export package.
 It replays the same argument vector, Python executable, working directory and
 progress settings (``HF_HUB_DISABLE_PROGRESS_BARS=0``, ``TQDM_POSITION=-1``)
+and offline conversion settings
 without a shell. Run it with Python to reproduce the export; unlike the viewer's
 fresh-directory check, subsequent CLI behavior is controlled by the exporter.
+The script reads the same cached local snapshot and does not repeat the source download.
 The live output retains its most recent 65,536 characters rather than growing
 indefinitely. The command display quotes arguments only when shell syntax requires
 it; execution always passes the argument vector directly, without a shell.
@@ -99,6 +124,6 @@ precision; the exporter reports unsupported values through its normal CLI errors
 Mobius receives ``f32``/``f16`` for FP32/FP16; other precision names are passed
 unchanged.
 Model support, authentication, runtime compatibility and additional restrictions
-depend on the installed exporter. Downloads use its normal environment and
+depend on the installed exporter. Downloads use the selected Python environment and
 credentials; the viewer does not request tokens or enable remote checkpoint code.
 Discovery of new model IDs and additional exporters are separate features.

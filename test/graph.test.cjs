@@ -38,6 +38,233 @@ function modelBytes(name) {
   return readFileSync(path.join(__dirname, "models", name));
 }
 
+function memoryTestModel(
+  dimensions,
+  {
+    nodes,
+    initializers = [],
+    outputType = 1,
+    outputDimensions = dimensions,
+    opset = 18,
+  } = {},
+) {
+  const tensor = (type, shape) =>
+    bytesField(
+      1,
+      Buffer.concat([
+        varintField(1, type),
+        bytesField(
+          2,
+          Buffer.concat(
+            shape.map((dimension) =>
+              bytesField(
+                1,
+                dimension === null
+                  ? Buffer.alloc(0)
+                  : typeof dimension === "string"
+                    ? bytesField(2, dimension)
+                    : varintField(1, dimension),
+              ),
+            ),
+          ),
+        ),
+      ]),
+    );
+  const port = (name, type, shape) =>
+    Buffer.concat([bytesField(1, name), bytesField(2, tensor(type, shape))]);
+  return loadModel(
+    Buffer.concat([
+      varintField(1, 9),
+      bytesField(8, varintField(2, opset)),
+      bytesField(
+        7,
+        Buffer.concat([
+          ...(
+            nodes ?? [
+              Buffer.concat([
+                bytesField(1, "x"),
+                bytesField(2, "y"),
+                bytesField(4, "Relu"),
+              ]),
+            ]
+          ).map((node) => bytesField(1, node)),
+          bytesField(2, "Memory edge cases"),
+          ...initializers.map((tensor) => bytesField(5, tensor)),
+          bytesField(11, port("x", 1, dimensions)),
+          bytesField(12, port("y", outputType, outputDimensions)),
+        ]),
+      ),
+    ]),
+    "memory.onnx",
+  );
+}
+
+test("memory estimates bind anonymous and repeated dimensions and retain zero-sized tensors", async () => {
+  const model = memoryTestModel([null, "N", "N"]);
+  assert.deepEqual(
+    model.memoryProfileInputs().map(({ key }) => key),
+    ["input:0:0", "symbol:N"],
+  );
+  assert.equal(
+    (await model.memoryProfile({ "input:0:0": 2, "symbol:N": 3 })).peakBytes,
+    144,
+  );
+  const empty = memoryTestModel([Number.MAX_SAFE_INTEGER, 0]);
+  assert.equal((await empty.memoryProfile({})).peakBytes, 0);
+});
+
+test("native memory estimates concretize symbolic inputs without editing the model", async () => {
+  const model = loadModel(modelBytes("inference.onnx"), "inference.onnx");
+  const original = model.graph();
+  assert.deepEqual(model.memoryProfileInputs(), [
+    { key: "symbol:N", label: "N", defaultValue: 1 },
+  ]);
+  const profile = await model.memoryProfile({ "symbol:N": 2 });
+  assert.equal(profile.device, "CPU");
+  assert.equal(profile.events.length, original.nodes.length);
+  assert.equal(profile.peakBytes, 132);
+  assert.equal(profile.events[1].outputBytes, 0);
+  for (const event of profile.events)
+    assert.equal(
+      event.deviceBytes,
+      event.existingBytes + event.outputBytes + event.scratchBytes,
+    );
+  const larger = await model.memoryProfile({ "symbol:N": 4 });
+  assert.ok(larger.peakBytes > profile.peakBytes);
+  assert.deepEqual(model.graph(), original);
+  const relu = loadModel(modelBytes("relu.onnx"), "relu.onnx");
+  assert.equal((await relu.memoryProfile({})).peakBytes, 24);
+});
+
+test("native memory estimates reject missing, invalid and unresolved dimensions explicitly", async () => {
+  const model = loadModel(modelBytes("inference.onnx"), "inference.onnx");
+  for (const values of [
+    {},
+    { "symbol:N": 0 },
+    { "symbol:N": -1 },
+    { "symbol:N": 1.5 },
+    { "symbol:N": "2" },
+    { "symbol:N": Infinity },
+    { "symbol:N": 2, extra: 1 },
+  ])
+    assert.throws(() => model.memoryProfile(values), /dimensions|integer/);
+  await assert.rejects(
+    model.memoryProfile({ "symbol:N": Number.MAX_SAFE_INTEGER }),
+    /exact integer range/,
+  );
+  assert.throws(
+    () => model.memoryProfile({}, [{ function: 0 }]),
+    /whole model/,
+  );
+  const invalid = loadModel(
+    modelBytes("invalid-graph.onnx"),
+    "invalid-graph.onnx",
+  );
+  await assert.rejects(invalid.memoryProfile({}), /./);
+  const empty = loadModel(
+    Buffer.concat([varintField(1, 9), bytesField(7, bytesField(2, "Empty"))]),
+    "empty.onnx",
+  );
+  assert.equal((await empty.memoryProfile({})).peakBytes, null);
+});
+
+test("pipeline memory estimates require a stage and leave every model unchanged", async () => {
+  const model = loadModel(modelBytes("tiny.pipe-onnx"), "tiny.pipe-onnx");
+  const original = model.graph();
+  assert.throws(() => model.memoryProfileInputs(), /Choose a pipeline stage/);
+  const path = [{ pipeline: "embedding" }];
+  const dimensions = Object.fromEntries(
+    model
+      .memoryProfileInputs(path)
+      .map(({ key, defaultValue }) => [key, defaultValue]),
+  );
+  const profile = await model.memoryProfile(dimensions, path);
+  assert.equal(profile.events.length, model.graph(false, path).nodes.length);
+  assert.deepEqual(model.graph(), original);
+});
+
+function attentionMemoryModel(
+  shape,
+  {
+    linear = false,
+    past = false,
+    queryHeads = 2,
+    keyValueHeads = 2,
+    keyShape,
+    valueShape,
+    outputDimensions = shape,
+  } = {},
+) {
+  const integerAttribute = (name, value) =>
+    bytesField(
+      5,
+      Buffer.concat([
+        bytesField(1, name),
+        varintField(3, value),
+        varintField(20, 2),
+      ]),
+    );
+  const stateShape = [
+    shape[0],
+    keyValueHeads,
+    shape[2] / queryHeads,
+    (valueShape ?? shape)[2] / keyValueHeads,
+  ];
+  return memoryTestModel(shape, {
+    opset: linear ? 27 : 23,
+    nodes: [
+      Buffer.concat([
+        bytesField(1, "x"),
+        bytesField(1, keyShape ? "key" : "x"),
+        bytesField(1, valueShape ? "value" : "x"),
+        ...(past ? [bytesField(1, "state")] : []),
+        bytesField(2, "y"),
+        bytesField(4, linear ? "LinearAttention" : "Attention"),
+        ...(linear
+          ? [
+              integerAttribute("q_num_heads", queryHeads),
+              integerAttribute("kv_num_heads", keyValueHeads),
+            ]
+          : []),
+      ]),
+    ],
+    initializers: [
+      ...(past ? [["state", stateShape]] : []),
+      ...(keyShape ? [["key", keyShape]] : []),
+      ...(valueShape ? [["value", valueShape]] : []),
+    ].map(([name, dimensions]) =>
+      Buffer.concat([
+        ...dimensions.map((dimension) => varintField(1, dimension)),
+        varintField(2, 1),
+        bytesField(8, name),
+      ]),
+    ),
+    outputDimensions,
+  });
+}
+
+test("memory estimates include registered Attention scratch in device totals and peaks", async () => {
+  const model = attentionMemoryModel([1, 2, 4, 8]);
+  const original = model.graph();
+  const profile = await model.memoryProfile({});
+  assert.equal(profile.events[0].scratchBytes, 128);
+  assert.equal(profile.events[0].deviceBytes, 640);
+  assert.equal(profile.peakBytes, 640);
+  assert.deepEqual(model.graph(), original);
+});
+
+test("memory estimates include LinearAttention scratch with and without past state", async () => {
+  for (const past of [false, true]) {
+    const model = attentionMemoryModel([1, 4, 8], { linear: true, past });
+    const original = model.graph();
+    const profile = await model.memoryProfile({});
+    assert.equal(profile.events[0].scratchBytes, past ? 128 : 256);
+    assert.equal(profile.events[0].deviceBytes, 512);
+    assert.equal(profile.peakBytes, 512);
+    assert.deepEqual(model.graph(), original);
+  }
+});
+
 function varint(value) {
   const bytes = [];
   do {

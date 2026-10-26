@@ -1,0 +1,33 @@
+Memory profiling without execution
+==================================
+
+Open **Memory**, beside **Statistics**, to estimate CPU tensor memory without
+running the model or changing its retained shapes.
+
+1. For a pipeline, choose a stage. Ordinary models always use the complete root
+   graph, even when the Model tab displays a function or subgraph.
+2. Fill the dynamic input dimensions. Defaults are **1**; repeated symbolic
+   dimensions share a field, and unnamed dimensions use ``input[axis]`` labels.
+3. Choose **Estimate memory**. The curve shows estimated device memory for every
+   node in execution order. The table below includes existing allocations, new
+   output allocations, scratch estimates and their total. **Previous** / **Next**
+   exposes every event, with 100 rows per page.
+
+The native onnx-light analysis runs on an independent snapshot in a background
+worker. Lifetime and potential in-place reuse decisions affect the estimate;
+model edits invalidate the displayed result. Reading dimensions and estimating
+memory happen only on request, not while browsing a hidden tab.
+
+**This is not measured RAM or GPU usage.** Function/control-flow internals,
+allocator overhead and fragmentation are excluded. Scratch estimates depend on
+registered CPU estimators: zero can mean unavailable. Only dense, fixed-width
+tensor inputs are supported. The viewer propagates SDK errors and rejects results
+outside JavaScript's exact integer range. A graph without executable nodes has no
+per-node peak.
+
+Shape inference and memory arithmetic belong to onnx-light, without viewer-side
+operator replacements. Known SDK issues are tracked upstream:
+`shape arithmetic <https://github.com/xadupre/onnx-light/issues/5629>`_,
+`allocation and scratch arithmetic <https://github.com/xadupre/onnx-light/issues/5630>`_
+and `callback lifecycle <https://github.com/xadupre/onnx-light/issues/5631>`_.
+The pinned SDK is not protected against those defects by the viewer.

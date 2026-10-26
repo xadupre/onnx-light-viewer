@@ -174,6 +174,174 @@ test("Verify reports success and errors, prevents duplicate requests and resets 
   assert.equal(button.disabled, false);
 });
 
+test("memory estimates are lazy, accept dimensions, and discard stale results and errors", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  const memoryRequests = () =>
+    messages.filter(({ type }) => type.startsWith("memory-"));
+  document.getElementById("memory-tab").click();
+  assert.equal(memoryRequests().length, 0);
+  document.getElementById("model-tab").click();
+  load(demoGraph);
+  assert.equal(memoryRequests().length, 0);
+  document.getElementById("memory-tab").click();
+  const setup = memoryRequests().at(-1);
+  send({
+    type: "memory-inputs",
+    requestId: setup.requestId,
+    dimensions: [{ key: "symbol:N", label: "N", defaultValue: 1 }],
+    stages: [],
+    path: [],
+  });
+  const dimension = document.querySelector("#memory-dimensions input");
+  assert.equal(dimension.value, "1");
+  dimension.value = "3";
+  const submit = () =>
+    document
+      .getElementById("memory-form")
+      .dispatchEvent(new window.Event("submit", { cancelable: true }));
+  submit();
+  const request = memoryRequests().at(-1);
+  assert.equal(request.type, "memory-profile");
+  assert.equal(request.dimensions["symbol:N"], 3);
+  assert.equal(document.getElementById("memory-run").disabled, true);
+  send({ type: "memory-profile", requestId: setup.requestId, profile: {} });
+  assert.equal(document.getElementById("memory-results").hidden, true);
+  send({
+    type: "memory-error",
+    requestId: request.requestId,
+    error: "Unresolved shape",
+  });
+  assert.match(
+    document.getElementById("memory-status").textContent,
+    /Unresolved shape/,
+  );
+  assert.equal(document.getElementById("memory-run").disabled, false);
+  submit();
+  const retry = memoryRequests().at(-1);
+  send({
+    type: "memory-error",
+    requestId: request.requestId,
+    error: "Old failure",
+  });
+  assert.match(
+    document.getElementById("memory-status").textContent,
+    /Estimating memory/,
+  );
+  send({
+    type: "memory-profile",
+    requestId: retry.requestId,
+    profile: {
+      name: "Model",
+      device: "CPU",
+      peakBytes: 24,
+      events: [
+        {
+          index: 0,
+          node: "<img src=x>",
+          opType: "Relu",
+          existingBytes: 12,
+          outputBytes: 12,
+          scratchBytes: 0,
+          deviceBytes: 24,
+        },
+      ],
+    },
+  });
+  assert.equal(document.getElementById("memory-results").hidden, false);
+  assert.equal(document.getElementById("memory-peak").textContent, "24 bytes");
+  assert.equal(document.querySelector("#memory-events img"), null);
+  assert.match(
+    document.querySelector("#memory-events").textContent,
+    /<img src=x>/,
+  );
+  load(demoGraph);
+  assert.equal(document.getElementById("memory-results").hidden, true);
+  send({
+    type: "memory-error",
+    requestId: retry.requestId,
+    error: "Old model",
+  });
+  assert.doesNotMatch(
+    document.getElementById("memory-status").textContent,
+    /Old model/,
+  );
+});
+
+test("memory setup failures still allow choosing another pipeline stage", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  load({ ...demoGraph, pipeline: true });
+  document.getElementById("memory-tab").click();
+  const stages = ["embedding", "prefill"].map((pipeline) => ({
+    name: pipeline,
+    path: [{ pipeline }],
+  }));
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: {
+        type: "memory-error",
+        requestId: messages.at(-1).requestId,
+        error: "Unknown tensor rank",
+        stages,
+        path: stages[0].path,
+      },
+    }),
+  );
+  assert.equal(document.getElementById("memory-stage-field").hidden, false);
+  assert.equal(document.getElementById("memory-run").disabled, true);
+  const stage = document.getElementById("memory-stage");
+  assert.equal(stage.disabled, false);
+  stage.selectedIndex = 1;
+  stage.dispatchEvent(new window.Event("change"));
+  assert.equal(messages.at(-1).type, "memory-inputs");
+  assert.equal(messages.at(-1).path[0].pipeline, "prefill");
+});
+
+test("memory chart batches 20,000 events and paginates every row", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  load(demoGraph);
+  document.getElementById("memory-tab").click();
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  send({
+    type: "memory-inputs",
+    requestId: messages.at(-1).requestId,
+    dimensions: [],
+    stages: [],
+    path: [],
+  });
+  document
+    .getElementById("memory-form")
+    .dispatchEvent(new window.Event("submit", { cancelable: true }));
+  const events = Array.from({ length: 20_000 }, (_, index) => ({
+    index,
+    node: `node${index}`,
+    opType: "Relu",
+    existingBytes: 16,
+    outputBytes: 0,
+    scratchBytes: 0,
+    deviceBytes: index === 12345 ? 32 : 16,
+  }));
+  send({
+    type: "memory-profile",
+    requestId: messages.at(-1).requestId,
+    profile: { name: "Large", device: "CPU", peakBytes: 32, events },
+  });
+  assert.equal(document.querySelectorAll("#memory-events tr").length, 100);
+  assert.equal(document.querySelectorAll("#memory-chart path").length, 2);
+  assert.equal(
+    document.getElementById("memory-curve").getAttribute("d").match(/[ML]/g)
+      .length,
+    20_000,
+  );
+  document.getElementById("memory-next").click();
+  assert.match(document.getElementById("memory-range").textContent, /101–200/);
+  assert.equal(document.querySelector("#memory-events th").textContent, "101");
+  document.getElementById("memory-previous").click();
+  assert.equal(document.querySelector("#memory-events th").textContent, "1");
+});
+
 test("statistics tab shows model counts, operator distribution and file sizes", (t) => {
   const viewer = openViewer(t);
   const { document, window } = viewer;
@@ -235,7 +403,7 @@ test("statistics tab shows model counts, operator distribution and file sizes", 
   document
     .getElementById("statistics-tab")
     .dispatchEvent(new window.KeyboardEvent("keydown", { key: "ArrowRight" }));
-  assert.equal(document.getElementById("status-view").hidden, false);
+  assert.equal(document.getElementById("memory-view").hidden, false);
   assert.equal(document.getElementById("statistics-view").hidden, true);
 });
 
@@ -5365,6 +5533,8 @@ test("exports from the right panel without a loaded model and shows commands, pr
     type: "export-progress",
     actionId: request.actionId,
     stage: "Exporting",
+    phase: "download",
+    cacheDirectory: "/tmp/downloads/huggingface",
     command: "python3 -u -m modelbuilder.builder",
     output: "<img src=x> 50%",
   });
@@ -5377,6 +5547,44 @@ test("exports from the right panel without a loaded model and shows commands, pr
     "python3 -u -m modelbuilder.builder\n\n<img src=x> 50%",
   );
   assert.equal(document.querySelector("#export-output img"), null);
+  assert.equal(document.getElementById("export-timings").hidden, false);
+  const timingTable = document.getElementById("export-timings");
+  assert.equal(timingTable.tagName, "TABLE");
+  assert.deepEqual(
+    [...timingTable.querySelectorAll("thead th")].map(
+      (cell) => cell.textContent,
+    ),
+    ["Step", "Elapsed time"],
+  );
+  assert.deepEqual(
+    [...timingTable.querySelectorAll("tbody th[scope=row]")].map(
+      (cell) => cell.textContent,
+    ),
+    ["Download", "Conversion"],
+  );
+  await new Promise((resolve) => window.setTimeout(resolve, 150));
+  assert.match(
+    document.getElementById("export-download-time").textContent,
+    /s \(running\)/,
+  );
+  assert.ok(
+    parseFloat(document.getElementById("export-download-time").textContent) > 0,
+  );
+  send({
+    type: "export-progress",
+    actionId: request.actionId,
+    stage: "Converting local model (offline)",
+    phase: "conversion",
+    downloadDurationMs: 2500,
+  });
+  assert.equal(
+    document.getElementById("export-download-time").textContent,
+    "2.50 s",
+  );
+  assert.match(
+    document.getElementById("export-cache").textContent,
+    /downloads\/huggingface/,
+  );
   assert.equal(output.scrollTop, output.scrollHeight);
   output.scrollTop = 0;
   const stdout = [
@@ -5423,6 +5631,14 @@ test("exports from the right panel without a loaded model and shows commands, pr
     document.getElementById("export-status").textContent,
     /cancelled/,
   );
+  assert.equal(
+    document.getElementById("export-download-time").textContent,
+    "2.50 s",
+  );
+  assert.doesNotMatch(
+    document.getElementById("export-conversion-time").textContent,
+    /running|Not started/,
+  );
   assert.equal(document.getElementById("open-model").disabled, false);
   field("export-precision", "int2");
   field("export-tool", "mobius");
@@ -5436,6 +5652,7 @@ test("exports from the right panel without a loaded model and shows commands, pr
   const next = messages.at(-1);
   assert.equal(next.exportOptions.exporter, "mobius");
   assert.equal(next.exportOptions.precision, "int2");
+  button.click();
   load(demoGraph);
   send({
     type: "export-info",
@@ -5444,6 +5661,7 @@ test("exports from the right panel without a loaded model and shows commands, pr
     script: "/tmp/export-model/export_model.py",
     loaded: true,
     durationMs: 1234,
+    downloadSkipped: true,
   });
   const running = events.find(
     (event) => event.type === "interaction" && event.entry.id === next.actionId,
@@ -5452,6 +5670,15 @@ test("exports from the right panel without a loaded model and shows commands, pr
   assert.equal(
     document.getElementById("export-status").textContent,
     "Converted and opened /tmp/export-model/model.onnx Conversion time: 1.23 s.",
+  );
+  assert.equal(document.getElementById("export-panel").hidden, false);
+  assert.equal(
+    document.getElementById("export-conversion-time").textContent,
+    "1.23 s",
+  );
+  assert.equal(
+    document.getElementById("export-download-time").textContent,
+    "Not needed (local source)",
   );
   assert.match(
     document.getElementById("export-script").textContent,

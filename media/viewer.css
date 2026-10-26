@@ -89,6 +89,7 @@ p {
 }
 #logs-view,
 #statistics-view,
+#memory-view,
 #status-view,
 #controls-view,
 #settings-view,
@@ -99,6 +100,7 @@ p {
 }
 #logs-view h2,
 #statistics-view h2,
+#memory-view h2,
 #status-view h2,
 #controls-view h2,
 #settings-view h2,
@@ -286,6 +288,51 @@ p {
   margin: 8px 0 20px;
   border-collapse: collapse;
   table-layout: fixed;
+}
+#memory-form {
+  display: grid;
+  gap: 12px;
+  max-width: 720px;
+}
+#memory-dimensions {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) minmax(100px, 1fr);
+  gap: 8px;
+}
+#memory-chart {
+  width: 100%;
+  max-height: 320px;
+  margin: 12px 0;
+}
+#memory-chart text {
+  fill: var(--text);
+  font-size: 14px;
+}
+.memory-axis,
+#memory-curve {
+  fill: none;
+  stroke: var(--text);
+}
+#memory-curve {
+  stroke: var(--mint);
+  stroke-width: 2;
+}
+.memory-table {
+  overflow: auto;
+}
+.memory-table table {
+  border-collapse: collapse;
+  width: 100%;
+}
+.memory-table th,
+.memory-table td {
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+#memory-range {
+  margin: 0 12px;
 }
 #statistics-view th,
 #statistics-view td {
@@ -1120,6 +1167,25 @@ button:disabled {
 }
 .file-panel p {
   line-height: 1.5;
+}
+#export-timings {
+  width: 100%;
+  margin: 8px 0 16px;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+#export-timings th,
+#export-timings td {
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  text-align: left;
+}
+#export-timings thead {
+  background: var(--border);
+}
+#export-timings td {
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
 }
 .export-output {
   white-space: pre-wrap;

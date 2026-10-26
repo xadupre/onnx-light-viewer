@@ -45,6 +45,7 @@ add_library(onnx_light_viewer SHARED
   native/model_serialization.cc
   native/fusion.cc
   native/graph_analysis.cc
+  native/memory_profile.cc
   native/graph_snapshot.cc
   native/tensor_preview.cc
   ${CMAKE_JS_SRC}

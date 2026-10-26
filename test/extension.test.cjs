@@ -21,6 +21,7 @@ const path = require("node:path");
 const vm = require("node:vm");
 const { test } = require("node:test");
 const { JSDOM } = require("jsdom");
+const { exportHub } = require("./helpers/export-hub.cjs");
 
 class FileSystemError extends Error {
   constructor(code) {
@@ -587,6 +588,9 @@ test("persists only viewer preferences across closed extension panels", async ()
 
 test("runs all exporter entry points in Python processes and preserves the model on failure or cancellation", async (t) => {
   const root = await mkdtemp(path.join(tmpdir(), "viewer-export-host-"));
+  const hub = await exportHub(t);
+  const oldEndpoint = process.env.HF_ENDPOINT;
+  process.env.HF_ENDPOINT = hub.endpoint;
   const oldPythonPath = process.env.PYTHONPATH;
   process.env.PYTHONPATH = [root, oldPythonPath]
     .filter(Boolean)
@@ -594,6 +598,8 @@ test("runs all exporter entry points in Python processes and preserves the model
   t.after(async () => {
     if (oldPythonPath === undefined) delete process.env.PYTHONPATH;
     else process.env.PYTHONPATH = oldPythonPath;
+    if (oldEndpoint === undefined) delete process.env.HF_ENDPOINT;
+    else process.env.HF_ENDPOINT = oldEndpoint;
     await rm(root, { recursive: true, force: true });
   });
   for (const directory of [
@@ -607,14 +613,22 @@ test("runs all exporter entry points in Python processes and preserves the model
   }
   const script = `
 import pathlib
+import json
+import os
 import shutil
 import sys
 import time
 args = sys.argv[1:]
+assert os.environ["HF_HUB_OFFLINE"] == "1"
+assert os.environ["TRANSFORMERS_OFFLINE"] == "1"
+source_flag = "--config" if "--config" in args else "-i"
+source = pathlib.Path(args[args.index(source_flag) + 1])
+model = json.loads((source / "config.json").read_text())["modelId"]
+assert (source / "model.safetensors").read_bytes() == b"source weights"
 print("Working on ONNX export", flush=True)
-if "wait" in args:
+if model == "wait":
     time.sleep(30)
-if "fail" in args:
+if model == "fail":
     raise RuntimeError("Failed export leaves the displayed model intact")
 flag = "-o" if "-o" in args else "--output"
 output = pathlib.Path(args[args.index(flag) + 1])
@@ -625,7 +639,7 @@ if pathlib.Path(sys.argv[0]).name == "__main__.py":
 else:
     output.mkdir(parents=True, exist_ok=True)
 shutil.copyfile(${JSON.stringify(path.join(__dirname, "models", "relu.onnx"))}, output / "model.onnx")
-if "multiple" in args:
+if model == "multiple":
     shutil.copyfile(output / "model.onnx", output / "second.onnx")
 print("Saved model.onnx", flush=True)
 `;
@@ -684,6 +698,8 @@ print("Saved model.onnx", flush=True)
     assert.equal(result.type, "export-info", result.error);
     assert.equal(result.loaded, true);
     assert.ok(Number.isFinite(result.durationMs) && result.durationMs > 0);
+    assert.ok(result.downloadDurationMs > 0);
+    assert.equal(result.downloadSkipped, false);
     assert.equal(preferences.get("exportHistory").exporter, exporter);
     assert.equal(result.path, path.join(exportOptions.directory, "model.onnx"));
     assert.equal(
@@ -700,6 +716,20 @@ print("Saved model.onnx", flush=True)
       ),
     );
   }
+  assert.equal(
+    hub.requests.filter(
+      ({ method, pathname }) =>
+        method === "GET" && pathname.includes("/owner/model/resolve/"),
+    ).length,
+    2,
+  );
+  assert.ok(
+    extension.events.some(
+      (event) =>
+        event.phase === "download" &&
+        event.cacheDirectory === path.join(root, "downloads", "huggingface"),
+    ),
+  );
   const occupied = options("modelbuilder", "mbext");
   const previousScript = await readFile(
     path.join(occupied.directory, "export_model.py"),
@@ -1513,6 +1543,14 @@ test("opens, browses and saves encrypted copies through embedded selectors witho
   submit("open-form");
   await flush();
   assert.equal(document.querySelectorAll(".graph-node").length, 5);
+  document.getElementById("memory-tab").click();
+  await flush();
+  submit("memory-form");
+  await flush();
+  assert.equal(document.getElementById("memory-results").hidden, false);
+  assert.equal(document.getElementById("memory-peak").textContent, "512 bytes");
+  assert.equal(document.querySelectorAll("#memory-events tr").length, 5);
+  document.getElementById("model-tab").click();
   document.getElementById("save-model").click();
   await flush();
   assert.equal(document.getElementById("save-options").hidden, false);
@@ -2879,6 +2917,77 @@ test("streams local custom-editor files and replacements without reading whole f
   assert.deepEqual(extension.reads, []);
 });
 
+test("estimates root and pipeline memory on request and reports errors without invalidating the model", async (t) => {
+  for (const name of [
+    "inference.onnx",
+    "nested-if.onnx",
+    "functions.onnx",
+    "tiny.pipe-onnx",
+  ]) {
+    const extension = await openExtension(name);
+    t.after(() => extension.dispose());
+    const native = extension.nativeModels.at(-1);
+    if (name === "functions.onnx")
+      await extension.receive({
+        type: "navigate",
+        path: native.graph().localFunctions[0].path,
+      });
+    if (name === "nested-if.onnx")
+      await extension.receive({
+        type: "navigate",
+        path: native
+          .graph()
+          .nodes[0].attributes.find(({ name }) => name === "then_branch")
+          .graphs[0].path,
+      });
+    await extension.receive({ type: "memory-inputs", requestId: 1 });
+    const inputs = extension.messages.at(-1);
+    assert.equal(inputs.type, "memory-inputs");
+    assert.equal(inputs.stages.length, name.endsWith("pipe-onnx") ? 3 : 0);
+    const dimensions = Object.fromEntries(
+      inputs.dimensions.map(({ key, defaultValue }) => [key, defaultValue]),
+    );
+    await extension.receive({
+      type: "memory-profile",
+      requestId: 2,
+      dimensions,
+      path: inputs.path,
+    });
+    const profile = extension.messages.at(-1);
+    assert.equal(profile.type, "memory-profile");
+    assert.ok(profile.profile.events.length > 0);
+    assert.deepEqual(
+      profile.profile.events.map(({ opType }) => opType),
+      native.graph(false, inputs.path).nodes.map(({ opType }) => opType),
+    );
+    await extension.receive({
+      type: "memory-profile",
+      requestId: 3,
+      dimensions: { extra: -1 },
+    });
+    assert.equal(extension.messages.at(-1).type, "memory-error");
+    await extension.receive({ type: "memory-inputs", requestId: 4 });
+    assert.equal(extension.messages.at(-1).type, "memory-inputs");
+    if (name.endsWith("pipe-onnx")) {
+      await extension.receive({
+        type: "memory-inputs",
+        requestId: 5,
+        path: [{ pipeline: "embedding" }, { function: 0 }],
+      });
+      const error = extension.messages.at(-1);
+      assert.equal(error.type, "memory-error");
+      assert.equal(error.stages.length, 3);
+      await extension.receive({
+        type: "memory-inputs",
+        requestId: 6,
+        path: error.stages[1].path,
+      });
+      assert.equal(extension.messages.at(-1).type, "memory-inputs");
+    }
+    assert.equal(extension.nativeModels.length, 1);
+  }
+});
+
 test("statistics list external dense and sparse files with current physical sizes", async (t) => {
   const directory = await mkdtemp(
     path.join(tmpdir(), "onnx-light-statistics-files-"),
@@ -3045,6 +3154,8 @@ test("ignores stale recovery results and errors after replacing a local model", 
   for (const type of [
     "navigate",
     "get-statistics",
+    "memory-inputs",
+    "memory-profile",
     "metadata",
     "refresh-shapes",
     "verify",
@@ -3060,6 +3171,7 @@ test("ignores stale recovery results and errors after replacing a local model", 
       const recovery = extension.receive({
         type,
         requestId: 1,
+        dimensions: {},
         path,
         scenario: "scenario",
         all: false,
@@ -3126,6 +3238,8 @@ test("ignores delayed recovery results and errors after disposing the panel", as
   for (const message of [
     { type: "navigate", path: [] },
     { type: "get-statistics", requestId: 1 },
+    { type: "memory-inputs", requestId: 1 },
+    { type: "memory-profile", requestId: 1, dimensions: {} },
     { type: "navigate", path: [{ node: 9999, attribute: 0, graph: 0 }] },
     { type: "metadata" },
     { type: "refresh-shapes" },

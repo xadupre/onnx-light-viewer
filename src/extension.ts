@@ -26,6 +26,7 @@ import { applicationSettings, inspectPythonPackages } from "./settings";
 import {
   defaultExportDirectory,
   ExportHistory,
+  downloadExportSource,
   exportPlan,
   prepareExportPlan,
   runExport,
@@ -465,6 +466,7 @@ async function configurePanel(
   let graphRevision = 0;
   let navigationRequest = 0;
   let statisticsRequest = 0;
+  let memoryRequest = 0;
   let fusionRequest = 0;
   let diagnosticRequest = 0;
   let undoRequest = 0;
@@ -677,6 +679,7 @@ async function configurePanel(
         maxExternalFileSize?: unknown;
         includeRewritings?: unknown;
         requestId?: unknown;
+        dimensions?: unknown;
         previewId?: unknown;
         pattern?: unknown;
         scenario?: unknown;
@@ -759,6 +762,84 @@ async function configurePanel(
         }
       } else if (message?.type === "interaction") {
         log.interaction(message.entry);
+      } else if (
+        message?.type === "memory-inputs" ||
+        message?.type === "memory-profile"
+      ) {
+        const requestedModel = model;
+        const revision = graphRevision;
+        const generation = ++memoryRequest;
+        let setup:
+          | { stages: NonNullable<Graph["pipelineStages"]>; path: GraphPath }
+          | undefined;
+        const isCurrent = () =>
+          active &&
+          model === requestedModel &&
+          graphRevision === revision &&
+          memoryRequest === generation;
+        try {
+          const result = await log.run("Estimate model memory", async () => {
+            if (
+              typeof message.requestId !== "number" ||
+              !Number.isSafeInteger(message.requestId) ||
+              message.requestId <= 0
+            )
+              throw new Error("Invalid memory profiling request.");
+            const current = requireModel();
+            const native = await nativeModel(current, log, () => {
+              void sendStatus();
+            });
+            if (!isCurrent()) return;
+            const stages = current.graph.pipeline
+              ? (native.graph().pipelineStages ?? [])
+              : [];
+            const path = message.path ?? stages[0]?.path ?? [];
+            if (!isGraphPath(path))
+              throw new Error("Invalid memory profiling path.");
+            setup = { stages, path };
+            if (message.type === "memory-inputs")
+              return {
+                dimensions: native.memoryProfileInputs(path),
+                stages,
+                path,
+              };
+            const values = message.dimensions;
+            if (!values || typeof values !== "object" || Array.isArray(values))
+              throw new Error("Expected dynamic dimension values.");
+            const dimensions = Object.fromEntries(
+              Object.entries(values).map(([key, value]): [string, number] => {
+                if (
+                  typeof value !== "number" ||
+                  !Number.isSafeInteger(value) ||
+                  value <= 0
+                )
+                  throw new Error(
+                    `Expected a positive safe integer for ${key}.`,
+                  );
+                return [key, value];
+              }),
+            );
+            return { profile: await native.memoryProfile(dimensions, path) };
+          });
+          if (isCurrent() && result)
+            await postMessage({
+              type: message.type,
+              requestId: message.requestId,
+              ...result,
+            });
+        } catch (error) {
+          if (!isCurrent()) return;
+          const detail = error instanceof Error ? error.message : String(error);
+          await postMessage({
+            type: "memory-error",
+            requestId: message.requestId,
+            error: detail,
+            ...setup,
+          });
+          await vscode.window.showErrorMessage(
+            `Could not estimate ONNX memory: ${detail}`,
+          );
+        }
       } else if (message?.type === "get-statistics") {
         const requestedModel = model;
         const revision = graphRevision;
@@ -843,6 +924,21 @@ async function configurePanel(
               const originalModel = model;
               const revision = graphRevision;
               let cancellation: string | undefined;
+              const needsDownload = !isAbsolute(plan.model);
+              const timings: {
+                downloadSkipped: boolean;
+                downloadDurationMs?: number;
+                durationMs?: number;
+              } = { downloadSkipped: !needsDownload };
+              let phase: "download" | "conversion" | undefined;
+              let phaseStarted = 0;
+              const finishPhase = () => {
+                if (phase)
+                  timings[
+                    phase === "download" ? "downloadDurationMs" : "durationMs"
+                  ] = performance.now() - phaseStarted;
+                phase = undefined;
+              };
               try {
                 plan = await prepareExportPlan(plan, controller.signal);
                 await postMessage({
@@ -855,18 +951,61 @@ async function configurePanel(
                   directoryTemplate: plan.directoryTemplate,
                   output: "",
                 });
+                await exportHistory.remember(plan);
+                await postMessage({
+                  type: "export-history",
+                  history: exportHistory.snapshot(),
+                });
+                if (needsDownload) {
+                  const cacheDirectory = join(
+                    getApplicationSettings().downloadDirectory,
+                    "huggingface",
+                  );
+                  phase = "download";
+                  phaseStarted = performance.now();
+                  await postMessage({
+                    type: "export-progress",
+                    actionId: message.actionId,
+                    stage: "Downloading source model",
+                    phase,
+                    cacheDirectory,
+                    ...timings,
+                  });
+                  plan = await downloadExportSource(
+                    plan,
+                    cacheDirectory,
+                    controller.signal,
+                    (output) => {
+                      if (!active || controller.signal.aborted) return;
+                      void postMessage({
+                        type: "export-progress",
+                        actionId: message.actionId,
+                        stage: "Downloading source model",
+                        phase: "download",
+                        output,
+                      });
+                    },
+                  );
+                  finishPhase();
+                }
+                controller.signal.throwIfAborted();
+                phase = "conversion";
+                phaseStarted = performance.now();
+                await postMessage({
+                  type: "export-progress",
+                  actionId: message.actionId,
+                  stage: "Converting local model (offline)",
+                  phase,
+                  command: plan.command,
+                  output: "",
+                  ...timings,
+                });
                 log.record(
                   "SUCCEEDED",
                   "Conversion command",
                   undefined,
                   `${plan.command}\nScript: ${plan.script}`,
                 );
-                await exportHistory.remember(plan);
-                await postMessage({
-                  type: "export-history",
-                  history: exportHistory.snapshot(),
-                });
-                const conversionStarted = performance.now();
                 const files = await runExport(
                   plan,
                   controller.signal,
@@ -875,13 +1014,27 @@ async function configurePanel(
                     void postMessage({
                       type: "export-progress",
                       actionId: message.actionId,
-                      stage: "Converting ONNX model",
+                      stage: "Converting local model (offline)",
+                      phase: "conversion",
                       output,
                     });
                   },
                 );
-                const durationMs = performance.now() - conversionStarted;
+                finishPhase();
                 if (!active) return;
+                await postMessage({
+                  type: "export-progress",
+                  actionId: message.actionId,
+                  stage: "Conversion completed",
+                  phase: "finished",
+                  ...timings,
+                });
+                log.record(
+                  "SUCCEEDED",
+                  "Download and conversion timings",
+                  undefined,
+                  JSON.stringify(timings),
+                );
                 controller.signal.throwIfAborted();
                 const selected =
                   files.length === 1
@@ -907,7 +1060,7 @@ async function configurePanel(
                     actionId: message.actionId,
                     script: plan.script,
                     loaded: false,
-                    durationMs,
+                    ...timings,
                   });
                   return;
                 }
@@ -939,9 +1092,19 @@ async function configurePanel(
                   path: selected,
                   script: plan.script,
                   loaded: true,
-                  durationMs,
+                  ...timings,
                 });
               } catch (error) {
+                const interrupted = phase;
+                finishPhase();
+                if (active)
+                  await postMessage({
+                    type: "export-progress",
+                    actionId: message.actionId,
+                    stage: `${interrupted === "download" ? "Download" : "Conversion"} ${controller.signal.aborted ? "cancelled" : "failed"}.`,
+                    phase: "finished",
+                    ...timings,
+                  });
                 if (
                   controller.signal.aborted &&
                   error instanceof Error &&
