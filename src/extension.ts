@@ -100,7 +100,47 @@ interface LoadedModel {
   fusionHistory?: FusionOperation[];
   source?: { uri: vscode.Uri };
   fileName?: string;
-  files?: { name: string; size?: number; external: boolean }[];
+}
+
+async function modelFiles(model: LoadedModel, native: NativeModel) {
+  const source = model.source?.uri;
+  const fileDetails = async (
+    uri: vscode.Uri | undefined,
+    name: string,
+    external: boolean,
+  ) => {
+    if (!uri) return { name, external, error: "Source directory unavailable." };
+    try {
+      const details = await vscode.workspace.fs.stat(uri);
+      if (!(details.type & vscode.FileType.File))
+        throw new Error("Not a regular file.");
+      return { name, external, size: details.size };
+    } catch (error) {
+      return {
+        name,
+        external,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  };
+  return Promise.all([
+    ...(source
+      ? [
+          fileDetails(
+            source,
+            model.fileName ?? posix.basename(source.path),
+            false,
+          ),
+        ]
+      : []),
+    ...[...new Set(native.externalDataLocations())].map((location) =>
+      fileDetails(
+        source ? vscode.Uri.joinPath(source, "..", location) : undefined,
+        location,
+        true,
+      ),
+    ),
+  ]);
 }
 
 function copyFileName(model: LoadedModel, encrypted = false): string {
@@ -283,25 +323,7 @@ async function readGraph(
       ? () => loadModel(retainedBytes, fileName, password)
       : () => loadModelFile(source.uri.fsPath, fileName, password);
     const native = await reload();
-    const fileDetails = async (
-      fileUri: vscode.Uri,
-      name: string,
-      external: boolean,
-    ) => {
-      try {
-        const { size } = await vscode.workspace.fs.stat(fileUri);
-        return { name, size, external };
-      } catch {
-        return { name, external };
-      }
-    };
-    const files = await Promise.all([
-      fileDetails(uri, fileName, false),
-      ...[...new Set(native.externalDataLocations())].map((location) =>
-        fileDetails(vscode.Uri.joinPath(uri, "..", location), location, true),
-      ),
-    ]);
-    return { graph: native.graph(), native, reload, source, fileName, files };
+    return { graph: native.graph(), native, reload, source, fileName };
   });
 }
 
@@ -747,29 +769,28 @@ async function configurePanel(
           graphRevision === revision &&
           statisticsRequest === generation;
         try {
-          const statistics = await log.run(
-            "Refresh model statistics",
-            async () => {
-              if (
-                typeof message.requestId !== "number" ||
-                !Number.isSafeInteger(message.requestId) ||
-                message.requestId <= 0
-              )
-                throw new Error("Invalid statistics request.");
-              const current = requireModel();
-              const native = await nativeModel(current, log, () => {
-                void sendStatus();
-              });
-              if (!isCurrent()) return;
-              return current.graph.pipeline ? native.graph() : native.summary();
-            },
-          );
-          if (!isCurrent() || !statistics) return;
+          const result = await log.run("Refresh model statistics", async () => {
+            if (
+              typeof message.requestId !== "number" ||
+              !Number.isSafeInteger(message.requestId) ||
+              message.requestId <= 0
+            )
+              throw new Error("Invalid statistics request.");
+            const current = requireModel();
+            const native = await nativeModel(current, log, () => {
+              void sendStatus();
+            });
+            if (!isCurrent()) return;
+            const statistics = current.graph.pipeline
+              ? native.graph()
+              : native.summary();
+            return { statistics, files: await modelFiles(current, native) };
+          });
+          if (!isCurrent() || !result) return;
           await postMessage({
             type: "statistics-info",
             requestId: message.requestId,
-            statistics,
-            files: requestedModel?.files ?? [],
+            ...result,
           });
         } catch (error) {
           if (!isCurrent()) return;
