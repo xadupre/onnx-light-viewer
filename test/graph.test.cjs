@@ -38,30 +38,39 @@ function modelBytes(name) {
   return readFileSync(path.join(__dirname, "models", name));
 }
 
-function memoryTestModel(dimensions) {
-  const tensor = bytesField(
-    1,
-    Buffer.concat([
-      varintField(1, 1),
-      bytesField(
-        2,
-        Buffer.concat(
-          dimensions.map((dimension) =>
-            bytesField(
-              1,
-              dimension === null
-                ? Buffer.alloc(0)
-                : typeof dimension === "string"
-                  ? bytesField(2, dimension)
-                  : varintField(1, dimension),
+function memoryTestModel(
+  dimensions,
+  {
+    nodes,
+    initializers = [],
+    outputType = 1,
+    outputDimensions = dimensions,
+  } = {},
+) {
+  const tensor = (type, shape) =>
+    bytesField(
+      1,
+      Buffer.concat([
+        varintField(1, type),
+        bytesField(
+          2,
+          Buffer.concat(
+            shape.map((dimension) =>
+              bytesField(
+                1,
+                dimension === null
+                  ? Buffer.alloc(0)
+                  : typeof dimension === "string"
+                    ? bytesField(2, dimension)
+                    : varintField(1, dimension),
+              ),
             ),
           ),
         ),
-      ),
-    ]),
-  );
-  const port = (name) =>
-    Buffer.concat([bytesField(1, name), bytesField(2, tensor)]);
+      ]),
+    );
+  const port = (name, type, shape) =>
+    Buffer.concat([bytesField(1, name), bytesField(2, tensor(type, shape))]);
   return loadModel(
     Buffer.concat([
       varintField(1, 9),
@@ -69,17 +78,19 @@ function memoryTestModel(dimensions) {
       bytesField(
         7,
         Buffer.concat([
-          bytesField(
-            1,
-            Buffer.concat([
-              bytesField(1, "x"),
-              bytesField(2, "y"),
-              bytesField(4, "Relu"),
-            ]),
-          ),
+          ...(
+            nodes ?? [
+              Buffer.concat([
+                bytesField(1, "x"),
+                bytesField(2, "y"),
+                bytesField(4, "Relu"),
+              ]),
+            ]
+          ).map((node) => bytesField(1, node)),
           bytesField(2, "Memory edge cases"),
-          bytesField(11, port("x")),
-          bytesField(12, port("y")),
+          ...initializers.map((tensor) => bytesField(5, tensor)),
+          bytesField(11, port("x", 1, dimensions)),
+          bytesField(12, port("y", outputType, outputDimensions)),
         ]),
       ),
     ]),
@@ -169,6 +180,113 @@ test("pipeline memory estimates require a stage and leave every model unchanged"
   const profile = await model.memoryProfile(dimensions, path);
   assert.equal(profile.events.length, model.graph(false, path).nodes.length);
   assert.deepEqual(model.graph(), original);
+});
+
+test("memory estimates reject inferred allocations before size multiplication can overflow", async () => {
+  const shape = Buffer.concat([
+    varintField(1, 2),
+    varintField(2, 7),
+    bytesField(8, "shape"),
+    bytesField(7, Buffer.concat([varint(2 ** 31), varint(2 ** 31)])),
+  ]);
+  for (const intermediate of [false, true]) {
+    const nodes = [
+      Buffer.concat([
+        bytesField(1, "x"),
+        bytesField(1, "shape"),
+        bytesField(2, intermediate ? "expanded" : "y"),
+        bytesField(4, "Expand"),
+      ]),
+    ];
+    if (intermediate)
+      nodes.push(
+        Buffer.concat([
+          bytesField(1, "expanded"),
+          bytesField(2, "y"),
+          bytesField(4, "Shape"),
+        ]),
+      );
+    const model = memoryTestModel([1], {
+      nodes,
+      initializers: [shape],
+      outputType: intermediate ? 7 : 1,
+      outputDimensions: intermediate ? [2] : [2 ** 31, 2 ** 31],
+    });
+    const original = model.graph();
+    await assert.rejects(model.memoryProfile({}), /too large.*(expanded|y)/);
+    assert.deepEqual(model.graph(), original);
+  }
+});
+
+test("memory estimates check initializer sizes and allocation sums before native analysis", async () => {
+  const initializer = (name, dimensions) =>
+    Buffer.concat([
+      ...dimensions.map((dimension) => varintField(1, dimension)),
+      varintField(2, 1),
+      bytesField(8, name),
+    ]);
+  const oversized = memoryTestModel([1], {
+    initializers: [initializer("huge", [2 ** 31, 2 ** 31])],
+  });
+  await assert.rejects(oversized.memoryProfile({}), /too large.*huge/);
+  const aggregate = memoryTestModel([1], {
+    initializers: Array.from({ length: 2048 }, (_, index) =>
+      initializer(`weight${index}`, [2 ** 50]),
+    ),
+  });
+  await assert.rejects(
+    aggregate.memoryProfile({}),
+    /allocation sum.*too large/,
+  );
+});
+
+test("memory estimates reject unsupported and unresolved intermediate, output and initializer sizes", async () => {
+  const cast = (input, output, type) =>
+    Buffer.concat([
+      bytesField(1, input),
+      bytesField(2, output),
+      bytesField(4, "Cast"),
+      bytesField(
+        5,
+        Buffer.concat([
+          bytesField(1, "to"),
+          varintField(3, type),
+          varintField(20, 2),
+        ]),
+      ),
+    ]);
+  for (const intermediate of [false, true]) {
+    const model = memoryTestModel([1], {
+      nodes: intermediate
+        ? [cast("x", "strings", 8), cast("strings", "y", 1)]
+        : [cast("x", "y", 8)],
+      outputType: intermediate ? 1 : 8,
+    });
+    await assert.rejects(model.memoryProfile({}), /fixed-width.*(strings|y)/);
+  }
+  const strings = memoryTestModel([1], {
+    initializers: [
+      Buffer.concat([
+        varintField(1, 1),
+        varintField(2, 8),
+        bytesField(6, "value"),
+        bytesField(8, "strings"),
+      ]),
+    ],
+  });
+  await assert.rejects(strings.memoryProfile({}), /fixed-width.*strings/);
+  const unresolved = memoryTestModel([1], {
+    nodes: [
+      Buffer.concat([
+        bytesField(1, "x"),
+        bytesField(2, "y"),
+        bytesField(4, "NonZero"),
+      ]),
+    ],
+    outputType: 7,
+    outputDimensions: [1, "nonzero_count"],
+  });
+  await assert.rejects(unresolved.memoryProfile({}), /unresolved.*y/);
 });
 
 function varint(value) {

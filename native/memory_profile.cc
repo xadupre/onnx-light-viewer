@@ -1,6 +1,7 @@
 #include "model.h"
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <map>
 #include <onnx_core/compute/compute_context.h>
 #include <onnx_extensions/kernels/kernel_dispatch_table.h>
@@ -64,6 +65,54 @@ int64_t Bytes(const ol::core::expressions::DimType &value) {
   return *bytes;
 }
 
+int64_t AllocationBytes(const std::string &name, ol::TensorProto::DataType type,
+                        const ol::core::symbolic::SymShape &shape) {
+  const auto width = ol::FixedBitWidth(type);
+  if (!width)
+    throw std::runtime_error("Memory estimation requires fixed-width tensor allocations: " + name);
+  int64_t elements = 1;
+  for (const auto &dimension : shape.Dims()) {
+    if (!dimension.IsInt() || dimension.AsInt() < 0)
+      throw std::runtime_error("Memory size is unresolved for " + name + ".");
+    const auto extent = dimension.AsInt();
+    if (extent && elements > std::numeric_limits<int64_t>::max() / extent)
+      throw std::runtime_error("Tensor shape is too large for exact memory estimation: " + name);
+    elements *= extent;
+  }
+  if (elements > maxSafeBytes * 8 / width)
+    throw std::runtime_error("Tensor shape is too large for exact memory estimation: " + name);
+  return (elements * width + 7) / 8;
+}
+
+void ValidateAllocations(const ol::GraphProto &graph,
+                         const ol::core::shapes::ShapesContext &shapes) {
+  int64_t total = 0;
+  for (const auto &[name, tensor] : shapes.Tensors()) {
+    if (shapes.HasEncodedValue(name) ||
+        (shapes.HasType(name) && !shapes.GetType(name).has_tensor_type()))
+      throw std::runtime_error("Memory estimation requires dense tensor allocations: " + name);
+    const auto bytes = AllocationBytes(
+        name, ol::core::symbolic::TensorTypeToDataType(tensor.Dtype()), tensor.Shape());
+    if (bytes > std::numeric_limits<int64_t>::max() - total)
+      throw std::runtime_error("Tensor allocation sum is too large for native memory analysis.");
+    total += bytes;
+  }
+  const auto require_tensor = [&](const auto &value) {
+    const std::string name(value);
+    if (!name.empty() && !shapes.Has(name))
+      throw std::runtime_error("Memory allocation is unsupported or unresolved for " + name + ".");
+  };
+  for (const auto &input : graph.input())
+    require_tensor(input.name());
+  for (const auto &initializer : graph.initializer())
+    require_tensor(initializer.name());
+  for (const auto &node : graph.node())
+    for (const auto &output : node.output())
+      require_tensor(output);
+  for (const auto &output : graph.output())
+    require_tensor(output.name());
+}
+
 class MemoryWorker : public Napi::AsyncWorker {
 public:
   MemoryWorker(Napi::Env env, std::shared_ptr<StoredModel> source,
@@ -77,20 +126,24 @@ public:
   void Execute() override {
     try {
       auto &graph = snapshot_.ref_graph();
+      if (graph.sparse_initializer_size() || graph.extended_initializer_size())
+        throw std::runtime_error("Memory estimation requires dense tensor initializers.");
+      for (const auto &tensor : graph.initializer())
+        AllocationBytes(std::string(tensor.name()), tensor.data_type(),
+                        ol::core::symbolic::ShapeFromTensorProtoDims(tensor));
       for (int input = 0; input < graph.input_size(); ++input) {
         auto &shape = graph.ref_input()[input].ref_type().ref_tensor_type().ref_shape();
-        long double elements = 1;
-        bool empty = false;
+        std::vector<ol::core::symbolic::SymDim> dimensions;
+        dimensions.reserve(shape.dim_size());
         for (int axis = 0; axis < shape.dim_size(); ++axis) {
           auto &dimension = shape.ref_dim()[axis];
           if (!dimension.has_dim_value() || dimension.dim_value() < 0)
             dimension.set_dim_value(dimensions_.at(DimensionKey(dimension, input, axis)));
-          elements *= dimension.dim_value();
-          empty |= dimension.dim_value() == 0;
+          dimensions.emplace_back(dimension.dim_value());
         }
-        const auto width = ol::FixedBitWidth(graph.input(input).type().tensor_type().elem_type());
-        if (!empty && std::ceil(elements * width / 8) > maxSafeBytes)
-          throw std::runtime_error("Input shape is too large for exact memory estimation.");
+        AllocationBytes(std::string(graph.input(input).name()),
+                        graph.input(input).type().tensor_type().elem_type(),
+                        ol::core::symbolic::SymShape(dimensions));
       }
       for (auto *values : {&graph.ref_output(), &graph.ref_value_info()})
         for (auto &value : *values) {
@@ -111,7 +164,12 @@ public:
             type.clear_shape();
         }
       ol::core::compute::ComputeContext context;
-      context.Compute(snapshot_, ol::core::symbolic::Device::kCPU);
+      context.ComputeShapes(snapshot_);
+      // Native memory arithmetic assumes concrete, bounded allocations.
+      ValidateAllocations(graph, context.Shapes());
+      context.ComputeValueAndNodeTags(graph);
+      context.ComputeInPlaceReuseGraph(graph, context.Shapes(), false, context.ValueTags());
+      context.ComputePeakMemory(graph, ol::core::symbolic::Device::kCPU);
       for (size_t index = 0; index < context.Memory().size(); ++index) {
         const auto &memory = context.NodeMemory(index);
         const auto scalar = [&](const char *key) {

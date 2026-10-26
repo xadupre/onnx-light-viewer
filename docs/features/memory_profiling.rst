@@ -20,6 +20,8 @@ memory happen only on request, not while browsing a hidden tab.
 
 **This is not measured RAM or GPU usage.** Function/control-flow internals,
 allocator overhead and fragmentation are excluded. Scratch estimates depend on
-registered CPU estimators: zero can mean unavailable. Unknown ranks, variable-width
-inputs, unresolved sizes and unsafe integer sizes report errors instead of zero.
+registered CPU estimators: zero can mean unavailable. Only dense, fixed-width
+tensor allocations are supported. Unknown ranks, unsupported inputs/outputs,
+intermediates or initializers, unresolved sizes and unsafe integer sizes report
+errors instead of partial estimates. Sizes are checked before memory analysis.
 A graph without executable nodes has no per-node peak.
