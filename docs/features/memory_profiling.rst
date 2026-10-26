@@ -21,11 +21,13 @@ memory happen only on request, not while browsing a hidden tab.
 **This is not measured RAM or GPU usage.** Function/control-flow internals,
 allocator overhead and fragmentation are excluded. Scratch estimates depend on
 registered CPU estimators: zero can mean unavailable. Only dense, fixed-width
-tensor allocations are supported. Unknown ranks, unsupported inputs/outputs,
-intermediates or initializers, unresolved sizes and unsafe integer sizes report
-errors instead of partial estimates. Sizes are checked before memory analysis.
-A graph without executable nodes has no per-node peak.
+tensor inputs are supported. The viewer propagates SDK errors and rejects results
+outside JavaScript's exact integer range. A graph without executable nodes has no
+per-node peak.
 
-Models that call local functions are rejected before shape inference: the pinned
-SDK does not carry the checked inference callbacks into function bodies. Unused
-function definitions do not prevent estimation.
+Shape inference and memory arithmetic belong to onnx-light, without viewer-side
+operator replacements. Known SDK issues are tracked upstream:
+`shape arithmetic <https://github.com/xadupre/onnx-light/issues/5629>`_,
+`allocation and scratch arithmetic <https://github.com/xadupre/onnx-light/issues/5630>`_
+and `callback lifecycle <https://github.com/xadupre/onnx-light/issues/5631>`_.
+The pinned SDK is not protected against those defects by the viewer.
