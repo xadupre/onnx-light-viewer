@@ -52,6 +52,8 @@ async function openExtension(
   const receivers = new Set();
   const disposals = new Set();
   const pendingReads = new Map();
+  let webviewPanelOptions;
+  let customEditorOptions;
   const receive = (message) =>
     Promise.all([...receivers].map((callback) => callback(message)));
   let selection;
@@ -203,9 +205,13 @@ async function openExtension(
       },
     },
     window: {
-      createWebviewPanel: () => panel,
-      registerCustomEditorProvider: (_viewType, provider) => {
+      createWebviewPanel: (_viewType, _title, _column, options) => {
+        webviewPanelOptions = options;
+        return panel;
+      },
+      registerCustomEditorProvider: (_viewType, provider, options) => {
         editor = provider;
+        customEditorOptions = options;
         return disposable();
       },
       showOpenDialog: async () => selection,
@@ -352,6 +358,8 @@ async function openExtension(
     logViews,
     events,
     preferences,
+    webviewPanelOptions,
+    customEditorOptions,
     setTrusted: (trusted) => {
       vscode.workspace.isTrusted = trusted;
     },
@@ -519,6 +527,16 @@ async function openExtension(
   };
 }
 
+test("retains webview context while hidden for both editor creation paths", async () => {
+  const extension = await openExtension();
+  assert.equal(extension.webviewPanelOptions.retainContextWhenHidden, true);
+  assert.equal(
+    extension.customEditorOptions.webviewOptions.retainContextWhenHidden,
+    true,
+  );
+  extension.dispose();
+});
+
 test("persists only viewer preferences across closed extension panels", async () => {
   const preferences = new Map();
   const first = await openExtension(
@@ -591,6 +609,12 @@ if "fail" in args:
     raise RuntimeError("Failed export leaves the displayed model intact")
 flag = "-o" if "-o" in args else "--output"
 output = pathlib.Path(args[args.index(flag) + 1])
+if pathlib.Path(sys.argv[0]).name == "__main__.py":
+    if output.exists():
+        raise RuntimeError("Mobius package path already exists")
+    output.mkdir(parents=True)
+else:
+    output.mkdir(parents=True, exist_ok=True)
 shutil.copyfile(${JSON.stringify(path.join(__dirname, "models", "relu.onnx"))}, output / "model.onnx")
 if "multiple" in args:
     shutil.copyfile(output / "model.onnx", output / "second.onnx")

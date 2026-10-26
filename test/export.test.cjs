@@ -2,6 +2,7 @@ const assert = require("node:assert/strict");
 const { execFile } = require("node:child_process");
 const {
   mkdtemp,
+  mkdir,
   readFile,
   readdir,
   rm,
@@ -119,7 +120,21 @@ test("defaults to model/exporter folders and passes every listed precision/devic
               ? "f16"
               : precision;
         assert.equal(plan.args[plan.args.indexOf(flag) + 1], dtype);
-        assert.equal(plan.args.at(-1), provider);
+        assert.equal(
+          plan.args[
+            plan.args.indexOf(exporter === "mobius" ? "--ep" : "-e") + 1
+          ],
+          provider,
+        );
+        assert.equal(
+          plan.args.includes("--extra_options"),
+          exporter === "mbext",
+        );
+        if (exporter === "mbext")
+          assert.deepEqual(plan.args.slice(-2), [
+            "--extra_options",
+            "hf_remote=false",
+          ]);
       }
 });
 
@@ -134,12 +149,33 @@ test("expands model and exporter directory templates without allowing model path
     assert.ok(plan.args.includes(expected));
     assert.ok(!plan.command.includes("<model_id>"));
     assert.ok(!plan.command.includes("<exporter>"));
-    assert.equal(plan.script, path.join(expected, "export_model.py"));
-    await prepareExportPlan(plan, new AbortController().signal);
-    await writeFile(plan.script, "Previous conversion");
+    const prepared = await prepareExportPlan(
+      plan,
+      new AbortController().signal,
+    );
+    if (exporter === "mobius") {
+      assert.notEqual(prepared.script, path.join(expected, "export_model.py"));
+      assert.equal(
+        path.dirname(path.dirname(prepared.script)),
+        path.dirname(prepared.directory),
+      );
+      assert.equal(prepared.directory, expected);
+      await assert.rejects(readdir(prepared.directory), { code: "ENOENT" });
+      await mkdir(prepared.directory);
+    } else {
+      assert.equal(prepared.script, path.join(expected, "export_model.py"));
+    }
+    await writeFile(prepared.script, "Previous conversion");
     const retry = await prepareExportPlan(plan, new AbortController().signal);
-    assert.equal(path.dirname(retry.directory), expected);
     assert.equal(retry.directoryTemplate, template);
+    if (exporter === "mobius") {
+      assert.equal(path.dirname(path.dirname(retry.directory)), expected);
+      assert.equal(path.dirname(retry.script), path.dirname(retry.directory));
+      assert.equal(path.basename(retry.directory), path.basename(expected));
+    } else {
+      assert.equal(path.dirname(retry.directory), expected);
+      assert.equal(retry.script, path.join(retry.directory, "export_model.py"));
+    }
     const values = new Map();
     const history = new ExportHistory({
       get: (key) => values.get(key),
@@ -229,6 +265,11 @@ test("builds the three documented exporter CLIs without interpreting model IDs a
     assert.ok(plan.args.includes(destination));
     assert.ok(plan.command.includes(module));
     assert.equal(plan.script, path.join(destination, "export_model.py"));
+    if (exporter === "mbext")
+      assert.deepEqual(plan.args.slice(-2), [
+        "--extra_options",
+        "hf_remote=false",
+      ]);
     const local = exportPlan(
       {
         ...options(destination, exporter),
@@ -261,7 +302,8 @@ test("retries in fresh subfolders and preserves prior conversion files for all t
     );
     const empty = await prepareExportPlan(original, signal);
     assert.equal(empty.directory, original.directory);
-    await writeFile(original.script, "Previous conversion script");
+    await writeFile(empty.script, "Previous conversion script");
+    if (exporter === "mobius") await mkdir(original.directory);
     await writeFile(
       path.join(original.directory, "weights.bin"),
       "Previous model weights",
@@ -272,18 +314,37 @@ test("retries in fresh subfolders and preserves prior conversion files for all t
     ]);
     assert.notEqual(first.directory, second.directory);
     for (const prepared of [first, second]) {
-      assert.equal(path.dirname(prepared.directory), original.directory);
-      assert.ok(path.basename(prepared.directory).startsWith(`${exporter}-`));
-      assert.deepEqual(await readdir(prepared.directory), []);
+      if (exporter === "mobius") {
+        assert.ok(
+          path
+            .basename(path.dirname(prepared.directory))
+            .startsWith(`${exporter}-`),
+        );
+        assert.equal(
+          path.dirname(path.dirname(prepared.directory)),
+          original.directory,
+        );
+        assert.equal(
+          path.dirname(prepared.script),
+          path.dirname(prepared.directory),
+        );
+        await assert.rejects(readdir(prepared.directory), { code: "ENOENT" });
+      } else {
+        assert.ok(path.basename(prepared.directory).startsWith(`${exporter}-`));
+        assert.equal(path.dirname(prepared.directory), original.directory);
+        assert.deepEqual(await readdir(prepared.directory), []);
+      }
       const flag = exporter === "mobius" ? "--output" : "-o";
       assert.equal(
         prepared.args[prepared.args.indexOf(flag) + 1],
         prepared.directory,
       );
-      assert.equal(
-        prepared.script,
-        path.join(prepared.directory, "export_model.py"),
-      );
+      if (exporter !== "mobius") {
+        assert.equal(
+          prepared.script,
+          path.join(prepared.directory, "export_model.py"),
+        );
+      }
       assert.equal(
         prepared.command,
         exportPlan({ ...options(prepared.directory, exporter) }, python)
@@ -291,7 +352,7 @@ test("retries in fresh subfolders and preserves prior conversion files for all t
       );
     }
     assert.equal(
-      await readFile(original.script, "utf8"),
+      await readFile(empty.script, "utf8"),
       "Previous conversion script",
     );
     assert.equal(

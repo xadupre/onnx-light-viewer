@@ -167,7 +167,7 @@ export function activate(context: vscode.ExtensionContext): void {
       viewType,
       "ONNX Light Viewer",
       vscode.ViewColumn.One,
-      { enableScripts: true },
+      { enableScripts: true, retainContextWhenHidden: true },
     );
     return configurePanel(
       context,
@@ -205,23 +205,29 @@ export function activate(context: vscode.ExtensionContext): void {
     );
   }
   context.subscriptions.push(
-    vscode.window.registerCustomEditorProvider(viewType, {
-      openCustomDocument: (uri) => ({ uri, dispose() {} }),
-      resolveCustomEditor: async (document, panel) => {
-        await configurePanel(
-          context,
-          panel,
-          document.uri,
-          "model",
-          pathHistory,
-          exportHistory,
-          (showLogs) => {
-            if (showLogs) current = { panel, showLogs };
-            else if (current?.panel === panel) current = undefined;
-          },
-        );
+    vscode.window.registerCustomEditorProvider(
+      viewType,
+      {
+        openCustomDocument: (uri) => ({ uri, dispose() {} }),
+        resolveCustomEditor: async (document, panel) => {
+          await configurePanel(
+            context,
+            panel,
+            document.uri,
+            "model",
+            pathHistory,
+            exportHistory,
+            (showLogs) => {
+              if (showLogs) current = { panel, showLogs };
+              else if (current?.panel === panel) current = undefined;
+            },
+          );
+        },
       },
-    }),
+      {
+        webviewOptions: { retainContextWhenHidden: true },
+      },
+    ),
   );
 }
 

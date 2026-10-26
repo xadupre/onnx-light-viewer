@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, readdir, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readdir, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { stripVTControlCharacters } from "node:util";
 import type { Memento } from "vscode";
 
@@ -79,6 +79,17 @@ export class ExportHistory {
 
 export function defaultExportDirectory(root: string): string {
   return join(root, "<model_id>", "<exporter>");
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await lstat(path);
+    return true;
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT")
+      return false;
+    throw error;
+  }
 }
 
 export interface ExportPlan {
@@ -183,6 +194,8 @@ export function exportPlan(
         "-e",
         value.provider,
       ];
+  if (value.exporter === "mbext")
+    args.push("--extra_options", "hf_remote=false");
   const quote = (argument: string) => {
     const safe =
       process.platform === "win32" ? /^[\w./\\:-]+$/ : /^[\w@%+=:,./-]+$/;
@@ -213,6 +226,26 @@ export async function prepareExportPlan(
   signal: AbortSignal,
 ): Promise<ExportPlan> {
   signal.throwIfAborted();
+  if (plan.exporter === "mobius") {
+    const parent = dirname(plan.directory);
+    await mkdir(parent, { recursive: true });
+    const occupied = await pathExists(plan.directory);
+    signal.throwIfAborted();
+    const staging = occupied
+      ? await mkdtemp(join(plan.directory, `${plan.exporter}-`))
+      : await mkdtemp(join(parent, `${plan.exporter}-`));
+    signal.throwIfAborted();
+    const directory = occupied
+      ? join(staging, basename(plan.directory))
+      : plan.directory;
+    return {
+      ...exportPlan({ ...plan, directory }, plan.executable),
+      script: join(staging, "export_model.py"),
+      ...(plan.directoryTemplate === undefined
+        ? {}
+        : { directoryTemplate: plan.directoryTemplate }),
+    };
+  }
   await mkdir(plan.directory, { recursive: true });
   const entries = await readdir(plan.directory);
   signal.throwIfAborted();
@@ -234,11 +267,19 @@ export async function runExport(
   progress: (output: string) => void,
 ): Promise<string[]> {
   signal.throwIfAborted();
-  await mkdir(plan.directory, { recursive: true });
-  if ((await readdir(plan.directory)).length)
-    throw new Error(
-      "The conversion directory is no longer empty. Retry to create a new subfolder.",
-    );
+  if (plan.exporter === "mobius") {
+    await mkdir(dirname(plan.directory), { recursive: true });
+    if (await pathExists(plan.directory))
+      throw new Error(
+        "The Mobius package path already exists. Retry to create a new subfolder.",
+      );
+  } else {
+    await mkdir(plan.directory, { recursive: true });
+    if ((await readdir(plan.directory)).length)
+      throw new Error(
+        "The conversion directory is no longer empty. Retry to create a new subfolder.",
+      );
+  }
   const script = `import os\nimport subprocess\n\nsubprocess.run(${JSON.stringify([plan.executable, ...plan.args])}, cwd=${JSON.stringify(homedir())}, env={**os.environ, **${JSON.stringify(exportEnvironment)}}, check=True)\n`;
   await writeFile(plan.script, script, { flag: "wx" });
   signal.throwIfAborted();
