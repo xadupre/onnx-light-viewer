@@ -82,9 +82,7 @@ export function webviewHtml(
                 <tr><th scope="row">Conversion</th><td id="export-conversion-time">Not started</td></tr>
               </tbody>
             </table>
-            <p>Download the source into the application's cache, then convert it offline with an installed exporter. Local sources need no download. No packages are installed automatically.</p>
             <p id="export-cache"></p>
-            <p id="export-python">Uses the Python executable configured in Settings.</p>
             <p id="export-trust" hidden>Trust this workspace before running an exporter.</p>
             <form id="export-form">
               <fieldset id="export-fields">
@@ -94,11 +92,8 @@ export function webviewHtml(
                 <input id="export-source" required placeholder="Qwen/Qwen3-0.6B" autocomplete="off" list="export-source-history"><datalist id="export-source-history"></datalist>
                 <label for="export-directory">Output directory or template</label>
                 <input id="export-directory" required placeholder="/path/to/new-export" autocomplete="off" list="export-directory-history"><datalist id="export-directory-history"></datalist>
-                <p>Defaults to a model-specific folder in the Settings download directory. Recent model IDs and output directories are saved as suggestions; existing files are never overwritten.</p>
-                <p>If the output directory is not empty, conversion creates a new subfolder automatically. The command shows the actual destination, where the model, weights and export_model.py reproduction script are kept together.</p>
                 <label for="export-precision">Precision</label>
                 <select id="export-precision"><option value="fp32">FP32</option><option value="fp16">FP16</option><option value="bf16">BF16</option><option value="int4">INT4</option><option value="int2">INT2</option><option value="fp4">FP4</option></select>
-                <p>All precisions are available for every exporter and device. Unsupported combinations are reported by the exporter.</p>
                 <label for="export-provider">Target device</label>
                 <select id="export-provider"><option value="cpu">CPU</option><option value="cuda">CUDA</option></select>
               </fieldset>
@@ -106,7 +101,6 @@ export function webviewHtml(
               <progress id="export-progress" aria-label="Converting ONNX model" hidden></progress>
               <p id="export-status" role="status"></p>
               <h3>Command and output</h3>
-              <p>Recent exporter output, including Hugging Face download progress (up to 65,536 characters); automatically follows the latest line.</p>
               <pre id="export-output" class="export-output" aria-label="Exporter command and output"><code id="export-command" aria-label="Exporter command"></code><span id="export-stdout"></span></pre>
               <p id="export-error" role="alert"></p>
               <footer><button id="cancel-export" type="button" disabled>Cancel conversion</button><button id="export-submit" class="primary" type="submit">Convert and open</button></footer>
