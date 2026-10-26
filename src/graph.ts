@@ -206,6 +206,7 @@ export interface OptimizationReport {
   iterations: number;
   rewrites: number;
   totalTimeNs: number;
+  wallTimeNs: number;
   matchingTimeNs: number;
   rewritingTimeNs: number;
   cleanupTimeNs: number;

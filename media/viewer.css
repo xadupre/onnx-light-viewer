@@ -1082,6 +1082,7 @@ button:disabled {
 }
 .save-grid label,
 .file-panel form > label,
+.file-panel fieldset > label,
 .file-panel #open-file-list > label,
 .file-panel > label {
   display: block;
@@ -1093,6 +1094,13 @@ button:disabled {
 }
 .file-panel p {
   line-height: 1.5;
+}
+.export-output {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 16rem;
+  overflow-y: auto;
+  font-size: 11px;
 }
 .file-panel progress {
   width: 100%;
@@ -1112,7 +1120,9 @@ button:disabled {
   width: 120px;
 }
 #save-options-error,
-#open-error {
+#open-error,
+#export-error,
+#export-trust {
   color: var(--vscode-errorForeground, #f88);
 }
 .file-panel input:not([type="radio"]):not([type="checkbox"]),

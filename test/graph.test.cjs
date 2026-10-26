@@ -1999,8 +1999,13 @@ test("explains one native pattern/node without changing matching, history or the
 test("retains native optimizer reports for changed and no-op snapshots, clone and undo", async () => {
   const source = optimizationModel();
   assert.equal(source.optimizationReport(), null);
+  const started = process.hrtime.bigint();
   const optimized = await source.optimize(["TransposeTranspose"], "Optimize");
+  const elapsedNs = Number(process.hrtime.bigint() - started);
   const report = optimized.optimizationReport();
+  assert.ok(report.wallTimeNs > 0);
+  assert.ok(report.wallTimeNs <= elapsedNs);
+  assert.ok(report.wallTimeNs >= report.totalTimeNs);
   assert.ok(report.iterations > 0);
   assert.ok(report.rewrites > 0);
   const transpose = report.patterns.find(
@@ -2042,12 +2047,14 @@ test("retains native optimizer reports for changed and no-op snapshots, clone an
   assert.deepEqual(fused.undoFusion().optimizationReport(), report);
   const noop = await optimized.optimize(["TransposeTranspose"], "Optimize");
   assert.equal(noop.optimizationReport().rewrites, 0);
+  assert.ok(noop.optimizationReport().wallTimeNs > 0);
   assert.equal(noop.fusionCount(), optimized.fusionCount());
   assert.deepEqual(noop.graph(), optimized.graph());
   assert.equal(noop.undoFusion().optimizationReport(), null);
   const relu = loadModel(modelBytes("relu.onnx"), "relu");
   const unchanged = await relu.optimize(["TransposeTranspose"], "Optimize");
   assert.equal(unchanged.optimizationReport().rewrites, 0);
+  assert.ok(unchanged.optimizationReport().wallTimeNs > 0);
   assert.equal(unchanged.fusionCount(), 0);
 });
 
@@ -2763,6 +2770,7 @@ test("optimizes one pipeline stage without adding no-op undo entries or changing
   );
   assert.equal(optimized.fusionCount(), 1);
   assert.equal(optimized.fusionHistory()[0].stage, "prefill");
+  assert.ok(optimized.optimizationReport(stagePath).wallTimeNs > 0);
   assert.ok(
     optimized
       .optimizationReport(stagePath)

@@ -63,6 +63,7 @@ export function webviewHtml(
           <nav id="sidebar-controls" aria-label="Sidebar panels and model actions">
             <button id="open-model" class="icon-button" title="Show or hide the model file selector" aria-expanded="false" aria-controls="open-panel">Open</button>
             <button id="save-model" class="icon-button" disabled title="Show or hide model save options" aria-expanded="false" aria-controls="save-options" aria-describedby="save-status">Save</button>
+            <button id="export-model" class="icon-button" title="Convert a model to ONNX with Python" aria-expanded="false" aria-controls="export-panel">Convert</button>
             <button id="show-find" class="icon-button" aria-expanded="true" aria-controls="find-panel" title="Show or hide node search">Find</button>
             <button id="optimize-model" class="icon-button" disabled title="Show or hide full native model optimization" aria-expanded="false" aria-controls="optimization-panel">Optimize</button>
             <button id="fuse-pattern" class="icon-button" disabled title="Show or hide fusion patterns and select candidates to fuse on the main graph" aria-expanded="false" aria-controls="fusion-panel">Fuse</button>
@@ -70,6 +71,37 @@ export function webviewHtml(
             <button id="show-operator" class="icon-button" aria-expanded="true" aria-controls="operator-panel" title="Show or hide operator and tensor details">Op</button>
             <button id="show-metadata" class="icon-button" aria-expanded="false" aria-controls="metadata-panel" title="Show or hide native constants, tags, lifetimes and stored metadata">Data</button>
           </nav>
+          <section id="export-panel" class="inspector-panel file-panel" aria-labelledby="export-title" hidden>
+            <h2 id="export-title" class="eyebrow panel-title">Convert to ONNX</h2>
+            <p>Run an installed exporter, save its files and open the exported model. No packages are installed automatically.</p>
+            <p id="export-python">Uses the Python executable configured in Settings.</p>
+            <p id="export-trust" hidden>Trust this workspace before running an exporter.</p>
+            <form id="export-form">
+              <fieldset id="export-fields">
+                <label for="export-tool">Exporter</label>
+                <select id="export-tool"><option value="modelbuilder">modelbuilder (ONNX Runtime GenAI)</option><option value="mobius">Mobius</option><option value="mbext">mbext (fast export)</option></select>
+                <label for="export-source">Hugging Face model ID or absolute local model directory</label>
+                <input id="export-source" required placeholder="Qwen/Qwen3-0.6B" autocomplete="off" list="export-source-history"><datalist id="export-source-history"></datalist>
+                <label for="export-directory">Output directory or template</label>
+                <input id="export-directory" required placeholder="/path/to/new-export" autocomplete="off" list="export-directory-history"><datalist id="export-directory-history"></datalist>
+                <p>Defaults to a model-specific folder in the Settings download directory. Recent model IDs and output directories are saved as suggestions; existing files are never overwritten.</p>
+                <p>If the output directory is not empty, conversion creates a new subfolder automatically. The command shows the actual destination, where the model, weights and export_model.py reproduction script are kept together.</p>
+                <label for="export-precision">Precision</label>
+                <select id="export-precision"><option value="fp32">FP32</option><option value="fp16">FP16</option><option value="bf16">BF16</option><option value="int4">INT4</option><option value="int2">INT2</option><option value="fp4">FP4</option></select>
+                <p>All precisions are available for every exporter and device. Unsupported combinations are reported by the exporter.</p>
+                <label for="export-provider">Target device</label>
+                <select id="export-provider"><option value="cpu">CPU</option><option value="cuda">CUDA</option></select>
+              </fieldset>
+              <p id="export-script"></p>
+              <progress id="export-progress" aria-label="Converting ONNX model" hidden></progress>
+              <p id="export-status" role="status"></p>
+              <h3>Command and output</h3>
+              <p>Recent exporter output, including Hugging Face download progress (up to 65,536 characters); automatically follows the latest line.</p>
+              <pre id="export-output" class="export-output" aria-label="Exporter command and output"><code id="export-command" aria-label="Exporter command"></code><span id="export-stdout"></span></pre>
+              <p id="export-error" role="alert"></p>
+              <footer><button id="cancel-export" type="button" disabled>Cancel conversion</button><button id="export-submit" class="primary" type="submit">Convert and open</button></footer>
+            </form>
+          </section>
           <section id="unfuse-panel" class="inspector-panel" aria-labelledby="unfuse-title" hidden>
             <h2 id="unfuse-title" class="eyebrow panel-title">Unfuse</h2>
             <p id="unfuse-count" role="status"></p>
@@ -443,7 +475,7 @@ export function webviewHtml(
         </li>
       </ul>
       <h3>Exporters</h3>
-      <p>These external tools create ONNX files to open in the viewer; they are not built-in export commands. Supported models and target runtimes vary by exporter.</p>
+      <p>Use Convert in the right panel to run an installed mbext, modelbuilder or Mobius exporter and open its ONNX output. Supported models and target runtimes vary by exporter.</p>
       <ul class="repository-list">
         <li>
           <div class="repository-heading">
@@ -518,13 +550,14 @@ export function webviewHtml(
   <dialog id="optimization-report" aria-labelledby="optimization-report-title">
     <header class="inspector-heading"><h2 id="optimization-report-title">Global optimization report</h2><button id="close-optimization-report" autofocus>Close</button></header>
     <p id="optimization-report-scope"></p>
-    <p>Counters include nested graphs. Phase timings marked root exclude them. Native timings are shown in milliseconds and exclude viewer preparation and final canonicalization.</p>
+    <p>Counters include nested graphs. Phase timings marked root exclude them. All timings are in milliseconds. Full native operation elapsed is measured independently, including native preparation, queueing and final canonicalization, but excluding graph transfer and rendering. Native phase timings cover only the instrumented optimizer phases.</p>
     <div id="optimization-report-body"></div>
     <p>Each subgraph's counters and elapsed time include its descendants; subgraph rows are not additive.</p>
   </dialog>
   <script nonce="${nonce}" src="${resource("vendor/markdown-it.min.js")}"></script>
   <script nonce="${nonce}" src="${resource("sidebar.js")}"></script>
   <script nonce="${nonce}" src="${resource("file-panels.js")}"></script>
+  <script nonce="${nonce}" src="${resource("export-panel.js")}"></script>
   <script nonce="${nonce}" src="${resource("inspector.js")}"></script>
   <script nonce="${nonce}" src="${resource("metadata-panel.js")}"></script>
   <script nonce="${nonce}" src="${resource("fusion-panel.js")}"></script>
