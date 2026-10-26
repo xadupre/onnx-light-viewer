@@ -6,6 +6,7 @@
 #include <onnx_core/compute/compute_context.h>
 #include <onnx_extensions/kernels/kernel_dispatch_table.h>
 #include <onnx_extensions/shapes/dispatch_table.h>
+#include <onnx_extensions/shapes/shapes/tensor/shape_tensor.h>
 #include <onnx_proto/onnx_helper.h>
 #include <stdexcept>
 
@@ -82,6 +83,29 @@ int64_t AllocationBytes(const std::string &name, ol::TensorProto::DataType type,
   if (elements > maxSafeBytes * 8 / width)
     throw std::runtime_error("Tensor shape is too large for exact memory estimation: " + name);
   return (elements * width + 7) / 8;
+}
+
+void ComputeCheckedTileShape(ol::core::shapes::ShapesContext &shapes, const ol::NodeProto &node) {
+  // The pinned SDK multiplies concrete Tile dimensions without overflow checks.
+  if (node.input_size() >= 2 && node.output_size() == 1) {
+    const auto &input = shapes.Get(node.input(0)).Shape();
+    const auto &counts = shapes.Get(node.input(1));
+    if (counts.HasValueAsShape() && counts.ValueAsShape().Rank() == input.Rank()) {
+      const auto &repeats = counts.ValueAsShape();
+      for (size_t axis = 0; axis < input.Rank(); ++axis) {
+        if (!input[axis].IsInt() || !repeats[axis].IsInt())
+          continue;
+        const auto extent = input[axis].AsInt();
+        const auto repeat = repeats[axis].AsInt();
+        if (extent < 0 || repeat < 0)
+          throw std::runtime_error("Tile dimensions and repeat counts must be non-negative.");
+        if (repeat && extent > std::numeric_limits<int64_t>::max() / repeat)
+          throw std::runtime_error("Tensor shape is too large for exact memory estimation: Tile " +
+                                   std::string(node.output(0)));
+      }
+    }
+  }
+  ol::onnx_shapes::shapes::tensor::ComputeShapeTile(shapes, node);
 }
 
 void ValidateAllocations(const ol::GraphProto &graph,
@@ -194,7 +218,9 @@ public:
             type.clear_shape();
         }
       ol::core::compute::ComputeContext context;
-      context.ComputeShapes(snapshot_);
+      context.Shapes().SetCustomShapeInferenceFunction("", "Tile", ComputeCheckedTileShape);
+      // ComputeShapes would clear the hook; the owned shapes context is already fresh.
+      context.Shapes().ComputeShapeModel(snapshot_);
       // Native memory arithmetic assumes concrete, bounded allocations.
       ValidateAllocations(graph, context.Shapes());
       ValidateScratchAllocations(graph, context.Shapes());

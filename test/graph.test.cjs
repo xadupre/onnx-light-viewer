@@ -219,6 +219,63 @@ test("memory estimates reject inferred allocations before size multiplication ca
   }
 });
 
+function tileMemoryModel(dimensions, repeats, propagated = false) {
+  return memoryTestModel(dimensions, {
+    initializers: [
+      Buffer.concat([
+        ...(propagated
+          ? repeats.map((dimension) => varintField(1, dimension))
+          : [varintField(1, repeats.length)]),
+        varintField(2, propagated ? 1 : 7),
+        bytesField(8, "repeats"),
+        ...(propagated
+          ? []
+          : [bytesField(7, Buffer.concat(repeats.map(varint)))]),
+      ]),
+    ],
+    nodes: [
+      ...(propagated
+        ? [
+            Buffer.concat([
+              bytesField(1, "x"),
+              bytesField(2, "input"),
+              bytesField(4, "Identity"),
+            ]),
+            Buffer.concat([
+              bytesField(1, "repeats"),
+              bytesField(2, "counts"),
+              bytesField(4, "Shape"),
+            ]),
+          ]
+        : []),
+      Buffer.concat([
+        bytesField(1, propagated ? "input" : "x"),
+        bytesField(1, propagated ? "counts" : "repeats"),
+        bytesField(2, "y"),
+        bytesField(4, "Tile"),
+      ]),
+    ],
+    outputDimensions: repeats.map(() => null),
+  });
+}
+
+test("memory estimates reject Tile dimension overflow before shape inference multiplication", async () => {
+  for (const propagated of [false, true])
+    for (const extent of [2 ** 32, 2 ** 31]) {
+      const model = tileMemoryModel([extent], [2 ** 32], propagated);
+      const original = model.graph();
+      await assert.rejects(model.memoryProfile({}), /too large.*Tile/);
+      assert.deepEqual(model.graph(), original);
+    }
+});
+
+test("memory estimates preserve valid and zero-repeat Tile shapes with unspecified outputs", async () => {
+  const repeated = tileMemoryModel([2, 3], [3, 2]);
+  assert.equal((await repeated.memoryProfile({})).peakBytes, 184);
+  const empty = tileMemoryModel([2, 3], [0, 2]);
+  assert.equal((await empty.memoryProfile({})).peakBytes, 40);
+});
+
 test("memory estimates check initializer sizes and allocation sums before native analysis", async () => {
   const initializer = (name, dimensions) =>
     Buffer.concat([
