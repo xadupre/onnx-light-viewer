@@ -1,4 +1,5 @@
 const assert = require("node:assert/strict");
+const { EventEmitter, once } = require("node:events");
 const { readFileSync } = require("node:fs");
 const { test } = require("node:test");
 const { JSDOM } = require("jsdom");
@@ -12,6 +13,7 @@ const { webviewHtml } = require("../dist/webview");
 
 function openViewer(t, initialTab = "model", setup = () => {}) {
   const messages = [];
+  const postedMessages = new EventEmitter();
   const events = [];
   const dom = new JSDOM(
     webviewHtml(
@@ -35,7 +37,10 @@ function openViewer(t, initialTab = "model", setup = () => {}) {
   dom.window.acquireVsCodeApi = () => ({
     postMessage: (message) => {
       events.push(message);
-      if (message.type !== "interaction") messages.push(message);
+      if (message.type !== "interaction") {
+        messages.push(message);
+        postedMessages.emit(`message:${message.type}`, message);
+      }
     },
   });
   let viewport = { width: 1060, height: 350 };
@@ -102,6 +107,12 @@ function openViewer(t, initialTab = "model", setup = () => {}) {
     document: dom.window.document,
     window: dom.window,
     messages,
+    waitForMessage: async (type) =>
+      (
+        await once(postedMessages, `message:${type}`, {
+          signal: AbortSignal.timeout(10000),
+        })
+      )[0],
     events,
     load,
     resize,
@@ -5467,7 +5478,7 @@ test("renders the demo, inspects its operator and requests a real file", (t) => 
 });
 
 test("builder layer limits reach previews and submissions without leaking into Mobius", async (t) => {
-  const { document, window, messages } = openViewer(t);
+  const { document, window, messages, waitForMessage } = openViewer(t);
   const byId = (id) => document.getElementById(id);
   const change = (id, value) => {
     byId(id).value = value;
@@ -5498,30 +5509,24 @@ test("builder layer limits reach previews and submissions without leaking into M
   change("export-source", "owner/model");
   change("export-directory", "/tmp/layer-limit");
   change("export-layer-count", "2");
-  await new Promise((resolve) => window.setTimeout(resolve, 180));
   assert.equal(
-    messages.findLast((message) => message.type === "export-preview")
-      .exportOptions.layerCount,
+    (await waitForMessage("export-preview")).exportOptions.layerCount,
     2,
   );
   for (const exporter of ["modelbuilder", "mobius"]) {
     change("export-tool", exporter);
     assert.equal(byId("export-layer-options").hidden, exporter === "mobius");
     assert.equal(byId("export-layer-count").disabled, exporter === "mobius");
-    await new Promise((resolve) => window.setTimeout(resolve, 180));
     assert.equal(
-      messages.findLast((message) => message.type === "export-preview")
-        .exportOptions.layerCount,
+      (await waitForMessage("export-preview")).exportOptions.layerCount,
       exporter === "mobius" ? undefined : 2,
     );
   }
   change("export-tool", "mbext");
   assert.equal(byId("export-layer-count").value, "2");
   change("export-layer-count", "");
-  await new Promise((resolve) => window.setTimeout(resolve, 180));
   assert.equal(
-    messages.findLast((message) => message.type === "export-preview")
-      .exportOptions.layerCount,
+    (await waitForMessage("export-preview")).exportOptions.layerCount,
     undefined,
   );
   change("export-layer-count", "2");
@@ -5536,7 +5541,7 @@ test("builder layer limits reach previews and submissions without leaking into M
 });
 
 test("advanced export options stay folded and omit hidden, unsupported or conflicting fields", async (t) => {
-  const { document, window, messages } = openViewer(t);
+  const { document, window, messages, waitForMessage } = openViewer(t);
   const byId = (id) => document.getElementById(id);
   const change = (id, value) => {
     if (typeof value === "boolean") byId(id).checked = value;
@@ -5544,10 +5549,8 @@ test("advanced export options stay folded and omit hidden, unsupported or confli
     byId(id).dispatchEvent(new window.Event("change", { bubbles: true }));
   };
   const preview = async () => {
-    await new Promise((resolve) => window.setTimeout(resolve, 180));
     return structuredClone(
-      messages.findLast((message) => message.type === "export-preview")
-        .exportOptions,
+      (await waitForMessage("export-preview")).exportOptions,
     );
   };
   window.dispatchEvent(

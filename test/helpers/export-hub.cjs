@@ -6,20 +6,22 @@ async function exportHub(t, onRequest = () => {}) {
   const revision = "1234567890abcdef1234567890abcdef12345678";
   const files = (model) => ({
     "config.json": Buffer.from(JSON.stringify({ modelId: model })),
-    ...(model === "owner/sharded"
-      ? {
-          "model.safetensors.index.json": Buffer.from(
-            JSON.stringify({
-              weight_map: {
-                a: "model-00001.safetensors",
-                b: "model-00002.safetensors",
-              },
-            }),
-          ),
-          "model-00001.safetensors": Buffer.from("first shard"),
-          "model-00002.safetensors": Buffer.from("second shard"),
-        }
-      : { "model.safetensors": Buffer.from("source weights") }),
+    ...(model === "owner/config-only"
+      ? {}
+      : model === "owner/sharded"
+        ? {
+            "model.safetensors.index.json": Buffer.from(
+              JSON.stringify({
+                weight_map: {
+                  a: "model-00001.safetensors",
+                  b: "model-00002.safetensors",
+                },
+              }),
+            ),
+            "model-00001.safetensors": Buffer.from("first shard"),
+            "model-00002.safetensors": Buffer.from("second shard"),
+          }
+        : { "model.safetensors": Buffer.from("source weights") }),
   });
   const server = createServer((request, response) => {
     const pathname = decodeURIComponent(
@@ -56,9 +58,9 @@ async function exportHub(t, onRequest = () => {}) {
           sha: revision,
           siblings: [
             ...Object.keys(files(model)),
-            "pytorch_model.bin",
-            "tf_model.h5",
-            "model.fp16.safetensors",
+            ...(model === "owner/config-only"
+              ? []
+              : ["pytorch_model.bin", "tf_model.h5", "model.fp16.safetensors"]),
           ].map((rfilename) => ({ rfilename })),
         }),
       );

@@ -570,6 +570,23 @@ test("Mobius graph-only conversion caches pinned metadata without downloading we
     "config.json",
     "model.safetensors",
   ]);
+  const configOnly = { ...options(root, "mobius"), model: "owner/config-only" };
+  const metadata = await downloadExportSource(
+    exportPlan({ ...configOnly, advancedOptions: { noWeights: true } }, python),
+    cache,
+    new AbortController().signal,
+    () => {},
+  );
+  assert.deepEqual(await readdir(metadata.model), ["config.json"]);
+  await assert.rejects(
+    downloadExportSource(
+      exportPlan(configOnly, python),
+      cache,
+      new AbortController().signal,
+      () => {},
+    ),
+    /No supported root checkpoint found/,
+  );
 });
 
 test("expands model and exporter directory templates without allowing model path traversal", async (t) => {
