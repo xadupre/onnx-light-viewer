@@ -5362,6 +5362,20 @@ test("exports from the right panel without a loaded model and shows commands, pr
   );
   assert.equal(document.querySelector("#export-output img"), null);
   assert.equal(document.getElementById("export-timings").hidden, false);
+  const timingTable = document.getElementById("export-timings");
+  assert.equal(timingTable.tagName, "TABLE");
+  assert.deepEqual(
+    [...timingTable.querySelectorAll("thead th")].map(
+      (cell) => cell.textContent,
+    ),
+    ["Step", "Elapsed time"],
+  );
+  assert.deepEqual(
+    [...timingTable.querySelectorAll("tbody th[scope=row]")].map(
+      (cell) => cell.textContent,
+    ),
+    ["Download", "Conversion"],
+  );
   await new Promise((resolve) => window.setTimeout(resolve, 150));
   assert.match(
     document.getElementById("export-download-time").textContent,

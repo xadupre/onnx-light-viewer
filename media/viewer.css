@@ -1121,6 +1121,25 @@ button:disabled {
 .file-panel p {
   line-height: 1.5;
 }
+#export-timings {
+  width: 100%;
+  margin: 8px 0 16px;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+#export-timings th,
+#export-timings td {
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  text-align: left;
+}
+#export-timings thead {
+  background: var(--border);
+}
+#export-timings td {
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
+}
 .export-output {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
