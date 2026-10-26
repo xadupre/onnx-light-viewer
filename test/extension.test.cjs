@@ -1499,6 +1499,14 @@ test("opens, browses and saves encrypted copies through embedded selectors witho
   submit("open-form");
   await flush();
   assert.equal(document.querySelectorAll(".graph-node").length, 5);
+  document.getElementById("memory-tab").click();
+  await flush();
+  submit("memory-form");
+  await flush();
+  assert.equal(document.getElementById("memory-results").hidden, false);
+  assert.equal(document.getElementById("memory-peak").textContent, "512 bytes");
+  assert.equal(document.querySelectorAll("#memory-events tr").length, 5);
+  document.getElementById("model-tab").click();
   document.getElementById("save-model").click();
   await flush();
   assert.equal(document.getElementById("save-options").hidden, false);
@@ -2865,6 +2873,64 @@ test("streams local custom-editor files and replacements without reading whole f
   assert.deepEqual(extension.reads, []);
 });
 
+test("estimates root and pipeline memory on request and reports errors without invalidating the model", async (t) => {
+  for (const name of ["inference.onnx", "functions.onnx", "tiny.pipe-onnx"]) {
+    const extension = await openExtension(name);
+    t.after(() => extension.dispose());
+    const native = extension.nativeModels.at(-1);
+    if (name === "functions.onnx")
+      await extension.receive({
+        type: "navigate",
+        path: native.graph().localFunctions[0].path,
+      });
+    await extension.receive({ type: "memory-inputs", requestId: 1 });
+    const inputs = extension.messages.at(-1);
+    assert.equal(inputs.type, "memory-inputs");
+    assert.equal(inputs.stages.length, name.endsWith("pipe-onnx") ? 3 : 0);
+    const dimensions = Object.fromEntries(
+      inputs.dimensions.map(({ key, defaultValue }) => [key, defaultValue]),
+    );
+    await extension.receive({
+      type: "memory-profile",
+      requestId: 2,
+      dimensions,
+      path: inputs.path,
+    });
+    const profile = extension.messages.at(-1);
+    assert.equal(profile.type, "memory-profile");
+    assert.ok(profile.profile.events.length > 0);
+    assert.deepEqual(
+      profile.profile.events.map(({ opType }) => opType),
+      native.graph(false, inputs.path).nodes.map(({ opType }) => opType),
+    );
+    await extension.receive({
+      type: "memory-profile",
+      requestId: 3,
+      dimensions: { extra: -1 },
+    });
+    assert.equal(extension.messages.at(-1).type, "memory-error");
+    await extension.receive({ type: "memory-inputs", requestId: 4 });
+    assert.equal(extension.messages.at(-1).type, "memory-inputs");
+    if (name.endsWith("pipe-onnx")) {
+      await extension.receive({
+        type: "memory-inputs",
+        requestId: 5,
+        path: [{ pipeline: "embedding" }, { function: 0 }],
+      });
+      const error = extension.messages.at(-1);
+      assert.equal(error.type, "memory-error");
+      assert.equal(error.stages.length, 3);
+      await extension.receive({
+        type: "memory-inputs",
+        requestId: 6,
+        path: error.stages[1].path,
+      });
+      assert.equal(extension.messages.at(-1).type, "memory-inputs");
+    }
+    assert.equal(extension.nativeModels.length, 1);
+  }
+});
+
 test("statistics recover complete model totals on demand after nested refresh failures", async (t) => {
   for (const name of ["nested-if.onnx", "functions.onnx", "tiny.pipe-onnx"]) {
     for (const type of ["refresh-shapes", "metadata"]) {
@@ -2953,6 +3019,8 @@ test("ignores stale recovery results and errors after replacing a local model", 
   for (const type of [
     "navigate",
     "get-statistics",
+    "memory-inputs",
+    "memory-profile",
     "metadata",
     "refresh-shapes",
     "verify",
@@ -2968,6 +3036,7 @@ test("ignores stale recovery results and errors after replacing a local model", 
       const recovery = extension.receive({
         type,
         requestId: 1,
+        dimensions: {},
         path,
         scenario: "scenario",
         all: false,
@@ -3034,6 +3103,8 @@ test("ignores delayed recovery results and errors after disposing the panel", as
   for (const message of [
     { type: "navigate", path: [] },
     { type: "get-statistics", requestId: 1 },
+    { type: "memory-inputs", requestId: 1 },
+    { type: "memory-profile", requestId: 1, dimensions: {} },
     { type: "navigate", path: [{ node: 9999, attribute: 0, graph: 0 }] },
     { type: "metadata" },
     { type: "refresh-shapes" },

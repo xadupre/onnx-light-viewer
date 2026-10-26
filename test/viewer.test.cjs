@@ -173,6 +173,174 @@ test("Verify reports success and errors, prevents duplicate requests and resets 
   assert.equal(button.disabled, false);
 });
 
+test("memory estimates are lazy, accept dimensions, and discard stale results and errors", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  const memoryRequests = () =>
+    messages.filter(({ type }) => type.startsWith("memory-"));
+  document.getElementById("memory-tab").click();
+  assert.equal(memoryRequests().length, 0);
+  document.getElementById("model-tab").click();
+  load(demoGraph);
+  assert.equal(memoryRequests().length, 0);
+  document.getElementById("memory-tab").click();
+  const setup = memoryRequests().at(-1);
+  send({
+    type: "memory-inputs",
+    requestId: setup.requestId,
+    dimensions: [{ key: "symbol:N", label: "N", defaultValue: 1 }],
+    stages: [],
+    path: [],
+  });
+  const dimension = document.querySelector("#memory-dimensions input");
+  assert.equal(dimension.value, "1");
+  dimension.value = "3";
+  const submit = () =>
+    document
+      .getElementById("memory-form")
+      .dispatchEvent(new window.Event("submit", { cancelable: true }));
+  submit();
+  const request = memoryRequests().at(-1);
+  assert.equal(request.type, "memory-profile");
+  assert.equal(request.dimensions["symbol:N"], 3);
+  assert.equal(document.getElementById("memory-run").disabled, true);
+  send({ type: "memory-profile", requestId: setup.requestId, profile: {} });
+  assert.equal(document.getElementById("memory-results").hidden, true);
+  send({
+    type: "memory-error",
+    requestId: request.requestId,
+    error: "Unresolved shape",
+  });
+  assert.match(
+    document.getElementById("memory-status").textContent,
+    /Unresolved shape/,
+  );
+  assert.equal(document.getElementById("memory-run").disabled, false);
+  submit();
+  const retry = memoryRequests().at(-1);
+  send({
+    type: "memory-error",
+    requestId: request.requestId,
+    error: "Old failure",
+  });
+  assert.match(
+    document.getElementById("memory-status").textContent,
+    /Estimating memory/,
+  );
+  send({
+    type: "memory-profile",
+    requestId: retry.requestId,
+    profile: {
+      name: "Model",
+      device: "CPU",
+      peakBytes: 24,
+      events: [
+        {
+          index: 0,
+          node: "<img src=x>",
+          opType: "Relu",
+          existingBytes: 12,
+          outputBytes: 12,
+          scratchBytes: 0,
+          deviceBytes: 24,
+        },
+      ],
+    },
+  });
+  assert.equal(document.getElementById("memory-results").hidden, false);
+  assert.equal(document.getElementById("memory-peak").textContent, "24 bytes");
+  assert.equal(document.querySelector("#memory-events img"), null);
+  assert.match(
+    document.querySelector("#memory-events").textContent,
+    /<img src=x>/,
+  );
+  load(demoGraph);
+  assert.equal(document.getElementById("memory-results").hidden, true);
+  send({
+    type: "memory-error",
+    requestId: retry.requestId,
+    error: "Old model",
+  });
+  assert.doesNotMatch(
+    document.getElementById("memory-status").textContent,
+    /Old model/,
+  );
+});
+
+test("memory setup failures still allow choosing another pipeline stage", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  load({ ...demoGraph, pipeline: true });
+  document.getElementById("memory-tab").click();
+  const stages = ["embedding", "prefill"].map((pipeline) => ({
+    name: pipeline,
+    path: [{ pipeline }],
+  }));
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: {
+        type: "memory-error",
+        requestId: messages.at(-1).requestId,
+        error: "Unknown tensor rank",
+        stages,
+        path: stages[0].path,
+      },
+    }),
+  );
+  assert.equal(document.getElementById("memory-stage-field").hidden, false);
+  assert.equal(document.getElementById("memory-run").disabled, true);
+  const stage = document.getElementById("memory-stage");
+  assert.equal(stage.disabled, false);
+  stage.selectedIndex = 1;
+  stage.dispatchEvent(new window.Event("change"));
+  assert.equal(messages.at(-1).type, "memory-inputs");
+  assert.equal(messages.at(-1).path[0].pipeline, "prefill");
+});
+
+test("memory chart batches 20,000 events and paginates every row", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  load(demoGraph);
+  document.getElementById("memory-tab").click();
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  send({
+    type: "memory-inputs",
+    requestId: messages.at(-1).requestId,
+    dimensions: [],
+    stages: [],
+    path: [],
+  });
+  document
+    .getElementById("memory-form")
+    .dispatchEvent(new window.Event("submit", { cancelable: true }));
+  const events = Array.from({ length: 20_000 }, (_, index) => ({
+    index,
+    node: `node${index}`,
+    opType: "Relu",
+    existingBytes: 16,
+    outputBytes: 0,
+    scratchBytes: 0,
+    deviceBytes: index === 12345 ? 32 : 16,
+  }));
+  send({
+    type: "memory-profile",
+    requestId: messages.at(-1).requestId,
+    profile: { name: "Large", device: "CPU", peakBytes: 32, events },
+  });
+  assert.equal(document.querySelectorAll("#memory-events tr").length, 100);
+  assert.equal(document.querySelectorAll("#memory-chart path").length, 2);
+  assert.equal(
+    document.getElementById("memory-curve").getAttribute("d").match(/[ML]/g)
+      .length,
+    20_000,
+  );
+  document.getElementById("memory-next").click();
+  assert.match(document.getElementById("memory-range").textContent, /101–200/);
+  assert.equal(document.querySelector("#memory-events th").textContent, "101");
+  document.getElementById("memory-previous").click();
+  assert.equal(document.querySelector("#memory-events th").textContent, "1");
+});
+
 test("statistics tab shows model counts, operator distribution and file sizes", (t) => {
   const viewer = openViewer(t);
   const { document, window } = viewer;
@@ -234,7 +402,7 @@ test("statistics tab shows model counts, operator distribution and file sizes", 
   document
     .getElementById("statistics-tab")
     .dispatchEvent(new window.KeyboardEvent("keydown", { key: "ArrowRight" }));
-  assert.equal(document.getElementById("status-view").hidden, false);
+  assert.equal(document.getElementById("memory-view").hidden, false);
   assert.equal(document.getElementById("statistics-view").hidden, true);
 });
 

@@ -1,5 +1,6 @@
 /* global acquireVsCodeApi, createSidebar, createFilePanels, createInspector,
-          createMetadataPanel, createFusionPanel, createSettingsPanel, createExportPanel */
+          createMetadataPanel, createFusionPanel, createSettingsPanel, createExportPanel,
+          createMemoryPanel */
 const vscode = acquireVsCodeApi();
 const svgNS = "http://www.w3.org/2000/svg";
 const byId = (id) => document.getElementById(id);
@@ -62,6 +63,7 @@ const tabs = [
   "model",
   "logs",
   "statistics",
+  "memory",
   "status",
   "controls",
   "repositories",
@@ -93,6 +95,11 @@ const inspector = createInspector({
   navigate,
 });
 const metadataPanel = createMetadataPanel({ byId, tensorDescription });
+const memoryPanel = createMemoryPanel({
+  byId,
+  postMessage: (message) => vscode.postMessage(message),
+  formatFileSize,
+});
 const filePanels = createFilePanels({
   byId,
   postMessage: (message) => vscode.postMessage(message),
@@ -142,6 +149,7 @@ function showTab(name, focus = false) {
   if (focus) byId(`${name}-tab`).focus();
   if (name === "model") fit();
   else if (name === "statistics") requestStatistics();
+  else if (name === "memory") memoryPanel.open();
   else if (name === "settings") vscode.postMessage({ type: "get-settings" });
   else if (name === "logs")
     byId("logs-view").scrollTop = byId("logs-view").scrollHeight;
@@ -2033,6 +2041,7 @@ window.addEventListener("message", (event) => {
     return;
   }
   if (
+    memoryPanel.handleMessage(event.data) ||
     exportPanel.handleMessage(event.data) ||
     filePanels.handleMessage(event.data) ||
     fusionPanel.handleMessage(event.data)
@@ -2135,6 +2144,7 @@ window.addEventListener("message", (event) => {
     }
     filePanels.reset();
     displayedGraph = event.data.graph;
+    memoryPanel.setGraph(displayedGraph);
     fusionPanel.reset(displayedGraph, event.data.fusionRequestId);
     render(event.data.graph, event.data.metadata);
     if (!byId("statistics-view").hidden) requestStatistics();

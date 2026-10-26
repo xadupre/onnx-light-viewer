@@ -58,6 +58,11 @@ underlying onnx-light libraries. Start with the worked example in
      - Constants, tags, lifetimes, last reads, releasable/unused outputs and stored
        model/graph/node/tensor metadata.
      - :doc:`features/metadata`. Static analysis, not measured runtime memory usage.
+   * - Memory profiling
+     - Dynamic dimension inputs, estimated CPU memory curve and paginated
+       per-node allocation/scratch events.
+     - :doc:`features/memory_profiling`. Native estimation, not model execution
+       or measured RAM/GPU usage.
    * - Diagnostics and help
      - Action history, progress/errors, native-library status, recovery after
        caught exceptions, keyboard/mouse controls and ONNX repository links.
@@ -102,6 +107,7 @@ Detailed guides
    features/inspection
    features/subgraphs
    features/metadata
+   features/memory_profiling
    features/fusion_patterns
    features/backend_tests
    features/action_logs

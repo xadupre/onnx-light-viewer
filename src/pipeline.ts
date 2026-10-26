@@ -7,6 +7,8 @@ import type {
   GraphPath,
   GraphSummary,
   MetadataEntry,
+  MemoryDimension,
+  MemoryProfile,
   NativeModel,
   OptimizationOperation,
   OptimizationPattern,
@@ -28,6 +30,20 @@ const roles: PipelineRole[] = ["embedding", "prefill", "decode"];
 
 /** Keeps stage models independent while saving the complete container. */
 export class PipelineModel implements NativeModel {
+  memoryProfileInputs = (path: GraphPath = []): MemoryDimension[] => {
+    const stage = this.select(path);
+    if (stage.path.length) throw new Error("Choose a pipeline stage root.");
+    return stage.model.memoryProfileInputs();
+  };
+
+  memoryProfile = (
+    dimensions: Record<string, number>,
+    path: GraphPath = [],
+  ): Promise<MemoryProfile> => {
+    const stage = this.select(path);
+    if (stage.path.length) throw new Error("Choose a pipeline stage root.");
+    return stage.model.memoryProfile(dimensions);
+  };
   constructor(
     private readonly data: PipelineData,
     private readonly fileName: string,
