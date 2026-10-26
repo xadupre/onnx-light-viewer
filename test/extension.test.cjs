@@ -2874,7 +2874,12 @@ test("streams local custom-editor files and replacements without reading whole f
 });
 
 test("estimates root and pipeline memory on request and reports errors without invalidating the model", async (t) => {
-  for (const name of ["inference.onnx", "functions.onnx", "tiny.pipe-onnx"]) {
+  for (const name of [
+    "inference.onnx",
+    "nested-if.onnx",
+    "functions.onnx",
+    "tiny.pipe-onnx",
+  ]) {
     const extension = await openExtension(name);
     t.after(() => extension.dispose());
     const native = extension.nativeModels.at(-1);
@@ -2882,6 +2887,14 @@ test("estimates root and pipeline memory on request and reports errors without i
       await extension.receive({
         type: "navigate",
         path: native.graph().localFunctions[0].path,
+      });
+    if (name === "nested-if.onnx")
+      await extension.receive({
+        type: "navigate",
+        path: native
+          .graph()
+          .nodes[0].attributes.find(({ name }) => name === "then_branch")
+          .graphs[0].path,
       });
     await extension.receive({ type: "memory-inputs", requestId: 1 });
     const inputs = extension.messages.at(-1);
@@ -2897,12 +2910,17 @@ test("estimates root and pipeline memory on request and reports errors without i
       path: inputs.path,
     });
     const profile = extension.messages.at(-1);
-    assert.equal(profile.type, "memory-profile");
-    assert.ok(profile.profile.events.length > 0);
-    assert.deepEqual(
-      profile.profile.events.map(({ opType }) => opType),
-      native.graph(false, inputs.path).nodes.map(({ opType }) => opType),
-    );
+    if (name === "functions.onnx") {
+      assert.equal(profile.type, "memory-error");
+      assert.match(profile.error, /does not support local function calls/);
+    } else {
+      assert.equal(profile.type, "memory-profile");
+      assert.ok(profile.profile.events.length > 0);
+      assert.deepEqual(
+        profile.profile.events.map(({ opType }) => opType),
+        native.graph(false, inputs.path).nodes.map(({ opType }) => opType),
+      );
+    }
     await extension.receive({
       type: "memory-profile",
       requestId: 3,

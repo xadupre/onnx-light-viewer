@@ -46,6 +46,7 @@ function memoryTestModel(
     outputType = 1,
     outputDimensions = dimensions,
     opset = 18,
+    functions = [],
   } = {},
 ) {
   const tensor = (type, shape) =>
@@ -76,6 +77,7 @@ function memoryTestModel(
     Buffer.concat([
       varintField(1, 9),
       bytesField(8, varintField(2, opset)),
+      ...functions.map((definition) => bytesField(25, definition)),
       bytesField(
         7,
         Buffer.concat([
@@ -276,6 +278,138 @@ test("memory estimates preserve valid and zero-repeat Tile shapes with unspecifi
   assert.equal((await empty.memoryProfile({})).peakBytes, 40);
 });
 
+test("memory estimates reject function-wrapped Tile before unchecked function inference", async () => {
+  const definition = Buffer.concat([
+    bytesField(1, "Repeat"),
+    bytesField(4, "data"),
+    bytesField(4, "counts"),
+    bytesField(5, "result"),
+    bytesField(
+      7,
+      Buffer.concat([
+        bytesField(1, "data"),
+        bytesField(1, "counts"),
+        bytesField(2, "result"),
+        bytesField(4, "Tile"),
+      ]),
+    ),
+    bytesField(9, varintField(2, 18)),
+    bytesField(10, "memory.test"),
+  ]);
+  for (const extent of [2, 2 ** 32]) {
+    const model = memoryTestModel([extent], {
+      functions: [definition],
+      initializers: [
+        Buffer.concat([
+          varintField(1, 1),
+          varintField(2, 7),
+          bytesField(7, varint(2 ** 32)),
+          bytesField(8, "repeats"),
+        ]),
+      ],
+      nodes: [
+        Buffer.concat([
+          bytesField(1, "x"),
+          bytesField(1, "repeats"),
+          bytesField(2, "y"),
+          bytesField(4, "Repeat"),
+          bytesField(7, "memory.test"),
+        ]),
+      ],
+      outputDimensions: [null],
+    });
+    const original = model.graph();
+    await assert.rejects(
+      model.memoryProfile({}),
+      /does not support local function calls: Repeat/,
+    );
+    assert.deepEqual(model.graph(), original);
+  }
+  const unused = memoryTestModel([2], { functions: [definition] });
+  assert.equal((await unused.memoryProfile({})).peakBytes, 16);
+});
+
+function reshapeMemoryModel(
+  dimensions,
+  target,
+  { allowzero = 0, propagated = false } = {},
+) {
+  const data = Buffer.alloc(target.length * 8);
+  target.forEach((dimension, index) =>
+    data.writeBigInt64LE(BigInt(dimension), index * 8),
+  );
+  const shape = Buffer.concat([
+    varintField(1, target.length),
+    varintField(2, 7),
+    bytesField(8, "shape"),
+    bytesField(9, data),
+  ]);
+  return memoryTestModel(dimensions, {
+    initializers: propagated ? [] : [shape],
+    nodes: [
+      ...(propagated
+        ? [
+            Buffer.concat([
+              bytesField(2, "target"),
+              bytesField(4, "Constant"),
+              bytesField(
+                5,
+                Buffer.concat([
+                  bytesField(1, "value"),
+                  bytesField(5, shape),
+                  varintField(20, 4),
+                ]),
+              ),
+            ]),
+          ]
+        : []),
+      Buffer.concat([
+        bytesField(1, "x"),
+        bytesField(1, propagated ? "target" : "shape"),
+        bytesField(2, "y"),
+        bytesField(4, "Reshape"),
+        bytesField(
+          5,
+          Buffer.concat([
+            bytesField(1, "allowzero"),
+            varintField(3, allowzero),
+            varintField(20, 2),
+          ]),
+        ),
+      ]),
+    ],
+    outputDimensions: target.map(() => null),
+  });
+}
+
+test("memory estimates reject Reshape product overflow before zero and inferred dimensions", async () => {
+  for (const propagated of [false, true])
+    for (const last of [0, -1]) {
+      const model = reshapeMemoryModel([0], [2 ** 32, 2 ** 32, last], {
+        allowzero: 1,
+        propagated,
+      });
+      const original = model.graph();
+      await assert.rejects(model.memoryProfile({}), /too large.*Reshape/);
+      assert.deepEqual(model.graph(), original);
+    }
+  const copied = reshapeMemoryModel([1, 2 ** 32, 0], [2 ** 32, 0, 0]);
+  await assert.rejects(copied.memoryProfile({}), /too large.*Reshape/);
+});
+
+test("memory estimates preserve Reshape copied zeros, literal zeros and inferred dimensions", async () => {
+  for (const [input, target, allowzero, expected] of [
+    [[2, 3], [0, -1], 0, 64],
+    [[0], [0, 2 ** 32, 2 ** 32], 1, 24],
+    [[0], [2, -1], 1, 16],
+  ]) {
+    const model = reshapeMemoryModel(input, target, { allowzero });
+    assert.equal((await model.memoryProfile({})).peakBytes, expected);
+  }
+  const invalid = reshapeMemoryModel([0], [0, -1], { allowzero: 1 });
+  await assert.rejects(invalid.memoryProfile({}), /product of 0.*-1/);
+});
+
 test("memory estimates check initializer sizes and allocation sums before native analysis", async () => {
   const initializer = (name, dimensions) =>
     Buffer.concat([
@@ -347,7 +481,18 @@ test("memory estimates reject unsupported and unresolved intermediate, output an
   await assert.rejects(unresolved.memoryProfile({}), /unresolved.*y/);
 });
 
-function attentionMemoryModel(shape, { linear = false, past = false } = {}) {
+function attentionMemoryModel(
+  shape,
+  {
+    linear = false,
+    past = false,
+    queryHeads = 2,
+    keyValueHeads = 2,
+    keyShape,
+    valueShape,
+    outputDimensions = shape,
+  } = {},
+) {
   const integerAttribute = (name, value) =>
     bytesField(
       5,
@@ -357,34 +502,42 @@ function attentionMemoryModel(shape, { linear = false, past = false } = {}) {
         varintField(20, 2),
       ]),
     );
-  const stateShape = [shape[0], 2, shape[2] / 2, shape[2] / 2];
+  const stateShape = [
+    shape[0],
+    keyValueHeads,
+    shape[2] / queryHeads,
+    (valueShape ?? shape)[2] / keyValueHeads,
+  ];
   return memoryTestModel(shape, {
     opset: linear ? 27 : 23,
     nodes: [
       Buffer.concat([
         bytesField(1, "x"),
-        bytesField(1, "x"),
-        bytesField(1, "x"),
+        bytesField(1, keyShape ? "key" : "x"),
+        bytesField(1, valueShape ? "value" : "x"),
         ...(past ? [bytesField(1, "state")] : []),
         bytesField(2, "y"),
         bytesField(4, linear ? "LinearAttention" : "Attention"),
         ...(linear
           ? [
-              integerAttribute("q_num_heads", 2),
-              integerAttribute("kv_num_heads", 2),
+              integerAttribute("q_num_heads", queryHeads),
+              integerAttribute("kv_num_heads", keyValueHeads),
             ]
           : []),
       ]),
     ],
-    initializers: past
-      ? [
-          Buffer.concat([
-            ...stateShape.map((dimension) => varintField(1, dimension)),
-            varintField(2, 1),
-            bytesField(8, "state"),
-          ]),
-        ]
-      : [],
+    initializers: [
+      ...(past ? [["state", stateShape]] : []),
+      ...(keyShape ? [["key", keyShape]] : []),
+      ...(valueShape ? [["value", valueShape]] : []),
+    ].map(([name, dimensions]) =>
+      Buffer.concat([
+        ...dimensions.map((dimension) => varintField(1, dimension)),
+        varintField(2, 1),
+        bytesField(8, name),
+      ]),
+    ),
+    outputDimensions,
   });
 }
 
@@ -426,6 +579,38 @@ test("memory estimates include LinearAttention scratch with and without past sta
 test("memory estimates reject oversized LinearAttention scratch before estimation", async () => {
   const model = attentionMemoryModel([1, 1, 2 ** 31], { linear: true });
   await assert.rejects(model.memoryProfile({}), /too large.*scratch/);
+});
+
+test("memory estimates check LinearAttention output products with unspecified output shapes", async () => {
+  for (const queryHeads of [2 ** 31, 2 ** 32])
+    for (const past of [false, true]) {
+      const model = attentionMemoryModel([1, 1, queryHeads], {
+        linear: true,
+        past,
+        queryHeads,
+        keyValueHeads: 1,
+        keyShape: [1, 1, 1],
+        valueShape: [1, 1, 2 ** 32],
+        outputDimensions: [null, null, null],
+      });
+      const original = model.graph();
+      await assert.rejects(
+        model.memoryProfile({}),
+        /too large.*LinearAttention/,
+      );
+      assert.deepEqual(model.graph(), original);
+    }
+  const grouped = attentionMemoryModel([1, 2, 8], {
+    linear: true,
+    queryHeads: 4,
+    keyValueHeads: 2,
+    keyShape: [1, 2, 4],
+    valueShape: [1, 2, 6],
+    outputDimensions: [null, null, null],
+  });
+  const profile = await grouped.memoryProfile({});
+  assert.equal(profile.events[0].outputBytes, 96);
+  assert.equal(profile.events[0].scratchBytes, 96);
 });
 
 function varint(value) {

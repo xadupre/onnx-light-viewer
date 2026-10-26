@@ -25,3 +25,7 @@ tensor allocations are supported. Unknown ranks, unsupported inputs/outputs,
 intermediates or initializers, unresolved sizes and unsafe integer sizes report
 errors instead of partial estimates. Sizes are checked before memory analysis.
 A graph without executable nodes has no per-node peak.
+
+Models that call local functions are rejected before shape inference: the pinned
+SDK does not carry the checked inference callbacks into function bodies. Unused
+function definitions do not prevent estimation.

@@ -6,8 +6,10 @@
 #include <onnx_core/compute/compute_context.h>
 #include <onnx_extensions/kernels/kernel_dispatch_table.h>
 #include <onnx_extensions/shapes/dispatch_table.h>
+#include <onnx_extensions/shapes/shapes/nn/shape_nn.h>
 #include <onnx_extensions/shapes/shapes/tensor/shape_tensor.h>
 #include <onnx_proto/onnx_helper.h>
+#include <set>
 #include <stdexcept>
 
 namespace onnx_light_viewer {
@@ -85,9 +87,19 @@ int64_t AllocationBytes(const std::string &name, ol::TensorProto::DataType type,
   return (elements * width + 7) / 8;
 }
 
+int64_t CheckedShapeProduct(int64_t left, int64_t right, const ol::NodeProto &node) {
+  if (left < 0 || right < 0)
+    throw std::runtime_error("Tensor dimensions must be non-negative for " +
+                             std::string(node.op_type()) + ".");
+  if (right && left > std::numeric_limits<int64_t>::max() / right)
+    throw std::runtime_error("Tensor shape is too large for exact memory estimation: " +
+                             std::string(node.op_type()) + " " + std::string(node.output(0)));
+  return left * right;
+}
+
 void ComputeCheckedTileShape(ol::core::shapes::ShapesContext &shapes, const ol::NodeProto &node) {
   // The pinned SDK multiplies concrete Tile dimensions without overflow checks.
-  if (node.input_size() >= 2 && node.output_size() == 1) {
+  if (node.input_size() >= 2 && node.output_size() > 0) {
     const auto &input = shapes.Get(node.input(0)).Shape();
     const auto &counts = shapes.Get(node.input(1));
     if (counts.HasValueAsShape() && counts.ValueAsShape().Rank() == input.Rank()) {
@@ -95,17 +107,94 @@ void ComputeCheckedTileShape(ol::core::shapes::ShapesContext &shapes, const ol::
       for (size_t axis = 0; axis < input.Rank(); ++axis) {
         if (!input[axis].IsInt() || !repeats[axis].IsInt())
           continue;
-        const auto extent = input[axis].AsInt();
-        const auto repeat = repeats[axis].AsInt();
-        if (extent < 0 || repeat < 0)
-          throw std::runtime_error("Tile dimensions and repeat counts must be non-negative.");
-        if (repeat && extent > std::numeric_limits<int64_t>::max() / repeat)
-          throw std::runtime_error("Tensor shape is too large for exact memory estimation: Tile " +
-                                   std::string(node.output(0)));
+        CheckedShapeProduct(input[axis].AsInt(), repeats[axis].AsInt(), node);
       }
     }
   }
   ol::onnx_shapes::shapes::tensor::ComputeShapeTile(shapes, node);
+}
+
+void ComputeCheckedReshapeShape(ol::core::shapes::ShapesContext &shapes,
+                                const ol::NodeProto &node) {
+  if (node.input_size() >= 2 && node.output_size() > 0) {
+    const auto &input = shapes.Get(node.input(0)).Shape();
+    const auto &shape = shapes.Get(node.input(1));
+    if (shape.HasValueAsShape()) {
+      const auto &target = shape.ValueAsShape();
+      const auto allowzero = ol::GetAttributeOr<int64_t>(node, "allowzero", 0);
+      int64_t product = 1;
+      bool infer_dimension = false;
+      for (size_t axis = 0; axis < target.Rank(); ++axis) {
+        if (!target[axis].IsInt())
+          continue;
+        auto extent = target[axis].AsInt();
+        if (extent == -1) {
+          infer_dimension = true;
+          continue;
+        }
+        if (extent == 0 && allowzero == 0) {
+          if (axis >= input.Rank())
+            throw std::runtime_error("Reshape zero dimension is outside the input rank.");
+          if (!input[axis].IsInt())
+            continue;
+          extent = input[axis].AsInt();
+        }
+        // Match the SDK's multiplication order, including prefixes before a zero.
+        product = CheckedShapeProduct(product, extent, node);
+      }
+      if (infer_dimension) {
+        product = 1;
+        for (const auto &dimension : input.Dims())
+          if (dimension.IsInt())
+            product = CheckedShapeProduct(product, dimension.AsInt(), node);
+      }
+    }
+  }
+  ol::onnx_shapes::shapes::tensor::ComputeShapeReshape(shapes, node);
+}
+
+void ComputeCheckedLinearAttentionShape(ol::core::shapes::ShapesContext &shapes,
+                                        const ol::NodeProto &node) {
+  if (node.input_size() < 3 || node.output_size() == 0)
+    throw std::runtime_error("LinearAttention requires query, key, value and an output.");
+  int64_t query_heads = 0, key_value_heads = 0;
+  for (const auto &attribute : node.attribute()) {
+    if (attribute.name() == "q_num_heads")
+      query_heads = attribute.i();
+    else if (attribute.name() == "kv_num_heads")
+      key_value_heads = attribute.i();
+  }
+  const std::string query(node.input(0)), key(node.input(1)), value(node.input(2));
+  const std::string state = node.input_size() > 3 ? std::string(node.input(3)) : "";
+  const auto &value_shape = shapes.Get(value).Shape();
+  if (query_heads > 0 && key_value_heads > 0 && value_shape.Rank() == 3) {
+    if (value_shape[2].IsInt())
+      CheckedShapeProduct(query_heads, value_shape[2].AsInt() / key_value_heads, node);
+    else if (!state.empty() && shapes.Has(state)) {
+      const auto &state_shape = shapes.Get(state).Shape();
+      if (state_shape.Rank() == 4 && state_shape[3].IsInt())
+        CheckedShapeProduct(query_heads, state_shape[3].AsInt(), node);
+    }
+  }
+  ol::onnx_shapes::shapes::nn::ComputeShapeLinearAttention(shapes, node, query.c_str(), key.c_str(),
+                                                           value.c_str(),
+                                                           state.empty() ? nullptr : state.c_str());
+}
+
+void ValidateInferenceGraph(const ol::GraphProto &graph, const std::set<std::string> &functions) {
+  for (const auto &node : graph.node()) {
+    if (functions.contains(ol::core::shapes::ShapesContext::LocalFunctionKey(
+            node.domain(), node.op_type(), node.overload())))
+      // The pinned SDK drops checked inference callbacks when entering a function.
+      throw std::runtime_error("Memory estimation does not support local function calls: " +
+                               std::string(node.op_type()) + ".");
+    for (const auto &attribute : node.attribute()) {
+      if (attribute.has_g())
+        ValidateInferenceGraph(attribute.g(), functions);
+      for (const auto &child : attribute.graphs())
+        ValidateInferenceGraph(child, functions);
+    }
+  }
 }
 
 void ValidateAllocations(const ol::GraphProto &graph,
@@ -180,6 +269,11 @@ public:
   void Execute() override {
     try {
       auto &graph = snapshot_.ref_graph();
+      std::set<std::string> functions;
+      for (const auto &function : snapshot_.functions())
+        functions.insert(ol::core::shapes::ShapesContext::LocalFunctionKey(
+            function.domain(), function.name(), function.overload()));
+      ValidateInferenceGraph(graph, functions);
       if (graph.sparse_initializer_size() || graph.extended_initializer_size())
         throw std::runtime_error("Memory estimation requires dense tensor initializers.");
       for (const auto &tensor : graph.initializer())
@@ -219,6 +313,9 @@ public:
         }
       ol::core::compute::ComputeContext context;
       context.Shapes().SetCustomShapeInferenceFunction("", "Tile", ComputeCheckedTileShape);
+      context.Shapes().SetCustomShapeInferenceFunction("", "Reshape", ComputeCheckedReshapeShape);
+      context.Shapes().SetCustomShapeInferenceFunction("", "LinearAttention",
+                                                       ComputeCheckedLinearAttentionShape);
       // ComputeShapes would clear the hook; the owned shapes context is already fresh.
       context.Shapes().ComputeShapeModel(snapshot_);
       // Native memory arithmetic assumes concrete, bounded allocations.
