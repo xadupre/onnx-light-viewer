@@ -226,7 +226,7 @@ test("opens and transforms the bundled three-stage pipeline through native file 
   assert.deepEqual(restored.metadata(), model.metadata());
 });
 
-test("pipeline statistics avoid repeated inference and report unavailable projections", () => {
+test("pipeline statistics use summaries without projecting stages or repeating inference", () => {
   const summaryCalls = [];
   const graphCalls = [];
   const model = {
@@ -240,6 +240,12 @@ test("pipeline statistics avoid repeated inference and report unavailable projec
         tensors: [],
         opsets: [],
         nodeCount: 0,
+        functionCount: 0,
+        denseInitializerCount: 0,
+        sparseInitializerCount: 0,
+        encodedInitializerCount: 0,
+        operatorTypes: [],
+        statisticsAvailable: true,
       };
     },
     graph(inferShapes) {
@@ -264,7 +270,7 @@ test("pipeline statistics avoid repeated inference and report unavailable projec
   );
   pipeline.summary(true);
   assert.deepEqual(summaryCalls, [true]);
-  assert.deepEqual(graphCalls, [false]);
+  assert.deepEqual(graphCalls, []);
 
   const unavailable = new PipelineModel(
     {
@@ -273,8 +279,11 @@ test("pipeline statistics avoid repeated inference and report unavailable projec
       models: {
         embedding: {
           ...model,
-          graph() {
-            throw new Error("Projection unavailable.");
+          summary(inferShapes) {
+            return {
+              ...model.summary(inferShapes),
+              statisticsAvailable: false,
+            };
           },
         },
       },
@@ -426,16 +435,29 @@ test("projects all declared opsets, including unused domains and function-specif
   );
 });
 
-test("projects stage summaries without inspecting stage operators", () => {
+test("projects stage statistics without inspecting operator attributes or schemas", () => {
   for (const bytes of [
     modelBytes("relu.onnx"),
     modelBytes("parameters.onnx"),
     encodedModel(),
     encodedModel({ structured: true, logical: false }),
+    modelBytes("functions.onnx"),
   ]) {
     const model = loadModel(bytes, "stage.onnx");
     const graph = model.graph();
     const ports = new Set([...graph.inputs, ...graph.outputs]);
+    const operators = new Map();
+    for (const node of graph.nodes) {
+      const key = JSON.stringify([node.domain, node.opType]);
+      const operator = operators.get(key);
+      if (operator) operator.count++;
+      else
+        operators.set(key, {
+          domain: node.domain,
+          opType: node.opType,
+          count: 1,
+        });
+    }
     assert.deepEqual(model.summary(), {
       name: graph.name,
       opsets: graph.opsets,
@@ -443,6 +465,16 @@ test("projects stage summaries without inspecting stage operators", () => {
       outputs: graph.outputs,
       initializerCount: graph.initializerCount,
       nodeCount: graph.nodes.length,
+      functionCount: graph.localFunctions.length,
+      denseInitializerCount: graph.initializers.length,
+      sparseInitializerCount: graph.sparseInitializers.length,
+      encodedInitializerCount: graph.encodedInitializers.length,
+      operatorTypes: [...operators.values()].sort(
+        (left, right) =>
+          left.domain.localeCompare(right.domain) ||
+          left.opType.localeCompare(right.opType),
+      ),
+      statisticsAvailable: true,
       tensors: graph.tensors.filter(({ name }) => ports.has(name)),
     });
   }

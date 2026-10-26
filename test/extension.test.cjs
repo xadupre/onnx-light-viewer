@@ -3521,6 +3521,17 @@ test("navigates retained subgraphs, scopes refreshes and reports invalid paths w
   const reads = extension.reads.length;
   await extension.receive({ type: "navigate", path });
   const child = extension.messages.at(-1).graph;
+  const statistics = extension.messages.at(-1).statistics;
+  assert.equal(statistics.nodeCount, root.nodes.length);
+  assert.equal(statistics.nodes, undefined);
+  assert.equal(statistics.initializers, undefined);
+  assert.equal(
+    statistics.operatorTypes.reduce(
+      (count, operator) => count + operator.count,
+      0,
+    ),
+    root.nodes.length,
+  );
   assert.equal(child.breadcrumbs.length, 2);
   assert.equal(child.nodes.length, 2);
   await extension.receive({ type: "metadata" });

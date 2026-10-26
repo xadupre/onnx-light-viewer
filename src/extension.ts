@@ -553,7 +553,9 @@ async function configurePanel(
     const current = requireModel();
     const statistics =
       current.graph.breadcrumbs.length > 1
-        ? (current.native?.graph() ?? current.graph)
+        ? ((current.graph.pipeline
+            ? current.native?.graph()
+            : current.native?.summary()) ?? current.graph)
         : undefined;
     void sendStatus();
     return postMessage({

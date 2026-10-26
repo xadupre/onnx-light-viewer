@@ -161,7 +161,7 @@ export interface Graph {
   tensors: TensorInformation[];
 }
 
-/** Root ports and counts without projecting operators, attributes or schemas. */
+/** Root ports and counts without projecting individual operators, attributes or schemas. */
 export type GraphSummary = Pick<
   Graph,
   "name" | "inputs" | "outputs" | "initializerCount" | "tensors" | "opsets"

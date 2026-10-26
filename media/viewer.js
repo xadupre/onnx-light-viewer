@@ -379,29 +379,35 @@ function renderStatistics(graph, files) {
   const summary = byId("statistics-summary");
   summary.replaceChildren();
   const entries = [
-    ["Nodes", total("nodeCount", graph.nodes.length)],
+    ["Nodes", total("nodeCount", graph.nodeCount ?? graph.nodes.length)],
     ["Initializers", graph.initializerCount],
     [
       "Dense initializers",
-      detailedTotal("denseInitializerCount", graph.initializers?.length ?? 0),
+      detailedTotal(
+        "denseInitializerCount",
+        graph.denseInitializerCount ?? graph.initializers?.length ?? 0,
+      ),
     ],
     [
       "Sparse initializers",
       detailedTotal(
         "sparseInitializerCount",
-        graph.sparseInitializers?.length ?? 0,
+        graph.sparseInitializerCount ?? graph.sparseInitializers?.length ?? 0,
       ),
     ],
     [
       "Encoded initializers",
       detailedTotal(
         "encodedInitializerCount",
-        graph.encodedInitializers?.length ?? 0,
+        graph.encodedInitializerCount ?? graph.encodedInitializers?.length ?? 0,
       ),
     ],
     [
       "Local functions",
-      detailedTotal("functionCount", graph.localFunctions?.length ?? 0),
+      detailedTotal(
+        "functionCount",
+        graph.functionCount ?? graph.localFunctions?.length ?? 0,
+      ),
     ],
     ["Inputs", graph.inputs.length],
     ["Outputs", graph.outputs.length],
@@ -445,6 +451,9 @@ function renderStatistics(graph, files) {
     for (const stage of availableStages)
       for (const operator of stage.operatorTypes ?? [])
         addOperator(operator.domain, operator.opType, operator.count);
+  } else if (graph.operatorTypes) {
+    for (const operator of graph.operatorTypes)
+      addOperator(operator.domain, operator.opType, operator.count);
   } else {
     for (const node of graph.nodes) addOperator(node.domain, node.opType);
   }
@@ -463,19 +472,16 @@ function renderStatistics(graph, files) {
       count.toLocaleString(),
     ]),
   );
-  if (!operators.length) {
+  const partial = availableStages.length < stages.length;
+  if (!operators.length || partial) {
     const row = byId("statistics-operators").createTBody().insertRow();
     const cell = row.insertCell();
     cell.colSpan = 3;
-    cell.textContent = availableStages.length
-      ? "No operators."
-      : "Operator statistics unavailable.";
-  } else if (availableStages.length < stages.length) {
-    const row = byId("statistics-operators").createTBody().insertRow();
-    const cell = row.insertCell();
-    cell.colSpan = 3;
-    cell.textContent =
-      "Partial operator statistics: some stages are unavailable.";
+    cell.textContent = partial
+      ? availableStages.length
+        ? "Partial operator statistics: some stages are unavailable."
+        : "Operator statistics unavailable."
+      : "No operators.";
   }
 
   const fileRows = (files ?? []).map(({ name, size, external }) => [

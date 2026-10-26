@@ -169,58 +169,10 @@ export class PipelineModel implements NativeModel {
         })),
       };
     }
-    const stages = this.stages().map(([role, model]) => {
-      const graph = model.summary(inferShapes);
-      let details: Pick<
-        GraphSummary,
-        | "functionCount"
-        | "denseInitializerCount"
-        | "sparseInitializerCount"
-        | "encodedInitializerCount"
-        | "operatorTypes"
-        | "statisticsAvailable"
-      > = {};
-      const operators = new Map<
-        string,
-        { domain: string; opType: string; count: number }
-      >();
-      try {
-        const snapshot = model.graph(false);
-        for (const node of snapshot.nodes) {
-          const key = JSON.stringify([node.domain, node.opType]);
-          const current = operators.get(key);
-          if (current) current.count++;
-          else
-            operators.set(key, {
-              domain: node.domain,
-              opType: node.opType,
-              count: 1,
-            });
-        }
-        details = {
-          functionCount: snapshot.localFunctions.length,
-          denseInitializerCount: snapshot.initializers.length,
-          sparseInitializerCount: snapshot.sparseInitializers.length,
-          encodedInitializerCount: snapshot.encodedInitializers.length,
-          statisticsAvailable: true,
-          operatorTypes: [...operators.values()].sort(
-            (left, right) =>
-              right.count - left.count ||
-              left.domain.localeCompare(right.domain) ||
-              left.opType.localeCompare(right.opType),
-          ),
-        };
-      } catch {
-        details = { operatorTypes: [], statisticsAvailable: false };
-      }
-      return {
-        role,
-        graph: {
-          ...graph,
-          ...details,
-        },
-      };
-    });
+    const stages = this.stages().map(([role, model]) => ({
+      role,
+      graph: model.summary(inferShapes),
+    }));
     const port = (role: string, direction: string, value: string) =>
       `${role}:${direction}:${value}`;
     const opsets = new Map<string, Graph["opsets"][number]>();

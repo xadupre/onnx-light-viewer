@@ -318,6 +318,81 @@ test("statistics identify unavailable pipeline projections instead of showing ze
   );
 });
 
+test("statistics accept compact model summaries while viewing a function", (t) => {
+  const { document, window } = openViewer(t);
+  const model = loadModel(
+    readFileSync(require.resolve("./models/functions.onnx")),
+    "functions.onnx",
+  );
+  const root = model.graph();
+  const graph = model.graph(false, root.localFunctions[0].path);
+  const statistics = model.summary();
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: { type: "graph", graph, statistics, file: { files: [] } },
+    }),
+  );
+  const summary = new Map(
+    [...document.querySelectorAll("#statistics-summary dt")].map((term) => [
+      term.textContent,
+      term.nextElementSibling.textContent,
+    ]),
+  );
+  assert.equal(summary.get("Nodes"), String(root.nodes.length));
+  assert.equal(
+    summary.get("Local functions"),
+    String(root.localFunctions.length),
+  );
+  assert.equal(
+    summary.get("Dense initializers"),
+    String(root.initializers.length),
+  );
+  assert.equal(
+    [
+      ...document.querySelectorAll("#statistics-operators tbody td:last-child"),
+    ].reduce((sum, cell) => sum + Number(cell.textContent), 0),
+    root.nodes.length,
+  );
+});
+
+test("statistics distinguish empty operator distributions from partial and unavailable data", (t) => {
+  const { document, window } = openViewer(t);
+  const empty = { ...demoGraph, nodes: [] };
+  const pipeline = loadModel(
+    readFileSync(require.resolve("./models/tiny.pipe-onnx")),
+    "tiny.pipe-onnx",
+  ).graph();
+  const partial = structuredClone(pipeline);
+  for (const [index, node] of partial.nodes.entries()) {
+    node.pipelineModel.statisticsAvailable = index === 0;
+    node.pipelineModel.operatorTypes = [];
+    if (index === 0) node.pipelineModel.nodeCount = 0;
+  }
+  const unavailable = structuredClone(partial);
+  unavailable.nodes[0].pipelineModel.statisticsAvailable = false;
+  const emptyPipeline = structuredClone(partial);
+  for (const node of emptyPipeline.nodes) {
+    node.pipelineModel.statisticsAvailable = true;
+    node.pipelineModel.nodeCount = 0;
+  }
+  for (const [graph, message] of [
+    [empty, "No operators."],
+    [emptyPipeline, "No operators."],
+    [partial, "Partial operator statistics: some stages are unavailable."],
+    [unavailable, "Operator statistics unavailable."],
+  ]) {
+    window.dispatchEvent(
+      new window.MessageEvent("message", {
+        data: { type: "graph", graph, file: { files: [] } },
+      }),
+    );
+    assert.equal(
+      document.querySelector("#statistics-operators tbody td").textContent,
+      message,
+    );
+  }
+});
+
 test("pipeline navigation enables stage fusions and disables unsupported encrypted saves", (t) => {
   const { document, window, messages } = openViewer(t);
   const send = (graph, file) =>
