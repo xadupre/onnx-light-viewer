@@ -2924,17 +2924,12 @@ test("estimates root and pipeline memory on request and reports errors without i
       path: inputs.path,
     });
     const profile = extension.messages.at(-1);
-    if (name === "functions.onnx") {
-      assert.equal(profile.type, "memory-error");
-      assert.match(profile.error, /does not support local function calls/);
-    } else {
-      assert.equal(profile.type, "memory-profile");
-      assert.ok(profile.profile.events.length > 0);
-      assert.deepEqual(
-        profile.profile.events.map(({ opType }) => opType),
-        native.graph(false, inputs.path).nodes.map(({ opType }) => opType),
-      );
-    }
+    assert.equal(profile.type, "memory-profile");
+    assert.ok(profile.profile.events.length > 0);
+    assert.deepEqual(
+      profile.profile.events.map(({ opType }) => opType),
+      native.graph(false, inputs.path).nodes.map(({ opType }) => opType),
+    );
     await extension.receive({
       type: "memory-profile",
       requestId: 3,
