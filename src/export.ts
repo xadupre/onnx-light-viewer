@@ -1,7 +1,8 @@
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { lstat, mkdir, mkdtemp, readdir, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { stripVTControlCharacters } from "node:util";
 import type { Memento } from "vscode";
 
@@ -260,6 +261,33 @@ export async function prepareExportPlan(
   };
 }
 
+async function terminateExport(pid: number): Promise<void> {
+  if (process.platform === "win32") {
+    await new Promise<void>((resolve, reject) => {
+      execFile("taskkill", ["/PID", String(pid), "/T", "/F"], (error) => {
+        if (error) reject(error);
+        else resolve();
+      });
+    });
+    return;
+  }
+  const killGroup = (signal: NodeJS.Signals) => {
+    try {
+      process.kill(-pid, signal);
+    } catch (error) {
+      if (!(
+        error instanceof Error &&
+        "code" in error &&
+        error.code === "ESRCH"
+      ))
+        throw error;
+    }
+  };
+  killGroup("SIGTERM");
+  await delay(2000);
+  killGroup("SIGKILL");
+}
+
 /** Runs the selected CLI with bounded, throttled output and explicit cancellation. */
 export async function runExport(
   plan: ExportPlan,
@@ -288,11 +316,11 @@ export async function runExport(
       cwd: homedir(),
       env: { ...process.env, ...exportEnvironment },
       stdio: ["ignore", "pipe", "pipe"],
-      signal,
+      detached: process.platform !== "win32",
     });
     let output = "";
     let timer: ReturnType<typeof setTimeout> | undefined;
-    let forceKill: ReturnType<typeof setTimeout> | undefined;
+    let termination: Promise<void> | undefined;
     let finished = false;
     const readableOutput = () =>
       stripVTControlCharacters(output).replace(/\r\n?/g, "\n");
@@ -303,11 +331,20 @@ export async function runExport(
     const finish = (error?: Error) => {
       if (finished) return;
       finished = true;
+      signal.removeEventListener("abort", abort);
       if (timer) clearTimeout(timer);
-      if (forceKill) clearTimeout(forceKill);
       flush();
-      if (error) reject(error);
-      else resolve();
+      const settle = () => {
+        if (error) reject(error);
+        else resolve();
+      };
+      if (termination) void termination.then(settle, reject);
+      else settle();
+    };
+    const abort = () => {
+      if (termination || child.pid === undefined) return;
+      termination = terminateExport(child.pid);
+      void termination.catch(finish);
     };
     for (const stream of [child.stdout, child.stderr]) {
       stream.setEncoding("utf8");
@@ -316,11 +353,7 @@ export async function runExport(
         if (!timer) timer = setTimeout(flush, 100);
       });
     }
-    child.once("error", (error) => {
-      if (signal.aborted && "code" in error && error.code === "ABORT_ERR")
-        forceKill = setTimeout(() => child.kill("SIGKILL"), 2000);
-      else finish(error);
-    });
+    child.once("error", finish);
     child.once("close", (code, termination) =>
       finish(
         signal.aborted
@@ -332,6 +365,8 @@ export async function runExport(
               ),
       ),
     );
+    signal.addEventListener("abort", abort, { once: true });
+    if (signal.aborted) abort();
   });
   signal.throwIfAborted();
   const models: string[] = [];

@@ -491,3 +491,69 @@ test("cancelling terminates the actual exporter before returning and keeps its r
   assert.throws(() => process.kill(pid, 0), { code: "ESRCH" });
   assert.match(await readFile(plan.script, "utf8"), /subprocess.run/);
 });
+
+for (const inheritedOutput of [true, false]) {
+  test(
+    `cancelling stops exporter workers with ${inheritedOutput ? "inherited" : "closed"} output before returning`,
+    { timeout: 10000 },
+    async (t) => {
+      const root = await directory(t);
+      const heartbeat = path.join(root, "worker-heartbeat");
+      const plan = exportPlan(options(path.join(root, "cancelled")), python);
+      const worker = `
+import pathlib
+import signal
+import sys
+import time
+if sys.platform != "win32":
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+for index in range(600):
+    pathlib.Path(sys.argv[1]).write_text(str(index))
+    time.sleep(0.05)
+`;
+      plan.args = [
+        "-u",
+        "-c",
+        `
+import os
+import pathlib
+import subprocess
+import sys
+import time
+output = ${inheritedOutput ? "None" : "subprocess.DEVNULL"}
+worker = subprocess.Popen([sys.executable, "-u", "-c", sys.argv[1], sys.argv[2]], stdout=output, stderr=output)
+while not pathlib.Path(sys.argv[2]).exists():
+    time.sleep(0.01)
+print(os.getpid(), worker.pid, flush=True)
+time.sleep(30)
+`,
+        worker,
+        heartbeat,
+      ];
+      const controller = new AbortController();
+      let pids = [];
+      t.after(() => {
+        for (const pid of pids) {
+          try {
+            process.kill(pid, "SIGKILL");
+          } catch (error) {
+            if (error.code !== "ESRCH") throw error;
+          }
+        }
+      });
+      await assert.rejects(
+        runExport(plan, controller.signal, (output) => {
+          if (controller.signal.aborted) return;
+          pids = output.trim().split(/\s+/).map(Number);
+          controller.abort();
+        }),
+        { name: "AbortError" },
+      );
+      assert.equal(pids.length, 2);
+      assert.ok(pids.every((pid) => Number.isSafeInteger(pid) && pid > 0));
+      const stopped = await readFile(heartbeat, "utf8");
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      assert.equal(await readFile(heartbeat, "utf8"), stopped);
+    },
+  );
+}
