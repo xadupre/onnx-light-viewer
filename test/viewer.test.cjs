@@ -238,6 +238,23 @@ test("statistics tab shows model counts, operator distribution and file sizes", 
   assert.equal(document.getElementById("statistics-view").hidden, true);
 });
 
+test("statistics retain missing external files with an explicit literal size error", (t) => {
+  const viewer = openViewer(t);
+  viewer.load(demoGraph);
+  showStatistics(viewer, demoGraph, [
+    {
+      name: "weights/<missing>.bin",
+      external: true,
+      error: "File not found <img src=x>",
+    },
+  ]);
+  const table = viewer.document.getElementById("statistics-files");
+  assert.match(table.textContent, /External data/);
+  assert.match(table.textContent, /weights\/<missing>\.bin/);
+  assert.match(table.textContent, /Unavailable: File not found <img src=x>/);
+  assert.equal(table.querySelector("img"), null);
+});
+
 test("statistics tab aggregates operator and node counts for each pipeline stage", (t) => {
   const viewer = openViewer(t);
   const { document, window } = viewer;

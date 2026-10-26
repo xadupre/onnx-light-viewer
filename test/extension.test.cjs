@@ -155,6 +155,15 @@ async function openExtension(
     workspace: {
       isTrusted: true,
       fs: {
+        stat: async (uri) => {
+          const details = await stat(uri.path);
+          return {
+            type: details.isDirectory() ? 2 : 1,
+            ctime: details.ctimeMs,
+            mtime: details.mtimeMs,
+            size: details.size,
+          };
+        },
         readDirectory: async (directory) =>
           (await readdir(directory.path, { withFileTypes: true })).map(
             (entry) => [entry.name, entry.isDirectory() ? 2 : 1],
@@ -2868,6 +2877,84 @@ test("streams local custom-editor files and replacements without reading whole f
   await extension.open("initializers.onnx");
   assert.equal(extension.messages.at(-1).type, "graph");
   assert.deepEqual(extension.reads, []);
+});
+
+test("statistics list external dense and sparse files with current physical sizes", async (t) => {
+  const directory = await mkdtemp(
+    path.join(tmpdir(), "onnx-light-statistics-files-"),
+  );
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const source = path.join(directory, "source.onnx");
+  await copyFile(require.resolve("./models/initializers.onnx"), source);
+  await mkdir(path.join(directory, "weights"));
+  for (const local of [true, false]) {
+    const extension = await openExtension(undefined, undefined, local);
+    t.after(() => extension.dispose());
+    await extension.openFile(source);
+    const reads = [...extension.reads];
+    const weights = [
+      ["weights/decoder.bin", 4096],
+      ["weights/indices.bin", 8],
+      ["weights/values.bin", 1536],
+    ];
+    for (const [name, size] of weights)
+      await writeFile(path.join(directory, name), Buffer.alloc(size));
+    await extension.receive({ type: "get-statistics", requestId: 1 });
+    assert.deepEqual(extension.messages.at(-1).files, [
+      { name: "source.onnx", external: false, size: (await stat(source)).size },
+      ...weights.map(([name, size]) => ({ name, external: true, size })),
+    ]);
+    await writeFile(
+      path.join(directory, "weights/values.bin"),
+      Buffer.alloc(3072),
+    );
+    await rm(path.join(directory, "weights/indices.bin"));
+    await extension.receive({ type: "get-statistics", requestId: 2 });
+    const files = extension.messages.at(-1).files;
+    assert.equal(
+      files.find(({ name }) => name === "weights/values.bin").size,
+      3072,
+    );
+    const missing = files.find(({ name }) => name === "weights/indices.bin");
+    assert.equal(missing.size, undefined);
+    assert.match(missing.error, /ENOENT|not found/i);
+    assert.deepEqual(extension.errors, []);
+    assert.deepEqual(extension.reads, reads);
+  }
+});
+
+test("statistics rediscover external file references after native recovery", async (t) => {
+  const directory = await mkdtemp(
+    path.join(tmpdir(), "onnx-light-statistics-recovery-"),
+  );
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const source = path.join(directory, "source.onnx");
+  await copyFile(require.resolve("./models/invalid-graph.onnx"), source);
+  const extension = await openExtension(undefined, undefined, true);
+  t.after(() => extension.dispose());
+  await extension.openFile(source);
+  await extension.receive({ type: "metadata" });
+  assert.equal(extension.messages.at(-1).type, "metadata-error");
+  await copyFile(require.resolve("./models/initializers.onnx"), source);
+  await mkdir(path.join(directory, "weights"));
+  await writeFile(
+    path.join(directory, "weights/decoder.bin"),
+    Buffer.alloc(2048),
+  );
+  await extension.receive({ type: "get-statistics", requestId: 1 });
+  const result = extension.messages.at(-1);
+  assert.equal(result.type, "statistics-info");
+  assert.deepEqual(
+    result.files.map(({ name }) => name),
+    [
+      "source.onnx",
+      "weights/decoder.bin",
+      "weights/indices.bin",
+      "weights/values.bin",
+    ],
+  );
+  assert.equal(result.files[1].size, 2048);
+  assert.match(result.files[2].error, /ENOENT|not found/i);
 });
 
 test("statistics recover complete model totals on demand after nested refresh failures", async (t) => {
