@@ -1,9 +1,11 @@
-function createMemoryPanel({ byId, postMessage, formatFileSize }) {
+function createMemoryPanel({ byId, postMessage, formatFileSize, selectNode }) {
   let hasModel = false;
   let requestId = 0;
   let path;
   let configured = false;
   let profile;
+  let peaks = [];
+  let peakIndices = new Set();
   let page = 0;
   const pageSize = 100;
   const view = byId("memory-view");
@@ -36,7 +38,8 @@ function createMemoryPanel({ byId, postMessage, formatFileSize }) {
   }
 
   function table() {
-    const events = profile.events;
+    const peaksOnly = byId("memory-peaks-only").checked;
+    const events = peaksOnly ? peaks : profile.events;
     const start = page * pageSize;
     const body = byId("memory-events");
     body.replaceChildren();
@@ -49,18 +52,27 @@ function createMemoryPanel({ byId, postMessage, formatFileSize }) {
         formatFileSize(event.existingBytes),
         formatFileSize(event.outputBytes),
         formatFileSize(event.scratchBytes),
-        formatFileSize(event.deviceBytes),
+        `${formatFileSize(event.deviceBytes)}${peakIndices.has(event.index) ? " (local peak)" : ""}`,
       ].entries()) {
         const cell = document.createElement(index === 0 ? "th" : "td");
         if (index === 0) cell.scope = "row";
-        cell.textContent = value;
+        if (index === 1) {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.textContent = value;
+          button.title = "Show this node in Model";
+          button.addEventListener("click", () => selectNode(path, event.index));
+          cell.append(button);
+        } else cell.textContent = value;
         row.append(cell);
       }
       body.append(row);
     }
     byId("memory-range").textContent = events.length
       ? `Events ${start + 1}–${Math.min(start + pageSize, events.length)} of ${events.length.toLocaleString()}`
-      : "No executable nodes; no per-node peak is available.";
+      : peaksOnly
+        ? "No local peaks."
+        : "No executable nodes; no per-node peak is available.";
     byId("memory-previous").disabled = page === 0;
     byId("memory-next").disabled = start + pageSize >= events.length;
   }
@@ -110,6 +122,10 @@ function createMemoryPanel({ byId, postMessage, formatFileSize }) {
     results.hidden = true;
     status.textContent =
       "Dimensions changed. Estimate again to update the profile.";
+  });
+  byId("memory-peaks-only").addEventListener("change", () => {
+    page = 0;
+    table();
   });
   byId("memory-stage").addEventListener("change", () => {
     path = JSON.parse(byId("memory-stage").value);
@@ -179,6 +195,26 @@ function createMemoryPanel({ byId, postMessage, formatFileSize }) {
         "Set dynamic dimensions, then choose Estimate memory.";
     } else {
       profile = message.profile;
+      peaks = [];
+      for (let start = 0; start < profile.events.length;) {
+        let end = start;
+        const bytes = profile.events[start].deviceBytes;
+        while (
+          end + 1 < profile.events.length &&
+          profile.events[end + 1].deviceBytes === bytes
+        )
+          end++;
+        if (
+          (start === 0 || bytes > profile.events[start - 1].deviceBytes) &&
+          (end === profile.events.length - 1 ||
+            bytes > profile.events[end + 1].deviceBytes)
+        )
+          peaks.push(profile.events[start]);
+        start = end + 1;
+      }
+      peakIndices = new Set(peaks.map((event) => event.index));
+      byId("memory-peaks-count").textContent =
+        `${peaks.length.toLocaleString()} local peak${peaks.length === 1 ? "" : "s"}. Select a node to show it in Model.`;
       page = 0;
       byId("memory-peak").textContent =
         profile.peakBytes === null

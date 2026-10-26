@@ -13,6 +13,12 @@ running the model or changing its retained shapes.
    output allocations, scratch estimates and their total. **Previous** / **Next**
    exposes every event, with 100 rows per page.
 
+Choose **Local peaks only** to list memory maxima, then click a node name to open
+**Model**, select the node and center it at readable zoom. Navigation opens the
+estimated root graph or pipeline stage, even if another graph was displayed.
+A flat peak is listed once, at its first event; endpoints are compared with their
+available neighbor. A constant or single-node trace has one peak.
+
 The native onnx-light analysis runs on an independent snapshot in a background
 worker. Lifetime and potential in-place reuse decisions affect the estimate;
 model edits invalidate the displayed result. Reading dimensions and estimating

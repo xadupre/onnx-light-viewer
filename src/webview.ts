@@ -335,6 +335,8 @@ export function webviewHtml(
           <path id="memory-curve"></path>
         </svg>
         <h3>Estimated execution events</h3>
+        <p id="memory-peaks-count"></p>
+        <label><input id="memory-peaks-only" type="checkbox"> Local peaks only</label>
         <div class="memory-table"><table><thead><tr><th scope="col">Event</th><th scope="col">Node</th><th scope="col">Operator</th><th scope="col">Already allocated</th><th scope="col">New outputs</th><th scope="col">Scratch</th><th scope="col">Device memory</th></tr></thead><tbody id="memory-events"></tbody></table></div>
         <nav aria-label="Memory events"><button id="memory-previous" type="button" disabled>Previous</button><span id="memory-range" role="status"></span><button id="memory-next" type="button" disabled>Next</button></nav>
       </div>

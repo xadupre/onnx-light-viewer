@@ -99,6 +99,14 @@ const memoryPanel = createMemoryPanel({
   byId,
   postMessage: (message) => vscode.postMessage(message),
   formatFileSize,
+  selectNode: (path, index) => {
+    if (replacementPending || svg.getAttribute("aria-busy") === "true") return;
+    showTab("model", true);
+    const currentPath = displayedGraph.breadcrumbs?.at(-1)?.path ?? [];
+    if (JSON.stringify(currentPath) === JSON.stringify(path ?? []))
+      focusNodes([index]);
+    else navigate(path ?? [], index);
+  },
 });
 const filePanels = createFilePanels({
   byId,
@@ -1425,12 +1433,15 @@ function findNode(event) {
   selectSearchMatch(matches[index], index, matches.length);
 }
 
-function navigate(path) {
+function navigate(path, nodeIndex) {
   endGesture();
   byId("navigation-status").textContent = "Opening graph…";
   svg.setAttribute("aria-busy", "true");
   fit();
-  requestAction("navigate", "Navigate graph", { path });
+  requestAction("navigate", "Navigate graph", {
+    path,
+    ...(nodeIndex === undefined ? {} : { nodeIndex }),
+  });
 }
 
 function render(graph, metadata) {
