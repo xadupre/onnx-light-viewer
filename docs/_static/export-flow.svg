@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 170" role="img" aria-labelledby="title description">
+  <title id="title">ONNX conversion and inspection</title>
+  <desc id="description">The Convert panel starts an installed Python CLI. It writes a model and weights to the user's output folder, alongside a reproduction script. The viewer then opens the model without executing it.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/>
+    </marker>
+  </defs>
+  <rect width="760" height="170" rx="12" fill="#f8fafc"/>
+  <g fill="#ffffff" stroke="#475569" stroke-width="1.5">
+    <rect x="16" y="50" width="150" height="76" rx="8"/>
+    <rect x="208" y="50" width="154" height="76" rx="8"/>
+    <rect x="404" y="50" width="150" height="76" rx="8"/>
+    <rect x="596" y="50" width="148" height="76" rx="8"/>
+  </g>
+  <g stroke="#475569" stroke-width="1.5" marker-end="url(#arrow)">
+    <path d="M 167 88 H 202"/>
+    <path d="M 363 88 H 398"/>
+    <path d="M 555 88 H 590"/>
+  </g>
+  <g font-family="sans-serif" text-anchor="middle" fill="#0f172a">
+    <g font-size="15" font-weight="bold">
+      <text x="91" y="78">Convert panel</text>
+      <text x="285" y="78">Python process</text>
+      <text x="479" y="78">Chosen folder</text>
+      <text x="670" y="78">Inspect model</text>
+    </g>
+    <g font-size="12">
+      <text x="91" y="101">Options + command</text>
+      <text x="285" y="101">Installed exporter CLI</text>
+      <text x="479" y="100">Model + weights</text>
+      <text x="479" y="117">export_model.py</text>
+      <text x="670" y="101">No graph execution</text>
+      <text x="185" y="35">start</text>
+      <text x="383" y="35">save</text>
+      <text x="575" y="35">open</text>
+      <text x="285" y="151">Live output and cancellation</text>
+    </g>
+  </g>
+</svg>

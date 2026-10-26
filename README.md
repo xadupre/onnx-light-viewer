@@ -16,6 +16,9 @@ files.
 
 - Open local ONNX files, download and cache public Hugging Face models, or browse
   bundled onnx-light backend test graphs.
+- Use **Convert** to run installed mbext, modelbuilder or Mobius CLIs in a trusted
+  workspace, with live output, a chosen output directory, a reproduction script
+  and automatic model opening. See [exporting models](docs/features/exporting_models.rst).
 - Search nodes and operators with live suggestions; zoom, pan, select and move
   nodes, including in large graphs.
 - Navigate nested subgraphs and model-local function definitions with breadcrumbs.

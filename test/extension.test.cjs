@@ -52,6 +52,8 @@ async function openExtension(
   const receivers = new Set();
   const disposals = new Set();
   const pendingReads = new Map();
+  let webviewPanelOptions;
+  let customEditorOptions;
   const receive = (message) =>
     Promise.all([...receivers].map((callback) => callback(message)));
   let selection;
@@ -64,6 +66,7 @@ async function openExtension(
   let modelSource = "local";
   let repositoryFiles;
   let repositoryFileSelection;
+  let exportedFileSelection;
   let passwordValues = [];
   let saveDestination;
   let failSaveWrite = false;
@@ -71,6 +74,7 @@ async function openExtension(
   let saveDialogGate;
   let saveWriteGate;
   let historyUpdateGate;
+  let errorMessageGate;
   const listedRepositories = [];
   const hubSearches = [];
   const hubSearchGates = [];
@@ -201,9 +205,13 @@ async function openExtension(
       },
     },
     window: {
-      createWebviewPanel: () => panel,
-      registerCustomEditorProvider: (_viewType, provider) => {
+      createWebviewPanel: (_viewType, _title, _column, options) => {
+        webviewPanelOptions = options;
+        return panel;
+      },
+      registerCustomEditorProvider: (_viewType, provider, options) => {
         editor = provider;
+        customEditorOptions = options;
         return disposable();
       },
       showOpenDialog: async () => selection,
@@ -236,6 +244,8 @@ async function openExtension(
           return items.find(({ id }) => id === modelSource);
         if (options.title === "Choose an ONNX file")
           return items.find(({ label }) => label === repositoryFileSelection);
+        if (options.title === "Choose exported ONNX model")
+          return items.find(({ label }) => label === exportedFileSelection);
         return backendSelection === undefined
           ? undefined
           : {
@@ -244,7 +254,15 @@ async function openExtension(
                 items.find((item) => item.label === backendSelection)?.id ?? -1,
             };
       },
-      showErrorMessage: async (message) => errors.push(message),
+      showErrorMessage: async (message) => {
+        errors.push(message);
+        const gate = errorMessageGate;
+        errorMessageGate = undefined;
+        if (gate) {
+          gate.arrived();
+          await gate.wait;
+        }
+      },
     },
   };
   const filename = path.join(root, "dist", "extension.js");
@@ -340,8 +358,13 @@ async function openExtension(
     logViews,
     events,
     preferences,
+    webviewPanelOptions,
+    customEditorOptions,
     setTrusted: (trusted) => {
       vscode.workspace.isTrusted = trusted;
+    },
+    selectExportedFile: (name) => {
+      exportedFileSelection = name;
     },
     pauseNextHistoryUpdate: () => {
       let release, arrived;
@@ -353,6 +376,17 @@ async function openExtension(
       });
       historyUpdateGate = { wait, arrived };
       return { started, release };
+    },
+    pauseNextErrorMessage: () => {
+      let release, arrived;
+      const wait = new Promise((resolve) => {
+        release = resolve;
+      });
+      const opened = new Promise((resolve) => {
+        arrived = resolve;
+      });
+      errorMessageGate = { wait, arrived };
+      return { opened, release };
     },
     passwordPrompts,
     saveDialogs,
@@ -493,6 +527,16 @@ async function openExtension(
   };
 }
 
+test("retains webview context while hidden for both editor creation paths", async () => {
+  const extension = await openExtension();
+  assert.equal(extension.webviewPanelOptions.retainContextWhenHidden, true);
+  assert.equal(
+    extension.customEditorOptions.webviewOptions.retainContextWhenHidden,
+    true,
+  );
+  extension.dispose();
+});
+
 test("persists only viewer preferences across closed extension panels", async () => {
   const preferences = new Map();
   const first = await openExtension(
@@ -532,9 +576,352 @@ test("persists only viewer preferences across closed extension panels", async ()
   second.dispose();
 });
 
+test("runs all exporter entry points in Python processes and preserves the model on failure or cancellation", async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), "viewer-export-host-"));
+  const oldPythonPath = process.env.PYTHONPATH;
+  process.env.PYTHONPATH = [root, oldPythonPath]
+    .filter(Boolean)
+    .join(path.delimiter);
+  t.after(async () => {
+    if (oldPythonPath === undefined) delete process.env.PYTHONPATH;
+    else process.env.PYTHONPATH = oldPythonPath;
+    await rm(root, { recursive: true, force: true });
+  });
+  for (const directory of [
+    "modelbuilder",
+    "onnxruntime_genai",
+    "onnxruntime_genai/models",
+    "mobius",
+  ]) {
+    await mkdir(path.join(root, directory), { recursive: true });
+    await writeFile(path.join(root, directory, "__init__.py"), "");
+  }
+  const script = `
+import pathlib
+import shutil
+import sys
+import time
+args = sys.argv[1:]
+print("Working on ONNX export", flush=True)
+if "wait" in args:
+    time.sleep(30)
+if "fail" in args:
+    raise RuntimeError("Failed export leaves the displayed model intact")
+flag = "-o" if "-o" in args else "--output"
+output = pathlib.Path(args[args.index(flag) + 1])
+if pathlib.Path(sys.argv[0]).name == "__main__.py":
+    if output.exists():
+        raise RuntimeError("Mobius package path already exists")
+    output.mkdir(parents=True)
+else:
+    output.mkdir(parents=True, exist_ok=True)
+shutil.copyfile(${JSON.stringify(path.join(__dirname, "models", "relu.onnx"))}, output / "model.onnx")
+if "multiple" in args:
+    shutil.copyfile(output / "model.onnx", output / "second.onnx")
+print("Saved model.onnx", flush=True)
+`;
+  for (const filename of [
+    "modelbuilder/builder.py",
+    "onnxruntime_genai/models/builder.py",
+    "mobius/__main__.py",
+  ])
+    await writeFile(path.join(root, filename), script);
+  const preferences = new Map([
+    [
+      "applicationSettings",
+      {
+        downloadDirectory: path.join(root, "downloads"),
+        pythonPath: process.platform === "win32" ? "python" : "python3",
+      },
+    ],
+  ]);
+  const extension = await openExtension(
+    "relu.onnx",
+    undefined,
+    true,
+    undefined,
+    undefined,
+    preferences,
+  );
+  t.after(() => extension.dispose());
+  const options = (exporter, name) => ({
+    exporter,
+    model: "owner/model",
+    directory: path.join(root, `output-${name}`),
+    precision: "fp32",
+    provider: "cpu",
+  });
+  for (const exporter of ["mbext", "modelbuilder", "mobius"]) {
+    const exportOptions = options(exporter, exporter);
+    await extension.receive({
+      type: "export-preview",
+      requestId: 1,
+      exportOptions,
+    });
+    assert.equal(extension.messages.at(-1).type, "export-preview");
+    assert.ok(
+      extension.messages
+        .at(-1)
+        .command.includes(
+          exporter === "mbext" ? "modelbuilder.builder" : exporter,
+        ),
+    );
+    await extension.receive({
+      type: "export",
+      actionId: `ui:export:${exporter}`,
+      exportOptions,
+    });
+    const result = extension.messages.at(-1);
+    assert.equal(result.type, "export-info", result.error);
+    assert.equal(result.loaded, true);
+    assert.equal(preferences.get("exportHistory").exporter, exporter);
+    assert.equal(result.path, path.join(exportOptions.directory, "model.onnx"));
+    assert.equal(
+      extension.messages.filter((message) => message.type === "graph").at(-1)
+        .file.directory,
+      exportOptions.directory,
+    );
+    assert.match(await readFile(result.script, "utf8"), /subprocess.run/);
+    assert.ok(
+      extension.events.some(
+        (event) =>
+          event.type === "export-progress" &&
+          event.output?.includes("Saved model.onnx"),
+      ),
+    );
+  }
+  const occupied = options("modelbuilder", "mbext");
+  const previousScript = await readFile(
+    path.join(occupied.directory, "export_model.py"),
+    "utf8",
+  );
+  const previousModel = await readFile(
+    path.join(occupied.directory, "model.onnx"),
+  );
+  await extension.receive({
+    type: "export",
+    actionId: "ui:export:retry",
+    exportOptions: occupied,
+  });
+  const retry = extension.messages.at(-1);
+  assert.equal(retry.type, "export-info", retry.error);
+  assert.equal(retry.loaded, true);
+  const retryDirectory = path.dirname(retry.path);
+  assert.equal(path.dirname(retryDirectory), occupied.directory);
+  assert.ok(path.basename(retryDirectory).startsWith("modelbuilder-"));
+  assert.equal(retry.script, path.join(retryDirectory, "export_model.py"));
+  assert.equal(
+    await readFile(path.join(occupied.directory, "export_model.py"), "utf8"),
+    previousScript,
+  );
+  assert.deepEqual(
+    await readFile(path.join(occupied.directory, "model.onnx")),
+    previousModel,
+  );
+  const command = extension.events.find(
+    (event) =>
+      event.type === "export-progress" &&
+      event.actionId === "ui:export:retry" &&
+      event.command,
+  );
+  assert.equal(command.directory, retryDirectory);
+  assert.equal(command.script, retry.script);
+  assert.ok(command.command.includes(retryDirectory));
+  assert.ok(
+    (await readFile(retry.script, "utf8")).includes(
+      JSON.stringify(retryDirectory),
+    ),
+  );
+  const defaultOptions = {
+    ...options("mbext", "default"),
+    directory: "",
+    model: "owner/default",
+  };
+  const defaultDirectory = path.join(
+    root,
+    "downloads",
+    "owner",
+    "default",
+    "mbext",
+  );
+  const defaultTemplate = path.join(
+    root,
+    "downloads",
+    "<model_id>",
+    "<exporter>",
+  );
+  await extension.receive({
+    type: "export-preview",
+    requestId: 2,
+    exportOptions: defaultOptions,
+  });
+  assert.equal(extension.messages.at(-1).directory, defaultDirectory);
+  assert.equal(extension.messages.at(-1).directoryTemplate, defaultTemplate);
+  assert.equal(preferences.has("exportHistory"), true);
+  assert.ok(!preferences.get("exportHistory").models.includes("owner/default"));
+  await extension.receive({ type: "export", exportOptions: defaultOptions });
+  assert.equal(
+    extension.messages.at(-1).path,
+    path.join(defaultDirectory, "model.onnx"),
+  );
+  const restored = await openExtension(
+    "relu.onnx",
+    undefined,
+    true,
+    undefined,
+    undefined,
+    preferences,
+  );
+  await restored.receive({ type: "get-settings" });
+  assert.deepEqual(restored.messages.at(-1).exportHistory, {
+    exporter: "mbext",
+    models: ["owner/default", "owner/model"],
+    directories: [
+      defaultTemplate,
+      defaultDirectory,
+      retryDirectory,
+      ...["mobius", "modelbuilder", "mbext"].map(
+        (name) => options(name, name).directory,
+      ),
+    ],
+  });
+  assert.equal(restored.messages.at(-1).exportDirectory, defaultTemplate);
+  restored.dispose();
+  const templateOptions = {
+    ...options("modelbuilder", "template"),
+    directory: path.join("base", "<model_id>", "<exporter>"),
+  };
+  const expandedDirectory = path.join(
+    root,
+    "downloads",
+    "base",
+    "owner",
+    "model",
+    "modelbuilder",
+  );
+  await extension.receive({
+    type: "export-preview",
+    requestId: 3,
+    exportOptions: templateOptions,
+  });
+  assert.equal(extension.messages.at(-1).directory, expandedDirectory);
+  assert.ok(!extension.messages.at(-1).command.includes("<model_id>"));
+  await extension.receive({ type: "export", exportOptions: templateOptions });
+  assert.equal(
+    extension.messages.at(-1).path,
+    path.join(expandedDirectory, "model.onnx"),
+  );
+  await extension.receive({ type: "export", exportOptions: templateOptions });
+  const templateRetry = extension.messages.at(-1);
+  assert.equal(templateRetry.type, "export-info", templateRetry.error);
+  assert.equal(
+    path.dirname(path.dirname(templateRetry.path)),
+    expandedDirectory,
+  );
+  assert.deepEqual(preferences.get("exportHistory").directories.slice(0, 2), [
+    templateOptions.directory,
+    path.dirname(templateRetry.path),
+  ]);
+  await extension.receive({
+    type: "export",
+    exportOptions: {
+      ...options("mobius", "multiple-cancelled"),
+      model: "multiple",
+    },
+  });
+  assert.equal(extension.messages.at(-1).type, "export-info");
+  assert.equal(extension.messages.at(-1).loaded, false);
+  extension.selectExportedFile("second.onnx");
+  await extension.receive({
+    type: "export",
+    exportOptions: {
+      ...options("mobius", "multiple-selected"),
+      model: "multiple",
+    },
+  });
+  assert.equal(extension.messages.at(-1).loaded, true);
+  assert.equal(
+    extension.messages.at(-1).path,
+    path.join(root, "output-multiple-selected", "second.onnx"),
+  );
+  const graphs = extension.messages.filter(
+    (message) => message.type === "graph",
+  ).length;
+  extension.setTrusted(false);
+  await extension.receive({
+    type: "export",
+    exportOptions: options("mbext", "blocked"),
+  });
+  assert.match(extension.messages.at(-1).error, /Trust this workspace/);
+  assert.equal((await readdir(root)).includes("output-blocked"), false);
+  extension.setTrusted(true);
+  const failureNotification = extension.pauseNextErrorMessage();
+  t.after(() => failureNotification.release());
+  const failed = extension.receive({
+    type: "export",
+    exportOptions: {
+      ...options("mbext", "failed"),
+      model: "fail",
+      precision: "fp4",
+    },
+  });
+  await failureNotification.opened;
+  assert.match(extension.messages.at(-1).error, /Failed export leaves/);
+  let started;
+  const progress = new Promise((resolve) => {
+    started = resolve;
+  });
+  extension.connect((event) => {
+    if (event.type === "export-progress" && event.output?.includes("Working"))
+      started();
+  });
+  const cancelled = extension.receive({
+    type: "export",
+    actionId: "ui:export:cancel",
+    exportOptions: { ...options("mbext", "cancelled"), model: "wait" },
+  });
+  await Promise.race([
+    progress,
+    cancelled.then(() =>
+      assert.fail("The retry ended before the exporter started."),
+    ),
+  ]);
+  failureNotification.release();
+  await failed;
+  await extension.receive({
+    type: "export",
+    exportOptions: options("mbext", "duplicate"),
+  });
+  assert.match(extension.messages.at(-1).error, /already running/);
+  await extension.receive({ type: "cancel-export" });
+  await cancelled;
+  assert.ok(
+    extension.logs.some((log) =>
+      log.includes("[CANCELLED] Convert ONNX model"),
+    ),
+  );
+  assert.equal(
+    extension.messages.filter((message) => message.type === "graph").length,
+    graphs,
+  );
+  const starting = new Promise((resolve) => {
+    started = resolve;
+  });
+  const disposed = extension.receive({
+    type: "export",
+    exportOptions: { ...options("mbext", "disposed"), model: "wait" },
+  });
+  await starting;
+  extension.dispose();
+  const events = extension.events.length;
+  await disposed;
+  assert.equal(extension.events.length, events);
+});
+
 test("Settings reports defaults, versions and persisted paths without running Python", async (t) => {
   const preferences = new Map();
-  const storage = path.join(tmpdir(), "viewer-settings");
+  const storage = await mkdtemp(path.join(tmpdir(), "viewer-settings-"));
+  t.after(() => rm(storage, { recursive: true, force: true }));
   const open = () =>
     openExtension(undefined, undefined, false, storage, undefined, preferences);
   const first = await open();
@@ -565,6 +952,18 @@ test("Settings reports defaults, versions and persisted paths without running Py
     type: "application-settings",
     settings: { ...settings, password: "discard" },
   });
+  assert.deepEqual(preferences.get("applicationSettings"), settings);
+  assert.equal((await stat(settings.downloadDirectory)).isDirectory(), true);
+  const blocked = path.join(storage, "not-a-directory");
+  await writeFile(
+    blocked,
+    "Cannot create a download directory over this file.",
+  );
+  await first.receive({
+    type: "application-settings",
+    settings: { ...settings, downloadDirectory: blocked },
+  });
+  assert.equal(first.messages.at(-1).type, "settings-error");
   assert.deepEqual(preferences.get("applicationSettings"), settings);
   const second = await open();
   t.after(() => second.dispose());
@@ -1487,6 +1886,7 @@ test("previews global passes without editing, rejects stale previews and optimiz
   });
   assert.equal(extension.messages.at(-1).type, "optimization-info");
   const report = extension.messages.at(-1).optimizationReport;
+  assert.ok(report.wallTimeNs > 0);
   assert.ok(
     report.patterns.some(
       (pattern) => pattern.name === "GemmTranspose" && pattern.matches > 0,

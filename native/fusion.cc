@@ -4,6 +4,7 @@
 #include "rewriting_trace.h"
 #include "tensor_preview.h"
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <map>
 #include <onnx_core/builder/graph_graph.h>
@@ -202,11 +203,13 @@ bool IsGlobalPass(const std::string &name) {
 }
 
 Napi::Object OptimizationReportValue(Napi::Env env,
-                                     const ol::core::builder::OptimizationReport &report) {
+                                     const ol::core::builder::OptimizationReport &report,
+                                     int64_t wall_time_ns) {
   auto result = Napi::Object::New(env);
   result.Set("iterations", Napi::Number::New(env, report.iterations));
   result.Set("rewrites", Napi::Number::New(env, report.rewrites));
   result.Set("totalTimeNs", Napi::Number::New(env, report.TotalTimeNs()));
+  result.Set("wallTimeNs", Napi::Number::New(env, wall_time_ns));
   result.Set("matchingTimeNs", Napi::Number::New(env, report.matching_time_ns));
   result.Set("rewritingTimeNs", Napi::Number::New(env, report.rewriting_time_ns));
   result.Set("cleanupTimeNs", Napi::Number::New(env, report.cleanup_time_ns));
@@ -259,8 +262,8 @@ public:
                std::vector<std::string> patterns, std::optional<std::vector<size_t>> anchors,
                std::string path, std::string scenario = "", bool all = false,
                std::string operation = "", std::optional<size_t> diagnostic_anchor = std::nullopt)
-      : Napi::AsyncWorker(env), deferred_(Napi::Promise::Deferred::New(env)),
-        source_(std::move(source)),
+      : Napi::AsyncWorker(env), started_(std::chrono::steady_clock::now()),
+        deferred_(Napi::Promise::Deferred::New(env)), source_(std::move(source)),
         canonical_(!scenario.empty() && source_->rewriting_base ? source_->rewriting_base
                                                                 : source_),
         snapshot_(canonical_->model->SharedCopy()), patterns_(std::move(patterns)),
@@ -509,7 +512,7 @@ public:
       auto stored = CloneStoredModel(source_);
       if (optimization_report_)
         stored->optimization_report = std::move(optimization_report_);
-      deferred_.Resolve(ModelHandle(Env(), stored));
+      ResolveModel(stored);
       return;
     }
     auto stored = std::make_shared<StoredModel>();
@@ -529,7 +532,7 @@ public:
       stored->rewriting_base = canonical_;
       stored->rewriting_name = scenario_;
       stored->rewriting_batches = std::move(batches_);
-      deferred_.Resolve(ModelHandle(Env(), stored));
+      ResolveModel(stored);
       return;
     }
     for (const auto &plan : source_->fusion_plans)
@@ -538,13 +541,14 @@ public:
       stored->fusion_base = source_->fusion_base ? source_->fusion_base : source_;
       stored->fusion_previous = source_;
       stored->fusion_plans.push_back(std::move(plan_));
-      deferred_.Resolve(ModelHandle(Env(), stored));
+      ResolveModel(stored);
       return;
     }
     stored->rewriting_base = source_->rewriting_base;
     stored->rewriting_name = source_->rewriting_name;
     stored->rewriting_batches = source_->rewriting_batches;
     stored->optimization_report = source_->optimization_report;
+    stored->optimization_wall_time_ns = source_->optimization_wall_time_ns;
     auto result = Napi::Object::New(Env());
     result.Set("model", ModelHandle(Env(), stored));
     auto matches = Napi::Array::New(Env(), matches_.size());
@@ -787,11 +791,21 @@ private:
     FinalizeCapturedPlan(snapshot_, plan_, history_, order, rewritten);
   }
 
+  void ResolveModel(const std::shared_ptr<StoredModel> &stored) {
+    auto result = ModelHandle(Env(), stored);
+    if (operation_ == "Optimize" && stored->optimization_report)
+      stored->optimization_wall_time_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                              std::chrono::steady_clock::now() - started_)
+                                              .count();
+    deferred_.Resolve(result);
+  }
+
   struct Match {
     size_t anchor;
     std::vector<size_t> nodes;
     ol::utils::RepeatedProtoField<ol::NodeProto> replacement;
   };
+  const std::chrono::steady_clock::time_point started_;
   Napi::Promise::Deferred deferred_;
   std::shared_ptr<StoredModel> source_;
   std::shared_ptr<StoredModel> canonical_;
@@ -823,7 +837,8 @@ void AddFusionMethods(Napi::Env env, Napi::Object result, std::shared_ptr<Stored
              Napi::Function::New(env, [model](const Napi::CallbackInfo &call) -> Napi::Value {
                if (!model->optimization_report)
                  return call.Env().Null();
-               return OptimizationReportValue(call.Env(), *model->optimization_report);
+               return OptimizationReportValue(call.Env(), *model->optimization_report,
+                                              model->optimization_wall_time_ns);
              }));
   result.Set("explainFusion",
              Napi::Function::New(env, [model](const Napi::CallbackInfo &call) -> Napi::Value {

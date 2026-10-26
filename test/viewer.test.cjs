@@ -1901,6 +1901,17 @@ test("opens tabular optimization reports only on request, including no-op runs a
       ).textContent,
       String(data.rewrites),
     );
+    const elapsed = document.querySelector(
+      "#optimization-report-summary tbody tr:nth-child(3)",
+    );
+    assert.equal(
+      elapsed.cells[0].textContent,
+      "Full native operation elapsed (ms)",
+    );
+    const elapsedMs = new Intl.NumberFormat(undefined, {
+      maximumFractionDigits: 6,
+    }).format(data.wallTimeNs / 1e6);
+    assert.equal(elapsed.cells[1].textContent, elapsedMs);
     assert.equal(
       document.querySelectorAll("#optimization-report-phases tbody tr").length,
       5,
@@ -1945,6 +1956,12 @@ test("opens tabular optimization reports only on request, including no-op runs a
     });
     showReport.click();
     assert.equal(report.open, true);
+    assert.equal(
+      document.querySelector(
+        "#optimization-report-summary tbody tr:nth-child(3) td",
+      ).textContent,
+      elapsedMs,
+    );
     if (changed) {
       document.getElementById("close-optimization-report").click();
       button.click();
@@ -2701,7 +2718,17 @@ test("toggles separated, stacked sidebar panels independently from Op Data Find 
   const allButtons = [...controls.querySelectorAll("button")];
   assert.deepEqual(
     allButtons.map((button) => button.lastChild.textContent.trim()),
-    ["Open", "Save", "Find", "Optimize", "Fuse", "Unfuse", "Op", "Data"],
+    [
+      "Open",
+      "Save",
+      "Convert",
+      "Find",
+      "Optimize",
+      "Fuse",
+      "Unfuse",
+      "Op",
+      "Data",
+    ],
   );
   assert.match(
     window.getComputedStyle(controls).gridTemplateColumns,
@@ -2720,7 +2747,12 @@ test("toggles separated, stacked sidebar panels independently from Op Data Find 
   assert.deepEqual(
     [...sidebar.querySelectorAll(":scope > section")].filter(
       (panel) =>
-        !["open-panel", "save-options", "unfuse-panel"].includes(panel.id),
+        ![
+          "open-panel",
+          "save-options",
+          "export-panel",
+          "unfuse-panel",
+        ].includes(panel.id),
     ),
     panels,
   );
@@ -5084,6 +5116,330 @@ test("renders the demo, inspects its operator and requests a real file", (t) => 
   assert.notEqual(graph.getAttribute("viewBox"), initialViewBox);
   document.getElementById("zoom-fit").click();
   assert.equal(graph.getAttribute("viewBox"), initialViewBox);
+});
+
+test("export defaults follow the download directory without replacing chosen paths, and histories fill safe suggestions", async (t) => {
+  const { document, window, messages } = openViewer(t);
+  const byId = (id) => document.getElementById(id);
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  const settings = {
+    type: "settings-info",
+    application: { downloadDirectory: "/downloads", pythonPath: "python3" },
+    viewer: { panels: { operator: true, find: true, metadata: false } },
+    trusted: true,
+    exportDirectory: "/downloads/<model_id>/<exporter>",
+    exportHistory: {
+      exporter: "mobius",
+      models: ["owner/previous", "<img src=x>"],
+      directories: ["/previous/output"],
+    },
+  };
+  const change = (id, value) => {
+    byId(id).value = value;
+    byId(id).dispatchEvent(new window.Event("input", { bubbles: true }));
+  };
+  send({ type: "load-state", pending: false });
+  byId("export-model").click();
+  assert.deepEqual(
+    [...byId("export-tool").options].map((option) => [
+      option.value,
+      option.textContent,
+    ]),
+    [
+      ["modelbuilder", "modelbuilder (ONNX Runtime GenAI)"],
+      ["mobius", "Mobius"],
+      ["mbext", "mbext (fast export)"],
+    ],
+  );
+  send(settings);
+  assert.equal(byId("export-tool").value, "mobius");
+  assert.deepEqual(
+    [...byId("export-precision").options].map((option) => option.value),
+    ["fp32", "fp16", "bf16", "int4", "int2", "fp4"],
+  );
+  assert.ok(
+    [...byId("export-precision").options].every((option) => !option.disabled),
+  );
+  assert.equal(
+    byId("export-directory").value,
+    "/downloads/<model_id>/<exporter>",
+  );
+  assert.equal(
+    byId("export-source").getAttribute("list"),
+    "export-source-history",
+  );
+  assert.deepEqual(
+    [...byId("export-source-history").options].map((option) => option.value),
+    settings.exportHistory.models,
+  );
+  assert.equal(byId("export-source-history").querySelector("img"), null);
+  change("export-precision", "fp4");
+  byId("export-tool").value = "modelbuilder";
+  byId("export-tool").dispatchEvent(
+    new window.Event("change", { bubbles: true }),
+  );
+  send(settings);
+  assert.equal(byId("export-tool").value, "modelbuilder");
+  assert.equal(byId("export-precision").value, "fp4");
+  change("export-source", "owner/model");
+  await new Promise((resolve) => window.setTimeout(resolve, 180));
+  const preview = messages.findLast(
+    (message) => message.type === "export-preview",
+  );
+  assert.equal(preview.exportOptions.directory, "");
+  send({
+    type: "export-preview",
+    requestId: preview.requestId,
+    directory: "/downloads/owner/model/modelbuilder",
+    directoryTemplate: "/downloads/<model_id>/<exporter>",
+  });
+  assert.equal(
+    byId("export-directory").value,
+    "/downloads/<model_id>/<exporter>",
+  );
+  change("export-directory", "/previous/output");
+  send({
+    ...settings,
+    exportDirectory: "/different/downloads/<model_id>/<exporter>",
+  });
+  assert.equal(byId("export-directory").value, "/previous/output");
+  change("export-source", "owner/another");
+  await new Promise((resolve) => window.setTimeout(resolve, 180));
+  const custom = messages.findLast(
+    (message) => message.type === "export-preview",
+  );
+  assert.equal(custom.exportOptions.directory, "/previous/output");
+  send({
+    type: "export-preview",
+    requestId: custom.requestId,
+    directory: "/downloads/owner_another",
+  });
+  assert.equal(byId("export-directory").value, "/previous/output");
+  send({
+    type: "export-history",
+    history: {
+      models: ["owner/another", "owner/model"],
+      directories: ["/previous/output", "/downloads/owner_model"],
+    },
+  });
+  assert.deepEqual(
+    [...byId("export-directory-history").options].map((option) => option.value),
+    ["/previous/output", "/downloads/owner_model"],
+  );
+  change("export-directory", "");
+  await new Promise((resolve) => window.setTimeout(resolve, 180));
+  const reset = messages.findLast(
+    (message) => message.type === "export-preview",
+  );
+  assert.equal(reset.exportOptions.directory, "");
+  send({
+    type: "export-preview",
+    requestId: reset.requestId,
+    directory: "/different/downloads/owner_another",
+    directoryTemplate: "/different/downloads/<model_id>/<exporter>",
+  });
+  assert.equal(
+    byId("export-directory").value,
+    "/different/downloads/<model_id>/<exporter>",
+  );
+  const template = "base/<model_id>/<exporter>";
+  change("export-directory", template);
+  byId("export-tool").value = "mbext";
+  byId("export-tool").dispatchEvent(
+    new window.Event("change", { bubbles: true }),
+  );
+  await new Promise((resolve) => window.setTimeout(resolve, 180));
+  const templated = messages.findLast(
+    (message) => message.type === "export-preview",
+  );
+  assert.equal(templated.exportOptions.directory, template);
+  assert.equal(templated.exportOptions.exporter, "mbext");
+  send({
+    type: "export-preview",
+    requestId: templated.requestId,
+    directory: "/downloads/base/owner/another/mbext",
+    command:
+      "python3 -m modelbuilder.builder -o /downloads/base/owner/another/mbext",
+  });
+  assert.equal(byId("export-directory").value, template);
+  assert.match(
+    byId("export-command").textContent,
+    /base\/owner\/another\/mbext/,
+  );
+});
+
+test("exports from the right panel without a loaded model and shows commands, progress and cancellation", async (t) => {
+  const { document, window, messages, events, load } = openViewer(t);
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  send({ type: "load-state", pending: false });
+  const button = document.getElementById("export-model");
+  const output = document.getElementById("export-output");
+  Object.defineProperty(output, "scrollHeight", {
+    get: () =>
+      document.getElementById("export-panel").hidden
+        ? 0
+        : output.textContent.split("\n").length * 20,
+  });
+  assert.equal(button.disabled, false);
+  assert.equal(document.getElementById("close-export"), null);
+  button.click();
+  assert.equal(document.getElementById("export-panel").hidden, false);
+  const field = (id, value) => {
+    document.getElementById(id).value = value;
+    document
+      .getElementById(id)
+      .dispatchEvent(new window.Event("change", { bubbles: true }));
+  };
+  field("export-source", "owner/model");
+  field("export-directory", "/tmp/export-model");
+  await new Promise((resolve) => window.setTimeout(resolve, 180));
+  const preview = messages.findLast(
+    (message) => message.type === "export-preview",
+  );
+  assert.equal(preview.exportOptions.model, "owner/model");
+  send({
+    type: "export-preview",
+    requestId: preview.requestId - 1,
+    command: "stale",
+  });
+  assert.equal(document.getElementById("export-command").textContent, "");
+  send({
+    type: "export-preview",
+    requestId: preview.requestId,
+    command: "python -m modelbuilder.builder",
+    script: "/tmp/export-model/export_model.py",
+  });
+  assert.match(
+    document.getElementById("export-command").textContent,
+    /modelbuilder.builder/,
+  );
+  document.getElementById("export-form").requestSubmit();
+  const request = messages.at(-1);
+  assert.equal(request.type, "export");
+  const runningPreviewCount = messages.filter(
+    (message) => message.type === "export-preview",
+  ).length;
+  assert.equal(document.getElementById("export-fields").disabled, true);
+  assert.equal(document.getElementById("export-progress").hidden, false);
+  assert.equal(document.getElementById("open-model").disabled, true);
+  button.click();
+  assert.equal(document.getElementById("export-panel").hidden, true);
+  assert.equal(button.getAttribute("aria-expanded"), "false");
+  assert.equal(
+    messages.some((message) => message.type === "cancel-export"),
+    false,
+  );
+  button.click();
+  assert.equal(document.getElementById("export-panel").hidden, false);
+  assert.equal(button.getAttribute("aria-expanded"), "true");
+  assert.equal(document.getElementById("export-progress").hidden, false);
+  send({
+    type: "export-progress",
+    actionId: "old-action",
+    stage: "Stale output",
+    command: "stale command",
+    output: "stale",
+  });
+  assert.equal(output.textContent, "python -m modelbuilder.builder");
+  send({
+    type: "export-progress",
+    actionId: request.actionId,
+    stage: "Exporting",
+    command: "python3 -u -m modelbuilder.builder",
+    output: "<img src=x> 50%",
+  });
+  assert.equal(
+    document.getElementById("export-status").textContent,
+    "Exporting",
+  );
+  assert.equal(
+    output.textContent,
+    "python3 -u -m modelbuilder.builder\n\n<img src=x> 50%",
+  );
+  assert.equal(document.querySelector("#export-output img"), null);
+  assert.equal(output.scrollTop, output.scrollHeight);
+  output.scrollTop = 0;
+  const stdout = [
+    ...Array.from({ length: 40 }, (_, index) => `Output line ${index}`),
+    "Last stdout line",
+  ].join("\n");
+  send({
+    type: "export-progress",
+    actionId: request.actionId,
+    stage: "Exporting",
+    output: stdout,
+  });
+  assert.equal(
+    output.textContent,
+    `python3 -u -m modelbuilder.builder\n\n${stdout}`,
+  );
+  assert.equal(output.scrollTop, output.scrollHeight);
+  button.click();
+  send({
+    type: "export-progress",
+    actionId: request.actionId,
+    stage: "Exporting",
+    output: `${stdout}\nFinished`,
+  });
+  assert.equal(output.scrollTop, 0);
+  button.click();
+  assert.equal(output.scrollTop, output.scrollHeight);
+  await new Promise((resolve) => window.setTimeout(resolve, 180));
+  assert.equal(
+    messages.filter((message) => message.type === "export-preview").length,
+    runningPreviewCount,
+  );
+  assert.equal(document.querySelector("#export-output img"), null);
+  document.getElementById("cancel-export").click();
+  assert.equal(messages.at(-1).type, "cancel-export");
+  const entry = events.find(
+    (event) =>
+      event.type === "interaction" && event.entry.id === request.actionId,
+  ).entry;
+  send({ type: "log-entry", entry: { ...entry, status: "CANCELLED" } });
+  assert.equal(document.getElementById("export-fields").disabled, false);
+  assert.equal(document.getElementById("export-progress").hidden, true);
+  assert.match(
+    document.getElementById("export-status").textContent,
+    /cancelled/,
+  );
+  assert.equal(document.getElementById("open-model").disabled, false);
+  field("export-precision", "int2");
+  field("export-tool", "mobius");
+  assert.equal(
+    [...document.getElementById("export-precision").options].find(
+      (option) => option.value === "int4",
+    ).disabled,
+    false,
+  );
+  document.getElementById("export-form").requestSubmit();
+  const next = messages.at(-1);
+  assert.equal(next.exportOptions.exporter, "mobius");
+  assert.equal(next.exportOptions.precision, "int2");
+  load(demoGraph);
+  send({
+    type: "export-info",
+    actionId: next.actionId,
+    path: "/tmp/export-model/model.onnx",
+    script: "/tmp/export-model/export_model.py",
+    loaded: true,
+  });
+  const running = events.find(
+    (event) => event.type === "interaction" && event.entry.id === next.actionId,
+  ).entry;
+  send({ type: "log-entry", entry: { ...running, status: "SUCCEEDED" } });
+  assert.match(
+    document.getElementById("export-status").textContent,
+    /Converted and opened/,
+  );
+  assert.match(
+    document.getElementById("export-script").textContent,
+    /export_model.py/,
+  );
+  assert.equal(document.getElementById("export-progress").hidden, true);
+  assert.equal(document.getElementById("save-model").disabled, false);
 });
 
 test("shows stored encoded field values and folds nested layouts without dequantizing weights", (t) => {

@@ -1,5 +1,5 @@
 /* global acquireVsCodeApi, createSidebar, createFilePanels, createInspector,
-          createMetadataPanel, createFusionPanel, createSettingsPanel */
+          createMetadataPanel, createFusionPanel, createSettingsPanel, createExportPanel */
 const vscode = acquireVsCodeApi();
 const svgNS = "http://www.w3.org/2000/svg";
 const byId = (id) => document.getElementById(id);
@@ -100,6 +100,12 @@ const filePanels = createFilePanels({
   revealPanel: sidebar.revealPanel,
   isReplacing: () => replacementPending,
 });
+const exportPanel = createExportPanel({
+  byId,
+  postMessage: (message) => vscode.postMessage(message),
+  requestAction,
+  revealPanel: sidebar.revealPanel,
+});
 const fusionPanel = createFusionPanel({
   byId,
   postMessage: (message) => vscode.postMessage(message),
@@ -178,12 +184,13 @@ function displayLog(entry) {
   if (entry.status !== "RUNNING" && pendingActions.has(entry.id)) {
     const type = pendingActions.get(entry.id);
     pendingActions.delete(entry.id);
-    if (type === "open") {
+    if (type === "open" || type === "export") {
       replacementPending = [...pendingActions.values()].some(
-        (pending) => pending === "open",
+        (pending) => pending === "open" || pending === "export",
       );
       setLoading(replacementPending);
-      filePanels.finishOpening(entry.status);
+      if (type === "open") filePanels.finishOpening(entry.status);
+      else exportPanel.finish(entry.status);
     } else if (type === "save") {
       filePanels.finishSaving(entry.status, replacementPending || !hasModel);
     }
@@ -203,11 +210,16 @@ function newAction(action) {
 }
 
 function requestAction(type, action, parameters = {}) {
-  if (["open", "navigate", "undo-fusion", "select-fusion"].includes(type))
+  if (
+    ["open", "export", "navigate", "undo-fusion", "select-fusion"].includes(
+      type,
+    )
+  )
     fusionPanel.invalidate();
   const entry = newAction(action);
   pendingActions.set(entry.id, type);
-  if (type === "open") {
+  if (type === "open" || type === "export") {
+    if (type === "export") exportPanel.start(entry.id);
     replacementPending = true;
     setLoading(true);
   } else if (type === "save") {
@@ -221,6 +233,7 @@ function setLoading(pending, message = "") {
   byId("load-progress").hidden = !pending;
   byId("model-view").setAttribute("aria-busy", String(pending));
   filePanels.setLoading(pending, hasModel);
+  exportPanel.setLoading(pending);
   for (const id of [
     "refresh-shapes",
     "refresh-metadata",
@@ -2020,6 +2033,7 @@ window.addEventListener("message", (event) => {
     return;
   }
   if (
+    exportPanel.handleMessage(event.data) ||
     filePanels.handleMessage(event.data) ||
     fusionPanel.handleMessage(event.data)
   )

@@ -91,16 +91,19 @@ Final native canonicalization removes redundant identities by rewiring consumers
 without inserting replacement Identity operators.
 
 After each run, click **Show optimization report** to open a wide dialog outside
-the sidebar. Its tables show iteration and rewrite counters, phase timings in
-milliseconds, per-pattern attempts and accepted matches, rejection reasons with
+the sidebar. Its tables show iteration and rewrite counters, elapsed and phase
+timings in milliseconds, per-pattern attempts and accepted matches, rejection reasons with
 occurrence counts and native source locations, and nested-graph statistics.
 Source locations link to the corresponding release file and line on GitHub.
 The dialog opens only when requested; **Close** or Escape returns to the graph.
 The report is also available after a no-op run and when reopening Optimize.
 Counters include nested graphs; phase timings marked **root** exclude them.
 Subgraph rows include their descendants and must not be summed.
-Timings exclude viewer preparation and final canonicalization; they are not
-an end-to-end UI measurement.
+**Full native operation elapsed** is independently measured with a monotonic
+clock, from native worker construction until its result is ready. It includes
+preparation, worker queueing, optimization and final canonicalization.
+**Total native phase time** covers only the instrumented optimizer phases.
+Neither includes graph transfer or rendering; these are not end-to-end UI timings.
 Reports belong to the current in-memory snapshot or pipeline stage.
 Unfuse restores the preceding snapshot's report; applying another rewrite
 clears it. Reports are not saved into ONNX files.

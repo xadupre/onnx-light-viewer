@@ -6,8 +6,9 @@ show or hide their panels independently. Visible panels stack vertically,
 with **Find** above **Op**, each in a separate bordered box. **Op** contains
 operator and tensor details, **Data** contains metadata and lifetime analysis, **Find** searches nodes,
 and **Fuse** manages fusion patterns. **Op** and **Find** are initially visible.
-The sidebar controls form two rows of three matching buttons:
-**Open**, **Save**, **Find**, then **Fuse**, **Op**, **Data**.
+The sidebar includes **Open**, **Save** and **Convert** alongside the inspection
+and optimization controls. **Convert** runs a separate installed Python exporter;
+see :doc:`exporting_models`.
 **Open** and **Save** toggle their own sidebar panels for file selection and
 save options; opening either hides the other. Neither opens a popup file picker.
 All sidebar panels have an inverted-color title bar using the compact uppercase
