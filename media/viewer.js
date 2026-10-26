@@ -1,5 +1,6 @@
 /* global acquireVsCodeApi, createSidebar, createFilePanels, createInspector,
-          createMetadataPanel, createFusionPanel, createSettingsPanel, createExportPanel */
+          createMetadataPanel, createFusionPanel, createSettingsPanel, createExportPanel,
+          sugiyamaLayout */
 const vscode = acquireVsCodeApi();
 const svgNS = "http://www.w3.org/2000/svg";
 const byId = (id) => document.getElementById(id);
@@ -648,11 +649,6 @@ function operatorSizes(nodes) {
   );
 }
 
-function randomNodeX(halfWidth) {
-  const margin = halfWidth + 20;
-  return margin + Math.random() * (layoutBounds.width - 2 * margin);
-}
-
 function tensorDescription(name) {
   const info = tensorInformation.get(name);
   const type = info?.type ?? "?";
@@ -713,10 +709,7 @@ function refreshPositions() {
   endGesture();
   const positions = new Map();
   for (const [id, view] of nodeViews) {
-    positions.set(id, {
-      x: view.node ? randomNodeX(view.halfWidth) : view.initial.x,
-      y: view.initial.y,
-    });
+    positions.set(id, { ...view.initial });
   }
   moveNodes(positions, 0, 0);
   bounds = { ...layoutBounds };
@@ -1513,34 +1506,10 @@ function render(graph, metadata) {
   edges.replaceChildren();
   nodes.replaceChildren();
   const sizes = operatorSizes(graph.nodes);
-  const producers = new Map();
-  const positions = new Map();
-  for (const node of graph.nodes) {
-    for (const output of node.outputs) producers.set(output, node.id);
-  }
-  bounds = {
-    x: 0,
-    y: 0,
-    width: Math.max(
-      500,
-      40 + Math.max(graph.inputs.length, graph.outputs.length) * 140,
-    ),
-    height: Math.max(
-      650,
-      250 +
-        [...sizes.values()].reduce((sum, size) => sum + size.height + 36, 0),
-    ),
-  };
+  const layout = sugiyamaLayout(graph, sizes);
+  const { producers, positions } = layout;
+  bounds = layout.bounds;
   layoutBounds = bounds;
-  let rowTop = 133;
-  graph.nodes.forEach((node) => {
-    const size = sizes.get(node.id);
-    positions.set(node.id, {
-      x: randomNodeX(size.width / 2),
-      y: rowTop + size.height / 2,
-    });
-    rowTop += size.height + 36;
-  });
   const addPort = (name, index, output) => {
     const count = output ? graph.outputs.length : graph.inputs.length;
     const position = {

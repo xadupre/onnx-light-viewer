@@ -6857,7 +6857,7 @@ test("spreads multiple graph ports across top and bottom rows without overlap", 
   assert.equal(document.querySelectorAll(".edge").length, 5);
 });
 
-test("assigns random horizontal positions and node-index rows on each model load", (t) => {
+test("aligns a dependency chain deterministically on each model load", (t) => {
   const { document, load } = openViewer(t);
   const model = chainGraph();
   load(model);
@@ -6872,9 +6872,9 @@ test("assigns random horizontal positions and node-index rows on each model load
       ) /
         2 +
       20;
-    assert.ok(position.x >= margin && position.x < 500 - margin);
+    assert.ok(position.x >= margin && position.x <= 500 - margin);
   });
-  assert.ok(new Set(positions.map((position) => position.x)).size > 1);
+  assert.equal(new Set(positions.map((position) => position.x)).size, 1);
   assert.equal(document.querySelectorAll(".edge").length, 7);
   const bounds = document
     .getElementById("graph")
@@ -6889,14 +6889,44 @@ test("assigns random horizontal positions and node-index rows on each model load
     assert.ok(y + Number(rect.getAttribute("height")) <= bounds[1] + bounds[3]);
   }
   load(model);
-  assert.notDeepEqual(
-    nodePositions(document).map((position) => position.x),
-    positions.map((position) => position.x),
+  assert.deepEqual(nodePositions(document), positions);
+});
+
+test("places parallel branches together and connects captures in dependency order", (t) => {
+  const { document, load } = openViewer(t);
+  const model = chainGraph(4);
+  const [source, left, right, join] = model.nodes;
+  source.outputs = ["source"];
+  left.inputs = ["source"];
+  left.outputs = ["left"];
+  left.parameters = [{ name: "weight", type: "float32", value: "[1]" }];
+  right.inputs = [];
+  right.captures = ["source"];
+  right.outputs = ["right"];
+  join.inputs = ["left", "right"];
+  model.nodes = [join, right, source, left];
+  load(model);
+  const boxes = new Map(
+    [...document.querySelectorAll(".graph-node")].map((group) => [
+      group.dataset.id,
+      group.querySelector("rect"),
+    ]),
   );
-  assert.deepEqual(
-    nodePositions(document).map((position) => position.y),
-    positions.map((position) => position.y),
+  const position = (node) =>
+    nodePositions(document, `[data-id="${node.id}"] > rect`)[0];
+  assert.equal(position(left).y, position(right).y);
+  assert.ok(position(source).y < position(left).y);
+  assert.ok(position(join).y > position(left).y);
+  assert.ok(
+    Math.abs(position(left).x - position(right).x) >
+      (Number(boxes.get(left.id).getAttribute("width")) +
+        Number(boxes.get(right.id).getAttribute("width"))) /
+        2,
   );
+  assert.equal(document.querySelectorAll(".edge").length, 6);
+  const positions = nodePositions(document);
+  load(model);
+  assert.deepEqual(nodePositions(document), positions);
 });
 
 test("refreshes operator and port positions independently while retaining shapes, selection and inspector", (t) => {
@@ -7625,7 +7655,7 @@ test("keeps graph outlines visible when zooming out in regular and virtualized o
 test("jumps to readable zoom and culls offscreen SVG content without rebuilding a large graph", (t) => {
   const { document, window, load } = openViewer(t);
   const model = chainGraph(200);
-  model.nodes.at(-1).inputs = ["tensor_0"];
+  model.nodes.at(-1).inputs.push("tensor_0");
   load(model);
   const graph = document.getElementById("graph");
   const initial = graph.getAttribute("viewBox");
@@ -7830,13 +7860,13 @@ test("bounds node suggestions, finds offscreen matches and clears stale results 
   );
 });
 
-test("virtualizes thousands of nodes, finds distant operators and uses a batched overview", (t) => {
+test("virtualizes 20,000 nodes, finds distant operators and uses a batched overview", (t) => {
   const { document, window, load } = openViewer(t);
-  const model = chainGraph(4000);
-  model.nodes[3998].parameters = [
+  const model = chainGraph(20_000);
+  model.nodes[19_998].parameters = [
     { name: "weight", type: "FLOAT", shape: ["3", "4"] },
   ];
-  model.nodes[3998].attributes = [
+  model.nodes[19_998].attributes = [
     { name: "body", graphs: [{ name: "child", path: [], nodeCount: 0 }] },
   ];
   load(model);
@@ -7855,8 +7885,8 @@ test("virtualizes thousands of nodes, finds distant operators and uses a batched
           values: [],
           nodes: [
             {
-              id: "node-3998",
-              unusedOutputs: ["tensor_3998"],
+              id: "node-19998",
+              unusedOutputs: ["tensor_19998"],
               releaseAfter: [],
               lastUse: [],
               entries: [],
@@ -7872,14 +7902,14 @@ test("virtualizes thousands of nodes, finds distant operators and uses a batched
       .getElementById("find-node")
       .dispatchEvent(new window.Event("submit", { cancelable: true }));
   };
-  search("activation_3998");
+  search("activation_19998");
   assert.equal(
     document.getElementById("node-name").textContent,
-    "activation_3998",
+    "activation_19998",
   );
   assert.equal(
     document.querySelector(".graph-node.selected").getAttribute("data-id"),
-    "node-3998",
+    "node-19998",
   );
   assert.match(
     document.querySelector(".graph-node.selected .unused-label").textContent,
@@ -7897,7 +7927,7 @@ test("virtualizes thousands of nodes, finds distant operators and uses a batched
   search("RELU");
   assert.equal(
     document.getElementById("node-name").textContent,
-    "activation_3999",
+    "activation_19999",
   );
   const current = graph.getAttribute("viewBox");
   search("does-not-exist");
@@ -7916,7 +7946,7 @@ test("virtualizes thousands of nodes, finds distant operators and uses a batched
   assert.equal(
     document.getElementById("overview-nodes").getAttribute("d").match(/M/g)
       .length,
-    4002,
+    20_002,
   );
   document.getElementById("zoom-readable").click();
   assert.equal(
@@ -7926,17 +7956,17 @@ test("virtualizes thousands of nodes, finds distant operators and uses a batched
   assert.ok(mounted() > 0 && mounted() < 20);
   assert.equal(
     document.querySelector(".graph-node.selected").getAttribute("data-id"),
-    "node-3999",
+    "node-19999",
   );
   window.dispatchEvent(
     new window.MessageEvent("message", {
       data: {
         type: "shape-info",
-        tensors: [{ name: "tensor_3998", type: "float32", shape: ["42"] }],
+        tensors: [{ name: "tensor_19998", type: "float32", shape: ["42"] }],
       },
     }),
   );
-  search("activation_3998");
+  search("activation_19998");
   assert.match(
     document.querySelector(".graph-node.selected .node-tensor-info")
       .textContent,

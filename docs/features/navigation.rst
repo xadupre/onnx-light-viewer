@@ -5,6 +5,11 @@ Zoom, navigation and moving nodes
    :alt: Interactive graph with a selected Relu node and the minus, Fit and plus zoom controls.
    :width: 480px
 
+Operators use a deterministic top-to-bottom Sugiyama layout. Dependencies set
+the rows; parallel branches can share a row, with spacing based on block sizes.
+Four barycentric sweeps reduce crossings without adding intermediate nodes
+along long connections.
+
 The **Controls** tab groups keyboard shortcuts, mouse gestures and navigation
 buttons into two-column tables: **Control** and **Action**. It is available even
 before a model is loaded.
@@ -55,6 +60,6 @@ Graph navigation buttons are stacked in the bottom-left corner in paired rows:
 * Ctrl+A (Cmd+A on macOS) selects all nodes when the graph has focus.
   Enter or Space selects a focused node. Escape cancels a drag/selection
   rectangle, or clears selection when no gesture is active.
-* **Refresh positions** restores the top-to-bottom layout with new random
-  horizontal operator positions and fits the view, preserving inferred shapes.
+* **Refresh positions** restores the hierarchical layout and fits the view,
+  resetting manual moves while preserving inferred shapes and selection.
   Resizing the editor preserves node positions and zoom.
