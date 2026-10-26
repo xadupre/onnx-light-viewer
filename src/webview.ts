@@ -585,6 +585,7 @@ export function webviewHtml(
   <script nonce="${nonce}" src="${resource("metadata-panel.js")}"></script>
   <script nonce="${nonce}" src="${resource("fusion-panel.js")}"></script>
   <script nonce="${nonce}" src="${resource("settings-panel.js")}"></script>
+  <script nonce="${nonce}" src="${resource("vendor/dagre.min.js")}"></script>
   <script nonce="${nonce}" src="${resource("graph-layout.js")}"></script>
   <script nonce="${nonce}" src="${resource("viewer.js")}"></script>
 </body>

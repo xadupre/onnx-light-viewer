@@ -5,6 +5,7 @@ const { runInNewContext } = require("node:vm");
 
 const sugiyamaLayout = runInNewContext(
   `${readFileSync(require.resolve("../media/graph-layout.js"), "utf8")}\nsugiyamaLayout;`,
+  { dagre: require("@dagrejs/dagre") },
 );
 
 function layout(nodes, inputs = [], outputs = []) {
@@ -37,6 +38,61 @@ function assertContained(result, nodes) {
   }
 }
 
+function segmentEntersBox(start, end, center, width, height) {
+  let low = 0;
+  let high = 1;
+  for (const [axis, size] of [
+    ["x", width],
+    ["y", height],
+  ]) {
+    const minimum = center[axis] - size / 2 + 0.001;
+    const maximum = center[axis] + size / 2 - 0.001;
+    const delta = end[axis] - start[axis];
+    if (!delta) {
+      if (start[axis] <= minimum || start[axis] >= maximum) return false;
+    } else {
+      const first = (minimum - start[axis]) / delta;
+      const last = (maximum - start[axis]) / delta;
+      low = Math.max(low, Math.min(first, last));
+      high = Math.min(high, Math.max(first, last));
+    }
+  }
+  return low < high;
+}
+
+function assertRouteAvoidsNodes(result, nodes, source, target) {
+  const from = nodes.find(({ id }) => id === source);
+  const to = nodes.find(({ id }) => id === target);
+  const start = result.positions.get(source);
+  const end = result.positions.get(target);
+  const route = result.routes.get(target)?.get(source);
+  assert.ok(route?.length, `Missing route for ${source} -> ${target}`);
+  const points = [
+    { x: start.x, y: start.y + (from.height ?? 88) / 2 },
+    ...route,
+    { x: end.x, y: end.y - (to.height ?? 88) / 2 },
+  ];
+  for (const point of points) {
+    assert.ok(point.x >= 0 && point.x <= result.bounds.width);
+    assert.ok(point.y >= 0 && point.y <= result.bounds.height);
+  }
+  for (const item of nodes) {
+    if (item.id === source || item.id === target) continue;
+    for (let index = 1; index < points.length; index++)
+      assert.equal(
+        segmentEntersBox(
+          points[index - 1],
+          points[index],
+          result.positions.get(item.id),
+          item.width ?? 140,
+          item.height ?? 88,
+        ),
+        false,
+        `${source} -> ${target} crosses ${item.id}`,
+      );
+  }
+}
+
 test("layers unsorted dependencies, captures and duplicate inputs with differently sized blocks", () => {
   const nodes = [
     node("join", ["left", "right", "left"], { height: 160 }),
@@ -61,6 +117,22 @@ test("barycentric sweeps uncross independent branches and align their chains", (
   assert.ok(positions.get("d").x < positions.get("c").x);
   assert.equal(positions.get("a").x, positions.get("d").x);
   assert.equal(positions.get("b").x, positions.get("c").x);
+});
+
+test("routes nested residual connections around intermediate operators", () => {
+  const nodes = [
+    node("source"),
+    node("projection", ["source"], { width: 280 }),
+    node("normalization", ["projection"], { height: 160 }),
+    node("residual", ["normalization", "source"]),
+    node("activation", ["residual"]),
+    node("output", ["activation", "projection"]),
+  ];
+  const result = layout(nodes);
+  assertContained(result, nodes);
+  assertRouteAvoidsNodes(result, nodes, "source", "residual");
+  assertRouteAvoidsNodes(result, nodes, "projection", "output");
+  assert.deepEqual([...layout(nodes).routes], [...result.routes]);
 });
 
 test("handles empty graphs, disconnected nodes, optional tensors and cyclic dependencies deterministically", () => {
@@ -89,6 +161,7 @@ test("lays out 20,000-node deep and wide graphs without expanding long edges", (
   );
   const deep = layout(chain);
   assertContained(deep, chain);
+  assertRouteAvoidsNodes(deep, chain, "node0", `node${count - 1}`);
   for (let i = 1; i < count; i++) {
     assert.ok(
       deep.positions.get(`node${i}`).y >

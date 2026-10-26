@@ -965,16 +965,13 @@ function selectNode(id, additive) {
 
 function updateConnection(connection) {
   if (!connection.group) return;
-  const { from, to, fromHeight, toHeight, path, text, information } =
-    connection;
-  const y1 = from.y + fromHeight;
-  const y2 = to.y - toHeight;
-  const middle = (y1 + y2) / 2;
+  const { path, text, information } = connection;
+  const { x, y } = connectionLabelPosition(connection);
   path.setAttribute("d", connectionPath(connection));
-  text.setAttribute("x", (from.x + to.x) / 2 + 10);
-  text.setAttribute("y", middle);
-  information.setAttribute("x", (from.x + to.x) / 2 + 10);
-  information.setAttribute("y", middle + 14);
+  text.setAttribute("x", x + 10);
+  text.setAttribute("y", y);
+  information.setAttribute("x", x + 10);
+  information.setAttribute("y", y + 14);
 }
 
 function setVisible(view, group, visible) {
@@ -1022,22 +1019,27 @@ function updateNodeVisibility(view) {
 }
 
 function updateConnectionVisibility(connection) {
-  const { from, to, fromHeight, toHeight } = connection;
+  const points = connectionPoints(connection);
+  let left = Infinity,
+    top = Infinity,
+    right = -Infinity,
+    bottom = -Infinity;
+  for (const { x, y } of points) {
+    left = Math.min(left, x);
+    top = Math.min(top, y);
+    right = Math.max(right, x);
+    bottom = Math.max(bottom, y);
+  }
+  const label = connectionLabelPosition(connection);
   const visible = intersectsCamera(
-    Math.min(from.x, to.x),
-    Math.min(from.y + fromHeight, to.y - toHeight),
-    Math.max(from.x, to.x) + 240,
-    Math.max(from.y + fromHeight, to.y - toHeight) + 28,
+    Math.min(left, label.x),
+    Math.min(top, label.y),
+    Math.max(right, label.x + 240),
+    Math.max(bottom, label.y + 28),
   );
-  const middle = (from.y + fromHeight + to.y - toHeight) / 2;
   const labelsVisible =
     !virtualized ||
-    intersectsCamera(
-      (from.x + to.x) / 2,
-      middle,
-      (from.x + to.x) / 2 + 240,
-      middle + 28,
-    );
+    intersectsCamera(label.x, label.y, label.x + 240, label.y + 28);
   if (virtualized && !overviewVisible && visible && !labelsVisible)
     crossingConnections.add(connection);
   else crossingConnections.delete(connection);
@@ -1181,6 +1183,15 @@ function reframe() {
     right = Math.max(right, position.x + halfWidth + 20);
     bottom = Math.max(bottom, position.y + halfHeight + 20);
   }
+  for (const connection of connections) {
+    if (!connection.route) continue;
+    for (const point of connectionPoints(connection)) {
+      x = Math.min(x, point.x - 20);
+      y = Math.min(y, point.y - 20);
+      right = Math.max(right, point.x + 20);
+      bottom = Math.max(bottom, point.y + 20);
+    }
+  }
   bounds = { x, y, width: right - x, height: bottom - y };
 }
 
@@ -1233,7 +1244,64 @@ function setZoomAreaMode(active) {
   svg.classList.toggle("zoom-area", active);
 }
 
-function connectionPath({ from, to, fromHeight, toHeight }) {
+function connectionPoints({ from, to, fromHeight, toHeight, route }) {
+  const start = { x: from.x, y: from.y + fromHeight };
+  const end = { x: to.x, y: to.y - toHeight };
+  if (!route) return [start, end];
+  const span = route.to.y - toHeight - route.from.y - fromHeight;
+  return [
+    start,
+    ...route.points.map((point, index) => {
+      // Translate the whole route for group drags, blend offsets for one endpoint.
+      const fraction = span
+        ? (point.y - route.from.y - fromHeight) / span
+        : (index + 1) / (route.points.length + 1);
+      return {
+        x:
+          point.x +
+          (from.x - route.from.x) * (1 - fraction) +
+          (to.x - route.to.x) * fraction,
+        y:
+          point.y +
+          (from.y - route.from.y) * (1 - fraction) +
+          (to.y - route.to.y) * fraction,
+      };
+    }),
+    end,
+  ];
+}
+
+function connectionLabelPosition(connection) {
+  const points = connectionPoints(connection);
+  let length = 0;
+  for (let i = 1; i < points.length; i++)
+    length += Math.hypot(
+      points[i].x - points[i - 1].x,
+      points[i].y - points[i - 1].y,
+    );
+  let remaining = length / 2;
+  for (let i = 1; i < points.length; i++) {
+    const start = points[i - 1],
+      end = points[i];
+    const segment = Math.hypot(end.x - start.x, end.y - start.y);
+    if (remaining <= segment && segment) {
+      const fraction = remaining / segment;
+      return {
+        x: start.x + (end.x - start.x) * fraction,
+        y: start.y + (end.y - start.y) * fraction,
+      };
+    }
+    remaining -= segment;
+  }
+  return points[0];
+}
+
+function connectionPath(connection) {
+  if (connection.route)
+    return connectionPoints(connection)
+      .map(({ x, y }, index) => `${index ? "L" : "M"}${x},${y}`)
+      .join(" ");
+  const { from, to, fromHeight, toHeight } = connection;
   const y1 = from.y + fromHeight;
   const y2 = to.y - toHeight;
   const middle = (y1 + y2) / 2;
@@ -1510,10 +1578,47 @@ function render(graph, metadata) {
   const { producers, positions } = layout;
   bounds = layout.bounds;
   layoutBounds = bounds;
+  const inputScores = new Map();
+  const rowBounds = new Map();
+  let firstRow = Infinity,
+    lastRow = -Infinity;
+  for (const node of graph.nodes) {
+    const { x, y } = positions.get(node.id);
+    const height = sizes.get(node.id).height;
+    const row = rowBounds.get(y) ?? { top: Infinity, bottom: -Infinity };
+    row.top = Math.min(row.top, y - height / 2);
+    row.bottom = Math.max(row.bottom, y + height / 2);
+    rowBounds.set(y, row);
+    firstRow = Math.min(firstRow, y);
+    lastRow = Math.max(lastRow, y);
+    for (const input of [...node.inputs, ...(node.captures ?? [])]) {
+      const score = inputScores.get(input) ?? { total: 0, count: 0 };
+      score.total += x;
+      score.count++;
+      inputScores.set(input, score);
+    }
+  }
+  const portSlots = (names, score) =>
+    new Map(
+      names
+        .map((name, index) => ({ name, index, score: score(name) }))
+        .sort((a, b) => a.score - b.score || a.index - b.index)
+        .map(({ name }, index) => [name, index]),
+    );
+  const inputs = portSlots(graph.inputs, (name) => {
+    const score = inputScores.get(name);
+    return score ? score.total / score.count : bounds.width / 2;
+  });
+  const outputs = portSlots(
+    graph.outputs,
+    (name) => positions.get(producers.get(name))?.x ?? bounds.width / 2,
+  );
   const addPort = (name, index, output) => {
     const count = output ? graph.outputs.length : graph.inputs.length;
     const position = {
-      x: ((index + 1) * bounds.width) / (count + 1),
+      x:
+        (((output ? outputs : inputs).get(name) + 1) * bounds.width) /
+        (count + 1),
       y: output ? bounds.height - 60 : 60,
     };
     const create = (position) => {
@@ -1555,7 +1660,19 @@ function render(graph, metadata) {
   const inputPositions = new Map(
     graph.inputs.map((name, index) => [name, addPort(name, index, false)]),
   );
-  const connect = (from, to, name, fromHeight, toHeight) => {
+  const boundaryRoute = (from, to, fromHeight, toHeight) => {
+    if (!from || !to) return;
+    const x = from.x + to.x < bounds.width ? 10 : bounds.width - 10;
+    const y1 = (rowBounds.get(from.y)?.bottom ?? from.y + fromHeight) + 18;
+    const y2 = (rowBounds.get(to.y)?.top ?? to.y - toHeight) - 18;
+    return [
+      { x: from.x, y: y1 },
+      { x, y: y1 },
+      { x, y: y2 },
+      { x: to.x, y: y2 },
+    ];
+  };
+  const connect = (from, to, name, fromHeight, toHeight, points) => {
     if (!from || !to) return;
     const connection = {
       from,
@@ -1563,6 +1680,7 @@ function render(graph, metadata) {
       name,
       fromHeight,
       toHeight,
+      route: points ? { points, from: { ...from }, to: { ...to } } : undefined,
       create() {
         const group = element("g", {});
         const path = element("path", { class: "edge" });
@@ -1739,17 +1857,31 @@ function render(graph, metadata) {
         input,
         producer ? sizes.get(producer).height / 2 : 26,
         size.height / 2,
+        producer
+          ? layout.routes.get(node.id)?.get(producer)
+          : position.y > firstRow
+            ? boundaryRoute(
+                inputPositions.get(input),
+                position,
+                26,
+                size.height / 2,
+              )
+            : undefined,
       );
     }
   }
   graph.outputs.forEach((name, index) => {
     const producer = producers.get(name);
+    const from = producer ? positions.get(producer) : inputPositions.get(name);
+    const to = addPort(name, index, true);
+    const fromHeight = producer ? sizes.get(producer).height / 2 : 26;
     connect(
-      producer ? positions.get(producer) : inputPositions.get(name),
-      addPort(name, index, true),
+      from,
+      to,
       name,
-      producer ? sizes.get(producer).height / 2 : 26,
+      fromHeight,
       26,
+      from?.y < lastRow ? boundaryRoute(from, to, fromHeight, 26) : undefined,
     );
   });
   overviewDirty = true;

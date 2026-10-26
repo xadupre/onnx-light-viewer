@@ -24,6 +24,7 @@ function openViewer(t, initialTab = "model", setup = () => {}) {
     { runScripts: "outside-only", pretendToBeVisual: true },
   );
   t.after(() => dom.window.close());
+  dom.window.structuredClone = structuredClone;
   dom.window.HTMLCanvasElement.prototype.getContext = () => ({
     font: "",
     measureText(text) {
@@ -6668,6 +6669,84 @@ function nodePositions(document, selector = ".graph-node > rect") {
     };
   });
 }
+
+test("keeps residual routes attached while dragging and restores their bends with Refresh positions", (t) => {
+  const { document, window, load, pointer } = openViewer(t);
+  const model = chainGraph(5);
+  model.nodes[4].inputs.push("tensor_0");
+  load(model);
+  const connection = [...document.querySelectorAll("#edges > g")].find(
+    (group) =>
+      group.querySelector(".tensor-label").textContent === "tensor_0" &&
+      group.querySelector(".edge").getAttribute("d").includes("L"),
+  );
+  assert.ok(connection, "Residual edge must follow the layout's routed bends");
+  const path = connection.querySelector(".edge");
+  const coordinates = () =>
+    path
+      .getAttribute("d")
+      .match(/-?\d+(?:\.\d+)?(?:e[+-]?\d+)?/gi)
+      .map(Number);
+  const before = coordinates();
+  const text = connection.querySelector(".tensor-label");
+  const label = {
+    x: Number(text.getAttribute("x")),
+    y: Number(text.getAttribute("y")),
+  };
+  const graph = document.getElementById("graph");
+  graph.dispatchEvent(
+    new window.KeyboardEvent("keydown", { key: "a", ctrlKey: true }),
+  );
+  const start = nodePositions(document)[0];
+  pointer(
+    document.querySelector(".graph-node"),
+    "pointerdown",
+    start.x,
+    start.y,
+  );
+  pointer(graph, "pointermove", start.x + 40, start.y + 25);
+  pointer(graph, "pointerup", start.x + 40, start.y + 25);
+  coordinates().forEach((value, index) =>
+    assert.ok(Math.abs(value - before[index] - (index % 2 ? 25 : 40)) < 1e-8),
+  );
+  assert.ok(Math.abs(Number(text.getAttribute("x")) - label.x - 40) < 1e-8);
+  assert.ok(Math.abs(Number(text.getAttribute("y")) - label.y - 25) < 1e-8);
+  document.getElementById("refresh-positions").click();
+  assert.deepEqual(coordinates(), before);
+});
+
+test("orders graph ports with their independent branches instead of crossing their connections", (t) => {
+  const { document, load } = openViewer(t);
+  load({
+    ...demoGraph,
+    inputs: ["right", "left"],
+    outputs: ["right_result", "left_result"],
+    nodes: [
+      {
+        ...demoGraph.nodes[0],
+        id: "left",
+        inputs: ["left"],
+        outputs: ["left_result"],
+      },
+      {
+        ...demoGraph.nodes[0],
+        id: "right",
+        inputs: ["right"],
+        outputs: ["right_result"],
+      },
+    ],
+  });
+  const x = (label) => {
+    const rect = document.querySelector(`[aria-label="${label}"] > rect`);
+    return (
+      Number(rect.getAttribute("x")) + Number(rect.getAttribute("width")) / 2
+    );
+  };
+  assert.ok(x("Input: left") < x("Input: right"));
+  assert.ok(x("Output: left_result") < x("Output: right_result"));
+  const positions = nodePositions(document);
+  assert.ok(positions[0].x < positions[1].x);
+});
 
 test("renders a portrait graph with inputs above operators and outputs below", (t) => {
   const { document, load } = openViewer(t);
