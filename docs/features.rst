@@ -176,6 +176,21 @@ Native estimation, not model execution or measured RAM/GPU usage.
 
    Estimate memory for concrete input dimensions without executing the model.
 
+Pattern groups
+^^^^^^^^^^^^^^
+
+Select onnx-light's ``L1``, ``L2``, ``Layer`` or ``all`` pattern sets in **Fuse**
+or **Optimize**, then refine the individual checkboxes. Fuse selects only
+graph-applicable members; Optimize starts with SDK-default patterns and leaves
+``RepeatedLayer`` unchecked. See :doc:`features/fusion_patterns`.
+Choosing a group alone does not transform or save the model.
+
+.. figure:: _static/feature-pattern-groups.png
+   :alt: Native pattern group menu in Optimize, with the L1 selection reflected in priority checkboxes.
+   :width: 100%
+
+   Named pattern sets are separate from optimization priorities.
+
 Diagnostics and help
 ^^^^^^^^^^^^^^^^^^^^
 
@@ -206,8 +221,8 @@ viewer control.
      - In progress in `PR #115
        <https://github.com/xadupre/onnx-light-viewer/pull/115>`_, including embedded
        and plain external-weight export. Not available on ``main`` yet.
-   * - Graph transformations
-     - Planned: fusion/Layer patterns, weight quantization and rewriting
+   * - Other graph transformations
+     - Planned: weight quantization and rewriting
        scenarios/pipelines.
    * - Full tensor analytics
      - Planned: statistics, histograms, color maps and decoded payload browsing.
