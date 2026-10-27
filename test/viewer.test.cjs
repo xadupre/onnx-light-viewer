@@ -5980,6 +5980,13 @@ test("builder layer limits reach previews and submissions without leaking into M
 test("advanced export options stay folded and omit hidden, unsupported or conflicting fields", async (t) => {
   const { document, window, messages, waitForMessage } = openViewer(t);
   const byId = (id) => document.getElementById(id);
+  for (const control of byId("export-advanced").querySelectorAll(
+    'input:not([type="checkbox"]), select',
+  )) {
+    const row = control.closest(".export-field");
+    assert.ok(row, `${control.id} must share a row with its label`);
+    assert.equal(row.querySelector("label"), control.labels[0], control.id);
+  }
   const change = (id, value) => {
     if (typeof value === "boolean") byId(id).checked = value;
     else byId(id).value = value;

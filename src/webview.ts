@@ -133,8 +133,10 @@ export function webviewHtml(
                 <details id="export-advanced" class="export-advanced">
                   <summary>Advanced options</summary>
                   <div id="export-layer-options" class="export-option" data-exporters="mbext modelbuilder" hidden>
-                    <label for="export-layer-count">Layer limit (test model)</label>
-                    <input id="export-layer-count" type="number" min="1" step="1" placeholder="All layers" disabled>
+                    <div class="export-field">
+                      <label for="export-layer-count">Layer limit (test model)</label>
+                      <input id="export-layer-count" type="number" min="1" step="1" placeholder="All layers" disabled>
+                    </div>
                   </div>
                   <div class="export-option" data-exporters="mbext modelbuilder" hidden>
                     <label><input id="export-exclude-embeds" type="checkbox" data-export-option="excludeEmbeds" disabled> Exclude embeddings</label>
@@ -149,14 +151,20 @@ export function webviewHtml(
                       <label for="export-olive-exporter">ONNX exporter</label>
                       <select id="export-olive-exporter" data-export-option="oliveExporter" disabled><option value="">Olive default (model builder)</option><option value="model_builder">Model builder</option><option value="dynamo_exporter">PyTorch Dynamo</option><option value="torchscript_exporter">PyTorch TorchScript</option></select>
                     </div>
-                    <label for="export-olive-task">Hugging Face task</label>
-                    <input id="export-olive-task" placeholder="Olive default" list="export-olive-tasks" data-export-option="task" disabled>
+                    <div class="export-field">
+                      <label for="export-olive-task">Hugging Face task</label>
+                      <input id="export-olive-task" placeholder="Olive default" list="export-olive-tasks" data-export-option="task" disabled>
+                    </div>
                     <datalist id="export-olive-tasks"><option value="text-generation-with-past"><option value="text-generation"><option value="text-classification"><option value="feature-extraction"></datalist>
                     <label><input id="export-olive-trust-code" type="checkbox" data-export-option="trustRemoteCode" disabled> Trust model repository code (executes Python)</label>
-                    <label for="export-olive-splits">Model splits</label>
-                    <input id="export-olive-splits" type="number" min="1" step="1" placeholder="Olive default" data-export-option="numSplits" disabled>
-                    <label for="export-olive-memory">Device memory (MB)</label>
-                    <input id="export-olive-memory" type="number" min="1" step="1" placeholder="Olive default" data-export-option="memory" disabled>
+                    <div class="export-field">
+                      <label for="export-olive-splits">Model splits</label>
+                      <input id="export-olive-splits" type="number" min="1" step="1" placeholder="Olive default" data-export-option="numSplits" disabled>
+                    </div>
+                    <div class="export-field">
+                      <label for="export-olive-memory">Device memory (MB)</label>
+                      <input id="export-olive-memory" type="number" min="1" step="1" placeholder="Olive default" data-export-option="memory" disabled>
+                    </div>
                   </div>
                   <div class="export-option" data-exporters="mbext modelbuilder olive" data-precisions="int4 int8" hidden>
                     <label><input id="export-use-qdq" type="checkbox" data-export-option="useQdq" disabled> Q/DQ quantization</label>
@@ -174,12 +182,16 @@ export function webviewHtml(
                     </div>
                   </div>
                   <div class="export-option" data-exporters="mbext" hidden>
-                    <label for="export-opset">ONNX opset</label>
-                    <input id="export-opset" type="number" min="1" step="1" placeholder="Exporter default" data-export-option="opset" disabled>
+                    <div class="export-field">
+                      <label for="export-opset">ONNX opset</label>
+                      <input id="export-opset" type="number" min="1" step="1" placeholder="Exporter default" data-export-option="opset" disabled>
+                    </div>
                   </div>
                   <div class="export-option" data-exporters="mbext mobius" hidden>
-                    <label for="export-max-shard-size">Maximum weight file size</label>
-                    <input id="export-max-shard-size" placeholder="2GB" pattern="[1-9][0-9]*([KkMmGg]?[Bb])" data-export-option="maxShardSize" disabled>
+                    <div class="export-field">
+                      <label for="export-max-shard-size">Maximum weight file size</label>
+                      <input id="export-max-shard-size" placeholder="2GB" pattern="[1-9][0-9]*([KkMmGg]?[Bb])" data-export-option="maxShardSize" disabled>
+                    </div>
                   </div>
                   <div class="export-option" data-exporters="mobius" hidden>
                     <label><input id="export-no-weights" type="checkbox" data-export-option="noWeights" disabled> Graph without weights</label>
@@ -198,8 +210,10 @@ export function webviewHtml(
                     <label><input id="export-static-cache" type="checkbox" data-export-option="staticCache" disabled> Static KV cache</label>
                   </div>
                   <div class="export-option" data-exporters="mobius" data-requires="export-static-cache" hidden>
-                    <label for="export-max-sequence-length">Maximum sequence length</label>
-                    <input id="export-max-sequence-length" type="number" min="1" step="1" placeholder="Model default" data-export-option="maxSequenceLength" disabled>
+                    <div class="export-field">
+                      <label for="export-max-sequence-length">Maximum sequence length</label>
+                      <input id="export-max-sequence-length" type="number" min="1" step="1" placeholder="Model default" data-export-option="maxSequenceLength" disabled>
+                    </div>
                   </div>
                 </details>
               </fieldset>
