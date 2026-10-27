@@ -40,6 +40,8 @@ is measured once, without warmup. Filesystem caches are not flushed.
 
 The output JSON file is updated after every export, including failures, and is
 replaced on subsequent invocations. It contains timings, logs and commands/configs.
+A final table of timings and output sizes, plus failure log tails, is printed to
+standard output; full logs remain in the JSON report.
 Exported models and per-run caches use temporary directories, removed after each
 measurement; only the shared download cache and the JSON report are retained.
 Runs need substantial RAM, CUDA resources where required, and temporary disk space
@@ -488,6 +490,42 @@ def environment_info() -> dict:
     }
 
 
+def print_summary(report: dict) -> None:
+    print(f"\nBenchmark summary: {report['model']} ({report['status']})")
+    print(
+        f"{'Profile':10} {'Exporter':13} {'Status':10} "
+        f"{'Creation(s)':>12} {'Validation(s)':>13} {'Output(MiB)':>12}"
+    )
+    for row in report["results"]:
+        creation = (
+            f"{row['creation_seconds']:.3f}" if "creation_seconds" in row else "-"
+        )
+        validation = (
+            f"{row['validation_seconds']:.3f}" if "validation_seconds" in row else "-"
+        )
+        size = f"{row['output_bytes'] / 1024**2:.3f}" if "output_bytes" in row else "-"
+        print(
+            f"{row['profile']:10} {row['exporter']:13} {row['status']:10} "
+            f"{creation:>12} {validation:>13} {size:>12}"
+        )
+    if not report["results"]:
+        print("No exporter results.")
+    if "error" in report:
+        print(f"Setup error: {report['error']}")
+    for row in report["results"]:
+        if row["status"] == "ok":
+            continue
+        print(
+            f"\n{row['profile']} {row['exporter']}: {row.get('error', row['status'])}"
+        )
+        if row.get("log"):
+            print(
+                "Last exporter log lines (up to 20 lines / 4000 characters; full log in JSON):"
+            )
+            print("\n".join(row["log"][-4000:].splitlines()[-20:]))
+    sys.stdout.flush()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -660,6 +698,7 @@ def main() -> int:
         return 1
     finally:
         write_json(report_path, report)
+        print_summary(report)
         print(f"Results: {report_path}", flush=True)
     return 0 if report["status"] == "ok" else 1
 

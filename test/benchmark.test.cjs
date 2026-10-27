@@ -102,8 +102,24 @@ sys.exit(23)
     const output = path.join(root, model.replace("/", "-") + ".json");
     const args = [...common, "--output", output];
     if (model !== "Qwen/Qwen3.5-4B") args.push("--model", model);
-    await assert.rejects(execute(python, args, { env }), { code: 1 });
+    let stdout;
+    await assert.rejects(execute(python, args, { env }), (error) => {
+      assert.equal(error.code, 1);
+      stdout = error.stdout;
+      return true;
+    });
     const report = JSON.parse(await readFile(output, "utf8"));
+    assert.ok(stdout.includes(`Benchmark summary: ${model} (failed)`), stdout);
+    assert.match(stdout, /Creation\(s\)\s+Validation\(s\)\s+Output\(MiB\)/);
+    assert.match(stdout, /Exporter exited with status 23/);
+    assert.match(
+      stdout,
+      /Fixture stops before model creation and ONNX validation/,
+    );
+    const summaryRows = stdout
+      .split(/\r?\n/)
+      .map((line) => line.trim().split(/\s+/))
+      .filter((cells) => cells[0] === "cpu-fp32" && cells.length === 6);
     assert.equal(report.model, model);
     assert.equal(report.arguments.model, model);
     assert.equal(report.status, "failed");
@@ -117,7 +133,15 @@ sys.exit(23)
       report.results.map(({ exporter }) => exporter),
       ["mbext", "modelbuilder", "mobius", "olive", "olive-recipes"],
     );
-    for (const row of report.results) {
+    for (const [index, row] of report.results.entries()) {
+      assert.deepEqual(summaryRows[index], [
+        row.profile,
+        row.exporter,
+        row.status,
+        row.creation_seconds.toFixed(3),
+        "-",
+        "-",
+      ]);
       assert.equal(row.status, "failed");
       assert.match(row.error, /Exporter exited with status 23/);
       assert.ok(row.log.startsWith(`source-model=${model}\n`), row.log);
@@ -153,11 +177,59 @@ sys.exit(23)
       [...common, "--model", "../invalid", "--output", invalidOutput],
       { env },
     ),
-    { code: 1 },
+    (error) => {
+      assert.equal(error.code, 1);
+      assert.match(error.stdout, /No exporter results\./);
+      assert.match(error.stdout, /Setup error: .*Repo id/);
+      return true;
+    },
   );
   const invalid = JSON.parse(await readFile(invalidOutput, "utf8"));
   assert.equal(invalid.status, "failed");
   assert.match(invalid.error, /Repo id/);
   assert.deepEqual(invalid.results, []);
   assert.equal(hub.requests.length, requestCount);
+});
+
+test("benchmark stdout summary includes successful timings and sizes and bounded cancellation logs", async () => {
+  const report = {
+    model: "owner/model",
+    status: "cancelled",
+    results: [
+      {
+        profile: "cpu-fp32",
+        exporter: "mbext",
+        status: "ok",
+        creation_seconds: 0,
+        validation_seconds: 0.125,
+        output_bytes: 2.5 * 1024 ** 2,
+      },
+      {
+        profile: "cuda-fp16",
+        exporter: "olive",
+        status: "cancelled",
+        creation_seconds: 2.5,
+        log:
+          "discarded log prefix\n" +
+          "older output\n".repeat(1000) +
+          "Traceback: conversion interrupted\nKeyboardInterrupt\n",
+      },
+    ],
+  };
+  const { stdout } = await execute(python, [
+    "-c",
+    'import json, runpy, sys; runpy.run_path(sys.argv[1])["print_summary"](json.loads(sys.argv[2]))',
+    benchmark,
+    JSON.stringify(report),
+  ]);
+  assert.match(stdout, /Benchmark summary: owner\/model \(cancelled\)/);
+  assert.match(stdout, /cpu-fp32\s+mbext\s+ok\s+0\.000\s+0\.125\s+2\.500/);
+  assert.match(stdout, /cuda-fp16\s+olive\s+cancelled\s+2\.500\s+-\s+-/);
+  assert.match(stdout, /full log in JSON/);
+  assert.match(
+    stdout,
+    /Traceback: conversion interrupted\r?\nKeyboardInterrupt/,
+  );
+  assert.ok(!stdout.includes("discarded log prefix"), stdout);
+  assert.ok(stdout.length < 4000, stdout);
 });
