@@ -4,7 +4,7 @@
 
 # ONNX Light Viewer
 
-[![Uses ONNX](media/onnx-badge.svg)](https://onnx.ai/)
+[![Uses ONNX](media/onnx-badge.png)](https://onnx.ai/)
 [![CI](https://github.com/xadupre/onnx-light-viewer/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/xadupre/onnx-light-viewer/actions/workflows/tests.yml)
 [![Code coverage](https://codecov.io/gh/xadupre/onnx-light-viewer/branch/main/graph/badge.svg)](https://codecov.io/gh/xadupre/onnx-light-viewer)
 
@@ -88,14 +88,15 @@ Sphinx documentation: [getting started](docs/getting_started.rst),
 
 ## Reusable ONNX badge
 
-Applications using ONNX can copy [the SVG badge](media/onnx-badge.svg) into their
-repository and add it to their README:
+Applications using ONNX can copy [the PNG badge](media/onnx-badge.png) into their
+repository and add it to their README. PNG images are supported by VSIX packaging:
 
 ```markdown
-[![Uses ONNX](media/onnx-badge.svg)](https://onnx.ai/)
+[![Uses ONNX](media/onnx-badge.png)](https://onnx.ai/)
 ```
 
-The badge is self-contained and includes a miniature of the
+The PNG is rendered from [the SVG badge](media/onnx-badge.svg). The SVG is
+self-contained and includes a miniature of the
 [ONNX logo](https://github.com/onnx/onnx/blob/main/docs/docsgen/source/_static/ONNX-Logo.svg)
 (copyright ONNX Project Contributors, Apache-2.0). Keep the attribution embedded
 in the SVG when reusing it. The badge indicates ONNX usage, not official

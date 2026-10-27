@@ -51,6 +51,30 @@ test("releases retain Linux and Windows packages while macOS builds are paused",
   assert.doesNotMatch(source, /sphinx|setup-python/);
 });
 
+test("README uses a PNG ONNX badge for VSIX packaging and retains the SVG source", () => {
+  const readme = readFileSync(
+    path.resolve(__dirname, "..", "README.md"),
+    "utf8",
+  );
+  assert.equal(
+    readme.split("[![Uses ONNX](media/onnx-badge.png)](https://onnx.ai/)")
+      .length - 1,
+    2,
+    "Both the displayed badge and the reuse example must use the PNG",
+  );
+  assert.doesNotMatch(readme, /!\[Uses ONNX\]\([^)]*\.svg\)/);
+  assert.match(readme, /\[the SVG badge\]\(media\/onnx-badge\.svg\)/);
+  const badge = readFileSync(
+    path.resolve(__dirname, "..", "media", "onnx-badge.png"),
+  );
+  assert.deepEqual(
+    badge.subarray(0, 8),
+    Buffer.from("89504e470d0a1a0a", "hex"),
+  );
+  assert.equal(badge.readUInt32BE(16), 88);
+  assert.equal(badge.readUInt32BE(20), 22);
+});
+
 test("Windows checkouts preserve LF line endings without changing ONNX binaries", () => {
   const source = readFileSync(
     path.resolve(__dirname, "..", ".gitattributes"),
