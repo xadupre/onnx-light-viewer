@@ -3,8 +3,15 @@ const { readFileSync } = require("node:fs");
 const { test } = require("node:test");
 const { runInNewContext } = require("node:vm");
 
-const sugiyamaLayout = runInNewContext(
-  `${readFileSync(require.resolve("../media/graph-layout.js"), "utf8")}\nsugiyamaLayout;`,
+const {
+  sugiyamaLayout,
+  layeredGraphLayout,
+  shortenGraphRoutes,
+  graphPathSegments,
+  flattenGraphPath,
+} = runInNewContext(
+  `${readFileSync(require.resolve("../media/graph-layout.js"), "utf8")}\n({ sugiyamaLayout, layeredGraphLayout, shortenGraphRoutes, graphPathSegments, flattenGraphPath });`,
+  { dagre: require("@dagrejs/dagre") },
 );
 
 function layout(nodes, inputs = [], outputs = []) {
@@ -37,6 +44,108 @@ function assertContained(result, nodes) {
   }
 }
 
+function segmentEntersBox(start, end, center, width, height) {
+  let low = 0;
+  let high = 1;
+  for (const [axis, size] of [
+    ["x", width],
+    ["y", height],
+  ]) {
+    const minimum = center[axis] - size / 2 + 0.001;
+    const maximum = center[axis] + size / 2 - 0.001;
+    const delta = end[axis] - start[axis];
+    if (!delta) {
+      if (start[axis] <= minimum || start[axis] >= maximum) return false;
+    } else {
+      const first = (minimum - start[axis]) / delta;
+      const last = (maximum - start[axis]) / delta;
+      low = Math.max(low, Math.min(first, last));
+      high = Math.min(high, Math.max(first, last));
+    }
+  }
+  return low < high;
+}
+
+function assertRouteAvoidsNodes(
+  result,
+  nodes,
+  source,
+  target,
+  requireRoute = true,
+) {
+  const from = nodes.find(({ id }) => id === source);
+  const to = nodes.find(({ id }) => id === target);
+  const start = result.positions.get(source);
+  const end = result.positions.get(target);
+  const route = result.routes.get(target)?.get(source);
+  if (requireRoute)
+    assert.ok(route?.length, `Missing route for ${source} -> ${target}`);
+  const points = flattenGraphPath(
+    [
+      { x: start.x, y: start.y + (from.height ?? 88) / 2 },
+      ...(route ?? []),
+      { x: end.x, y: end.y - (to.height ?? 88) / 2 },
+    ],
+    !!route?.length,
+  );
+  for (const point of points) {
+    assert.ok(point.x >= 0 && point.x <= result.bounds.width);
+    assert.ok(point.y >= 0 && point.y <= result.bounds.height);
+  }
+  for (const item of nodes) {
+    if (item.id === source || item.id === target) continue;
+    for (let index = 1; index < points.length; index++)
+      assert.equal(
+        segmentEntersBox(
+          points[index - 1],
+          points[index],
+          result.positions.get(item.id),
+          item.width ?? 140,
+          item.height ?? 88,
+        ),
+        false,
+        `${source} -> ${target} crosses ${item.id}`,
+      );
+  }
+}
+
+test("rounds detour corners without pulling the exterior run into operator rows", () => {
+  const points = [
+    { x: 0, y: 0 },
+    { x: 0, y: 100 },
+    { x: 300, y: 100 },
+    { x: 300, y: 500 },
+    { x: 0, y: 500 },
+    { x: 0, y: 600 },
+  ];
+  const segments = graphPathSegments(points, true);
+  assert.deepEqual(segments[0][0], points[0]);
+  assert.deepEqual(segments.at(-1).at(-1), points.at(-1));
+  for (let index = 1; index < segments.length; index++) {
+    const previous = segments[index - 1];
+    const current = segments[index];
+    assert.deepEqual(previous.at(-1), current[0]);
+    const incoming = {
+      x: previous.at(-1).x - previous.at(-2).x,
+      y: previous.at(-1).y - previous.at(-2).y,
+    };
+    const outgoing = {
+      x: current[1].x - current[0].x,
+      y: current[1].y - current[0].y,
+    };
+    assert.ok(
+      Math.abs(incoming.x * outgoing.y - incoming.y * outgoing.x) < 1e-8,
+    );
+    assert.ok(incoming.x * outgoing.x + incoming.y * outgoing.y >= 0);
+  }
+  const curve = flattenGraphPath(points, true);
+  assert.ok(curve.some(({ x, y }) => x > 0 && x < 16 && y > 84 && y < 100));
+  for (const { x, y } of curve) {
+    if (y > 116 && y < 484) assert.equal(x, 300);
+    if (y < 84 || y > 516) assert.equal(x, 0);
+  }
+});
+
 test("layers unsorted dependencies, captures and duplicate inputs with differently sized blocks", () => {
   const nodes = [
     node("join", ["left", "right", "left"], { height: 160 }),
@@ -50,8 +159,13 @@ test("layers unsorted dependencies, captures and duplicate inputs with different
   assert.equal(at("left").y, at("right").y);
   assert.ok(at("left").y + 60 < at("join").y - 80);
   assert.ok(Math.abs(at("left").x - at("right").x) >= 230);
+  assert.ok(Math.abs(at("left").x - at("right").x) - (180 + 280) / 2 >= 120);
+  assert.ok(at("left").y - 60 - (at("source").y + 44) >= 108);
   assertContained(result, nodes);
-  assert.deepEqual([...layout(nodes).positions], [...result.positions]);
+  assert.deepEqual(
+    [...layout(nodes, ["input"], ["join"]).positions],
+    [...result.positions],
+  );
 });
 
 test("barycentric sweeps uncross independent branches and align their chains", () => {
@@ -61,6 +175,297 @@ test("barycentric sweeps uncross independent branches and align their chains", (
   assert.ok(positions.get("d").x < positions.get("c").x);
   assert.equal(positions.get("a").x, positions.get("d").x);
   assert.equal(positions.get("b").x, positions.get("c").x);
+});
+
+test("routes nested residual connections around intermediate operators", () => {
+  const nodes = [
+    node("source"),
+    node("projection", ["source"], { width: 280 }),
+    node("normalization", ["projection"], { height: 160 }),
+    node("residual", ["normalization", "source"]),
+    node("activation", ["residual"]),
+    node("output", ["activation", "projection"]),
+  ];
+  const result = layout(nodes);
+  assertContained(result, nodes);
+  assertRouteAvoidsNodes(result, nodes, "source", "residual");
+  assertRouteAvoidsNodes(result, nodes, "projection", "output");
+  assert.deepEqual([...layout(nodes).routes], [...result.routes]);
+});
+
+test("omits routes with no bend points after shortcutting", () => {
+  const result = layout([
+    node("a"),
+    node("b"),
+    node("c", ["b"]),
+    node("d", ["b", "c"]),
+    node("e", ["a", "c"]),
+  ]);
+  for (const routes of [result.routes.values(), result.inputRoutes.values()]) {
+    for (const targets of routes)
+      for (const points of targets.values()) assert.ok(points.length);
+  }
+  for (const points of result.outputRoutes.values()) assert.ok(points.length);
+  assert.equal(result.routes.get("d")?.has("b"), undefined);
+});
+
+test("places graph ports beside their consumers and producers in both layout engines", () => {
+  for (const count of [8, 600, 2100]) {
+    const nodes = Array.from({ length: count }, (_, index) =>
+      node(`node${index}`, index ? [`node${index - 1}`] : ["start"]),
+    );
+    nodes[count - 1].inputs.push("late");
+    nodes[count - 1].captures = ["captured"];
+    const inputs = ["late", "start", "captured", "unused"];
+    const outputs = ["node0", `node${count - 1}`, "start"];
+    const result = layout(nodes, inputs, outputs);
+    assertContained(result, nodes);
+    const first = result.positions.get("node0");
+    const last = result.positions.get(`node${count - 1}`);
+    for (const name of ["late", "captured"]) {
+      const port = result.inputPositions.get(name);
+      assert.ok(port.y > first.y);
+      const gap = last.y - 44 - (port.y + 26);
+      assert.ok(gap >= 108 && gap < 180, `${count}: ${name} gap ${gap}`);
+    }
+    const early = result.outputPositions.get("node0");
+    assert.ok(early.y > first.y + 44 + 26);
+    assert.ok(early.y < last.y);
+    assert.ok(result.inputPositions.get("start").y < first.y);
+    assert.ok(result.outputPositions.get("start").y < last.y);
+    for (const [name, position] of [
+      ...result.inputPositions,
+      ...result.outputPositions,
+    ]) {
+      assert.ok(position.x >= 60, name);
+      assert.ok(position.x + 60 <= result.bounds.width, name);
+      assert.ok(position.y >= 26, name);
+      assert.ok(position.y + 26 <= result.bounds.height, name);
+      for (const item of nodes) {
+        const operator = result.positions.get(item.id);
+        assert.ok(
+          Math.abs(position.x - operator.x) >= 130 ||
+            Math.abs(position.y - operator.y) >= 70,
+          `${name} overlaps ${item.id}`,
+        );
+      }
+    }
+    const repeated = layout(nodes, inputs, outputs);
+    assert.deepEqual([...repeated.inputPositions], [...result.inputPositions]);
+    assert.deepEqual(
+      [...repeated.outputPositions],
+      [...result.outputPositions],
+    );
+  }
+});
+
+test("shortens exterior routes through free interior corridors after placement", () => {
+  for (const blocked of [false, true]) {
+    const nodes = [node("source"), node("target", ["source"])];
+    if (blocked) nodes.push(node("obstacle"));
+    const sizes = new Map(
+      nodes.map(({ id }) => [id, { width: 140, height: 88 }]),
+    );
+    const route = [
+      { x: 100, y: 280 },
+      { x: 500, y: 280 },
+      { x: 500, y: 720 },
+      { x: 100, y: 720 },
+    ];
+    const result = {
+      positions: new Map([
+        ["source", { x: 100, y: 200 }],
+        ["target", { x: 100, y: 800 }],
+        ...(blocked ? [["obstacle", { x: 100, y: 500 }]] : []),
+      ]),
+      producers: new Map(nodes.map(({ id }) => [id, id])),
+      routes: new Map([["target", new Map([["source", route]])]]),
+      bounds: { width: 600, height: 1000 },
+    };
+    shortenGraphRoutes({ nodes }, sizes, result);
+    const shortened = result.routes.get("target").get("source");
+    assert.notDeepEqual(shortened, route);
+    if (blocked) {
+      assert.ok(shortened.every(({ x }) => x < 250));
+      assertRouteAvoidsNodes(result, nodes, "source", "target");
+    } else assert.equal(shortened.length, 0);
+  }
+});
+
+test("checks the rendered cubic before removing every bend from a shortcut", () => {
+  const nodes = [node("source"), node("target", ["source"]), node("obstacle")];
+  const sizes = new Map(
+    nodes.map(({ id }) => [id, { width: 140, height: 88 }]),
+  );
+  const result = {
+    positions: new Map([
+      ["source", { x: 100, y: 200 }],
+      ["target", { x: 2100, y: 1288 }],
+      ["obstacle", { x: 412.5, y: 540.875 }],
+    ]),
+    producers: new Map(nodes.map(({ id }) => [id, id])),
+    routes: new Map([
+      [
+        "target",
+        new Map([
+          [
+            "source",
+            [
+              { x: 100, y: 300 },
+              { x: 2500, y: 300 },
+              { x: 2500, y: 1188 },
+              { x: 2100, y: 1188 },
+            ],
+          ],
+        ]),
+      ],
+    ]),
+    bounds: { width: 2600, height: 1500 },
+  };
+  shortenGraphRoutes({ nodes }, sizes, result);
+  assertRouteAvoidsNodes(result, nodes, "source", "target");
+});
+
+test("keeps initial and shortened fallback curves outside a wide consumer row", () => {
+  const consumers = Array.from({ length: 1999 }, (_, index) =>
+    node(`consumer${index}`, ["source"]),
+  );
+  const nodes = [
+    node("source"),
+    ...consumers,
+    node("target", ["source", consumers[0].id]),
+  ];
+  const sizes = new Map(
+    nodes.map(({ id }) => [id, { width: 140, height: 88 }]),
+  );
+  const initial = layeredGraphLayout({ nodes }, sizes);
+  assertRouteAvoidsNodes(initial, nodes, "source", "target");
+  assertRouteAvoidsNodes(layout(nodes), nodes, "source", "target");
+});
+
+test("routes adjacent-rank graph outputs outside a wide fallback operator row", () => {
+  const operators = [
+    node("source"),
+    ...Array.from({ length: 2100 }, (_, index) =>
+      node(`consumer${index}`, ["source"]),
+    ),
+  ];
+  const port = node("output-port", ["source"], {
+    port: "output",
+    width: 120,
+    height: 52,
+  });
+  const nodes = [...operators, port];
+  const sizes = new Map(
+    nodes.map(({ id, width = 140, height = 88 }) => [id, { width, height }]),
+  );
+  assertRouteAvoidsNodes(
+    layeredGraphLayout({ nodes }, sizes),
+    nodes,
+    "source",
+    port.id,
+    false,
+  );
+  const result = layout(operators, [], ["source"]);
+  result.positions.set(port.id, result.outputPositions.get("source"));
+  result.routes.set(
+    port.id,
+    new Map([["source", result.outputRoutes.get("source")]]),
+  );
+  assertRouteAvoidsNodes(result, nodes, "source", port.id, false);
+});
+
+test("routes adjacent-rank graph inputs outside mixed-height fallback rows", () => {
+  const operators = [
+    node("tall-left", [], { height: 240 }),
+    node("tall-right", [], { height: 160 }),
+    ...Array.from({ length: 2100 }, (_, index) =>
+      node(`consumer${index}`, ["input"], { height: index % 3 ? 88 : 168 }),
+    ),
+  ];
+  const port = node("input-port", [], {
+    port: "input",
+    outputs: ["input"],
+    width: 120,
+    height: 52,
+  });
+  const nodes = [port, ...operators];
+  const sizes = new Map(
+    nodes.map(({ id, width = 140, height = 88 }) => [id, { width, height }]),
+  );
+  const initial = layeredGraphLayout({ nodes }, sizes);
+  const result = layout(operators, ["input"]);
+  result.positions.set(port.id, result.inputPositions.get("input"));
+  for (const target of ["consumer0", "consumer2099"]) {
+    assertRouteAvoidsNodes(initial, nodes, port.id, target, false);
+    if (!result.routes.has(target)) result.routes.set(target, new Map());
+    result.routes
+      .get(target)
+      .set(port.id, result.inputRoutes.get(target)?.get("input"));
+    assertRouteAvoidsNodes(result, nodes, port.id, target, false);
+  }
+});
+
+test("keeps a detour when the direct shortcut would cross another arc", () => {
+  const nodes = [
+    node("source"),
+    node("target", ["source"]),
+    node("left"),
+    node("right", ["left"]),
+  ];
+  const sizes = new Map(nodes.map(({ id }) => [id, { width: 80, height: 88 }]));
+  const route = [
+    { x: 200, y: 280 },
+    { x: 500, y: 280 },
+    { x: 500, y: 720 },
+    { x: 200, y: 720 },
+  ];
+  const result = {
+    positions: new Map([
+      ["source", { x: 200, y: 200 }],
+      ["target", { x: 200, y: 800 }],
+      ["left", { x: 50, y: 500 }],
+      ["right", { x: 350, y: 500 }],
+    ]),
+    producers: new Map(nodes.map(({ id }) => [id, id])),
+    routes: new Map([["target", new Map([["source", route]])]]),
+    bounds: { width: 600, height: 1000 },
+  };
+  shortenGraphRoutes({ nodes }, sizes, result);
+  assert.deepEqual(result.routes.get("target").get("source"), route);
+});
+
+test("routes a shared graph input around intervening operators", () => {
+  const nodes = [
+    node("first", ["shared"]),
+    node("middle", ["first"]),
+    node("last", ["middle", "shared"]),
+  ];
+  const result = layout(nodes, ["shared"], ["first", "last"]);
+  const port = { id: "input-port", width: 120, height: 52 };
+  result.positions.set(port.id, result.inputPositions.get("shared"));
+  if (!result.routes.has("last")) result.routes.set("last", new Map());
+  result.routes
+    .get("last")
+    .set(port.id, result.inputRoutes.get("last").get("shared"));
+  assertRouteAvoidsNodes(result, [...nodes, port], port.id, "last");
+});
+
+test("keeps short fanout branches local instead of expanding them over the whole chain", () => {
+  const nodes = Array.from({ length: 400 }, (_, index) =>
+    node(`chain${index}`, index ? [`chain${index - 1}`] : []),
+  );
+  for (let index = 0; index < 600; index++)
+    nodes.push(node(`leaf${index}`, ["chain0"]));
+  const result = layout(nodes);
+  assertContained(result, nodes);
+  for (let index = 0; index < 600; index++) {
+    assert.equal(
+      result.positions.get(`leaf${index}`).y,
+      result.positions.get("chain1").y,
+    );
+    assert.equal(result.routes.get(`leaf${index}`)?.has("chain0"), undefined);
+  }
 });
 
 test("handles empty graphs, disconnected nodes, optional tensors and cyclic dependencies deterministically", () => {
@@ -89,6 +494,7 @@ test("lays out 20,000-node deep and wide graphs without expanding long edges", (
   );
   const deep = layout(chain);
   assertContained(deep, chain);
+  assertRouteAvoidsNodes(deep, chain, "node0", `node${count - 1}`);
   for (let i = 1; i < count; i++) {
     assert.ok(
       deep.positions.get(`node${i}`).y >

@@ -53,6 +53,36 @@ function createMemoryPanel({ byId, postMessage, formatFileSize, selectNode }) {
         formatFileSize(event.outputBytes),
         formatFileSize(event.scratchBytes),
         `${formatFileSize(event.deviceBytes)}${peakIndices.has(event.index) ? " (local peak)" : ""}`,
+        event.afterBytes == null
+          ? "Unavailable"
+          : formatFileSize(event.afterBytes),
+        (event.decisions ?? [])
+          .filter(({ action }) => action === "inplace")
+          .map(({ input, output, kind }) => `${input} → ${output} (${kind})`)
+          .join("\n") || "—",
+        (event.decisions ?? [])
+          .filter(({ action }) => action === "release")
+          .map(({ name }) => name)
+          .join("\n") || "—",
+        (event.decisions ?? [])
+          .filter(({ action }) => action === "release_shape_tag")
+          .map(({ name }) => name)
+          .join("\n") || "—",
+        [
+          ...(event.inputs ?? []).map((tensor) => ({
+            ...tensor,
+            direction: "in",
+          })),
+          ...(event.outputs ?? []).map((tensor) => ({
+            ...tensor,
+            direction: "out",
+          })),
+        ]
+          .map(
+            ({ name, type, shape, tag, direction }) =>
+              `${direction}: ${name}: ${type ?? "Unknown"} ${shape ?? "Unknown shape"}${tag ? ` (${tag})` : ""}`,
+          )
+          .join("\n") || "—",
       ].entries()) {
         const cell = document.createElement(index === 0 ? "th" : "td");
         if (index === 0) cell.scope = "row";
@@ -80,19 +110,107 @@ function createMemoryPanel({ byId, postMessage, formatFileSize, selectNode }) {
   function chart() {
     const events = profile.events;
     const peak = profile.peakBytes ?? 0;
-    const points = events.map((event, index) => {
-      const x = 60 + (920 * index) / Math.max(1, events.length - 1);
-      const y = 240 - (210 * event.deviceBytes) / Math.max(1, peak);
-      return `${index ? "L" : "M"}${x.toFixed(2)},${y.toFixed(2)}`;
-    });
-    if (events.length === 1)
-      points.push(
-        `L980,${(240 - (210 * events[0].deviceBytes) / Math.max(1, peak)).toFixed(2)}`,
-      );
+    const x = (step) =>
+      (60 + (920 * step) / (events.length * 3 + 1)).toFixed(5);
+    const y = (bytes) => (240 - (210 * bytes) / Math.max(1, peak)).toFixed(5);
+    const points = events.length
+      ? [`M${x(0)},${y(events[0].existingBytes)}`]
+      : [];
+    const interval = (index) =>
+      `M${x(index * 3 + 1)},242 H${x(index * 3 + 3)} V252 H${x(index * 3 + 1)}Z`;
+    const intervals = [];
+    for (const [index, event] of events.entries()) {
+      const allocate = index * 3 + 1;
+      const release = allocate + 2;
+      points.push(`H${x(allocate)} V${y(event.deviceBytes)} H${x(release)}`);
+      if (event.afterBytes != null)
+        points.push(`V${y(event.afterBytes)} H${x(release + 1)}`);
+      intervals.push(interval(index));
+    }
     byId("memory-curve").setAttribute("d", points.join(" "));
+    byId("memory-node-intervals").setAttribute("d", intervals.join(" "));
     byId("memory-chart").toggleAttribute("hidden", events.length === 0);
     byId("memory-chart-peak").textContent = formatFileSize(peak);
-    byId("memory-chart-last").textContent = events.length.toLocaleString();
+    const append = (parent, tag, attributes, text) => {
+      const element = document.createElementNS(
+        "http://www.w3.org/2000/svg",
+        tag,
+      );
+      for (const [name, value] of Object.entries(attributes))
+        element.setAttribute(name, value);
+      if (text !== undefined) element.textContent = text;
+      parent.append(element);
+      return element;
+    };
+    const numbers = byId("memory-node-numbers");
+    const labels = byId("memory-operator-labels");
+    numbers.replaceChildren();
+    labels.replaceChildren();
+    const center = (index) => Number(x(index * 3 + 2));
+    const indices = [];
+    if (events.length) {
+      indices.push(0);
+      const target = Math.max(1, (events.length - 1) / 9);
+      const power = 10 ** Math.floor(Math.log10(target));
+      const step =
+        [1, 2, 5, 10].find((multiple) => multiple * power >= target) * power;
+      for (let index = step - 1; index < events.length - 1; index += step)
+        if (center(index) - center(indices.at(-1)) >= 72) indices.push(index);
+      const last = events.length - 1;
+      if (last) {
+        if (indices.length > 1 && center(last) - center(indices.at(-1)) < 72)
+          indices.pop();
+        indices.push(last);
+      }
+    }
+    for (const index of indices) {
+      const position = center(index);
+      const group = append(numbers, "g", {
+        class: "memory-node-number",
+        "data-node-index": events[index].index,
+      });
+      append(
+        group,
+        "text",
+        { x: position, y: 272, "text-anchor": "middle" },
+        String(events[index].index + 1),
+      );
+    }
+    const markers = [];
+    const rowEnds = [-Infinity, -Infinity];
+    for (const [index, event] of events.entries()) {
+      if (
+        !/Attention|MatMul|^(?:Gemm|Conv|ConvInteger|QLinearConv|ConvTranspose|Einsum|LSTM|GRU|RNN)$/i.test(
+          event.opType,
+        )
+      )
+        continue;
+      const position = center(index);
+      markers.push(interval(index));
+      const text = `#${event.index + 1} ${event.opType}`;
+      const width = text.length * 8 + 12;
+      if (width > 920) continue;
+      const left = Math.max(60, Math.min(position - width / 2, 980 - width));
+      const row = rowEnds.findIndex((end) => left >= end + 12);
+      if (row < 0) continue;
+      rowEnds[row] = left + width;
+      const group = append(labels, "g", { "data-node-index": event.index });
+      append(
+        group,
+        "text",
+        { x: left + width / 2, y: 288 + row * 24, "text-anchor": "middle" },
+        text,
+      );
+      append(
+        group,
+        "title",
+        {},
+        `${text}${event.node ? `: ${event.node}` : ""}`,
+      );
+    }
+    byId("memory-operator-intervals").setAttribute("d", markers.join(" "));
+    byId("memory-final-status").hidden =
+      !events.length || events.at(-1).afterBytes != null;
   }
 
   byId("memory-form").addEventListener("submit", (event) => {
