@@ -3872,6 +3872,63 @@ test("selects optimization groups and previews global passes through the real we
   assert.equal(document.getElementById("fusion-panel").hidden, true);
   assert.equal(document.getElementById("optimization-picker").open, true);
   assert.ok(patterns.querySelector('input[value="GemmTranspose"]'));
+  const nativeCatalog = extension.messages.at(-1).optimizationPatterns;
+  assert.equal(
+    patterns.querySelector('input[value="RepeatedLayer"]').checked,
+    false,
+  );
+  const groupInput = (id, name) => {
+    const picker = document.getElementById(id);
+    assert.equal(picker.disabled, false);
+    const input = picker.querySelector(`input[value="${name}"]`);
+    assert.ok(input);
+    return input;
+  };
+  const chooseGroup = (id, name) => {
+    const input = groupInput(id, name);
+    input.parentElement.click();
+    return input.checked;
+  };
+  const checked = (fieldset) =>
+    [...fieldset.querySelectorAll("input:checked")]
+      .filter((input) => !input.hasAttribute("data-priority"))
+      .map((input) => input.value)
+      .sort();
+  const members = (...groups) =>
+    nativeCatalog
+      .filter((pattern) =>
+        groups.some((name) =>
+          name === "Default"
+            ? pattern.enabledByDefault
+            : pattern.groups.includes(name),
+        ),
+      )
+      .map((pattern) => pattern.name)
+      .sort();
+  assert.equal(
+    groupInput("optimization-pattern-group", "Default").checked,
+    true,
+  );
+  assert.equal(groupInput("optimization-pattern-group", "all").checked, false);
+  assert.deepEqual(checked(patterns), members("Default"));
+  for (const name of ["Default", "Layer", "L1", "L2", "all"]) {
+    document.getElementById("clear-optimization-patterns").click();
+    chooseGroup("optimization-pattern-group", name);
+    assert.deepEqual(checked(patterns), members(name));
+  }
+  document.getElementById("clear-optimization-patterns").click();
+  for (const name of ["Default", "L1", "L2", "Layer"])
+    assert.equal(chooseGroup("optimization-pattern-group", name), true);
+  assert.deepEqual(checked(patterns), members("Default", "L1", "L2", "Layer"));
+  assert.equal(chooseGroup("optimization-pattern-group", "Default"), false);
+  assert.deepEqual(checked(patterns), members("L1", "L2", "Layer"));
+  assert.equal(chooseGroup("optimization-pattern-group", "L1"), false);
+  assert.deepEqual(checked(patterns), members("L2", "Layer"));
+  assert.equal(chooseGroup("optimization-pattern-group", "Layer"), false);
+  assert.deepEqual(checked(patterns), members("L2"));
+  assert.equal(chooseGroup("optimization-pattern-group", "L2"), false);
+  assert.deepEqual(checked(patterns), []);
+  assert.equal(count(), original);
   assert.ok(patterns.querySelectorAll("details").length > 1);
   document.getElementById("clear-optimization-patterns").click();
   assert.equal(document.getElementById("run-optimization").disabled, true);
@@ -3887,9 +3944,61 @@ test("selects optimization groups and previews global passes through the real we
   group.querySelector("input[data-pattern]").click();
   assert.equal(toggle.indeterminate, true);
   document.getElementById("select-optimization-patterns").click();
+  assert.equal(groupInput("optimization-pattern-group", "all").checked, true);
+  patterns.querySelector('input[value="RepeatedLayer"]').click();
+  assert.equal(
+    groupInput("optimization-pattern-group", "Default").checked,
+    true,
+  );
+  assert.equal(groupInput("optimization-pattern-group", "all").checked, false);
+  const defaultPattern = patterns.querySelector("input[data-pattern]:checked");
+  defaultPattern.click();
+  assert.equal(
+    document.querySelectorAll("#optimization-pattern-group input:checked")
+      .length,
+    0,
+  );
+  defaultPattern.click();
+  assert.equal(
+    groupInput("optimization-pattern-group", "Default").checked,
+    true,
+  );
+  document.getElementById("select-optimization-patterns").click();
   document.getElementById("optimize-model").click();
   document.getElementById("fuse-pattern").click();
   await flush();
+  const fusionPatterns = document.getElementById("fusion-pattern");
+  const available = [...fusionPatterns.querySelectorAll("input")].map(
+    (input) => input.value,
+  );
+  chooseGroup("fusion-pattern-group", "Layer");
+  assert.deepEqual(checked(fusionPatterns), ["RepeatedLayer"]);
+  chooseGroup("fusion-pattern-group", "Default");
+  assert.equal(groupInput("fusion-pattern-group", "Layer").checked, true);
+  assert.deepEqual(
+    checked(fusionPatterns),
+    members("Default", "Layer").filter((name) => available.includes(name)),
+  );
+  chooseGroup("fusion-pattern-group", "Default");
+  assert.deepEqual(checked(fusionPatterns), ["RepeatedLayer"]);
+  chooseGroup("fusion-pattern-group", "all");
+  assert.deepEqual(
+    checked(fusionPatterns),
+    nativeCatalog
+      .filter((pattern) => available.includes(pattern.name))
+      .map((pattern) => pattern.name)
+      .sort(),
+  );
+  assert.ok(
+    !checked(fusionPatterns).some((name) =>
+      ["IdentityRemoval", "ConstantFolding", "RemoveUnusedNodes"].includes(
+        name,
+      ),
+    ),
+  );
+  chooseGroup("fusion-pattern-group", "all");
+  assert.deepEqual(checked(fusionPatterns), ["RepeatedLayer"]);
+  document.getElementById("clear-patterns").click();
   const selectPass = (name) =>
     document.querySelector(`#fusion-pattern input[value="${name}"]`).click();
   for (const name of [

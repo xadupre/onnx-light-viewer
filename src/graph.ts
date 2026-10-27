@@ -199,6 +199,8 @@ export interface OptimizationPattern {
   name: string;
   priority: number;
   device: string;
+  enabledByDefault: boolean;
+  groups: string[];
 }
 
 export interface FusionDiagnostic {
