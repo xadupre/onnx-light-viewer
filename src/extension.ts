@@ -27,6 +27,7 @@ import {
   defaultExportDirectory,
   ExportHistory,
   downloadExportSource,
+  exportNeedsDownload,
   exportPlan,
   prepareExportPlan,
   runExport,
@@ -45,6 +46,7 @@ import {
   searchHuggingFaceModels,
   HuggingFaceSource,
 } from "./huggingface";
+import { OliveRecipes } from "./oliveRecipes";
 
 const viewType = "onnxLightViewer.graph";
 const panelSessions = new WeakMap<vscode.WebviewPanel, () => void>();
@@ -577,6 +579,17 @@ async function configurePanel(
       trusted: vscode.workspace.isTrusted,
     });
   };
+  let recipeCache: { directory: string; recipes: OliveRecipes } | undefined;
+  const getOliveRecipes = () => {
+    const directory = join(
+      getApplicationSettings().downloadDirectory,
+      "olive-recipes",
+    );
+    if (recipeCache?.directory !== directory)
+      recipeCache = { directory, recipes: new OliveRecipes(directory) };
+    return recipeCache.recipes;
+  };
+  const recipeController = new AbortController();
   const getExportPlan = (value: unknown) => {
     const settings = getApplicationSettings();
     if (
@@ -589,7 +602,25 @@ async function configurePanel(
         ...value,
         directory: defaultExportDirectory(settings.downloadDirectory),
       };
-    return exportPlan(value, settings.pythonPath, settings.downloadDirectory);
+    let recipe;
+    if (
+      value &&
+      typeof value === "object" &&
+      "exporter" in value &&
+      value.exporter === "olive-recipes"
+    ) {
+      recipe = getOliveRecipes().resolve(
+        "recipeId" in value ? value.recipeId : undefined,
+        "recipeRevision" in value ? value.recipeRevision : undefined,
+      );
+      value = { ...value, model: recipe.name };
+    }
+    return exportPlan(
+      value,
+      settings.pythonPath,
+      settings.downloadDirectory,
+      recipe,
+    );
   };
   let inspectingPackages = false;
   let exporting: AbortController | undefined;
@@ -886,6 +917,29 @@ async function configurePanel(
             `Could not refresh ONNX statistics: ${detail}`,
           );
         }
+      } else if (message?.type === "olive-recipes") {
+        try {
+          if (!vscode.workspace.isTrusted)
+            throw new Error(
+              "Trust this workspace before downloading Olive recipes.",
+            );
+          const catalog = await getOliveRecipes().refresh(
+            recipeController.signal,
+          );
+          if (!active) return;
+          await postMessage({
+            type: "olive-recipes",
+            requestId: message.requestId,
+            ...catalog,
+          });
+        } catch (error) {
+          if (!active) return;
+          await postMessage({
+            type: "olive-recipes",
+            requestId: message.requestId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
       } else if (message?.type === "export-preview") {
         try {
           const plan = getExportPlan(message.exportOptions);
@@ -925,7 +979,10 @@ async function configurePanel(
               const originalModel = model;
               const revision = graphRevision;
               let cancellation: string | undefined;
-              const needsDownload = !isAbsolute(plan.model);
+              const needsDownload = exportNeedsDownload(plan);
+              const conversionStage = plan.recipe
+                ? "Running pinned Olive recipe (network may be required)"
+                : "Converting local model (offline)";
               const timings: {
                 downloadSkipped: boolean;
                 downloadDurationMs?: number;
@@ -995,7 +1052,7 @@ async function configurePanel(
                 await postMessage({
                   type: "export-progress",
                   actionId: message.actionId,
-                  stage: "Converting local model (offline)",
+                  stage: conversionStage,
                   phase,
                   command: plan.command,
                   output: "",
@@ -1015,7 +1072,7 @@ async function configurePanel(
                     void postMessage({
                       type: "export-progress",
                       actionId: message.actionId,
-                      stage: "Converting local model (offline)",
+                      stage: conversionStage,
                       phase: "conversion",
                       output,
                     });
@@ -2541,6 +2598,7 @@ async function configurePanel(
     active = false;
     hubSearch?.abort();
     exporting?.abort();
+    recipeController.abort();
     model = undefined;
     stopHistory();
     messages.dispose();

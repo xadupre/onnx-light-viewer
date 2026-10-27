@@ -1,5 +1,6 @@
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import {
+  cp,
   lstat,
   mkdir,
   mkdtemp,
@@ -13,6 +14,7 @@ import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { stripVTControlCharacters } from "node:util";
 import type { Memento } from "vscode";
+import type { PinnedOliveRecipe } from "./oliveRecipes";
 
 const exportEnvironment = {
   PYTHONUNBUFFERED: "1",
@@ -63,10 +65,16 @@ with open(result, "w", encoding="utf-8") as stream:
 print(f"Source ready: {source}", flush=True)
 `;
 
-type Exporter = "mbext" | "modelbuilder" | "mobius";
+type Exporter = "mbext" | "modelbuilder" | "mobius" | "olive" | "olive-recipes";
 
 function isExporter(value: unknown): value is Exporter {
-  return value === "mbext" || value === "modelbuilder" || value === "mobius";
+  return (
+    value === "mbext" ||
+    value === "modelbuilder" ||
+    value === "mobius" ||
+    value === "olive" ||
+    value === "olive-recipes"
+  );
 }
 
 interface ExportHistorySnapshot {
@@ -169,6 +177,11 @@ function exportAdvancedOptions(
   if (value === undefined) return {};
   if (!value || typeof value !== "object" || Array.isArray(value))
     throw new Error("Invalid advanced export options.");
+  if (
+    (exporter === "olive" || exporter === "olive-recipes") &&
+    Object.keys(value).length
+  )
+    throw new Error("Builder advanced options do not apply to Olive.");
   const options: ExportAdvancedOptions = {};
   const mobius = exporter === "mobius";
   for (const [key, entry] of Object.entries(value)) {
@@ -276,6 +289,8 @@ function exportAdvancedOptions(
 
 export interface ExportPlan {
   exporter: Exporter;
+  recipe?: PinnedOliveRecipe;
+  cwd?: string;
   layerCount?: number;
   advancedOptions?: ExportAdvancedOptions;
   model: string;
@@ -294,6 +309,7 @@ export function exportPlan(
   value: unknown,
   pythonPath: string,
   downloadDirectory?: string,
+  recipe?: PinnedOliveRecipe,
 ): ExportPlan {
   if (
     !value ||
@@ -310,9 +326,15 @@ export function exportPlan(
     /[\0\r\n]/.test(value.directory) ||
     !("precision" in value) ||
     typeof value.precision !== "string" ||
-    !["fp32", "fp16", "bf16", "int4", "int2", "fp4"].includes(
-      value.precision,
-    ) ||
+    ![
+      "fp32",
+      "fp16",
+      "bf16",
+      "int4",
+      "int2",
+      "fp4",
+      ...(value.exporter === "olive" ? ["int8"] : []),
+    ].includes(value.precision) ||
     !("provider" in value) ||
     (value.provider !== "cpu" && value.provider !== "cuda")
   )
@@ -320,10 +342,22 @@ export function exportPlan(
       "Choose an exporter, model, absolute output directory, precision and device.",
     );
   const model = value.model.trim();
+  if (
+    value.exporter === "olive" &&
+    (!isAbsolute(model) ||
+      !/\.onnx$/i.test(model) ||
+      !["int4", "int8"].includes(value.precision) ||
+      value.provider !== "cpu")
+  )
+    throw new Error(
+      "Olive quantization requires an absolute ONNX file, INT4 or INT8, and CPU.",
+    );
+  if (value.exporter === "olive-recipes" && !recipe)
+    throw new Error("Choose a pinned Olive recipe.");
   const layerCount = "layerCount" in value ? value.layerCount : undefined;
   if (
     layerCount !== undefined &&
-    (value.exporter === "mobius" ||
+    (!["mbext", "modelbuilder"].includes(value.exporter) ||
       typeof layerCount !== "number" ||
       !Number.isSafeInteger(layerCount) ||
       layerCount < 1)
@@ -368,36 +402,72 @@ export function exportPlan(
   }
   const precision = value.precision;
   const mobius = value.exporter === "mobius";
-  const args = mobius
-    ? [
-        "-u",
-        "-m",
-        "mobius",
-        "build",
-        isAbsolute(model) ? "--config" : "--model",
-        model,
-        "--output",
-        directory,
-        "--dtype",
-        precision === "fp32" ? "f32" : precision === "fp16" ? "f16" : precision,
-        "--ep",
-        value.provider,
-      ]
-    : [
-        "-u",
-        "-m",
-        value.exporter === "mbext"
-          ? "modelbuilder.builder"
-          : "onnxruntime_genai.models.builder",
-        isAbsolute(model) ? "-i" : "-m",
-        model,
-        "-o",
-        directory,
-        "-p",
-        precision,
-        "-e",
-        value.provider,
-      ];
+  const recipeRoot = join(directory, "olive-recipe");
+  const cwd = recipe ? join(recipeRoot, dirname(recipe.id)) : undefined;
+  let args: string[];
+  if (value.exporter === "olive")
+    args = [
+      "-u",
+      "-m",
+      "olive",
+      "quantize",
+      "-m",
+      model,
+      "--output_path",
+      directory,
+      "--precision",
+      precision,
+      "--algorithm",
+      "rtn",
+      "--implementation",
+      precision === "int4" ? "olive" : "ort",
+    ];
+  else if (value.exporter === "olive-recipes" && recipe)
+    args = [
+      "-u",
+      "-m",
+      "olive",
+      "run",
+      "--run-config",
+      join(recipeRoot, recipe.id),
+      "--output_path",
+      directory,
+    ];
+  else
+    args = mobius
+      ? [
+          "-u",
+          "-m",
+          "mobius",
+          "build",
+          isAbsolute(model) ? "--config" : "--model",
+          model,
+          "--output",
+          directory,
+          "--dtype",
+          precision === "fp32"
+            ? "f32"
+            : precision === "fp16"
+              ? "f16"
+              : precision,
+          "--ep",
+          value.provider,
+        ]
+      : [
+          "-u",
+          "-m",
+          value.exporter === "mbext"
+            ? "modelbuilder.builder"
+            : "onnxruntime_genai.models.builder",
+          isAbsolute(model) ? "-i" : "-m",
+          model,
+          "-o",
+          directory,
+          "-p",
+          precision,
+          "-e",
+          value.provider,
+        ];
   if (mobius) {
     if (advancedOptions.noWeights) args.push("--no-weights");
     if (advancedOptions.staticCache) args.push("--features", "static-cache");
@@ -409,7 +479,7 @@ export function exportPlan(
     ] as const)
       if (advancedOptions[key] !== undefined)
         args.push(flag, String(advancedOptions[key]));
-  } else {
+  } else if (value.exporter === "mbext" || value.exporter === "modelbuilder") {
     if (advancedOptions.opset !== undefined)
       args.push("--onnx_opset", String(advancedOptions.opset));
     const extra = value.exporter === "mbext" ? ["hf_remote=false"] : [];
@@ -445,6 +515,7 @@ export function exportPlan(
   };
   return {
     exporter: value.exporter,
+    ...(recipe ? { recipe, cwd } : {}),
     ...(layerCount === undefined ? {} : { layerCount }),
     ...(Object.keys(advancedOptions).length ? { advancedOptions } : {}),
     model,
@@ -494,7 +565,12 @@ export async function prepareExportPlan(
   const directory = await mkdtemp(join(plan.directory, `${plan.exporter}-`));
   signal.throwIfAborted();
   return {
-    ...exportPlan({ ...plan, directory }, plan.executable),
+    ...exportPlan(
+      { ...plan, directory },
+      plan.executable,
+      undefined,
+      plan.recipe,
+    ),
     ...(plan.directoryTemplate === undefined
       ? {}
       : { directoryTemplate: plan.directoryTemplate }),
@@ -541,8 +617,8 @@ async function terminateExport(child: ChildProcess): Promise<void> {
   killGroup("SIGKILL");
 }
 
-async function runProcess(
-  plan: Pick<ExportPlan, "executable" | "args">,
+export async function runProcess(
+  plan: Pick<ExportPlan, "executable" | "args" | "cwd">,
   signal: AbortSignal,
   progress: (output: string) => void,
   environment: NodeJS.ProcessEnv,
@@ -551,7 +627,7 @@ async function runProcess(
   signal.throwIfAborted();
   await new Promise<void>((resolve, reject) => {
     const child = spawn(plan.executable, plan.args, {
-      cwd: homedir(),
+      cwd: plan.cwd ?? homedir(),
       env: { ...process.env, ...environment },
       stdio: ["ignore", "pipe", "pipe"],
       detached: process.platform !== "win32",
@@ -617,7 +693,7 @@ export async function downloadExportSource(
   progress: (output: string) => void,
 ): Promise<ExportPlan> {
   signal.throwIfAborted();
-  if (isAbsolute(plan.model)) return plan;
+  if (!exportNeedsDownload(plan)) return plan;
   await mkdir(cacheDirectory, { recursive: true });
   const request = await mkdtemp(join(cacheDirectory, ".request-"));
   try {
@@ -659,6 +735,10 @@ export async function downloadExportSource(
   }
 }
 
+export function exportNeedsDownload(plan: ExportPlan): boolean {
+  return plan.exporter !== "olive-recipes" && !isAbsolute(plan.model);
+}
+
 /** Runs the selected CLI with bounded, throttled output and explicit cancellation. */
 export async function runExport(
   plan: ExportPlan,
@@ -681,9 +761,16 @@ export async function runExport(
   }
   const environment = {
     ...exportEnvironment,
-    ...(isAbsolute(plan.model) ? offlineEnvironment : {}),
+    ...(isAbsolute(plan.model) && !plan.recipe ? offlineEnvironment : {}),
   };
-  const script = `import os\nimport subprocess\n\nsubprocess.run(${JSON.stringify([plan.executable, ...plan.args])}, cwd=${JSON.stringify(homedir())}, env={**os.environ, **${JSON.stringify(environment)}}, check=True)\n`;
+  if (plan.recipe)
+    await cp(plan.recipe.snapshot, join(plan.directory, "olive-recipe"), {
+      recursive: true,
+      verbatimSymlinks: true,
+      filter: (source) => basename(source) !== ".git",
+    });
+  signal.throwIfAborted();
+  const script = `${plan.recipe ? `# Olive recipes commit: ${plan.recipe.revision}\n` : ""}import os\nimport subprocess\n\nsubprocess.run(${JSON.stringify([plan.executable, ...plan.args])}, cwd=${JSON.stringify(plan.cwd ?? homedir())}, env={**os.environ, **${JSON.stringify(environment)}}, check=True)\n`;
   await writeFile(plan.script, script, { flag: "wx" });
   await runProcess(plan, signal, progress, environment, "Exporter");
   const models: string[] = [];
@@ -691,6 +778,8 @@ export async function runExport(
     for (const entry of await readdir(directory, { withFileTypes: true })) {
       signal.throwIfAborted();
       const path = join(directory, entry.name);
+      if (plan.recipe && path === join(plan.directory, "olive-recipe"))
+        continue;
       if (entry.isDirectory()) await visit(path);
       else if (entry.isFile() && /\.(?:onnx|pipe-onnx)$/i.test(entry.name))
         models.push(path);

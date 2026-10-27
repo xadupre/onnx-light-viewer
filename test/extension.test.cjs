@@ -586,6 +586,118 @@ test("persists only viewer preferences across closed extension panels", async ()
   second.dispose();
 });
 
+test("Olive host enforces workspace trust, quantizes without a checkpoint download and rejects unpinned recipe paths", async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), "viewer-olive-host-"));
+  const previous = process.env.PYTHONPATH;
+  process.env.PYTHONPATH = root;
+  t.after(async () => {
+    if (previous === undefined) delete process.env.PYTHONPATH;
+    else process.env.PYTHONPATH = previous;
+    await rm(root, { recursive: true, force: true });
+  });
+  await mkdir(path.join(root, "olive"));
+  await writeFile(path.join(root, "olive", "__init__.py"), "");
+  await writeFile(
+    path.join(root, "olive", "__main__.py"),
+    `
+import os
+import pathlib
+import shutil
+import sys
+args = sys.argv[1:]
+assert args[0] == "quantize"
+assert args[args.index("--precision") + 1] == "int4"
+assert args[args.index("--implementation") + 1] == "olive"
+assert os.environ["HF_HUB_OFFLINE"] == "1"
+source = pathlib.Path(args[args.index("-m") + 1])
+output = pathlib.Path(args[args.index("--output_path") + 1])
+shutil.copyfile(source, output / "quantized.onnx")
+`,
+  );
+  const extension = await openExtension(
+    "relu.onnx",
+    undefined,
+    true,
+    undefined,
+    undefined,
+    new Map([
+      [
+        "applicationSettings",
+        {
+          downloadDirectory: root,
+          pythonPath: process.platform === "win32" ? "python" : "python3",
+        },
+      ],
+    ]),
+  );
+  t.after(() => extension.dispose());
+  const exportOptions = {
+    exporter: "olive",
+    model: path.join(__dirname, "models", "relu.onnx"),
+    directory: path.join(root, "output"),
+    precision: "int4",
+    provider: "cpu",
+  };
+  extension.setTrusted(false);
+  await extension.receive({ type: "olive-recipes", requestId: 1 });
+  assert.match(
+    extension.messages.find((message) => message.type === "olive-recipes")
+      .error,
+    /Trust this workspace/,
+  );
+  await extension.receive({
+    type: "export",
+    actionId: "untrusted",
+    exportOptions,
+  });
+  assert.match(
+    extension.messages.find((message) => message.type === "export-error").error,
+    /Trust this workspace/,
+  );
+  assert.equal((await readdir(root)).includes("output"), false);
+  extension.setTrusted(true);
+  await extension.receive({
+    type: "export",
+    actionId: "quantize",
+    exportOptions,
+  });
+  const result = extension.messages.find(
+    (message) =>
+      message.type === "export-info" && message.actionId === "quantize",
+  );
+  assert.equal(result.loaded, true);
+  assert.equal(result.path, path.join(root, "output", "quantized.onnx"));
+  const progress = extension.messages.filter(
+    (message) =>
+      message.type === "export-progress" && message.actionId === "quantize",
+  );
+  assert.equal(
+    progress.some((message) => message.phase === "download"),
+    false,
+  );
+  assert.equal(
+    progress.some((message) => message.downloadSkipped === true),
+    true,
+  );
+  await extension.receive({
+    type: "export-preview",
+    requestId: 2,
+    exportOptions: {
+      ...exportOptions,
+      exporter: "olive-recipes",
+      recipeId: "../untrusted.json",
+      recipeRevision: "a".repeat(40),
+      recipe: { id: "../untrusted.json", snapshot: root },
+    },
+  });
+  assert.match(
+    extension.messages.find(
+      (message) => message.type === "export-preview" && message.requestId === 2,
+    ).error,
+    /Refresh the Olive recipe list/,
+  );
+});
+
 test("runs all exporter entry points in Python processes and preserves the model on failure or cancellation", async (t) => {
   const root = await mkdtemp(path.join(tmpdir(), "viewer-export-host-"));
   const hub = await exportHub(t);

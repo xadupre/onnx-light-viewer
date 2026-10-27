@@ -82,25 +82,44 @@ export function webviewHtml(
                 <tr><th scope="row">Conversion</th><td id="export-conversion-time">Not started</td></tr>
               </tbody>
             </table>
-            <p>Download the source into the application's cache, then convert it offline with an installed exporter. Local sources need no download. No packages are installed automatically.</p>
+            <p>Convert cached or local models with an installed exporter. Olive quantizes local ONNX files; Olive recipes run pinned workflows and may download models or datasets. No packages are installed automatically.</p>
             <p id="export-cache"></p>
             <p id="export-python">Uses the Python executable configured in Settings.</p>
             <p id="export-trust" hidden>Trust this workspace before running an exporter.</p>
             <form id="export-form">
               <fieldset id="export-fields">
                 <label for="export-tool">Exporter</label>
-                <select id="export-tool"><option value="modelbuilder">modelbuilder (ONNX Runtime GenAI)</option><option value="mobius">Mobius</option><option value="mbext">mbext (fast export)</option></select>
+                <select id="export-tool"><option value="modelbuilder">modelbuilder (ONNX Runtime GenAI)</option><option value="mobius">Mobius</option><option value="olive">Olive (ONNX quantization)</option><option value="olive-recipes">Olive recipes (model export workflows)</option><option value="mbext">mbext (fast export)</option></select>
+                <div id="export-source-options">
                 <label for="export-source">Hugging Face model ID or absolute local model directory</label>
                 <input id="export-source" required placeholder="Qwen/Qwen3-0.6B" autocomplete="off" list="export-source-history"><datalist id="export-source-history"></datalist>
+                </div>
+                <div id="export-olive-options" hidden>
+                  <label for="export-olive-source">Absolute local ONNX file</label>
+                  <input id="export-olive-source" placeholder="/path/to/model.onnx" disabled required>
+                  <label for="export-olive-precision">Quantization precision (CPU, RTN)</label>
+                  <select id="export-olive-precision" disabled><option value="int4">INT4 (Olive)</option><option value="int8">INT8 (ONNX Runtime dynamic)</option></select>
+                </div>
+                <div id="export-recipe-options" hidden>
+                  <label for="export-recipe">Olive recipe</label>
+                  <select id="export-recipe" disabled required><option value="">Load the recipe list</option></select>
+                  <button id="export-recipe-refresh" type="button">Refresh recipes</button>
+                  <p id="export-recipe-status" role="status"></p>
+                  <p id="export-recipe-details"></p>
+                  <p>Recipes keep their own model, precision and target. Install the recipe's requirements in the configured Python environment, including any pinned Olive version, before running.</p>
+                  <a id="export-recipe-link" href="https://github.com/microsoft/olive-recipes">Recipe source and requirements</a>
+                </div>
                 <label for="export-directory">Output directory or template</label>
                 <input id="export-directory" required placeholder="/path/to/new-export" autocomplete="off" list="export-directory-history"><datalist id="export-directory-history"></datalist>
                 <p>Defaults to a model-specific folder in the Settings download directory. Recent model IDs and output directories are saved as suggestions; existing files are never overwritten.</p>
                 <p>If the output directory is not empty, conversion creates a new subfolder automatically. The command shows the actual destination, where the model, weights and export_model.py reproduction script are kept together.</p>
+                <div id="export-target-options">
                 <label for="export-precision">Precision</label>
                 <select id="export-precision"><option value="fp32">FP32</option><option value="fp16">FP16</option><option value="bf16">BF16</option><option value="int4">INT4</option><option value="int2">INT2</option><option value="fp4">FP4</option></select>
                 <p>All precisions are available for every exporter and device. Unsupported combinations are reported by the exporter.</p>
                 <label for="export-provider">Target device</label>
                 <select id="export-provider"><option value="cpu">CPU</option><option value="cuda">CUDA</option></select>
+                </div>
                 <details id="export-advanced" class="export-advanced">
                   <summary>Advanced options</summary>
                   <div id="export-layer-options" class="export-option" data-exporters="mbext modelbuilder" hidden>
@@ -502,6 +521,24 @@ export function webviewHtml(
       <p>Explore ONNX projects and exporters, with the packages and ecosystems they specialize in.</p>
       <h3>Official projects</h3>
       <ul class="repository-list">
+        <li>
+          <div class="repository-heading">
+            <a href="https://github.com/microsoft/Olive"><svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true"><path d="M5 21 19 3M9 16C2 15 2 9 2 9s8-1 7 7ZM14 10c-1-7 7-7 7-7s1 6-7 7Z"/></svg>Olive</a>
+            ${documentationLink("Olive", "https://microsoft.github.io/Olive/")}
+          </div>
+          <img class="repository-logo" src="${resource("repositories/olive.svg")}" alt="" width="96" height="64">
+          <p>Model optimization and quantization with olive-ai. Available in Convert for local ONNX quantization.</p>
+          <p class="repository-specialization"><strong>Specialized for:</strong> ONNX optimization and quantization with olive-ai.</p>
+        </li>
+        <li>
+          <div class="repository-heading">
+            <a href="https://github.com/microsoft/olive-recipes"><svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true"><path d="M4 3h16v18H4ZM8 7h8M8 12h8M8 17h5"/></svg>Olive recipes</a>
+            ${documentationLink("Olive recipes", "https://github.com/microsoft/olive-recipes#readme")}
+          </div>
+          <img class="repository-logo" src="${resource("repositories/olive.svg")}" alt="" width="96" height="64">
+          <p>Model-specific Olive export and optimization workflows. Convert caches the recipe list by Git commit and shows recipe-specific Olive requirements.</p>
+          <p class="repository-specialization"><strong>Specialized for:</strong> Model-specific export workflows with olive-ai.</p>
+        </li>
         <li>
           <div class="repository-heading">
           <a href="https://github.com/onnx/onnx"><svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true"><circle cx="5" cy="12" r="3"/><circle cx="18" cy="5" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8 11 7-5M8 13l7 5"/></svg>ONNX</a>

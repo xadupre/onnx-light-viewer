@@ -39,7 +39,7 @@ See :doc:`features/backend_tests`; this opens graphs, not a test runner.
 Converting models
 ^^^^^^^^^^^^^^^^^
 
-Run installed mbext, modelbuilder or Mobius exporters with visible commands,
+Run installed mbext, modelbuilder, Mobius or Olive exporters with visible commands,
 live output, cancellation and a saved reproduction script; open their output.
 See :doc:`features/exporting_models`. Requires Python and a trusted workspace;
 exporter packages and checkpoints are not installed automatically.
@@ -49,6 +49,25 @@ exporter packages and checkpoints are not installed automatically.
    :width: 100%
 
    Configure an exporter before launching conversion.
+
+Olive quantization and recipes
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Quantize a local ONNX file with Olive, or select a model-specific Olive recipe.
+The recipe catalogue is cached by Git commit, retains version-pinned entries and
+shows their required Olive version. See :doc:`features/exporting_models`.
+
+.. figure:: _static/feature-olive.png
+   :alt: Olive quantization controls for local ONNX files.
+   :width: 100%
+
+   INT4 or INT8 quantization, without checkpoint export.
+
+.. figure:: _static/feature-olive-recipes.png
+   :alt: Olive recipe controls showing the pinned Git commit and Olive requirements.
+   :width: 100%
+
+   Model-specific workflows are distinct from quantization.
 
 Navigation
 ^^^^^^^^^^

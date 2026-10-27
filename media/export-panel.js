@@ -12,6 +12,32 @@ function createExportPanel({ byId, postMessage, requestAction, revealPanel }) {
   let phaseStarted;
   let times = {};
   let downloadSkipped = false;
+  let recipeRun = false;
+  let recipeRequest = 0;
+  let recipeLoading = false;
+  let recipeCatalog;
+  function recipeDetails() {
+    const recipe = recipeCatalog?.recipes.find(
+      (entry) => entry.id === byId("export-recipe").value,
+    );
+    byId("export-recipe-details").textContent = recipe
+      ? `${recipe.target || "Target defined by recipe"}. Olive requirement: ${recipe.requirements.join("; ") || "olive-ai (no version pin declared)"}.${recipe.manualReason ? ` ${recipe.manualReason}` : ""}`
+      : "";
+    byId("export-recipe-link").href = recipe
+      ? `https://github.com/microsoft/olive-recipes/tree/${recipeCatalog.revision}/${recipe.id.split("/").slice(0, -1).map(encodeURIComponent).join("/")}`
+      : "https://github.com/microsoft/olive-recipes";
+  }
+  function loadRecipes() {
+    if (recipeLoading || running) return;
+    recipeLoading = true;
+    byId("export-recipe-refresh").disabled = true;
+    byId("export-recipe-status").textContent =
+      "Checking the upstream recipe commit...";
+    postMessage({ type: "olive-recipes", requestId: ++recipeRequest });
+    enabled();
+  }
+  byId("export-recipe-refresh").addEventListener("click", loadRecipes);
+  byId("export-recipe").addEventListener("change", recipeDetails);
   function renderTimes() {
     for (const [key, id] of [
       ["download", "export-download-time"],
@@ -21,7 +47,9 @@ function createExportPanel({ byId, postMessage, requestAction, revealPanel }) {
         phase === key ? performance.now() - phaseStarted : times[key];
       byId(id).textContent =
         key === "download" && downloadSkipped
-          ? "Not needed (local source)"
+          ? recipeRun
+            ? "Managed by recipe"
+            : "Not needed (local source)"
           : elapsed === undefined
             ? "Not started"
             : `${(elapsed / 1000).toFixed(2)} s${phase === key ? " (running)" : ""}`;
@@ -54,12 +82,27 @@ function createExportPanel({ byId, postMessage, requestAction, revealPanel }) {
             : control.value;
       }
     }
+    const exporter = byId("export-tool").value;
+    const olive = exporter === "olive";
+    const recipes = exporter === "olive-recipes";
     return {
-      exporter: byId("export-tool").value,
-      model: byId("export-source").value,
+      exporter,
+      model: recipes
+        ? "Olive recipe"
+        : byId(olive ? "export-olive-source" : "export-source").value,
       directory: defaultDirectory ? "" : byId("export-directory").value,
-      precision: byId("export-precision").value,
-      provider: byId("export-provider").value,
+      precision: olive
+        ? byId("export-olive-precision").value
+        : recipes
+          ? "fp32"
+          : byId("export-precision").value,
+      provider: olive || recipes ? "cpu" : byId("export-provider").value,
+      ...(recipes
+        ? {
+            recipeId: byId("export-recipe").value,
+            recipeRevision: recipeCatalog?.revision,
+          }
+        : {}),
       ...(!byId("export-layer-count").disabled &&
       byId("export-layer-count").value !== ""
         ? { layerCount: Number(byId("export-layer-count").value) }
@@ -69,6 +112,20 @@ function createExportPanel({ byId, postMessage, requestAction, revealPanel }) {
   };
   function updateAdvancedOptions() {
     const exporter = byId("export-tool").value;
+    const olive = exporter === "olive";
+    const recipes = exporter === "olive-recipes";
+    for (const [id, visible] of [
+      ["export-source-options", !olive && !recipes],
+      ["export-target-options", !olive && !recipes],
+      ["export-olive-options", olive],
+      ["export-recipe-options", recipes],
+    ]) {
+      const field = byId(id);
+      field.hidden = !visible;
+      for (const control of field.querySelectorAll("input, select"))
+        control.disabled = !visible;
+    }
+    byId("export-advanced").hidden = olive || recipes;
     const precision = byId("export-precision").value;
     for (const field of advancedFields) {
       const { exporters, precisions, requires, excludes } = field.dataset;
@@ -104,9 +161,19 @@ function createExportPanel({ byId, postMessage, requestAction, revealPanel }) {
   byId("export-tool").addEventListener("change", () => {
     exporterChosen = true;
     updateAdvancedOptions();
+    if (byId("export-tool").value === "olive-recipes") loadRecipes();
+    enabled();
   });
   const enabled = () => {
-    byId("export-submit").disabled = running || loading;
+    byId("export-submit").disabled =
+      running ||
+      loading ||
+      (byId("export-tool").value === "olive-recipes" &&
+        (recipeLoading ||
+          !byId("export-recipe").value ||
+          !!recipeCatalog?.recipes.find(
+            (entry) => entry.id === byId("export-recipe").value,
+          )?.manualReason));
     byId("export-fields").disabled = running;
     byId("cancel-export").disabled = !running;
     byId("export-model").disabled = loading && !running;
@@ -131,6 +198,7 @@ function createExportPanel({ byId, postMessage, requestAction, revealPanel }) {
   }
   const fieldsChanged = () => {
     updateAdvancedOptions();
+    enabled();
     preview();
   };
   byId("export-fields").addEventListener("input", fieldsChanged);
@@ -143,6 +211,7 @@ function createExportPanel({ byId, postMessage, requestAction, revealPanel }) {
       revealPanel(panel);
       followOutput();
       postMessage({ type: "get-settings" });
+      if (byId("export-tool").value === "olive-recipes") loadRecipes();
       preview();
     }
   });
@@ -169,6 +238,7 @@ function createExportPanel({ byId, postMessage, requestAction, revealPanel }) {
       request++;
       times = {};
       downloadSkipped = false;
+      recipeRun = byId("export-tool").value === "olive-recipes";
       byId("export-timings").hidden = false;
       byId("export-cache").textContent = "";
       renderTimes();
@@ -195,6 +265,39 @@ function createExportPanel({ byId, postMessage, requestAction, revealPanel }) {
       enabled();
     },
     handleMessage(data) {
+      if (data?.type === "olive-recipes") {
+        if (data.requestId !== recipeRequest) return true;
+        recipeLoading = false;
+        byId("export-recipe-refresh").disabled = false;
+        if (data.error) {
+          byId("export-recipe-status").textContent =
+            `Recipe list refresh failed: ${data.error}`;
+        } else {
+          const selection = byId("export-recipe").value;
+          recipeCatalog = data;
+          const select = byId("export-recipe");
+          select.replaceChildren(
+            ...[
+              { id: "", name: "Choose an Olive recipe" },
+              ...data.recipes,
+            ].map((recipe) => {
+              const option = select.ownerDocument.createElement("option");
+              option.value = recipe.id;
+              option.textContent = recipe.name;
+              return option;
+            }),
+          );
+          select.value = data.recipes.some((entry) => entry.id === selection)
+            ? selection
+            : "";
+          byId("export-recipe-status").textContent =
+            `${data.recipes.length} recipes. Git commit: ${data.revision}`;
+          recipeDetails();
+          preview();
+        }
+        enabled();
+        return true;
+      }
       if (data?.type === "settings-info") {
         byId("export-python").textContent =
           `Python: ${data.application.pythonPath}. Change it in Settings.`;
@@ -206,10 +309,17 @@ function createExportPanel({ byId, postMessage, requestAction, revealPanel }) {
             updateAdvancedOptions();
           }
         }
+        if (
+          byId("export-tool").value === "olive-recipes" &&
+          !byId("export-panel").hidden &&
+          !recipeCatalog
+        )
+          loadRecipes();
         if (defaultDirectory && data.exportDirectory && !running) {
           byId("export-directory").value = data.exportDirectory;
           preview();
         }
+        enabled();
         return false;
       }
       if (data?.type === "export-history") {

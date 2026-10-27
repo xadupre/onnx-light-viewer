@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="210" viewBox="0 0 1000 210" role="img" aria-labelledby="title description">
+  <title id="title">Commit-pinned Olive recipe execution</title>
+  <desc id="description">Check the upstream commit. Reuse an unchanged cached catalogue, or index a new immutable checkout. Copy the selected snapshot into fresh output, then run its JSON workflow with the configured Python interpreter.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="m0 0 8 4-8 4Z" fill="#46617c"/></marker>
+  </defs>
+  <rect width="1000" height="210" rx="12" fill="#f3f6fa"/>
+  <g fill="#fff" stroke="#46617c" stroke-width="2">
+    <rect x="15" y="58" width="175" height="115" rx="10"/>
+    <rect x="235" y="58" width="240" height="115" rx="10"/>
+    <rect x="520" y="58" width="220" height="115" rx="10"/>
+    <rect x="785" y="58" width="200" height="115" rx="10"/>
+  </g>
+  <g fill="none" stroke="#46617c" stroke-width="2" marker-end="url(#arrow)">
+    <path d="M190 115h40"/><path d="M475 115h40"/><path d="M740 115h40"/>
+  </g>
+  <g fill="#172b42" font-family="Arial, sans-serif" font-size="16" text-anchor="middle">
+    <text x="500" y="29" font-size="20" font-weight="bold">Olive recipes: the Git commit is the version</text>
+    <text x="102" y="90" font-weight="bold">Upstream HEAD</text>
+    <text x="102" y="120">Check on open</text><text x="102" y="144">or Refresh recipes</text>
+    <text x="355" y="88" font-weight="bold">Persistent catalogue</text>
+    <text x="355" y="118">Same SHA: reuse list</text><text x="355" y="145">New SHA: checkout + index</text>
+    <text x="630" y="90" font-weight="bold">Isolated recipe copy</text>
+    <text x="630" y="120">Fresh output folder</text><text x="630" y="144">Pinned helpers + config</text>
+    <text x="885" y="90" font-weight="bold">Python: olive run</text>
+    <text x="885" y="120">Network may be needed</text><text x="885" y="144">ONNX + replay script</text>
+  </g>
+</svg>
