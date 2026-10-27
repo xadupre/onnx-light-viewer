@@ -4,7 +4,7 @@
 Usage:
     python scripts/benchmark_qwen35_exporters.py --output /data/qwen35-benchmark
     python scripts/benchmark_qwen35_exporters.py --output /data/qwen35-cpu \
-        --profiles cpu-fp32 --repeat 3
+        --profiles cpu-fp32
 
 Requires Python >= 3.10, huggingface_hub, onnx and the selected exporters:
 modelbuilder (mbext), onnxruntime-genai, mobius-onnx and olive-ai. Install their
@@ -28,13 +28,13 @@ provider and unpruned logits, retaining its non-quantizing surgery.
 Creation time includes a fresh Python process, imports, loading/casting weights,
 graph construction/optimization and serialization. Each run has private output
 and Olive caches; only the source download is shared. ONNX header validation is
-timed separately and does not load external weights. Filesystem caches are not
-flushed; execution order is seeded/shuffled between repetitions.
+timed separately and does not load external weights. Each selected exporter/profile
+is measured once, without warmup. Filesystem caches are not flushed.
 
 results.json is updated after every run, including failures. See each run.log
 and recorded command/config for reproduction. Existing output is never reused.
 Full runs need substantial RAM, CUDA resources where required, and disk space:
-five FP32/FP16 exports can retain well over 100 GB per repetition.
+the ten FP32/FP16 exports can retain well over 100 GB.
 """
 
 from __future__ import annotations
@@ -44,7 +44,6 @@ import json
 import math
 import os
 import platform
-import random
 import re
 import signal
 import subprocess
@@ -487,16 +486,12 @@ def main() -> int:
     parser.add_argument(
         "--profiles", choices=PROFILES, nargs="+", default=list(PROFILES)
     )
-    parser.add_argument("--repeat", type=int, default=1)
     parser.add_argument(
         "--timeout", type=float, default=3600, help="Seconds per exporter process."
     )
-    parser.add_argument(
-        "--seed", type=int, default=0, help="Reproducible execution-order shuffle."
-    )
     args = parser.parse_args()
-    if args.repeat < 1 or not math.isfinite(args.timeout) or args.timeout <= 0:
-        parser.error("--repeat and --timeout must be positive.")
+    if not math.isfinite(args.timeout) or args.timeout <= 0:
+        parser.error("--timeout must be positive.")
     if not re.fullmatch(r"[a-f0-9]{40}", args.recipe_revision):
         parser.error("--recipe-revision must be an immutable 40-character commit.")
     output = args.output.expanduser().resolve()
@@ -530,15 +525,8 @@ def main() -> int:
                     f"Recipe download ({profile}): {recipes[profile]['seconds']:.3f}s; cache_hit={recipes[profile]['cache_hit']}",
                     flush=True,
                 )
-        rng = random.Random(args.seed)
-        for repeat in range(args.repeat):
-            cases = [
-                (profile, exporter)
-                for profile in args.profiles
-                for exporter in args.exporters
-            ]
-            rng.shuffle(cases)
-            for profile, exporter in cases:
+        for profile in dict.fromkeys(args.profiles):
+            for exporter in dict.fromkeys(args.exporters):
                 directory = (
                     output / f"{len(report['results']) + 1:03d}-{profile}-{exporter}"
                 )
@@ -547,7 +535,6 @@ def main() -> int:
                 row = {
                     "exporter": exporter,
                     "profile": profile,
-                    "repeat": repeat + 1,
                     "status": "incomplete",
                     "log": str(directory / "run.log"),
                     "backend": (
@@ -566,7 +553,7 @@ def main() -> int:
                         recipes.get(profile, {}).get("config"),
                     )
                     print(
-                        f"{profile:10} {exporter:13} repeat={repeat + 1}: creating model",
+                        f"{profile:10} {exporter:13}: creating model",
                         flush=True,
                     )
                     start = time.perf_counter()
