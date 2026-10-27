@@ -607,8 +607,8 @@ std::optional<std::string> ReadPassword(const Napi::Value &value) {
 void RestoreModelPayloads(ol::ModelProto &snapshot, const StoredModel &source,
                           const std::string &file_path) {
   if (source.has_training_info)
-    throw std::runtime_error(
-        "Editing or saving models containing training_info is not supported by onnx-light 0.2.0.");
+    throw std::runtime_error("Editing or saving models containing training_info is not supported "
+                             "by onnx-light " ONNX_LIGHT_VERSION ".");
   if (source.skipped.empty())
     return;
   const auto path = ModelFilePath(file_path);

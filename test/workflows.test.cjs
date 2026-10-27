@@ -12,6 +12,22 @@ function workflow(name) {
 
 const documentation = workflow("documentation.yml");
 
+test("native builds and coverage use onnx-light 0.2.1 with pinned checksums", () => {
+  const cmake = readFileSync(
+    path.resolve(__dirname, "..", "CMakeLists.txt"),
+    "utf8",
+  );
+  const version = cmake.match(/set\(ONNX_LIGHT_VERSION "([^"]+)"\)/)[1];
+  assert.equal(version, "0.2.1");
+  assert.equal([...cmake.matchAll(/set\(_sha256 "[a-f0-9]{64}"\)/g)].length, 5);
+  assert.match(cmake, /URL_HASH "SHA256=\$\{_sha256\}"/);
+  assert.ok(
+    workflow("coverage.yml").includes(
+      `https://github.com/xadupre/onnx-light/releases/download/${version}/onnx_light-${version}-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl#sha256=3aa2fe0d0eb39a5fe380b5241997169edad466f99dc688eec97ef4091cefc2ae`,
+    ),
+  );
+});
+
 test("CI runs unit tests on Linux and Windows without building documentation", () => {
   const source = workflow("tests.yml");
   assert.match(source, /runs-on: \$\{\{ matrix\.os \}\}/);

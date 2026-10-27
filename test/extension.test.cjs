@@ -3790,7 +3790,9 @@ test("selects optimization groups and previews global passes through the real we
   assert.ok(patterns.querySelectorAll("details").length > 1);
   document.getElementById("clear-optimization-patterns").click();
   assert.equal(document.getElementById("run-optimization").disabled, true);
-  const group = patterns.querySelector("details");
+  const group = [...patterns.querySelectorAll("details")].find(
+    (group) => group.querySelectorAll("input[data-pattern]").length > 1,
+  );
   const toggle = group.querySelector("input[data-priority]");
   toggle.click();
   assert.equal(

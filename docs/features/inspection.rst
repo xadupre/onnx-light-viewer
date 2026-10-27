@@ -97,7 +97,7 @@ Open ``examples/quantized-2bit.onnx`` or ``examples/quantized-3bit.onnx`` and se
 **Dequantize** to inspect portable Q2_K/Q3_K weight layouts. The 2-bit example
 uses an inline declaration; the 3-bit example uses a model-scoped type reference.
 These are onnx-light extensions, not standard ONNX or GGUF storage formats.
-With onnx-light 0.2.0 Python bindings and their dependencies available, regenerate
+With onnx-light 0.2.1 Python bindings and their dependencies available, regenerate
 both examples from the repository root:
 
 .. code-block:: sh
