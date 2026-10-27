@@ -1,14 +1,19 @@
 #!/usr/bin/env python3
-"""Compare five Qwen3.5-4B text-decoder export entry points, without quantization.
+"""Compare five text-decoder export entry points, without quantization.
 
 Usage:
     python scripts/benchmark_qwen35_exporters.py
     python scripts/benchmark_qwen35_exporters.py --output qwen35-cpu.json \
         --profiles cpu-fp32
+    python scripts/benchmark_qwen35_exporters.py --model Qwen/Qwen3-0.6B \
+        --output qwen3-cpu.json --profiles cpu-fp32
+
+The default model is Qwen/Qwen3.5-4B. Other models must be text decoders supported
+by the selected exporters; this option does not add support to those exporters.
 
 Requires Python >= 3.10, huggingface_hub, onnx and the selected exporters:
-modelbuilder (mbext), onnxruntime-genai, mobius-onnx and olive-ai. Install their
-Qwen3.5-capable versions yourself; PYTHONPATH is inherited, never modified.
+modelbuilder (mbext), onnxruntime-genai, mobius-onnx and olive-ai. Install versions
+supporting the selected model yourself; PYTHONPATH is inherited, never modified.
 FP16/CUDA requires the corresponding exporter/runtime dependencies.
 
 The original HF checkpoint is downloaded once, at an immutable revision, and
@@ -23,7 +28,9 @@ head. Vision/embedding sidecar pipelines, quantization and inference are exclude
 Olive uses capture-onnx-graph with ModelBuilder; the official recipe also uses
 ModelBuilder, followed by TieWordEmbeddings. These are five entry points, NOT five
 independent graph builders. The recipe is adapted to the requested precision,
-provider and unpruned logits, retaining its non-quantizing surgery.
+provider and unpruned logits, retaining its non-quantizing surgery. The pinned
+Qwen3.5 recipe is reused as a pipeline template with the selected checkpoint;
+changing --model does not select a different model-specific recipe.
 
 Creation time includes a fresh Python process, imports, loading/casting weights,
 graph construction/optimization and serialization. Each run has private output
@@ -59,7 +66,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from urllib.request import urlopen
 
-MODEL = "Qwen/Qwen3.5-4B"
+DEFAULT_MODEL = "Qwen/Qwen3.5-4B"
 RECIPE_REVISION = "47b21648b9bf1a4b7beba2d0b231ceeda76edae8"
 EXPORTERS = ("mbext", "modelbuilder", "mobius", "olive", "olive-recipes")
 PROFILES = {
@@ -84,7 +91,7 @@ def write_json(path: Path, value: object) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def download_model(cache: Path, revision: str) -> dict:
+def download_model(model: str, cache: Path, revision: str) -> dict:
     from huggingface_hub import (
         HfApi,
         hf_hub_download,
@@ -93,7 +100,7 @@ def download_model(cache: Path, revision: str) -> dict:
     )
 
     start = time.perf_counter()
-    info = HfApi().model_info(MODEL, revision=revision)
+    info = HfApi().model_info(model, revision=revision)
     if not info.sha or not re.fullmatch(r"[a-f0-9]{40}", info.sha):
         raise ValueError("The Hub did not return an immutable model revision.")
     files = {entry.rfilename for entry in info.siblings}
@@ -110,13 +117,13 @@ def download_model(cache: Path, revision: str) -> dict:
 
     def cached(name: str) -> bool:
         return isinstance(
-            try_to_load_from_cache(MODEL, name, revision=info.sha, cache_dir=cache), str
+            try_to_load_from_cache(model, name, revision=info.sha, cache_dir=cache), str
         )
 
     checkpoint_cached = cached(checkpoint)
     if checkpoint.endswith(".index.json"):
         index_path = hf_hub_download(
-            MODEL, checkpoint, revision=info.sha, cache_dir=cache
+            model, checkpoint, revision=info.sha, cache_dir=cache
         )
         weights = set(
             json.loads(Path(index_path).read_text(encoding="utf-8"))[
@@ -138,7 +145,7 @@ def download_model(cache: Path, revision: str) -> dict:
     cache_hit = checkpoint_cached and all(cached(name) for name in selected)
     source = Path(
         snapshot_download(
-            MODEL, revision=info.sha, cache_dir=cache, allow_patterns=selected
+            model, revision=info.sha, cache_dir=cache, allow_patterns=selected
         )
     ).resolve()
     elapsed = time.perf_counter() - start
@@ -486,6 +493,11 @@ def main() -> int:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument(
+        "--model",
+        default=DEFAULT_MODEL,
+        help="Hugging Face model ID (default: %(default)s).",
+    )
+    parser.add_argument(
         "--output",
         type=Path,
         default=Path("qwen35-benchmark.json"),
@@ -526,7 +538,7 @@ def main() -> int:
     output = args.output.expanduser().resolve()
     cache = args.cache_dir.expanduser().resolve()
     report = {
-        "model": MODEL,
+        "model": args.model,
         "component": "text-only decoder with embeddings and LM head",
         "status": "incomplete",
         "environment": environment_info(),
@@ -535,8 +547,8 @@ def main() -> int:
     }
     report_path = output
     try:
-        print(f"Downloading shared checkpoint: {MODEL}", flush=True)
-        report["model_download"] = download_model(cache, args.revision)
+        print(f"Downloading shared checkpoint: {args.model}", flush=True)
+        report["model_download"] = download_model(args.model, cache, args.revision)
         write_json(report_path, report)
         source = Path(report["model_download"]["source"])
         print(
