@@ -304,6 +304,8 @@ function createFusionPanel({
     byId("optimization-panel").setAttribute("aria-busy", String(busy));
     const patterns = byId("fusion-pattern");
     patterns.disabled = busy || !patterns.querySelector("input");
+    byId("fusion-pattern-group").disabled =
+      patterns.disabled || byId("fusion-pattern-group").options.length <= 1;
     byId("select-patterns").disabled = patterns.disabled;
     byId("clear-patterns").disabled =
       busy || !patterns.querySelector("input:checked");
@@ -317,6 +319,9 @@ function createFusionPanel({
     const optimization = byId("optimization-patterns");
     optimization.disabled =
       busy || !canFuse() || !optimization.querySelector("input");
+    byId("optimization-pattern-group").disabled =
+      optimization.disabled ||
+      byId("optimization-pattern-group").options.length <= 1;
     byId("select-optimization-patterns").disabled = optimization.disabled;
     for (const id of ["clear-optimization-patterns", "run-optimization"])
       byId(id).disabled =
@@ -410,7 +415,7 @@ function createFusionPanel({
         input.dataset.pattern = pattern.name;
         input.checked = optimizationSelection
           ? optimizationSelection.has(pattern.name)
-          : true;
+          : pattern.enabledByDefault !== false;
         label.title = `${pattern.device}; native priority ${pattern.priority}`;
         label.append(input, document.createTextNode(pattern.name));
         group.append(label);
@@ -422,6 +427,45 @@ function createFusionPanel({
       fieldset.append(group);
     }
     updateOptimizationSelection();
+  }
+
+  function showPatternGroups(id, fieldsetId, patterns, changed) {
+    const picker = byId(id);
+    picker.replaceChildren();
+    const placeholder = document.createElement("option");
+    placeholder.value = "";
+    placeholder.textContent = "Choose a group…";
+    picker.append(placeholder);
+    const available = new Set(
+      [...byId(fieldsetId).querySelectorAll("input")].map(
+        (input) => input.value,
+      ),
+    );
+    const groups = new Map();
+    for (const pattern of patterns ?? []) {
+      if (!available.has(pattern.name)) continue;
+      for (const name of pattern.groups ?? []) {
+        if (!groups.has(name)) groups.set(name, new Set());
+        groups.get(name).add(pattern.name);
+      }
+    }
+    for (const [name, members] of [...groups].sort(([a], [b]) =>
+      a.localeCompare(b),
+    )) {
+      const option = document.createElement("option");
+      option.value = name;
+      option.textContent = `${name} (${members.size} patterns)`;
+      picker.append(option);
+    }
+    picker.onchange = () => {
+      const members = groups.get(picker.value);
+      if (!members) return;
+      for (const input of byId(fieldsetId).querySelectorAll("input"))
+        if (!input.hasAttribute("data-priority"))
+          input.checked = members.has(input.value);
+      picker.value = "";
+      changed();
+    };
   }
 
   function updateOptimizationSelection() {
@@ -808,6 +852,18 @@ function createFusionPanel({
         label.append(checkbox, document.createTextNode(pattern));
         byId("fusion-pattern").append(label);
       }
+      showPatternGroups(
+        "fusion-pattern-group",
+        "fusion-pattern",
+        data.optimizationPatterns,
+        changeFusionPatterns,
+      );
+      showPatternGroups(
+        "optimization-pattern-group",
+        "optimization-patterns",
+        data.optimizationPatterns,
+        updateOptimizationSelection,
+      );
       updateDiagnosticPatterns();
       fusionControls(
         false,

@@ -3074,6 +3074,34 @@ test("matches and applies unused-code removal including initializer-only changes
   );
 });
 
+test("exposes native pattern sets including explicitly enabled Layer patterns", async () => {
+  const source = optimizationModel();
+  const catalog = source.optimizationPatterns();
+  assert.equal(
+    new Set(catalog.map((pattern) => pattern.name)).size,
+    catalog.length,
+  );
+  for (const pattern of catalog) {
+    assert.ok(pattern.groups.includes("all"));
+    assert.equal(typeof pattern.enabledByDefault, "boolean");
+  }
+  const layer = catalog.find((pattern) => pattern.name === "RepeatedLayer");
+  assert.deepEqual(layer.groups, ["Layer", "all"]);
+  assert.equal(layer.enabledByDefault, false);
+  assert.ok(source.fusionPatterns().includes(layer.name));
+  for (const name of ["L1", "L2"]) {
+    const members = catalog.filter((pattern) => pattern.groups.includes(name));
+    assert.ok(members.length > 0);
+    assert.ok(members.every((pattern) => pattern.enabledByDefault));
+    const optimized = await source.optimize(
+      members.map((pattern) => pattern.name),
+      "Optimize",
+    );
+    assert.ok(optimized.optimizationReport());
+  }
+  assert.deepEqual(source.optimizationPatterns(), catalog);
+});
+
 test("uses the full catalog and native priority iteration to match operators introduced by earlier patterns", async () => {
   const source = optimizationModel();
   const catalog = source.optimizationPatterns();

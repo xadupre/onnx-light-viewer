@@ -3787,6 +3787,34 @@ test("selects optimization groups and previews global passes through the real we
   assert.equal(document.getElementById("fusion-panel").hidden, true);
   assert.equal(document.getElementById("optimization-picker").open, true);
   assert.ok(patterns.querySelector('input[value="GemmTranspose"]'));
+  const nativeCatalog = extension.messages.at(-1).optimizationPatterns;
+  assert.equal(
+    patterns.querySelector('input[value="RepeatedLayer"]').checked,
+    false,
+  );
+  const chooseGroup = (id, name) => {
+    const picker = document.getElementById(id);
+    assert.equal(picker.disabled, false);
+    assert.ok([...picker.options].some((option) => option.value === name));
+    picker.value = name;
+    picker.dispatchEvent(new window.Event("change"));
+    assert.equal(picker.value, "");
+  };
+  const checked = (fieldset) =>
+    [...fieldset.querySelectorAll("input:checked")]
+      .filter((input) => !input.hasAttribute("data-priority"))
+      .map((input) => input.value)
+      .sort();
+  for (const name of ["Layer", "L1", "L2", "all"]) {
+    chooseGroup("optimization-pattern-group", name);
+    assert.deepEqual(
+      checked(patterns),
+      nativeCatalog
+        .filter((pattern) => pattern.groups.includes(name))
+        .map((pattern) => pattern.name)
+        .sort(),
+    );
+  }
   assert.ok(patterns.querySelectorAll("details").length > 1);
   document.getElementById("clear-optimization-patterns").click();
   assert.equal(document.getElementById("run-optimization").disabled, true);
@@ -3805,6 +3833,28 @@ test("selects optimization groups and previews global passes through the real we
   document.getElementById("optimize-model").click();
   document.getElementById("fuse-pattern").click();
   await flush();
+  const fusionPatterns = document.getElementById("fusion-pattern");
+  const available = [...fusionPatterns.querySelectorAll("input")].map(
+    (input) => input.value,
+  );
+  chooseGroup("fusion-pattern-group", "Layer");
+  assert.deepEqual(checked(fusionPatterns), ["RepeatedLayer"]);
+  chooseGroup("fusion-pattern-group", "all");
+  assert.deepEqual(
+    checked(fusionPatterns),
+    nativeCatalog
+      .filter((pattern) => available.includes(pattern.name))
+      .map((pattern) => pattern.name)
+      .sort(),
+  );
+  assert.ok(
+    !checked(fusionPatterns).some((name) =>
+      ["IdentityRemoval", "ConstantFolding", "RemoveUnusedNodes"].includes(
+        name,
+      ),
+    ),
+  );
+  document.getElementById("clear-patterns").click();
   const selectPass = (name) =>
     document.querySelector(`#fusion-pattern input[value="${name}"]`).click();
   for (const name of [
