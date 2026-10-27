@@ -3152,6 +3152,88 @@ test("estimates root and pipeline memory on request and reports errors without i
   }
 });
 
+test("tensor statistics requests validate transport and keep native handles usable", async (t) => {
+  const extension = await openExtension("tiny-initializers.onnx");
+  t.after(() => extension.dispose());
+  const request = {
+    type: "tensor-statistics",
+    requestId: 1,
+    name: "typed_floats",
+    path: [],
+  };
+  await extension.receive(request);
+  assert.equal(extension.messages.at(-1).type, "tensor-statistics-info");
+  assert.equal(extension.messages.at(-1).statistics.mean, 0.5);
+  for (const invalid of [
+    { requestId: "1" },
+    { requestId: 0 },
+    { name: 7 },
+    { name: "" },
+    { path: "root" },
+    { path: [{ node: -1, attribute: 0, graph: 0 }] },
+  ]) {
+    await extension.receive({ ...request, ...invalid });
+    assert.equal(extension.messages.at(-1).type, "tensor-statistics-error");
+    assert.match(
+      extension.messages.at(-1).error,
+      /Invalid tensor statistics request/,
+    );
+  }
+  await extension.receive({ ...request, name: "absent", requestId: 2 });
+  assert.equal(extension.messages.at(-1).type, "tensor-statistics-error");
+  assert.match(extension.messages.at(-1).error, /No stored tensor data/);
+  await extension.receive({ ...request, requestId: 3 });
+  assert.equal(extension.messages.at(-1).type, "tensor-statistics-info");
+  assert.equal(extension.nativeModels.length, 1);
+});
+
+test("tensor statistics discard delayed computations after navigation, replacement or disposal", async () => {
+  for (const action of ["navigate", "replace", "dispose", "new-request"]) {
+    for (const fail of [false, true]) {
+      const extension = await openExtension("tiny-initializers.onnx");
+      try {
+        const native = extension.nativeModels.at(-1);
+        const original = native.tensorStatistics;
+        let resume;
+        const gate = new Promise((resolve) => {
+          resume = resolve;
+        });
+        native.tensorStatistics = async (...args) => {
+          await gate;
+          if (fail) throw new Error("Delayed tensor failure");
+          return original(...args);
+        };
+        const pending = extension.receive({
+          type: "tensor-statistics",
+          requestId: 1,
+          name: "typed_floats",
+          path: [],
+        });
+        await new Promise((resolve) => setImmediate(resolve));
+        if (action === "replace") await extension.open("relu.onnx");
+        else if (action === "navigate")
+          await extension.receive({ type: "navigate", path: [] });
+        else if (action === "dispose") extension.dispose();
+        else {
+          native.tensorStatistics = original;
+          await extension.receive({
+            type: "tensor-statistics",
+            requestId: 2,
+            name: "scalar",
+            path: [],
+          });
+        }
+        const count = extension.messages.length;
+        resume();
+        await pending;
+        assert.equal(extension.messages.length, count, `${action}: ${fail}`);
+      } finally {
+        extension.dispose();
+      }
+    }
+  }
+});
+
 test("statistics list external dense and sparse files with current physical sizes", async (t) => {
   const directory = await mkdtemp(
     path.join(tmpdir(), "onnx-light-statistics-files-"),
@@ -3320,6 +3402,7 @@ test("ignores stale recovery results and errors after replacing a local model", 
     "get-statistics",
     "memory-inputs",
     "memory-profile",
+    "tensor-statistics",
     "metadata",
     "refresh-shapes",
     "verify",
@@ -3335,6 +3418,7 @@ test("ignores stale recovery results and errors after replacing a local model", 
       const recovery = extension.receive({
         type,
         requestId: 1,
+        name: "weight",
         dimensions: {},
         path,
         scenario: "scenario",
@@ -3424,6 +3508,7 @@ test("ignores delayed recovery results and errors after disposing the panel", as
     { type: "get-statistics", requestId: 1 },
     { type: "memory-inputs", requestId: 1 },
     { type: "memory-profile", requestId: 1, dimensions: {} },
+    { type: "tensor-statistics", requestId: 1, name: "weight", path: [] },
     { type: "navigate", path: [{ node: 9999, attribute: 0, graph: 0 }] },
     { type: "metadata" },
     { type: "refresh-shapes" },

@@ -5308,6 +5308,291 @@ test("exposes connected initializer metadata and tiny values without external re
   );
 });
 
+test("tensor statistics report dense values, quartiles, histogram and a square map", async () => {
+  const model = loadModel(
+    modelBytes("tiny-initializers.onnx"),
+    "statistics.onnx",
+  );
+  const graph = model.graph();
+  const stats = await model.tensorStatistics("typed_floats");
+  assert.equal(stats.dtype, "FLOAT");
+  assert.deepEqual(stats.shape, ["3"]);
+  assert.equal(stats.count, "3");
+  assert.equal(stats.sizeBytes, "12");
+  assert.equal(stats.mean, 0.5);
+  assert.equal(stats.median, 0.5);
+  assert.equal(stats.min, -2);
+  assert.equal(stats.max, 3);
+  assert.deepEqual(stats.quantiles, [-0.75, 0.5, 1.75]);
+  assert.deepEqual(stats.distribution, []);
+  assert.deepEqual(stats.rectangleShape, [32, 32]);
+  assert.equal(stats.rectangleMap.length, 1024);
+  const histogram = await model.tensorStatistics("raw_fifteen");
+  assert.equal(histogram.mean, 7);
+  assert.equal(histogram.median, 7);
+  assert.equal(histogram.distribution.length, 10);
+  assert.equal(histogram.binEdges.length, 11);
+  assert.equal(
+    histogram.distribution.reduce((a, b) => a + BigInt(b), 0n),
+    15n,
+  );
+  assert.equal(histogram.binEdges[0], 0);
+  assert.equal(histogram.binEdges.at(-1), 14);
+  assert.deepEqual((await model.tensorStatistics("scalar")).shape, []);
+  const empty = await model.tensorStatistics("empty");
+  assert.equal(empty.count, "0");
+  assert.equal(empty.mean, "NaN");
+  assert.equal(empty.median, "NaN");
+  assert.deepEqual(empty.quantiles, ["NaN", "NaN", "NaN"]);
+  assert.deepEqual(empty.rectangleMap, []);
+  assert.deepEqual(model.graph(), graph);
+});
+
+test("tensor statistics use SDK decoding for low-bit and encoded quantized tensors", async () => {
+  const model = loadModel(
+    modelBytes("tiny-initializers.onnx"),
+    "statistics.onnx",
+  );
+  for (const [name, min, max, median] of [
+    ["uint4", 1, 15, 2],
+    ["int4", -8, 7, -1],
+    ["uint2", 0, 3, 2],
+    ["int2", -2, 1, -1],
+    ["float4", -1, 1, 0],
+    ["float8", -2, 1, -0.5],
+    ["float6", 1, 3, 2],
+    ["float16", -2, 1, -0.5],
+    ["bfloat16", -2, 1, -0.5],
+    ["booleans", 0, 1, 0.5],
+  ]) {
+    const stats = await model.tensorStatistics(name);
+    assert.equal(stats.min, min, name);
+    assert.equal(stats.max, max, name);
+    assert.equal(stats.median, median, name);
+  }
+  for (const bits of [2, 3]) {
+    const file = path.resolve(
+      __dirname,
+      `../examples/quantized-${bits}bit.onnx`,
+    );
+    const streamed = await loadModelFile(file, "quantized.onnx");
+    const stats = await streamed.tensorStatistics("weight");
+    assert.equal(stats.dtype, "FLOAT");
+    assert.deepEqual(stats.shape, ["8", "4"]);
+    assert.equal(stats.count, "32");
+    assert.equal(stats.min, -1);
+    assert.equal(stats.max, 1);
+    assert.equal(stats.mean, -1 / 32);
+    assert.equal(stats.median, 0);
+    assert.equal(stats.distinctCount, "3");
+    assert.equal(stats.rectangleMap.length, 1024);
+  }
+});
+
+test("tensor statistics preserve nonfinite values and reject unavailable or unsupported data", async () => {
+  const raw = Buffer.alloc(12);
+  raw.writeFloatLE(-Infinity, 0);
+  raw.writeFloatLE(0, 4);
+  raw.writeFloatLE(Infinity, 8);
+  const model = memoryTestModel([3], {
+    initializers: [
+      Buffer.concat([
+        varintField(1, 3),
+        varintField(2, 1),
+        bytesField(8, "weight"),
+        bytesField(9, raw),
+      ]),
+    ],
+  });
+  const stats = await model.tensorStatistics("weight");
+  assert.equal(stats.min, "-Infinity");
+  assert.equal(stats.max, "Infinity");
+  assert.equal(stats.mean, "NaN");
+  assert.equal(stats.median, 0);
+  assert.equal(stats.rectangleMap.includes("Infinity"), true);
+  for (const name of ["x", "y", "absent"])
+    await assert.rejects(model.tensorStatistics(name), /No stored tensor data/);
+  assert.throws(() => model.tensorStatistics(1), /tensor name/);
+  assert.throws(() => model.tensorStatistics(""), /nonempty tensor name/);
+  await assert.rejects(model.tensorStatistics("weight", [{ function: 9999 }]));
+  const tiny = loadModel(modelBytes("tiny-initializers.onnx"), "tiny.onnx");
+  for (const name of ["strings", "precision_complex64", "tiny_sparse"])
+    await assert.rejects(tiny.tensorStatistics(name));
+  await assert.rejects(
+    loadModel(encodedModel(), "affine.onnx").tensorStatistics("weight"),
+    /Expected one loaded structured quantization record/,
+  );
+});
+
+test("tensor statistics restore omitted and external payloads without changing the model", async (t) => {
+  const directory = mkdtempSync(path.join(tmpdir(), "tensor-statistics-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const file = path.join(directory, "source.onnx");
+  const raw = Buffer.alloc(256, 63);
+  writeFileSync(file, matmulWithWeight(9, raw));
+  const streamed = await loadModelFile(file, "source.onnx");
+  const original = streamed.graph();
+  const name = original.initializers[0].name;
+  assert.equal(original.initializers[0].storage.location, null);
+  const restored = await streamed.tensorStatistics(name);
+  assert.equal(restored.count, "64");
+  assert.equal(restored.min, restored.max);
+  assert.deepEqual(streamed.graph(), original);
+  const constant = memoryTestModel([64], {
+    nodes: [
+      Buffer.concat([
+        bytesField(2, "constant"),
+        bytesField(4, "Constant"),
+        bytesField(
+          5,
+          Buffer.concat([
+            bytesField(1, "value"),
+            varintField(20, 4),
+            bytesField(
+              5,
+              Buffer.concat([
+                varintField(1, 64),
+                varintField(2, 1),
+                bytesField(9, raw),
+              ]),
+            ),
+          ]),
+        ),
+      ]),
+    ],
+  });
+  writeFileSync(file, await constant.serialize());
+  const storedConstant = await loadModelFile(file, "constant.onnx");
+  assert.equal((await storedConstant.tensorStatistics("constant")).count, "64");
+
+  const split = await loadModel(
+    matmulWithWeight(9, raw),
+    "dense.onnx",
+  ).serializeFiles(1024, "weights");
+  assert.ok(split.weights.length);
+  for (const weight of split.weights)
+    writeFileSync(path.join(directory, weight.name), weight.bytes);
+  writeFileSync(file, split.model);
+  const externalDense = await loadModelFile(file, "external-dense.onnx");
+  assert.deepEqual(await externalDense.tensorStatistics("weight"), restored);
+
+  writeFileSync(file, encodedModel({ external: "codes.bin" }));
+  writeFileSync(
+    path.join(directory, "codes.bin"),
+    Buffer.from([0, 0xe4, 0xe4]),
+  );
+  const external = await loadModelFile(file, "external.onnx");
+  await assert.rejects(
+    external.tensorStatistics("weight"),
+    /Expected one loaded structured quantization record/,
+  );
+  await assert.rejects(
+    loadModel(
+      encodedModel({ external: "../codes.bin" }),
+      "virtual.onnx",
+    ).tensorStatistics("weight"),
+    /local source model/,
+  );
+  writeFileSync(file, encodedModel({ external: "../codes.bin" }));
+  await assert.rejects(
+    (await loadModelFile(file, "unsafe.onnx")).tensorStatistics("weight"),
+    /safe relative path/,
+  );
+});
+
+test("tensor statistics inspect stored scalar and list Constant attributes", async () => {
+  const cases = [
+    ["value_int", varintField(3, 7), 2, [], "INT64", 7],
+    [
+      "value_ints",
+      Buffer.concat([varintField(8, 2), varintField(8, 8)]),
+      7,
+      ["2"],
+      "INT64",
+      5,
+    ],
+    [
+      "value_float",
+      Buffer.concat([varint(2 * 8 + 5), Buffer.from([0, 0, 192, 63])]),
+      1,
+      [],
+      "FLOAT",
+      1.5,
+    ],
+    [
+      "value_floats",
+      Buffer.concat([
+        varint(7 * 8 + 5),
+        Buffer.from([0, 0, 128, 63]),
+        varint(7 * 8 + 5),
+        Buffer.from([0, 0, 64, 64]),
+      ]),
+      6,
+      ["2"],
+      "FLOAT",
+      2,
+    ],
+  ];
+  for (const [name, value, type, shape, dtype, mean] of cases) {
+    const model = memoryTestModel([1], {
+      nodes: [
+        Buffer.concat([
+          bytesField(2, "constant"),
+          bytesField(4, "Constant"),
+          bytesField(
+            5,
+            Buffer.concat([bytesField(1, name), varintField(20, type), value]),
+          ),
+        ]),
+      ],
+    });
+    const stats = await model.tensorStatistics("constant");
+    assert.deepEqual(stats.shape, shape, name);
+    assert.equal(stats.dtype, dtype, name);
+    assert.equal(stats.mean, mean, name);
+  }
+});
+
+test("tensor statistics resolve captures and prefer subgraph-local initializers", async () => {
+  const model = loadModel(modelBytes("subgraphs.onnx"), "subgraphs.onnx");
+  const root = model.graph();
+  const captured = root.nodes[0].attributes.find(
+    ({ name }) => name === "then_branch",
+  ).graphs[0].path;
+  assert.deepEqual(
+    await model.tensorStatistics("bias", captured),
+    await model.tensorStatistics("bias"),
+  );
+  const local = root.nodes[1].attributes[0].graphs[1].path;
+  const localStatistics = await model.tensorStatistics("bias", local);
+  assert.deepEqual(localStatistics.shape, ["2"]);
+  assert.equal(localStatistics.count, "2");
+  assert.equal((await model.tensorStatistics("bias")).count, "3");
+  assert.equal(localStatistics.min, localStatistics.max);
+  const functions = loadModel(modelBytes("functions.onnx"), "functions.onnx");
+  const definition = functions.graph().localFunctions[0].path;
+  await assert.rejects(
+    functions.tensorStatistics("x", definition),
+    /No stored tensor data/,
+  );
+});
+
+test("tensor statistics delegate pipeline stage paths", async () => {
+  const pipeline = loadModel(modelBytes("tiny.pipe-onnx"), "tiny.pipe-onnx");
+  for (const { path: stagePath } of pipeline.graph().pipelineStages) {
+    const graph = pipeline.graph(false, stagePath);
+    for (const tensor of graph.initializers.slice(0, 1)) {
+      const stats = await pipeline.tensorStatistics(tensor.name, stagePath);
+      assert.equal(stats.name, tensor.name);
+      assert.equal(stats.dtype, tensor.type);
+    }
+  }
+  assert.throws(
+    () => pipeline.tensorStatistics("weight"),
+    /Choose a pipeline stage/,
+  );
+});
+
 test("previews fewer than 16 initializer elements with locale-independent decimals and exact integer precision", async () => {
   const bytes = modelBytes("tiny-initializers.onnx");
   const graph = decodeGraph(bytes, "tiny-initializers.onnx");

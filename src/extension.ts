@@ -468,6 +468,7 @@ async function configurePanel(
   let graphRevision = 0;
   let navigationRequest = 0;
   let statisticsRequest = 0;
+  let tensorStatisticsRequest = 0;
   let memoryRequest = 0;
   let fusionRequest = 0;
   let diagnosticRequest = 0;
@@ -711,6 +712,7 @@ async function configurePanel(
         maxExternalFileSize?: unknown;
         includeRewritings?: unknown;
         requestId?: unknown;
+        name?: unknown;
         dimensions?: unknown;
         previewId?: unknown;
         pattern?: unknown;
@@ -871,6 +873,50 @@ async function configurePanel(
           await vscode.window.showErrorMessage(
             `Could not estimate ONNX memory: ${detail}`,
           );
+        }
+      } else if (message?.type === "tensor-statistics") {
+        const requestedModel = model;
+        const revision = graphRevision;
+        const generation = ++tensorStatisticsRequest;
+        const isCurrent = () =>
+          active &&
+          model === requestedModel &&
+          graphRevision === revision &&
+          tensorStatisticsRequest === generation;
+        try {
+          const statistics = await log.run(
+            "Inspect tensor statistics",
+            async () => {
+              if (
+                typeof message.requestId !== "number" ||
+                !Number.isSafeInteger(message.requestId) ||
+                message.requestId <= 0 ||
+                typeof message.name !== "string" ||
+                !message.name.length ||
+                !isGraphPath(message.path)
+              )
+                throw new Error("Invalid tensor statistics request.");
+              const current = requireModel();
+              const native = await nativeModel(current, log, () => {
+                void sendStatus();
+              });
+              if (!isCurrent()) return;
+              return native.tensorStatistics(message.name, message.path);
+            },
+          );
+          if (isCurrent() && statistics)
+            await postMessage({
+              type: "tensor-statistics-info",
+              requestId: message.requestId,
+              statistics,
+            });
+        } catch (error) {
+          if (!isCurrent()) return;
+          await postMessage({
+            type: "tensor-statistics-error",
+            requestId: message.requestId,
+            error: error instanceof Error ? error.message : String(error),
+          });
         }
       } else if (message?.type === "get-statistics") {
         const requestedModel = model;

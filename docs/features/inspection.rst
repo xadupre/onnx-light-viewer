@@ -104,6 +104,37 @@ both examples from the repository root:
 
    python examples/generate_quantized.py
 
+Tensor statistics
+-----------------
+
+Use **Tensor statistics** for the selected nodes' tensors or selected connection,
+**All tensors** for the current graph scope, or **Tensor statistics** beside a tensor
+in **Op**. Open a pipeline stage first. The dialog browses one tensor at a time
+with a name picker and **Previous tensor** / **Next tensor**;
+**Close** or Escape dismisses it.
+
+It shows dtype, shape, count, stored byte size, mean, median, min/max and quartiles
+(25%, 50%, 75%, linearly interpolated). The SDK supplies a finite-value histogram
+for at least ten values and a 32 × 32 area-averaged color map. Rank-two and higher
+tensors use the first dimension as rows and flatten the remaining dimensions;
+scalars and vectors use one row before resizing. Blue is low, red is high and
+gray is nonfinite. Hover over bars or cells for their numeric values.
+
+Statistics run on demand in a native background worker. Unlike small previews,
+this explicitly reads local external weights and restores omitted inline data
+when necessary. Large tensors may require substantial decoding and sorting
+memory. Low-bit numeric types and SDK-supported encoded quantized tensors use
+the SDK's decoded values; ordinary integer tensors describe their stored codes,
+without inferring scales from connected operators.
+Sparse, string, complex and unsupported encoded layouts report unavailability.
+Affine-only encoded layouts are not decoded by onnx-light 0.2.1.
+Inputs and intermediate outputs without stored values also report unavailability:
+the viewer never executes the graph to collect activations.
+
+Only successful summaries are cached, up to 32 tensors in the current graph.
+Opening another graph, replacing the model or refreshing shapes clears the cache.
+The source model is not modified, and late responses cannot update another tensor.
+
 Operator documentation and inference
 -------------------------------------
 

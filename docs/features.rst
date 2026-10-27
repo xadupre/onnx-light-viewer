@@ -99,6 +99,21 @@ payloads are not read for previews; this is not a full tensor-data browser.
 
    Operator details accompany the selected graph node.
 
+Tensor statistics
+^^^^^^^^^^^^^^^^^
+
+Open **Tensor statistics** for selected nodes or a connection, **All tensors**
+for the current scope, or **Tensor statistics** beside an inspector tensor.
+Browse mean, median, extrema, quartiles, shape/dtype, a histogram and a square
+color map. Low-bit numeric tensors and SDK-supported encoded quantized weights
+are supported. See :doc:`features/inspection`.
+
+.. figure:: _static/feature-tensor-statistics.png
+   :alt: Tensor statistics dialog showing quantized weight statistics, histogram and square color map.
+   :width: 100%
+
+   Statistics describe stored values, without executing the graph.
+
 Subgraphs and functions
 ^^^^^^^^^^^^^^^^^^^^^^^
 

@@ -1498,3 +1498,58 @@ button:disabled {
     stroke: Highlight;
   }
 }
+#tensor-statistics-dialog {
+  width: min(760px, 90vw);
+  max-height: 85vh;
+  overflow: auto;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+#tensor-statistics-name {
+  width: 100%;
+  box-sizing: border-box;
+  margin: 8px 0;
+}
+
+#tensor-statistics-position {
+  margin: 0 12px;
+}
+
+#tensor-statistics-content .status-details {
+  grid-template-columns: minmax(90px, 1fr) minmax(0, 1.4fr) minmax(
+      90px,
+      1fr
+    ) minmax(0, 1.4fr);
+  gap: 8px 12px;
+}
+
+@media (max-width: 600px) {
+  #tensor-statistics-content .status-details {
+    grid-template-columns: minmax(90px, 1fr) minmax(0, 2fr);
+  }
+}
+
+.tensor-statistics-charts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 20px;
+  color: var(--mint);
+}
+
+.tensor-statistics-charts svg {
+  width: 100%;
+  align-self: center;
+}
+
+.tensor-statistics-legend {
+  border-bottom: 8px solid transparent;
+  border-image: linear-gradient(to right, blue, cyan, lime, yellow, red) 1;
+}
+
+.tensor-statistics-button {
+  margin: 4px;
+  font-size: 11px;
+}

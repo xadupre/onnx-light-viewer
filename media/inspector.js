@@ -1,5 +1,23 @@
 /* global markdownit */
-function createInspector({ byId, tensorDescription, subgraphLabel, navigate }) {
+function createInspector({
+  byId,
+  tensorDescription,
+  subgraphLabel,
+  navigate,
+  openTensorStatistics,
+}) {
+  function statisticsButton(name) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "tensor-statistics-button";
+    button.textContent = "Tensor statistics";
+    button.title = `Tensor statistics for ${name}`;
+    button.setAttribute("aria-label", button.title);
+    button.setAttribute("aria-haspopup", "dialog");
+    button.addEventListener("click", () => openTensorStatistics(name));
+    button.disabled = !name;
+    return button;
+  }
   const documentationMarkdown = markdownit({ html: false });
   documentationMarkdown.validateLink = (url) => /^https?:\/\//i.test(url);
   documentationMarkdown.renderer.rules.image = (tokens, index) =>
@@ -128,6 +146,8 @@ function createInspector({ byId, tensorDescription, subgraphLabel, navigate }) {
         outputs.textContent = constant.outputs
           .map((name) => `${name}: ${tensorDescription(name)}`)
           .join("; ");
+        for (const name of constant.outputs)
+          outputs.append(statisticsButton(name));
         const attributes = document.createElement("ul");
         attributes.append(...(constant.attributes ?? []).map(attributeItem));
         details.append(summary, outputs, attributes);
@@ -154,7 +174,7 @@ function createInspector({ byId, tensorDescription, subgraphLabel, navigate }) {
           const information = document.createElement("span");
           information.className = "tensor-info";
           information.textContent = tensorDescription(name);
-          item.append(tensorName, information);
+          item.append(tensorName, information, statisticsButton(name));
           return item;
         }),
       );
@@ -165,6 +185,7 @@ function createInspector({ byId, tensorDescription, subgraphLabel, navigate }) {
       ...captures.map((name) => {
         const item = document.createElement("li");
         item.textContent = `${name}: ${tensorDescription(name)}`;
+        item.append(statisticsButton(name));
         return item;
       }),
     );
@@ -185,6 +206,7 @@ function createInspector({ byId, tensorDescription, subgraphLabel, navigate }) {
         shape.className = "tensor-info";
         shape.textContent = `Shape: [${parameter.shape?.join(", ") ?? "?"}]`;
         item.append(heading);
+        item.append(statisticsButton(parameter.name));
         if (parameter.shape !== undefined) item.append(shape);
         if (parameter.typeDetails) {
           item.append(typeTable("Logical type", parameter.typeDetails));

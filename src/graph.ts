@@ -293,11 +293,35 @@ export interface RewritingScenario {
   available: boolean;
 }
 
+export type StatisticsNumber = number | "NaN" | "Infinity" | "-Infinity";
+
+/** SDK statistics; integer metadata and nonfinite numbers survive webview transport exactly. */
+export interface TensorStatistics {
+  name: string;
+  dtype: string;
+  shape: string[];
+  count: string;
+  sizeBytes: string;
+  min: StatisticsNumber;
+  max: StatisticsNumber;
+  mean: StatisticsNumber;
+  median: StatisticsNumber;
+  /** Quartiles at 0.25, 0.5 and 0.75, using linear interpolation. */
+  quantiles: StatisticsNumber[];
+  distinctCount?: string;
+  distribution: string[];
+  binEdges: StatisticsNumber[];
+  rectangleMap: StatisticsNumber[];
+  rectangleShape: number[];
+}
+
 /**
  * Retained model or pipeline whose inferred information survives graph projections.
  * Methods do not execute the model or write files.
  */
 export interface NativeModel {
+  /** Computes statistics on stored values only, without executing the graph. */
+  tensorStatistics(name: string, path?: GraphPath): Promise<TensorStatistics>;
   memoryProfileInputs(path?: GraphPath): MemoryDimension[];
   /** Estimates CPU memory on an independent snapshot, without executing kernels. */
   memoryProfile(

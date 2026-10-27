@@ -5,6 +5,39 @@ const { JSDOM } = require("jsdom");
 const { huggingFaceTasks } = require("../dist/huggingFaceTasks");
 const { webviewHtml } = require("../dist/webview");
 
+test("tensor statistics shell exposes a labelled dialog and loads its controller before the viewer", (t) => {
+  const dom = new JSDOM(
+    webviewHtml((name) => name, "test-source", "test-nonce", "test"),
+  );
+  t.after(() => dom.window.close());
+  const { document } = dom.window;
+  const dialog = document.getElementById("tensor-statistics-dialog");
+  assert.equal(dialog.tagName, "DIALOG");
+  assert.equal(
+    document.getElementById(dialog.getAttribute("aria-labelledby")).textContent,
+    "Tensor statistics",
+  );
+  assert.equal(
+    document.getElementById("show-tensor-statistics").textContent,
+    "Tensor statistics",
+  );
+  assert.equal(
+    document.querySelector('label[for="tensor-statistics-name"]').textContent,
+    "Tensor name",
+  );
+  assert.equal(
+    document.getElementById("tensor-statistics-status").getAttribute("role"),
+    "status",
+  );
+  const scripts = [...document.querySelectorAll("script[src]")].map((script) =>
+    script.getAttribute("src"),
+  );
+  assert.ok(
+    scripts.indexOf("tensor-statistics-panel.js") <
+      scripts.indexOf("viewer.js"),
+  );
+});
+
 test("action buttons use rounded neutral surfaces and distinct typography", (t) => {
   const dom = new JSDOM(
     webviewHtml((name) => name, "test-source", "test-nonce", "test"),

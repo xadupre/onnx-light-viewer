@@ -135,6 +135,352 @@ function submitOpen(document, window) {
     .dispatchEvent(new window.Event("submit", { cancelable: true }));
 }
 
+function tensorStatistics(name = "input") {
+  return {
+    name,
+    dtype: "FLOAT",
+    shape: ["2", "3"],
+    count: "6",
+    sizeBytes: "24",
+    min: -2,
+    max: 3,
+    mean: 0.5,
+    median: 0.5,
+    quantiles: [-0.75, 0.5, 1.75],
+    distribution: ["2", "4"],
+    binEdges: [-2, 0, 3],
+    rectangleMap: Array.from({ length: 1024 }, (_, i) => (i % 6) - 2),
+    rectangleShape: [32, 32],
+    distinctCount: "6",
+  };
+}
+
+test("tensor statistics lazily browses selection, renders SDK summaries and caches successes", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const byId = (id) => document.getElementById(id);
+  const requests = () => messages.filter((m) => m.type === "tensor-statistics");
+  const reply = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  assert.equal(byId("show-tensor-statistics").disabled, true);
+  load(demoGraph);
+  byId("show-tensor-statistics").click();
+  assert.equal(byId("tensor-statistics-dialog").open, true);
+  assert.equal(requests().length, 1);
+  const first = requests()[0];
+  assert.equal(first.name, "input");
+  assert.equal(
+    Number.isSafeInteger(first.requestId) && first.requestId > 0,
+    true,
+  );
+  assert.deepEqual(Array.from(first.path), []);
+  reply({
+    type: "tensor-statistics-info",
+    requestId: first.requestId,
+    statistics: tensorStatistics(),
+  });
+  const content = byId("tensor-statistics-content");
+  assert.match(content.textContent, /Average0.5Median0.5/);
+  assert.match(content.textContent, /Q1 \(25%\)-0.75/);
+  assert.match(content.textContent, /DtypeFLOATShape\[2, 3\]Count6/);
+  assert.equal(content.querySelectorAll("svg").length, 2);
+  assert.equal(
+    content.querySelectorAll("svg")[0].querySelectorAll("rect").length,
+    2,
+  );
+  assert.equal(
+    content.querySelectorAll("svg")[1].querySelectorAll("rect").length,
+    1024,
+  );
+  assert.equal(
+    content.querySelectorAll("svg")[1].getAttribute("viewBox"),
+    "0 0 32 32",
+  );
+  assert.match(
+    content.querySelector("svg > title").textContent,
+    /Histogram for input/,
+  );
+  assert.match(
+    content.querySelector("rect > title").textContent,
+    /-2 to 0: 2 values/,
+  );
+  assert.match(content.textContent, /blue \(low\).*red \(high\)/);
+  byId("tensor-statistics-next").click();
+  assert.equal(requests().length, 2);
+  assert.equal(requests()[1].name, "output");
+  reply({
+    type: "tensor-statistics-error",
+    requestId: requests()[1].requestId,
+    error: "No stored data",
+  });
+  assert.match(
+    byId("tensor-statistics-status").textContent,
+    /unavailable.*not executed.*Choose another/,
+  );
+  byId("tensor-statistics-previous").click();
+  assert.equal(requests().length, 2);
+  assert.match(content.textContent, /Average0.5/);
+  byId("tensor-statistics-next").click();
+  assert.equal(requests().length, 3, "failures are not cached");
+});
+
+test("tensor statistics ignores changed names, close, Escape, reload and navigation responses", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const byId = (id) => document.getElementById(id);
+  const requests = () => messages.filter((m) => m.type === "tensor-statistics");
+  const reply = (request, type = "tensor-statistics-info") =>
+    window.dispatchEvent(
+      new window.MessageEvent("message", {
+        data: {
+          type,
+          requestId: request.requestId,
+          statistics: tensorStatistics(request.name),
+          error: "stale error",
+        },
+      }),
+    );
+  const open = () => {
+    byId("show-tensor-statistics").click();
+    return requests().at(-1);
+  };
+  load(demoGraph);
+  const first = open();
+  byId("tensor-statistics-name").value = "output";
+  byId("tensor-statistics-name").dispatchEvent(new window.Event("input"));
+  reply(first);
+  assert.equal(byId("tensor-statistics-content").children.length, 0);
+  byId("tensor-statistics-name").dispatchEvent(new window.Event("change"));
+  const second = requests().at(-1);
+  reply(first, "tensor-statistics-error");
+  assert.match(byId("tensor-statistics-status").textContent, /Loading.*output/);
+  byId("close-tensor-statistics").click();
+  reply(second);
+  const third = open();
+  assert.ok(third.requestId > second.requestId);
+  byId("tensor-statistics-dialog").dispatchEvent(new window.Event("cancel"));
+  reply(third, "tensor-statistics-error");
+  assert.doesNotMatch(
+    byId("tensor-statistics-status").textContent,
+    /stale error/,
+  );
+  byId("close-tensor-statistics").click();
+  const fourth = open();
+  reply(fourth);
+  byId("close-tensor-statistics").click();
+  load(demoGraph);
+  const fifth = open();
+  assert.ok(
+    fifth.requestId > fourth.requestId,
+    "same-path graph replacement clears cache",
+  );
+  reply(fourth, "tensor-statistics-error");
+  assert.match(byId("tensor-statistics-status").textContent, /Loading/);
+  load(demoGraph);
+  assert.equal(byId("tensor-statistics-dialog").open, false);
+  reply(fifth);
+  assert.equal(byId("tensor-statistics-content").children.length, 0);
+  const path = [{ node: 0, attribute: "body" }];
+  load({
+    ...demoGraph,
+    breadcrumbs: [
+      { name: "root", path: [] },
+      { name: "body", path },
+    ],
+  });
+  const sixth = open();
+  assert.equal(JSON.stringify(sixth.path), JSON.stringify(path));
+  document.querySelector("#graph-navigation button").click();
+  assert.equal(byId("tensor-statistics-dialog").open, false);
+  reply(sixth);
+  assert.equal(byId("tensor-statistics-content").children.length, 0);
+});
+
+test("tensor statistics supports node batches, edges, ports, captures and initializer inspector buttons", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const byId = (id) => document.getElementById(id);
+  const names = () =>
+    [...byId("tensor-statistics-names").children].map((o) => o.value);
+  const request = () =>
+    messages.filter((m) => m.type === "tensor-statistics").at(-1);
+  const graph = {
+    ...demoGraph,
+    nodes: [
+      {
+        ...demoGraph.nodes[0],
+        inputs: ["input", "weight"],
+        captures: ["capture"],
+        parameters: [{ name: "weight", type: "FLOAT", shape: ["1"] }],
+      },
+      {
+        ...demoGraph.nodes[0],
+        id: "node-1",
+        name: "second",
+        inputs: ["output"],
+        outputs: ["final"],
+      },
+      {
+        ...demoGraph.nodes[0],
+        id: "node-2",
+        name: "unused constant",
+        opType: "Constant",
+        inputs: [],
+        outputs: ["unused-constant"],
+      },
+    ],
+    initializers: [
+      { name: "weight", type: "FLOAT", shape: ["1"] },
+      { name: "unused-dense", type: "FLOAT", shape: ["1"] },
+    ],
+    sparseInitializers: [
+      { name: "unused-sparse", type: "FLOAT", shape: ["1"] },
+    ],
+    encodedInitializers: [
+      { name: "unused-encoded", type: "FLOAT", shape: ["1"] },
+    ],
+  };
+  load(graph);
+  document
+    .querySelector('[data-id="node-1"]')
+    .dispatchEvent(
+      new window.KeyboardEvent("keydown", { key: "Enter", shiftKey: true }),
+    );
+  byId("show-tensor-statistics").click();
+  assert.deepEqual(names(), ["input", "weight", "output", "capture", "final"]);
+  byId("close-tensor-statistics").click();
+  document
+    .querySelector('[data-id="node-0"]')
+    .dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter" }));
+  document
+    .querySelector("#node-initializers .tensor-statistics-button")
+    .click();
+  assert.equal(request().name, "weight");
+  assert.deepEqual(names(), ["weight"]);
+  byId("close-tensor-statistics").click();
+  document.querySelector("#captured-inputs .tensor-statistics-button").click();
+  assert.equal(request().name, "capture");
+  byId("close-tensor-statistics").click();
+  document
+    .querySelector(".port")
+    .dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter" }));
+  document.querySelector("#node-outputs .tensor-statistics-button").click();
+  assert.equal(request().name, "input");
+  byId("close-tensor-statistics").click();
+  document
+    .querySelector("#edges [role=button]")
+    .dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter" }));
+  byId("show-tensor-statistics").click();
+  assert.equal(names().length, 1);
+  assert.equal(
+    request().name,
+    document
+      .querySelector("#edges [role=button]")
+      .getAttribute("aria-label")
+      .slice("Connection: ".length),
+  );
+  byId("close-tensor-statistics").click();
+  byId("all-tensor-statistics").click();
+  for (const name of [
+    "weight",
+    "capture",
+    "final",
+    "unused-dense",
+    "unused-sparse",
+    "unused-encoded",
+    "unused-constant",
+  ])
+    assert.ok(names().includes(name), name);
+});
+
+test("tensor statistics bounds batch DOM and evicts successful summaries beyond 32", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const byId = (id) => document.getElementById(id);
+  const requests = () => messages.filter((m) => m.type === "tensor-statistics");
+  load({
+    ...demoGraph,
+    tensors: Array.from({ length: 2000 }, (_, i) => ({
+      name: `tensor-${i}`,
+      type: "FLOAT",
+      shape: ["1"],
+    })),
+  });
+  byId("all-tensor-statistics").click();
+  assert.equal(requests().length, 1);
+  assert.ok(byId("tensor-statistics-names").children.length <= 100);
+  for (let i = 0; i < 33; i++) {
+    const request = requests().at(-1);
+    window.dispatchEvent(
+      new window.MessageEvent("message", {
+        data: {
+          type: "tensor-statistics-info",
+          requestId: request.requestId,
+          statistics: tensorStatistics(request.name),
+        },
+      }),
+    );
+    if (i < 32) byId("tensor-statistics-next").click();
+  }
+  const count = requests().length;
+  for (let i = 0; i < 31; i++) byId("tensor-statistics-previous").click();
+  assert.equal(requests().length, count);
+  byId("tensor-statistics-previous").click();
+  assert.equal(requests().length, count + 1);
+  assert.equal(requests().at(-1).name, "input");
+  assert.ok(byId("tensor-statistics-names").children.length <= 100);
+});
+
+test("tensor statistics renders non-finite scalar summaries safely and invalidates on model loading", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const byId = (id) => document.getElementById(id);
+  load(demoGraph);
+  byId("show-tensor-statistics").click();
+  const request = messages.find((m) => m.type === "tensor-statistics");
+  const statistics = {
+    ...tensorStatistics(),
+    min: "-Infinity",
+    max: "Infinity",
+    mean: "NaN",
+    rectangleMap: ["NaN", "Infinity", "-Infinity"],
+  };
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: {
+        type: "tensor-statistics-info",
+        requestId: request.requestId,
+        statistics,
+      },
+    }),
+  );
+  assert.match(byId("tensor-statistics-content").textContent, /AverageNaN/);
+  assert.match(
+    byId("tensor-statistics-content").textContent,
+    /Minimum-InfinityMaximumInfinity/,
+  );
+  assert.doesNotMatch(byId("tensor-statistics-content").innerHTML, /hsl\(NaN/);
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: { type: "load-state", pending: true },
+    }),
+  );
+  assert.equal(byId("tensor-statistics-dialog").open, false);
+  assert.equal(byId("all-tensor-statistics").disabled, true);
+  const count = messages.filter((m) => m.type === "tensor-statistics").length;
+  document.querySelector("#node-inputs .tensor-statistics-button").click();
+  assert.equal(byId("tensor-statistics-dialog").open, false);
+  assert.equal(
+    messages.filter((m) => m.type === "tensor-statistics").length,
+    count,
+  );
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: {
+        type: "tensor-statistics-error",
+        requestId: request.requestId,
+        error: "stale",
+      },
+    }),
+  );
+  assert.doesNotMatch(byId("tensor-statistics-status").textContent, /stale/);
+});
+
 test("restores the Olive recipes exporter and checks the commit on every panel opening without duplicate requests", (t) => {
   const { document, window, messages } = openViewer(t);
   const byId = (id) => document.getElementById(id);

@@ -15,6 +15,7 @@ import type {
   OptimizationReport,
   PipelineRole,
   RewritingScenario,
+  TensorStatistics,
 } from "./graph";
 
 export interface PipelineData {
@@ -30,6 +31,14 @@ const roles: PipelineRole[] = ["embedding", "prefill", "decode"];
 
 /** Keeps stage models independent while saving the complete container. */
 export class PipelineModel implements NativeModel {
+  tensorStatistics = (
+    name: string,
+    path: GraphPath = [],
+  ): Promise<TensorStatistics> => {
+    const stage = this.select(path);
+    return stage.model.tensorStatistics(name, stage.path);
+  };
+
   memoryProfileInputs = (path: GraphPath = []): MemoryDimension[] => {
     const stage = this.select(path);
     if (stage.path.length) throw new Error("Choose a pipeline stage root.");

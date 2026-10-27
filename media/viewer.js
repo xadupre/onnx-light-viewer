@@ -1,6 +1,6 @@
 /* global acquireVsCodeApi, createSidebar, createFilePanels, createInspector,
           createMetadataPanel, createFusionPanel, createSettingsPanel, createExportPanel,
-          createMemoryPanel, sugiyamaLayout, graphPathSegments,
+          createMemoryPanel, createTensorStatisticsPanel, sugiyamaLayout, graphPathSegments,
           flattenGraphPath, graphPointDistance */
 const vscode = acquireVsCodeApi();
 const svgNS = "http://www.w3.org/2000/svg";
@@ -98,7 +98,69 @@ const inspector = createInspector({
   tensorDescription,
   subgraphLabel,
   navigate,
+  openTensorStatistics: (name) => openTensorStatistics([name]),
 });
+const tensorStatisticsPanel = createTensorStatisticsPanel({
+  byId,
+  postMessage: (message) => vscode.postMessage(message),
+});
+
+function nodeTensorNames(node) {
+  return [
+    ...(node.inputs ?? []),
+    ...(node.outputs ?? []),
+    ...(node.captures ?? []),
+    ...(node.parameters ?? []).map((parameter) => parameter.name),
+  ];
+}
+
+function selectedTensorNames() {
+  if (selectedConnection) return [selectedConnection.name];
+  return [...selected].flatMap((id) => {
+    const view = nodeViews.get(id);
+    return view?.port
+      ? [view.port.name]
+      : view?.node
+        ? nodeTensorNames(view.node)
+        : [];
+  });
+}
+
+function openTensorStatistics(names) {
+  if (
+    !hasModel ||
+    replacementPending ||
+    byId("model-view").getAttribute("aria-busy") === "true" ||
+    svg.getAttribute("aria-busy") === "true"
+  )
+    return;
+  tensorStatisticsPanel.open(
+    names,
+    displayedGraph?.breadcrumbs?.at(-1)?.path ?? [],
+  );
+}
+
+byId("show-tensor-statistics").addEventListener("click", () =>
+  openTensorStatistics(selectedTensorNames()),
+);
+byId("all-tensor-statistics").addEventListener("click", () => {
+  const graph = displayedGraph;
+  openTensorStatistics([
+    ...(graph.inputs ?? []),
+    ...(graph.outputs ?? []),
+    ...(graph.tensors ?? []).map((tensor) => tensor.name),
+    ...["initializers", "sparseInitializers", "encodedInitializers"].flatMap(
+      (field) => (graph[field] ?? []).map((tensor) => tensor.name),
+    ),
+    ...graph.nodes.flatMap(nodeTensorNames),
+  ]);
+});
+
+function updateTensorStatisticsButtons(pending = false) {
+  byId("show-tensor-statistics").disabled =
+    pending || !hasModel || !selectedTensorNames().length;
+  byId("all-tensor-statistics").disabled = pending || !hasModel;
+}
 const metadataPanel = createMetadataPanel({ byId, tensorDescription });
 const memoryPanel = createMemoryPanel({
   byId,
@@ -253,6 +315,8 @@ function requestAction(type, action, parameters = {}) {
 }
 
 function setLoading(pending, message = "") {
+  if (pending) tensorStatisticsPanel.reset();
+  updateTensorStatisticsButtons(pending);
   if (pending) byId("model-error").hidden = true;
   byId("load-progress").hidden = !pending;
   byId("model-view").setAttribute("aria-busy", String(pending));
@@ -944,6 +1008,7 @@ function inspect(view) {
 }
 
 function updateSelection(activeId, forceInspect = false) {
+  updateTensorStatisticsButtons(replacementPending);
   for (const id of new Set([...renderedSelection, ...selected])) {
     const isSelected = selected.has(id);
     if (isSelected === renderedSelection.has(id)) continue;
@@ -1034,6 +1099,7 @@ function selectConnection(connection) {
   if (selectedConnection === connection) return;
   selectedConnection?.group?.setAttribute("aria-pressed", "false");
   selectedConnection = connection;
+  updateTensorStatisticsButtons(replacementPending);
   connection?.group?.setAttribute("aria-pressed", "true");
   updateConnectionHighlight();
 }
@@ -1623,6 +1689,8 @@ function findNode(event) {
 }
 
 function navigate(path, nodeIndex) {
+  tensorStatisticsPanel.reset();
+  updateTensorStatisticsButtons(true);
   endGesture();
   byId("navigation-status").textContent = "Opening graph…";
   svg.setAttribute("aria-busy", "true");
@@ -2271,6 +2339,7 @@ window.addEventListener("message", (event) => {
     return;
   }
   if (
+    tensorStatisticsPanel.handleMessage(event.data) ||
     memoryPanel.handleMessage(event.data) ||
     exportPanel.handleMessage(event.data) ||
     filePanels.handleMessage(event.data) ||
@@ -2374,6 +2443,7 @@ window.addEventListener("message", (event) => {
     }
     filePanels.reset();
     displayedGraph = event.data.graph;
+    tensorStatisticsPanel.reset();
     memoryPanel.setGraph(displayedGraph);
     fusionPanel.reset(displayedGraph, event.data.fusionRequestId);
     render(event.data.graph, event.data.metadata);
