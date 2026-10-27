@@ -179,14 +179,15 @@ Native estimation, not model execution or measured RAM/GPU usage.
 Pattern groups
 ^^^^^^^^^^^^^^
 
-Select onnx-light's ``L1``, ``L2``, ``Layer`` or ``all`` pattern sets in **Fuse**
-or **Optimize**, then refine the individual checkboxes. Fuse selects only
-graph-applicable members; Optimize starts with SDK-default patterns and leaves
-``RepeatedLayer`` unchecked. See :doc:`features/fusion_patterns`.
-Choosing a group alone does not transform or save the model.
+Combine **Default**, ``L1``, ``L2``, ``Layer`` or **All** in **Fuse**
+or **Optimize**, even when their members overlap, then refine individual patterns.
+Fuse selects only graph-applicable members; Optimize starts with **Default**
+and leaves the opt-in ``RepeatedLayer`` unchecked. **All** includes it.
+See :doc:`features/fusion_patterns`.
+Choosing groups alone does not transform or save the model.
 
 .. figure:: _static/feature-pattern-groups.png
-   :alt: Native pattern group menu in Optimize, with the L1 selection reflected in priority checkboxes.
+   :alt: Optimize group tiles combining Default and Layer, including the opt-in RepeatedLayer pattern.
    :width: 100%
 
    Named pattern sets are separate from optimization priorities.

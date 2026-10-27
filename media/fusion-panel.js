@@ -305,7 +305,7 @@ function createFusionPanel({
     const patterns = byId("fusion-pattern");
     patterns.disabled = busy || !patterns.querySelector("input");
     byId("fusion-pattern-group").disabled =
-      patterns.disabled || byId("fusion-pattern-group").options.length <= 1;
+      patterns.disabled || !byId("fusion-pattern-group").querySelector("input");
     byId("select-patterns").disabled = patterns.disabled;
     byId("clear-patterns").disabled =
       busy || !patterns.querySelector("input:checked");
@@ -321,7 +321,7 @@ function createFusionPanel({
       busy || !canFuse() || !optimization.querySelector("input");
     byId("optimization-pattern-group").disabled =
       optimization.disabled ||
-      byId("optimization-pattern-group").options.length <= 1;
+      !byId("optimization-pattern-group").querySelector("input");
     byId("select-optimization-patterns").disabled = optimization.disabled;
     for (const id of ["clear-optimization-patterns", "run-optimization"])
       byId(id).disabled =
@@ -431,39 +431,67 @@ function createFusionPanel({
 
   function showPatternGroups(id, fieldsetId, patterns, changed) {
     const picker = byId(id);
-    picker.replaceChildren();
-    const placeholder = document.createElement("option");
-    placeholder.value = "";
-    placeholder.textContent = "Choose a group…";
-    picker.append(placeholder);
+    const legend = document.createElement("legend");
+    legend.textContent = "Select pattern groups";
+    picker.replaceChildren(legend);
+    const fieldset = byId(fieldsetId);
     const available = new Set(
-      [...byId(fieldsetId).querySelectorAll("input")].map(
-        (input) => input.value,
-      ),
+      [...fieldset.querySelectorAll("input")].map((input) => input.value),
     );
-    const groups = new Map();
+    const groups = new Map([["Default", new Set()]]);
     for (const pattern of patterns ?? []) {
       if (!available.has(pattern.name)) continue;
+      if (pattern.enabledByDefault) groups.get("Default").add(pattern.name);
       for (const name of pattern.groups ?? []) {
         if (!groups.has(name)) groups.set(name, new Set());
         groups.get(name).add(pattern.name);
       }
     }
-    for (const [name, members] of [...groups].sort(([a], [b]) =>
-      a.localeCompare(b),
-    )) {
-      const option = document.createElement("option");
-      option.value = name;
-      option.textContent = `${name} (${members.size} patterns)`;
-      picker.append(option);
+    const names = [...groups.keys()]
+      .filter((name) => name !== "Default" && name !== "all")
+      .sort();
+    for (const name of ["Default", ...names, "all"]) {
+      const members = groups.get(name);
+      if (!members?.size) continue;
+      const label = document.createElement("label");
+      const input = document.createElement("input");
+      input.type = "checkbox";
+      input.value = name;
+      label.append(
+        input,
+        document.createTextNode(
+          `${name === "all" ? "All" : name} (${members.size} patterns)`,
+        ),
+      );
+      picker.append(label);
     }
+    const sync = () => {
+      const selected = new Set(
+        [...fieldset.querySelectorAll("input:checked")]
+          .filter((input) => !input.hasAttribute("data-priority"))
+          .map((input) => input.value),
+      );
+      let matched = false;
+      for (const input of picker.querySelectorAll("input")) {
+        const members = groups.get(input.value);
+        input.checked =
+          !matched &&
+          members.size === selected.size &&
+          [...members].every((name) => selected.has(name));
+        matched ||= input.checked;
+      }
+    };
+    fieldset.onchange = sync;
+    sync();
     picker.onchange = () => {
-      const members = groups.get(picker.value);
-      if (!members) return;
-      for (const input of byId(fieldsetId).querySelectorAll("input"))
+      const members = new Set(
+        [...picker.querySelectorAll("input:checked")].flatMap((input) => [
+          ...groups.get(input.value),
+        ]),
+      );
+      for (const input of fieldset.querySelectorAll("input"))
         if (!input.hasAttribute("data-priority"))
           input.checked = members.has(input.value);
-      picker.value = "";
       changed();
     };
   }
@@ -678,7 +706,7 @@ function createFusionPanel({
         "input[data-pattern]",
       ))
         input.checked = checked;
-      updateOptimizationSelection();
+      byId("optimization-patterns").dispatchEvent(new Event("change"));
     });
   byId("run-optimization").addEventListener("click", () => {
     clearFusionPreview();
@@ -726,7 +754,7 @@ function createFusionPanel({
     byId(id).addEventListener("click", () => {
       for (const input of byId("fusion-pattern").querySelectorAll("input"))
         input.checked = checked;
-      changeFusionPatterns();
+      byId("fusion-pattern").dispatchEvent(new Event("change"));
     });
   byId("preview-fusion").addEventListener("click", previewFusion);
   byId("select-fusions").addEventListener("click", () => {

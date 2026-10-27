@@ -14,11 +14,18 @@ patterns and clears the previous candidates and selection.
 Click a pattern again to uncheck it. **Select all** checks every pattern;
 **Clear selection** unchecks them all. No modifier key is needed.
 
-**Select a native pattern group** replaces the checked patterns with the members
-of an onnx-light 0.2.1 set: ``L1``, ``L2``, ``Layer`` or ``all``.
+**Select pattern groups** shows clickable rectangular tiles: click to select
+or deselect a group. Selected tiles have a highlighted border and bold text.
+It combines the selected groups without duplicating
+overlapping members. **Default** contains the SDK-default patterns, excluding
+``RepeatedLayer``; **All** includes opt-in patterns too.
+The other sets, ``L1``, ``L2`` and ``Layer``, come from onnx-light.
 In **Fuse**, only members with compatible anchors in the current graph are
-selected; global passes are not part of these sets. Individual checkboxes remain
-editable, and choosing a group does not run matching or change the model.
+selected; global passes are not part of these sets.
+Unchecking a group keeps members covered by another checked group.
+Individual checkboxes remain editable; a manual selection is shown as a single
+group only if it exactly matches that group. Choosing groups does not run
+matching or change the model.
 
 .. code-block:: text
 
@@ -88,16 +95,16 @@ Iterative optimization and global passes
 It opens the full native catalog, including patterns whose operators
 are not present yet. Select individual patterns, whole **Priority** groups,
 or **Select all**, then click **Run global optimization**.
-The native group selector also selects named sets across priorities.
+The group tiles combine named sets across priorities.
 Set membership and priorities come directly from onnx-light, not inferred categories.
 Initially, only SDK-default patterns are checked: ``RepeatedLayer`` is opt-in.
-Choose ``Layer``, ``all``, **Select all** or its individual checkbox to enable it.
+Choose ``Layer``, **All**, **Select all** or its individual checkbox to enable it.
 
 .. figure:: ../_static/feature-pattern-groups.png
-   :alt: Optimize panel showing the native all, L1, L2 and Layer group choices, with eleven L1 patterns selected.
+   :alt: Optimize panel showing Default and Layer tiles selected together, with RepeatedLayer enabled.
    :width: 100%
 
-   Select a named set, then refine individual patterns before running optimization.
+   Combine named sets, then refine individual patterns before running optimization.
 
 This runs onnx-light's complete native optimizer, not a single pattern batch:
 native canonicalization, repeated priority-ordered matching, evaluation of
