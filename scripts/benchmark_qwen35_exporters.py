@@ -460,8 +460,8 @@ def main() -> int:
     parser.add_argument(
         "--output",
         type=Path,
-        required=True,
-        help="New directory for models, logs and results.json.",
+        default=Path("qwen35-benchmark"),
+        help="New directory for models, logs and results.json (default: %(default)s).",
     )
     default_cache = (
         Path(os.environ.get("HF_HOME", Path.home() / ".cache" / "huggingface")) / "hub"
