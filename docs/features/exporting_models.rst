@@ -1,16 +1,16 @@
 Converting models
 =================
 
-Choose **Convert** to export checkpoints, quantize local ONNX files with
-**Olive**, or run a model-specific **Olive recipes** workflow.
-Checkpoint exporters use the cached/offline flow below; recipes manage their
-own model and dataset downloads.
+Choose **Convert** to export checkpoints with mbext, modelbuilder, Mobius or
+**Olive**, quantize an existing ONNX file, or run an **Olive recipes** workflow.
+Model IDs are downloaded into the source cache first. Olive optimization and
+recipes may also download calibration data during conversion.
 **Download time** and **Conversion time** are shown separately at the top of the
 panel, update while running and remain visible after success, failure or cancellation.
 
 .. figure:: ../_static/export-flow.svg
    :alt: The application downloads a pinned source checkpoint into its cache.
-         An offline Python exporter reads that snapshot and saves ONNX files.
+         A Python exporter reads that snapshot and saves ONNX files.
          The viewer opens the result without executing it.
    :width: 100%
 
@@ -19,9 +19,9 @@ panel, update while running and remain visible after success, failure or cancell
 1. Trust the VS Code workspace and select your Python executable in **Settings**.
    Install the desired exporter and its dependencies in that environment yourself.
    The viewer neither installs packages nor changes ``PYTHONPATH``.
-2. Open **Convert** and select the exporter. For mbext, modelbuilder or Mobius,
-   enter a Hugging Face model ID or an absolute local checkpoint-directory path;
-   Olive's inputs are described below. The last used exporter is restored
+2. Open **Convert** and select the exporter. Enter a Hugging Face model ID or an
+   absolute local checkpoint-directory path. Olive also accepts local ONNX files.
+   The last used exporter is restored
    across sessions. ``mbext (fast export)`` appears last in the list.
    Choose precision and CPU/CUDA target.
 3. The output defaults to ``<download directory>/<model_id>/<exporter>``, using
@@ -59,9 +59,21 @@ Olive and Olive recipes
 Both use the ``olive-ai`` Python package (``python -m olive``), but have distinct
 controls:
 
-* **Olive (ONNX quantization):** enter an absolute local ``.onnx`` file and
-  choose **INT4** (Olive RTN) or **INT8** (ONNX Runtime dynamic quantization).
-  Quantization runs on CPU, offline, without a calibration dataset.
+* **Olive (export and quantization):** defaults to **Export checkpoint /
+  optimize ONNX**. Enter a Hugging Face ID (for example
+  ``Qwen/Qwen3-0.6B``), an absolute local checkpoint directory or an ONNX file.
+  Select **FP32**, **FP16**, **BF16**, **INT4** or **INT8**, and **CPU** or **CUDA**.
+  The viewer invokes ``olive optimize``; Olive selects its optimization passes
+  and reports unsupported model/device combinations.
+* **Advanced options** exposes Olive's ONNX exporter (model builder, PyTorch
+  Dynamo or TorchScript), Hugging Face task, model splits, device memory in MB,
+  Q/DQ encoding and INT4 block size. Unset fields keep Olive's defaults.
+  **Trust model repository code** explicitly permits executing custom Python
+  from the model repository; its files are downloaded at the same pinned revision.
+* To retain the local-only quantizer, select **Quantize existing ONNX (CPU,
+  offline)**. Supply an absolute ``.onnx`` file and choose **INT4** (Olive RTN)
+  or **INT8** (ONNX Runtime dynamic). Q/DQ encoding is optional. This mode needs
+  no calibration dataset.
 * **Olive recipes (model export workflows):** choose a catalogued recipe.
   The recipe keeps its own model, precision and target. Install the requirements
   linked beside it in the configured Python environment first. Version-pinned
@@ -69,10 +81,24 @@ controls:
   the viewer never upgrades packages or hides recipes based on the installed version.
 
 .. figure:: ../_static/feature-olive.png
-   :alt: Olive quantization controls for a local ONNX file and INT4 or INT8.
+   :alt: Olive checkpoint export with a Hugging Face model ID, CUDA target and advanced parameters.
    :width: 100%
 
-   Quantization is separate from checkpoint export.
+   Export a checkpoint directly; an existing ONNX file is not required.
+
+Olive optimization is not forced offline: selected passes may fetch calibration
+datasets or other resources even when the checkpoint is local. Install the
+dependencies required by Olive and the chosen ONNX exporter yourself.
+The equivalent direct CLI invocation is:
+
+.. code-block:: bash
+
+   python -m olive optimize -m Qwen/Qwen3-0.6B \
+       --output_path /path/to/new-export --precision fp32 \
+       --device cpu --provider CPUExecutionProvider
+
+The viewer first caches the pinned checkpoint, then substitutes its absolute
+snapshot directory for the model ID in this command.
 
 .. figure:: ../_static/feature-olive-recipes.png
    :alt: Olive recipe selection showing the upstream Git commit, target and required Olive version.
@@ -122,10 +148,11 @@ and configuration files are included; alternative weight formats and precision
 variants are not downloaded. For repositories with a custom layout, provide
 an absolute local checkpoint directory instead.
 
-Local sources skip downloading. Conversion uses local exporter arguments
-(``-i`` or Mobius ``--config``) with ``HF_HUB_OFFLINE=1`` and
+Local sources skip downloading. mbext, modelbuilder and Mobius use local exporter
+arguments (``-i`` or Mobius ``--config``) with ``HF_HUB_OFFLINE=1`` and
 ``TRANSFORMERS_OFFLINE=1``: a missing dependency or file fails explicitly rather
-than silently downloading during the conversion phase.
+than silently downloading during conversion. Olive optimization receives the
+same local snapshot through ``-m`` without forced offline mode.
 
 Output directory templates
 --------------------------
@@ -136,7 +163,7 @@ are also supported. For model ``Qwen/Qwen3-0.6B`` with modelbuilder, this become
 ``<download directory>/base/Qwen/Qwen3-0.6B/modelbuilder``.
 ``<exporter>`` expands to ``modelbuilder``, ``mobius``, ``mbext``, ``olive`` or
 ``olive-recipes``, not its display label. For a local checkpoint, ``<model_id>``
-is its directory name; for Olive it is the ONNX filename, and for recipes the
+is its directory name; for a local ONNX file it is the filename, and for recipes the
 recipe name.
 Unsupported placeholders and model IDs containing unsafe path components are
 reported as errors.
@@ -151,7 +178,7 @@ Reproducing a conversion
 The chosen folder contains ``export_model.py`` alongside the export package.
 It replays the same argument vector, Python executable, working directory and
 progress settings (``HF_HUB_DISABLE_PROGRESS_BARS=0``, ``TQDM_POSITION=-1``)
-and, for checkpoint exporters and local quantization, offline conversion settings
+and, for mbext, modelbuilder, Mobius and local-only quantization, offline settings
 without a shell. Run it with Python to reproduce the export; unlike the viewer's
 fresh-directory check, subsequent CLI behavior is controlled by the exporter.
 Checkpoint reproduction reads the same cached local snapshot without repeating
@@ -181,7 +208,7 @@ not detected or rewritten.
    * - Mobius
      - ``mobius build``
    * - Olive
-     - ``olive quantize``
+     - ``olive optimize`` (default) or ``olive quantize`` (local-only mode)
    * - Olive recipes
      - ``olive run``
 

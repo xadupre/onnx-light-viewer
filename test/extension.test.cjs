@@ -633,6 +633,7 @@ shutil.copyfile(source, output / "quantized.onnx")
   t.after(() => extension.dispose());
   const exportOptions = {
     exporter: "olive",
+    oliveWorkflow: "quantize",
     model: path.join(__dirname, "models", "relu.onnx"),
     directory: path.join(root, "output"),
     precision: "int4",
@@ -719,6 +720,7 @@ test("runs all exporter entry points in Python processes and preserves the model
     "onnxruntime_genai",
     "onnxruntime_genai/models",
     "mobius",
+    "olive",
   ]) {
     await mkdir(path.join(root, directory), { recursive: true });
     await writeFile(path.join(root, directory, "__init__.py"), "");
@@ -731,9 +733,18 @@ import shutil
 import sys
 import time
 args = sys.argv[1:]
-assert os.environ["HF_HUB_OFFLINE"] == "1"
-assert os.environ["TRANSFORMERS_OFFLINE"] == "1"
-source_flag = "--config" if "--config" in args else "-i"
+olive = args[0] == "optimize"
+if olive:
+    assert args[args.index("--exporter") + 1] == "dynamo_exporter"
+    assert args[args.index("--task") + 1] == "text-generation"
+    assert args[args.index("--device") + 1] == "cpu"
+    assert args[args.index("--provider") + 1] == "CPUExecutionProvider"
+    assert os.environ.get("HF_HUB_OFFLINE", "") == ${JSON.stringify(process.env.HF_HUB_OFFLINE ?? "")}
+    assert os.environ.get("TRANSFORMERS_OFFLINE", "") == ${JSON.stringify(process.env.TRANSFORMERS_OFFLINE ?? "")}
+else:
+    assert os.environ["HF_HUB_OFFLINE"] == "1"
+    assert os.environ["TRANSFORMERS_OFFLINE"] == "1"
+source_flag = "-m" if olive else "--config" if "--config" in args else "-i"
 source = pathlib.Path(args[args.index(source_flag) + 1])
 model = json.loads((source / "config.json").read_text())["modelId"]
 assert (source / "model.safetensors").read_bytes() == b"source weights"
@@ -743,9 +754,9 @@ if model == "wait":
     time.sleep(30)
 if model == "fail":
     raise RuntimeError("Failed export leaves the displayed model intact")
-flag = "-o" if "-o" in args else "--output"
+flag = "--output_path" if olive else "-o" if "-o" in args else "--output"
 output = pathlib.Path(args[args.index(flag) + 1])
-if pathlib.Path(sys.argv[0]).name == "__main__.py":
+if args[0] == "build":
     if output.exists():
         raise RuntimeError("Mobius package path already exists")
     output.mkdir(parents=True)
@@ -760,6 +771,7 @@ print("Saved model.onnx", flush=True)
     "modelbuilder/builder.py",
     "onnxruntime_genai/models/builder.py",
     "mobius/__main__.py",
+    "olive/__main__.py",
   ])
     await writeFile(path.join(root, filename), script);
   const preferences = new Map([
@@ -787,16 +799,22 @@ print("Saved model.onnx", flush=True)
     precision: "fp32",
     provider: "cpu",
   });
-  for (const exporter of ["mbext", "modelbuilder", "mobius"]) {
+  for (const exporter of ["mbext", "modelbuilder", "mobius", "olive"]) {
     const exportOptions = {
       ...options(exporter, exporter),
       advancedOptions:
-        exporter === "mobius"
-          ? { optimize: "all", staticCache: true, maxSequenceLength: 128 }
-          : { excludeEmbeds: true, includeHiddenStates: true },
+        exporter === "olive"
+          ? { oliveExporter: "dynamo_exporter", task: "text-generation" }
+          : exporter === "mobius"
+            ? { optimize: "all", staticCache: true, maxSequenceLength: 128 }
+            : { excludeEmbeds: true, includeHiddenStates: true },
     };
     const advancedArgument =
-      exporter === "mobius" ? "--max-seq-len" : "include_hidden_states=true";
+      exporter === "olive"
+        ? "--exporter"
+        : exporter === "mobius"
+          ? "--max-seq-len"
+          : "include_hidden_states=true";
     await extension.receive({
       type: "export-preview",
       requestId: 1,
@@ -848,6 +866,17 @@ print("Saved model.onnx", flush=True)
           event.output?.includes("Saved model.onnx"),
       ),
     );
+    if (exporter === "olive")
+      assert.ok(
+        extension.events.some(
+          (event) =>
+            event.type === "export-progress" &&
+            event.actionId === `ui:export:${exporter}` &&
+            event.phase === "conversion" &&
+            event.stage ===
+              "Exporting with Olive (calibration downloads may be required)",
+        ),
+      );
   }
   assert.equal(
     hub.requests.filter(
@@ -953,7 +982,7 @@ print("Saved model.onnx", flush=True)
       defaultTemplate,
       defaultDirectory,
       retryDirectory,
-      ...["mobius", "modelbuilder", "mbext"].map(
+      ...["olive", "mobius", "modelbuilder", "mbext"].map(
         (name) => options(name, name).directory,
       ),
     ],

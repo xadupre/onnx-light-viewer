@@ -50,24 +50,27 @@ exporter packages and checkpoints are not installed automatically.
 
    Configure an exporter before launching conversion.
 
-Olive quantization and recipes
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Olive export, quantization and recipes
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Quantize a local ONNX file with Olive, or select a model-specific Olive recipe.
+Export a Hugging Face model ID or local checkpoint to ONNX with Olive, optimize
+an ONNX model, or select a model-specific recipe. Configure precision, CPU/CUDA
+target and advanced export parameters. Local-only ONNX quantization remains a
+separate workflow.
 The recipe catalogue is cached by Git commit, retains version-pinned entries and
 shows their required Olive version. See :doc:`features/exporting_models`.
 
 .. figure:: _static/feature-olive.png
-   :alt: Olive quantization controls for local ONNX files.
+   :alt: Olive checkpoint export with model ID, target, precision and advanced parameters.
    :width: 100%
 
-   INT4 or INT8 quantization, without checkpoint export.
+   Export checkpoints without preparing an ONNX file first.
 
 .. figure:: _static/feature-olive-recipes.png
    :alt: Olive recipe controls showing the pinned Git commit and Olive requirements.
    :width: 100%
 
-   Model-specific workflows are distinct from quantization.
+   Model-specific recipes retain their own source and parameters.
 
 Navigation
 ^^^^^^^^^^

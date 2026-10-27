@@ -87,16 +87,19 @@ function createExportPanel({ byId, postMessage, requestAction, revealPanel }) {
     const recipes = exporter === "olive-recipes";
     return {
       exporter,
-      model: recipes
-        ? "Olive recipe"
-        : byId(olive ? "export-olive-source" : "export-source").value,
+      model: recipes ? "Olive recipe" : byId("export-source").value,
       directory: defaultDirectory ? "" : byId("export-directory").value,
-      precision: olive
-        ? byId("export-olive-precision").value
-        : recipes
-          ? "fp32"
-          : byId("export-precision").value,
-      provider: olive || recipes ? "cpu" : byId("export-provider").value,
+      precision:
+        olive && byId("export-olive-workflow").value === "quantize"
+          ? byId("export-olive-precision").value
+          : recipes
+            ? "fp32"
+            : byId("export-precision").value,
+      provider:
+        recipes || (olive && byId("export-olive-workflow").value === "quantize")
+          ? "cpu"
+          : byId("export-provider").value,
+      ...(olive ? { oliveWorkflow: byId("export-olive-workflow").value } : {}),
       ...(recipes
         ? {
             recipeId: byId("export-recipe").value,
@@ -114,23 +117,45 @@ function createExportPanel({ byId, postMessage, requestAction, revealPanel }) {
     const exporter = byId("export-tool").value;
     const olive = exporter === "olive";
     const recipes = exporter === "olive-recipes";
+    const quantize =
+      olive && byId("export-olive-workflow").value === "quantize";
     for (const [id, visible] of [
-      ["export-source-options", !olive && !recipes],
-      ["export-target-options", !olive && !recipes],
+      ["export-source-options", !recipes],
+      ["export-target-options", !recipes && !quantize],
       ["export-olive-options", olive],
       ["export-recipe-options", recipes],
+      ["export-olive-quantization", quantize],
     ]) {
       const field = byId(id);
       field.hidden = !visible;
       for (const control of field.querySelectorAll("input, select"))
         control.disabled = !visible;
     }
-    byId("export-advanced").hidden = olive || recipes;
-    const precision = byId("export-precision").value;
+    byId("export-source-label").textContent = quantize
+      ? "Absolute local ONNX file"
+      : olive
+        ? "Hugging Face model ID, absolute checkpoint directory or ONNX file"
+        : "Hugging Face model ID or absolute local model directory";
+    for (const option of byId("export-precision").options) {
+      option.hidden = option.disabled =
+        option.value === "int8"
+          ? !olive
+          : olive && ["int2", "fp4"].includes(option.value);
+    }
+    byId("export-advanced").hidden = recipes;
+    const precision = quantize
+      ? byId("export-olive-precision").value
+      : byId("export-precision").value;
     for (const field of advancedFields) {
-      const { exporters, precisions, requires, excludes } = field.dataset;
+      const { exporters, precisions, requires, excludes, oliveWorkflows } =
+        field.dataset;
       field.hidden =
         !exporters.split(" ").includes(exporter) ||
+        (olive &&
+          oliveWorkflows !== undefined &&
+          !oliveWorkflows
+            .split(" ")
+            .includes(byId("export-olive-workflow").value)) ||
         (precisions !== undefined &&
           !precisions.split(" ").includes(precision)) ||
         (requires !== undefined && !byId(requires).checked) ||

@@ -33,7 +33,7 @@ import pathlib
 import sys
 from huggingface_hub import HfApi, hf_hub_download, snapshot_download
 
-model, cache, result, include_weights = sys.argv[1:]
+model, cache, result, include_weights, include_code = sys.argv[1:]
 info = HfApi().model_info(model)
 if not info.sha:
     raise ValueError("The repository did not provide an immutable revision.")
@@ -57,6 +57,8 @@ else:
 metadata = {name for name in files if name.endswith((
     ".json", ".model", ".txt", ".tiktoken", ".jinja", ".vocab", ".merges",
 ))}
+if include_code == "1":
+    metadata.update(name for name in files if name.endswith(".py"))
 print(f"Downloading {model}@{info.sha} into {cache}", flush=True)
 source = snapshot_download(model, revision=info.sha, cache_dir=cache,
                            allow_patterns=sorted(metadata | weights))
@@ -66,6 +68,7 @@ print(f"Source ready: {source}", flush=True)
 `;
 
 type Exporter = "mbext" | "modelbuilder" | "mobius" | "olive" | "olive-recipes";
+type OliveWorkflow = "optimize" | "quantize";
 
 function isExporter(value: unknown): value is Exporter {
   return (
@@ -168,33 +171,80 @@ interface ExportAdvancedOptions {
   staticCache?: boolean;
   maxSequenceLength?: number;
   runtime?: string;
+  oliveExporter?: string;
+  task?: string;
+  trustRemoteCode?: boolean;
+  numSplits?: number;
+  memory?: number;
 }
 
 function exportAdvancedOptions(
   value: unknown,
   exporter: Exporter,
+  oliveWorkflow?: OliveWorkflow,
 ): ExportAdvancedOptions {
   if (value === undefined) return {};
   if (!value || typeof value !== "object" || Array.isArray(value))
     throw new Error("Invalid advanced export options.");
-  if (
-    (exporter === "olive" || exporter === "olive-recipes") &&
-    Object.keys(value).length
-  )
+  if (exporter === "olive-recipes" && Object.keys(value).length)
     throw new Error(
-      `Advanced options are not supported for ${exporter === "olive" ? "Olive quantization" : "Olive recipes"}. Clear advanced options before converting.`,
+      "Advanced options are not supported for Olive recipes. Clear advanced options before converting.",
     );
   const options: ExportAdvancedOptions = {};
   const mobius = exporter === "mobius";
+  const builder = exporter === "mbext" || exporter === "modelbuilder";
+  const oliveOptimize = exporter === "olive" && oliveWorkflow === "optimize";
   for (const [key, entry] of Object.entries(value)) {
     switch (key) {
       case "excludeEmbeds":
       case "excludeLmHead":
       case "includeHiddenStates":
       case "pruneLmHead":
-      case "useQdq":
-        if (mobius || typeof entry !== "boolean")
+        if (!builder || typeof entry !== "boolean")
           throw new Error(`Invalid ${key} option for ${exporter}.`);
+        options[key] = entry;
+        break;
+      case "useQdq":
+        if ((!builder && exporter !== "olive") || typeof entry !== "boolean")
+          throw new Error(`Invalid ${key} option for ${exporter}.`);
+        options.useQdq = entry;
+        break;
+      case "trustRemoteCode":
+        if (!oliveOptimize || typeof entry !== "boolean")
+          throw new Error(`Invalid ${key} option for ${exporter}.`);
+        options.trustRemoteCode = entry;
+        break;
+      case "oliveExporter":
+        if (
+          !oliveOptimize ||
+          typeof entry !== "string" ||
+          ![
+            "model_builder",
+            "dynamo_exporter",
+            "torchscript_exporter",
+          ].includes(entry)
+        )
+          throw new Error("Choose a supported Olive ONNX exporter.");
+        options.oliveExporter = entry;
+        break;
+      case "task":
+        if (
+          !oliveOptimize ||
+          typeof entry !== "string" ||
+          !/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(entry)
+        )
+          throw new Error("Enter a Hugging Face task name for Olive.");
+        options.task = entry;
+        break;
+      case "numSplits":
+      case "memory":
+        if (
+          !oliveOptimize ||
+          typeof entry !== "number" ||
+          !Number.isSafeInteger(entry) ||
+          entry < 1
+        )
+          throw new Error(`${key} must be a positive integer for Olive.`);
         options[key] = entry;
         break;
       case "noWeights":
@@ -216,7 +266,7 @@ function exportAdvancedOptions(
         break;
       case "blockSize":
         if (
-          mobius ||
+          (!builder && !oliveOptimize) ||
           typeof entry !== "number" ||
           ![16, 32, 64, 128, 256].includes(entry)
         )
@@ -225,7 +275,7 @@ function exportAdvancedOptions(
         break;
       case "quantizationAlgorithm":
         if (
-          mobius ||
+          !builder ||
           typeof entry !== "string" ||
           ![
             "rtn",
@@ -240,7 +290,7 @@ function exportAdvancedOptions(
         break;
       case "maxShardSize":
         if (
-          exporter === "modelbuilder" ||
+          (exporter !== "mbext" && !mobius) ||
           typeof entry !== "string" ||
           !/^[1-9]\d*(?:B|KB|MB|GB)$/i.test(entry)
         )
@@ -291,6 +341,7 @@ function exportAdvancedOptions(
 
 export interface ExportPlan {
   exporter: Exporter;
+  oliveWorkflow?: OliveWorkflow;
   recipe?: PinnedOliveRecipe;
   cwd?: string;
   layerCount?: number;
@@ -344,8 +395,21 @@ export function exportPlan(
       "Choose an exporter, model, absolute output directory, precision and device.",
     );
   const model = value.model.trim();
+  const oliveWorkflow =
+    "oliveWorkflow" in value ? value.oliveWorkflow : "optimize";
+  if (oliveWorkflow !== "optimize" && oliveWorkflow !== "quantize")
+    throw new Error(
+      "Choose an Olive export/optimization or quantization workflow.",
+    );
   if (
     value.exporter === "olive" &&
+    oliveWorkflow === "optimize" &&
+    !["fp32", "fp16", "bf16", "int4", "int8"].includes(value.precision)
+  )
+    throw new Error("Olive export supports FP32, FP16, BF16, INT4 or INT8.");
+  if (
+    value.exporter === "olive" &&
+    oliveWorkflow === "quantize" &&
     (!isAbsolute(model) ||
       !/\.onnx$/i.test(model) ||
       !["int4", "int8"].includes(value.precision) ||
@@ -368,14 +432,20 @@ export function exportPlan(
   const advancedOptions = exportAdvancedOptions(
     "advancedOptions" in value ? value.advancedOptions : undefined,
     value.exporter,
+    value.exporter === "olive" ? oliveWorkflow : undefined,
   );
   if (
     value.precision !== "int4" &&
-    (advancedOptions.useQdq ||
+    ((advancedOptions.useQdq &&
+      !(value.exporter === "olive" && value.precision === "int8")) ||
       advancedOptions.blockSize !== undefined ||
       advancedOptions.quantizationAlgorithm !== undefined)
   )
-    throw new Error("Quantization options require INT4 precision.");
+    throw new Error(
+      value.exporter === "olive"
+        ? "Olive Q/DQ requires INT4 or INT8; block size requires INT4."
+        : "Quantization options require INT4 precision.",
+    );
   let directory = value.directory;
   if (directory.includes("<model_id>")) {
     const parts = isAbsolute(model) ? [basename(model)] : model.split(/[\\/]/);
@@ -407,7 +477,7 @@ export function exportPlan(
   const recipeRoot = join(directory, "olive-recipe");
   const cwd = recipe ? join(recipeRoot, dirname(recipe.id)) : undefined;
   let args: string[];
-  if (value.exporter === "olive")
+  if (value.exporter === "olive" && oliveWorkflow === "quantize")
     args = [
       "-u",
       "-m",
@@ -423,6 +493,25 @@ export function exportPlan(
       "rtn",
       "--implementation",
       precision === "int4" ? "olive" : "ort",
+    ];
+  else if (value.exporter === "olive")
+    args = [
+      "-u",
+      "-m",
+      "olive",
+      "optimize",
+      "-m",
+      model,
+      "--output_path",
+      directory,
+      "--precision",
+      precision,
+      "--device",
+      value.provider === "cuda" ? "gpu" : "cpu",
+      "--provider",
+      value.provider === "cuda"
+        ? "CUDAExecutionProvider"
+        : "CPUExecutionProvider",
     ];
   else if (value.exporter === "olive-recipes" && recipe)
     args = [
@@ -470,7 +559,24 @@ export function exportPlan(
           "-e",
           value.provider,
         ];
-  if (mobius) {
+  if (value.exporter === "olive") {
+    if (advancedOptions.useQdq)
+      args.push(
+        oliveWorkflow === "quantize"
+          ? "--use_qdq_encoding"
+          : "--use_qdq_format",
+      );
+    if (advancedOptions.trustRemoteCode) args.push("--trust_remote_code");
+    for (const [key, flag] of [
+      ["oliveExporter", "--exporter"],
+      ["task", "--task"],
+      ["blockSize", "--block_size"],
+      ["numSplits", "--num_split"],
+      ["memory", "--memory"],
+    ] as const)
+      if (advancedOptions[key] !== undefined)
+        args.push(flag, String(advancedOptions[key]));
+  } else if (mobius) {
     if (advancedOptions.noWeights) args.push("--no-weights");
     if (advancedOptions.staticCache) args.push("--features", "static-cache");
     for (const [key, flag] of [
@@ -517,6 +623,7 @@ export function exportPlan(
   };
   return {
     exporter: value.exporter,
+    ...(value.exporter === "olive" ? { oliveWorkflow } : {}),
     ...(recipe ? { recipe, cwd } : {}),
     ...(layerCount === undefined ? {} : { layerCount }),
     ...(Object.keys(advancedOptions).length ? { advancedOptions } : {}),
@@ -711,6 +818,7 @@ export async function downloadExportSource(
           cacheDirectory,
           result,
           plan.advancedOptions?.noWeights ? "0" : "1",
+          plan.advancedOptions?.trustRemoteCode ? "1" : "0",
         ],
       },
       signal,
@@ -763,7 +871,11 @@ export async function runExport(
   }
   const environment = {
     ...exportEnvironment,
-    ...(isAbsolute(plan.model) && !plan.recipe ? offlineEnvironment : {}),
+    ...(isAbsolute(plan.model) &&
+    !plan.recipe &&
+    (plan.exporter !== "olive" || plan.oliveWorkflow === "quantize")
+      ? offlineEnvironment
+      : {}),
   };
   if (plan.recipe)
     await cp(plan.recipe.snapshot, join(plan.directory, "olive-recipe"), {

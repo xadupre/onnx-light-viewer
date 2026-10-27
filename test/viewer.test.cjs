@@ -185,32 +185,83 @@ test("restores the Olive recipes exporter and checks the commit on every panel o
   assert.match(byId("export-recipe-status").textContent, /Network unavailable/);
 });
 
-test("Convert separates Olive quantization from commit-pinned recipes and shows version and manual requirements", async (t) => {
+test("Convert supports Olive checkpoint export, explicit ONNX quantization and pinned recipes", async (t) => {
   const { document, window, messages, waitForMessage } = openViewer(t);
   const byId = (id) => document.getElementById(id);
   const send = (data) =>
     window.dispatchEvent(new window.MessageEvent("message", { data }));
   const change = (id, value) => {
-    byId(id).value = value;
+    if (typeof value === "boolean") byId(id).checked = value;
+    else byId(id).value = value;
     byId(id).dispatchEvent(new window.Event("change", { bubbles: true }));
   };
   send({ type: "load-state", pending: false });
   byId("export-model").click();
-  byId("export-block-size").value = "32";
   change("export-tool", "olive");
-  assert.equal(byId("export-source").disabled, true);
-  assert.equal(byId("export-target-options").hidden, true);
-  assert.equal(byId("export-advanced").hidden, true);
+  assert.equal(byId("export-source").disabled, false);
+  assert.equal(byId("export-olive-workflow").value, "optimize");
+  assert.equal(byId("export-target-options").hidden, false);
+  assert.equal(byId("export-advanced").hidden, false);
   assert.equal(byId("export-olive-options").hidden, false);
-  change("export-olive-source", "/models/model.onnx");
+  const checkpointPreview = waitForMessage("export-preview");
+  change("export-source", "owner/model");
+  change("export-precision", "int4");
+  change("export-provider", "cuda");
+  change("export-olive-exporter", "dynamo_exporter");
+  change("export-olive-task", "text-generation-with-past");
+  change("export-olive-trust-code", true);
+  change("export-olive-splits", "2");
+  change("export-olive-memory", "8192");
+  change("export-use-qdq", true);
+  change("export-block-size", "64");
+  change("export-quantization-algorithm", "k_quant");
+  const checkpoint = structuredClone((await checkpointPreview).exportOptions);
+  assert.equal(checkpoint.model, "owner/model");
+  assert.equal(checkpoint.oliveWorkflow, "optimize");
+  assert.equal(checkpoint.precision, "int4");
+  assert.equal(checkpoint.provider, "cuda");
+  assert.deepEqual(checkpoint.advancedOptions, {
+    oliveExporter: "dynamo_exporter",
+    task: "text-generation-with-past",
+    trustRemoteCode: true,
+    numSplits: 2,
+    memory: 8192,
+    useQdq: true,
+    blockSize: 64,
+  });
+  byId("export-form").dispatchEvent(
+    new window.Event("submit", { cancelable: true }),
+  );
+  assert.deepEqual(
+    structuredClone(
+      messages.findLast(({ type }) => type === "export").exportOptions,
+    ),
+    checkpoint,
+  );
+  send({
+    type: "log-entry",
+    entry: {
+      id: messages.findLast(({ type }) => type === "export").actionId,
+      timestamp: new Date().toISOString(),
+      action: "Convert ONNX model",
+      status: "SUCCEEDED",
+    },
+  });
+  change("export-olive-workflow", "quantize");
+  assert.equal(byId("export-target-options").hidden, true);
+  assert.equal(byId("export-olive-quantization").hidden, false);
+  assert.equal(byId("export-olive-exporter").disabled, true);
+  assert.equal(byId("export-block-size").disabled, true);
+  change("export-source", "/models/model.onnx");
   const quantizationPreview = waitForMessage("export-preview");
   change("export-olive-precision", "int8");
   const quantize = (await quantizationPreview).exportOptions;
   assert.equal(quantize.exporter, "olive");
+  assert.equal(quantize.oliveWorkflow, "quantize");
   assert.equal(quantize.model, "/models/model.onnx");
   assert.equal(quantize.precision, "int8");
   assert.equal(quantize.provider, "cpu");
-  assert.equal("advancedOptions" in quantize, false);
+  assert.deepEqual(structuredClone(quantize.advancedOptions), { useQdq: true });
   assert.equal("layerCount" in quantize, false);
   change("export-tool", "olive-recipes");
   const request = messages.findLast(
@@ -218,7 +269,8 @@ test("Convert separates Olive quantization from commit-pinned recipes and shows 
   );
   assert.ok(request);
   assert.equal(byId("export-recipe-options").hidden, false);
-  assert.equal(byId("export-olive-source").disabled, true);
+  assert.equal(byId("export-source").disabled, true);
+  assert.equal(byId("export-olive-workflow").disabled, true);
   assert.equal(byId("export-submit").disabled, true);
   send({
     type: "olive-recipes",
@@ -6084,7 +6136,7 @@ test("export defaults follow the download directory without replacing chosen pat
     [
       ["modelbuilder", "modelbuilder (ONNX Runtime GenAI)"],
       ["mobius", "Mobius"],
-      ["olive", "Olive (ONNX quantization)"],
+      ["olive", "Olive (export and quantization)"],
       ["olive-recipes", "Olive recipes (model export workflows)"],
       ["mbext", "mbext (fast export)"],
     ],
@@ -6092,11 +6144,15 @@ test("export defaults follow the download directory without replacing chosen pat
   send(settings);
   assert.equal(byId("export-tool").value, "mobius");
   assert.deepEqual(
-    [...byId("export-precision").options].map((option) => option.value),
+    [...byId("export-precision").options]
+      .filter((option) => !option.disabled)
+      .map((option) => option.value),
     ["fp32", "fp16", "bf16", "int4", "int2", "fp4"],
   );
   assert.ok(
-    [...byId("export-precision").options].every((option) => !option.disabled),
+    [...byId("export-precision").options].every(
+      (option) => option.disabled === (option.value === "int8"),
+    ),
   );
   assert.equal(
     byId("export-directory").value,

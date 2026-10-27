@@ -427,6 +427,7 @@ shutil.copyfile(source, output / "quantized.onnx")
   });
   const options = {
     exporter: "olive",
+    oliveWorkflow: "quantize",
     model: source,
     directory: path.join(root, "output"),
     precision: "int4",
@@ -454,7 +455,7 @@ shutil.copyfile(source, output / "quantized.onnx")
   assert.throws(
     () =>
       exportPlan({ ...options, advancedOptions: { blockSize: 32 } }, python),
-    /Advanced options are not supported for Olive quantization.*Clear advanced options/,
+    /supported quantization block size/,
   );
   assert.throws(
     () => exportPlan({ ...options, exporter: "olive-recipes" }, python),

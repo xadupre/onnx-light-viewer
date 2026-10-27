@@ -982,7 +982,9 @@ async function configurePanel(
               const needsDownload = exportNeedsDownload(plan);
               const conversionStage = plan.recipe
                 ? "Running pinned Olive recipe (network may be required)"
-                : "Converting local model (offline)";
+                : plan.exporter === "olive" && plan.oliveWorkflow === "optimize"
+                  ? "Exporting with Olive (calibration downloads may be required)"
+                  : "Converting local model (offline)";
               const timings: {
                 downloadSkipped: boolean;
                 downloadDurationMs?: number;

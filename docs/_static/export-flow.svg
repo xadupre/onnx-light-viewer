@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 170" role="img" aria-labelledby="title description">
   <title id="title">ONNX conversion and inspection</title>
-  <desc id="description">The application downloads a pinned checkpoint into its reusable source cache. An installed Python exporter converts the local snapshot offline and writes ONNX files and a reproduction script. Download and conversion have separate clocks. The viewer opens the result without executing it.</desc>
+  <desc id="description">The application downloads a pinned checkpoint into its reusable source cache. An installed Python exporter converts the local snapshot and writes ONNX files and a reproduction script. mbext, modelbuilder and Mobius run offline; Olive optimization may download calibration data. Download and conversion have separate clocks. The viewer opens the result without executing it.</desc>
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
       <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/>
@@ -22,7 +22,7 @@
     <g font-size="15" font-weight="bold">
       <text x="91" y="78">Download source</text>
       <text x="285" y="78">Source cache</text>
-      <text x="479" y="78">Convert offline</text>
+      <text x="479" y="78">Run exporter</text>
       <text x="670" y="78">Inspect model</text>
     </g>
     <g font-size="12">
