@@ -388,8 +388,9 @@ test("builds advanced arguments using each exporter's supported CLI", () => {
       "include_hidden_states=true",
       "prune_lm_head=true",
       "use_qdq=true",
-      "int4_block_size=64",
-      "int4_algo_config=k_quant",
+      ...(exporter === "mbext"
+        ? ["int4_block_size=64", "int4_algo_config=k_quant"]
+        : ["block_size=64", "algo_config=k_quant"]),
       ...(exporter === "mbext" ? ["--max-shard-size", "2GB"] : []),
     ]);
     assert.equal(plan.args.includes("--onnx_opset"), exporter === "mbext");
@@ -546,9 +547,18 @@ test("preserves advanced options through cached downloads, retries and reproduct
     const advancedOptions =
       exporter === "mobius"
         ? { noWeights: true, optimize: "skip_norm", maxShardSize: "1GB" }
-        : { excludeEmbeds: true, excludeLmHead: true };
+        : {
+            excludeEmbeds: true,
+            excludeLmHead: true,
+            blockSize: 64,
+            quantizationAlgorithm: "k_quant",
+          };
     const plan = exportPlan(
-      { ...options(path.join(root, exporter), exporter), advancedOptions },
+      {
+        ...options(path.join(root, exporter), exporter),
+        precision: "int4",
+        advancedOptions,
+      },
       python,
     );
     await mkdir(plan.directory);
@@ -563,13 +573,21 @@ test("preserves advanced options through cached downloads, retries and reproduct
     );
     assert.deepEqual(local.advancedOptions, advancedOptions);
     assert.deepEqual(local.args.slice(8), retry.args.slice(8));
-    const expectedOption =
-      exporter === "mobius" ? "--no-weights" : "exclude_lm_head=true";
+    const expectedOptions =
+      exporter === "mobius"
+        ? ["--no-weights"]
+        : exporter === "mbext"
+          ? [
+              "exclude_lm_head=true",
+              "int4_block_size=64",
+              "int4_algo_config=k_quant",
+            ]
+          : ["exclude_lm_head=true", "block_size=64", "algo_config=k_quant"];
     local.args = [
       "-u",
       "-c",
       `import pathlib, shutil, sys
-assert ${JSON.stringify(expectedOption)} in sys.argv[3:]
+assert all(option in sys.argv[3:] for option in ${JSON.stringify(expectedOptions)})
 pathlib.Path(sys.argv[2]).mkdir(parents=True, exist_ok=True)
 shutil.copyfile(sys.argv[1], pathlib.Path(sys.argv[2]) / "model.onnx")
 `,
@@ -578,7 +596,9 @@ shutil.copyfile(sys.argv[1], pathlib.Path(sys.argv[2]) / "model.onnx")
       ...local.args,
     ];
     await runExport(local, new AbortController().signal, () => {});
-    assert.ok((await readFile(local.script, "utf8")).includes(expectedOption));
+    const script = await readFile(local.script, "utf8");
+    for (const option of expectedOptions) assert.ok(script.includes(option));
+    await promisify(execFile)(python, [local.script]);
   }
 });
 

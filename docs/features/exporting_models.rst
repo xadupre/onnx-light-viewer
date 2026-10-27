@@ -118,6 +118,14 @@ The upstream modelbuilder module is included with ``onnxruntime-genai``.
    * - Mobius
      - ``mobius build``
 
+For INT4 advanced options, modelbuilder uses ``block_size`` and ``algo_config``;
+mbext retains ``int4_block_size`` and ``int4_algo_config``. Modelbuilder requires
+the `updated upstream CLI contract
+<https://github.com/microsoft/onnxruntime-genai/blob/6b7ff3ca3efa15da219050fdb4ecf8bed67875af/src/python/py/models/README.md#quantization-options>`_.
+Older modelbuilder versions accepting only the prefixed names must be upgraded
+to use these two settings; the viewer does not detect or fall back to legacy names.
+Default commands are unchanged when these settings are left unset.
+
 FP32, FP16, BF16, INT4, INT2 and FP4 are selectable for every exporter and both
 CPU/CUDA targets. The viewer does not filter combinations or reset the selected
 precision; the exporter reports unsupported values through its normal CLI errors.

@@ -422,10 +422,15 @@ export function exportPlan(
       ["useQdq", "use_qdq"],
     ] as const)
       if (advancedOptions[key]) extra.push(`${flag}=true`);
+    const quantizationPrefix = value.exporter === "mbext" ? "int4_" : "";
     if (advancedOptions.blockSize !== undefined)
-      extra.push(`int4_block_size=${advancedOptions.blockSize}`);
+      extra.push(
+        `${quantizationPrefix}block_size=${advancedOptions.blockSize}`,
+      );
     if (advancedOptions.quantizationAlgorithm !== undefined)
-      extra.push(`int4_algo_config=${advancedOptions.quantizationAlgorithm}`);
+      extra.push(
+        `${quantizationPrefix}algo_config=${advancedOptions.quantizationAlgorithm}`,
+      );
     if (extra.length) args.push("--extra_options", ...extra);
   }
   if (advancedOptions.maxShardSize !== undefined)
