@@ -1,42 +1,22 @@
 #!/usr/bin/env python3
-"""Compare five Qwen3.5-4B text-decoder export entry points, without quantization.
+"""Benchmark five text-only ONNX export entry points, without quantization/inference.
 
-Usage:
-    python scripts/benchmark_qwen35_exporters.py
-    python scripts/benchmark_qwen35_exporters.py --output qwen35-cpu.json \
-        --profiles cpu-fp32
+Example:
+    python scripts/benchmark_qwen35_exporters.py --model Qwen/Qwen3-0.6B \\
+        --profiles cpu-fp32 --output results.json
 
-Requires Python >= 3.10, huggingface_hub, onnx and the selected exporters:
-modelbuilder (mbext), onnxruntime-genai, mobius-onnx and olive-ai. Install their
-Qwen3.5-capable versions yourself; PYTHONPATH is inherited, never modified.
-FP16/CUDA requires the corresponding exporter/runtime dependencies.
+Defaults: Qwen/Qwen3.5-4B, all exporters, FP32/CPU and FP16/CUDA.
+Requires Python >= 3.10, huggingface_hub, onnx and the selected exporters.
+PYTHONPATH is inherited unchanged; CUDA needs compatible dependencies.
 
-The original HF checkpoint is downloaded once, at an immutable revision, and
-shared by all runs. Its stored dtype is not changed. Each exporter loads/casts
-it to FP32/CPU or FP16/CUDA during the separately timed creation phase.
-Download timing includes revision resolution and cache lookups; cache hits are
-identified, not presented as cold network transfers. Recipe downloads are timed
-separately as well.
+One immutable checkpoint is shared. Downloads, creation (startup/imports/I/O
+included) and ONNX header validation are timed separately; no inference check,
+warmup or cache flushing. Olive wraps ModelBuilder; its Qwen recipe is reused
+as a pipeline template, not selected per model.
 
-All five entry points export text only, including token embeddings and the LM
-head. Vision/embedding sidecar pipelines, quantization and inference are excluded.
-Olive uses capture-onnx-graph with ModelBuilder; the official recipe also uses
-ModelBuilder, followed by TieWordEmbeddings. These are five entry points, NOT five
-independent graph builders. The recipe is adapted to the requested precision,
-provider and unpruned logits, retaining its non-quantizing surgery.
-
-Creation time includes a fresh Python process, imports, loading/casting weights,
-graph construction/optimization and serialization. Each run has private output
-and Olive caches; only the source download is shared. ONNX header validation is
-timed separately and does not load external weights. Each selected exporter/profile
-is measured once, without warmup. Filesystem caches are not flushed.
-
-The output JSON file is updated after every export, including failures, and is
-replaced on subsequent invocations. It contains timings, logs and commands/configs.
-Exported models and per-run caches use temporary directories, removed after each
-measurement; only the shared download cache and the JSON report are retained.
-Runs need substantial RAM, CUDA resources where required, and temporary disk space
-for one exported model and its intermediate artifacts. TMPDIR controls its location.
+stdout shows timings, sizes and errors; --output keeps full logs in incremental
+JSON, overwritten on rerun. Temporary exports/caches are deleted; the shared
+checkpoint and JSON remain. Allow RAM/disk for one export; TMPDIR selects storage.
 """
 
 from __future__ import annotations
@@ -59,7 +39,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from urllib.request import urlopen
 
-MODEL = "Qwen/Qwen3.5-4B"
+DEFAULT_MODEL = "Qwen/Qwen3.5-4B"
 RECIPE_REVISION = "47b21648b9bf1a4b7beba2d0b231ceeda76edae8"
 EXPORTERS = ("mbext", "modelbuilder", "mobius", "olive", "olive-recipes")
 PROFILES = {
@@ -84,7 +64,7 @@ def write_json(path: Path, value: object) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def download_model(cache: Path, revision: str) -> dict:
+def download_model(model: str, cache: Path, revision: str) -> dict:
     from huggingface_hub import (
         HfApi,
         hf_hub_download,
@@ -93,7 +73,7 @@ def download_model(cache: Path, revision: str) -> dict:
     )
 
     start = time.perf_counter()
-    info = HfApi().model_info(MODEL, revision=revision)
+    info = HfApi().model_info(model, revision=revision)
     if not info.sha or not re.fullmatch(r"[a-f0-9]{40}", info.sha):
         raise ValueError("The Hub did not return an immutable model revision.")
     files = {entry.rfilename for entry in info.siblings}
@@ -110,13 +90,13 @@ def download_model(cache: Path, revision: str) -> dict:
 
     def cached(name: str) -> bool:
         return isinstance(
-            try_to_load_from_cache(MODEL, name, revision=info.sha, cache_dir=cache), str
+            try_to_load_from_cache(model, name, revision=info.sha, cache_dir=cache), str
         )
 
     checkpoint_cached = cached(checkpoint)
     if checkpoint.endswith(".index.json"):
         index_path = hf_hub_download(
-            MODEL, checkpoint, revision=info.sha, cache_dir=cache
+            model, checkpoint, revision=info.sha, cache_dir=cache
         )
         weights = set(
             json.loads(Path(index_path).read_text(encoding="utf-8"))[
@@ -138,7 +118,7 @@ def download_model(cache: Path, revision: str) -> dict:
     cache_hit = checkpoint_cached and all(cached(name) for name in selected)
     source = Path(
         snapshot_download(
-            MODEL, revision=info.sha, cache_dir=cache, allow_patterns=selected
+            model, revision=info.sha, cache_dir=cache, allow_patterns=selected
         )
     ).resolve()
     elapsed = time.perf_counter() - start
@@ -283,7 +263,7 @@ def export_command(
         command += [
             "mobius",
             "build",
-            "--config",
+            "--model",
             str(source),
             "--output",
             str(output),
@@ -291,9 +271,10 @@ def export_command(
             "f32" if precision == "fp32" else "f16",
             "--ep",
             device,
-            "--features",
-            "text-only",
         ]
+        config = json.loads((source / "config.json").read_text(encoding="utf-8"))
+        if isinstance(config.get("text_config"), dict):
+            command += ["--features", "text-only"]
     elif exporter == "olive":
         command += [
             "olive",
@@ -481,9 +462,50 @@ def environment_info() -> dict:
     }
 
 
+def print_summary(report: dict) -> None:
+    print(f"\nBenchmark summary: {report['model']} ({report['status']})")
+    print(
+        f"{'Profile':10} {'Exporter':13} {'Status':10} "
+        f"{'Creation(s)':>12} {'Validation(s)':>13} {'Output(MiB)':>12}"
+    )
+    for row in report["results"]:
+        creation = (
+            f"{row['creation_seconds']:.3f}" if "creation_seconds" in row else "-"
+        )
+        validation = (
+            f"{row['validation_seconds']:.3f}" if "validation_seconds" in row else "-"
+        )
+        size = f"{row['output_bytes'] / 1024**2:.3f}" if "output_bytes" in row else "-"
+        print(
+            f"{row['profile']:10} {row['exporter']:13} {row['status']:10} "
+            f"{creation:>12} {validation:>13} {size:>12}"
+        )
+    if not report["results"]:
+        print("No exporter results.")
+    if "error" in report:
+        print(f"Setup error: {report['error']}")
+    for row in report["results"]:
+        if row["status"] == "ok":
+            continue
+        print(
+            f"\n{row['profile']} {row['exporter']}: {row.get('error', row['status'])}"
+        )
+        if row.get("log"):
+            print(
+                "Last exporter log lines (up to 20 lines / 4000 characters; full log in JSON):"
+            )
+            print("\n".join(row["log"][-4000:].splitlines()[-20:]))
+    sys.stdout.flush()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument(
+        "--model",
+        default=DEFAULT_MODEL,
+        help="Hugging Face model ID (default: %(default)s).",
     )
     parser.add_argument(
         "--output",
@@ -526,7 +548,7 @@ def main() -> int:
     output = args.output.expanduser().resolve()
     cache = args.cache_dir.expanduser().resolve()
     report = {
-        "model": MODEL,
+        "model": args.model,
         "component": "text-only decoder with embeddings and LM head",
         "status": "incomplete",
         "environment": environment_info(),
@@ -535,8 +557,8 @@ def main() -> int:
     }
     report_path = output
     try:
-        print(f"Downloading shared checkpoint: {MODEL}", flush=True)
-        report["model_download"] = download_model(cache, args.revision)
+        print(f"Downloading shared checkpoint: {args.model}", flush=True)
+        report["model_download"] = download_model(args.model, cache, args.revision)
         write_json(report_path, report)
         source = Path(report["model_download"]["source"])
         print(
@@ -648,6 +670,7 @@ def main() -> int:
         return 1
     finally:
         write_json(report_path, report)
+        print_summary(report)
         print(f"Results: {report_path}", flush=True)
     return 0 if report["status"] == "ok" else 1
 
