@@ -123,7 +123,7 @@ function createMemoryPanel({ byId, postMessage, formatFileSize, selectNode }) {
       const allocate = index * 3 + 1;
       const release = allocate + 2;
       points.push(`H${x(allocate)} V${y(event.deviceBytes)} H${x(release)}`);
-      if (event.afterBytes !== null)
+      if (event.afterBytes != null)
         points.push(`V${y(event.afterBytes)} H${x(release + 1)}`);
       intervals.push(interval(index));
     }
@@ -210,7 +210,7 @@ function createMemoryPanel({ byId, postMessage, formatFileSize, selectNode }) {
     }
     byId("memory-operator-intervals").setAttribute("d", markers.join(" "));
     byId("memory-final-status").hidden =
-      !events.length || events.at(-1).afterBytes !== null;
+      !events.length || events.at(-1).afterBytes != null;
   }
 
   byId("memory-form").addEventListener("submit", (event) => {

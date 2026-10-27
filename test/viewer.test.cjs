@@ -667,6 +667,24 @@ test("memory steps allocate before each two-interval node and release into one-i
     document.getElementById("memory-curve").getAttribute("d"),
     /V156\.00000 H980\.00000$/,
   );
+  profile.events[0].afterBytes = 0;
+  display();
+  assert.match(
+    document.getElementById("memory-curve").getAttribute("d"),
+    /V240\.00000 H980\.00000$/,
+  );
+  assert.equal(document.getElementById("memory-final-status").hidden, true);
+  delete profile.events[0].afterBytes;
+  display();
+  assert.equal(
+    document.getElementById("memory-curve").getAttribute("d"),
+    "M60.00000,198.00000 H290.00000 V30.00000 H750.00000",
+  );
+  assert.equal(document.getElementById("memory-final-status").hidden, false);
+  assert.equal(
+    document.querySelector("#memory-events tr").cells[7].textContent,
+    "Unavailable",
+  );
   profile.events = [];
   profile.peakBytes = null;
   display();
