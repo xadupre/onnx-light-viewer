@@ -183,7 +183,14 @@ export class OliveRecipes {
         maxBuffer: 1024 * 1024,
         env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
       },
-    );
+    ).catch((error: unknown) => {
+      if (error instanceof Error && "code" in error && error.code === "ENOENT")
+        throw new Error(
+          "Git is required on PATH to refresh Olive recipes. Install Git and restart VS Code.",
+          { cause: error },
+        );
+      throw error;
+    });
     const revision = stdout.split(/\s+/)[0];
     if (!/^[a-f0-9]{40}$/.test(revision))
       throw new Error("Olive recipes did not provide a Git commit.");

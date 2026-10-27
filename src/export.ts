@@ -181,7 +181,9 @@ function exportAdvancedOptions(
     (exporter === "olive" || exporter === "olive-recipes") &&
     Object.keys(value).length
   )
-    throw new Error("Builder advanced options do not apply to Olive.");
+    throw new Error(
+      `Advanced options are not supported for ${exporter === "olive" ? "Olive quantization" : "Olive recipes"}. Clear advanced options before converting.`,
+    );
   const options: ExportAdvancedOptions = {};
   const mobius = exporter === "mobius";
   for (const [key, entry] of Object.entries(value)) {
@@ -766,8 +768,14 @@ export async function runExport(
   if (plan.recipe)
     await cp(plan.recipe.snapshot, join(plan.directory, "olive-recipe"), {
       recursive: true,
-      verbatimSymlinks: true,
-      filter: (source) => basename(source) !== ".git",
+      filter: async (source) => {
+        if (basename(source) === ".git") return false;
+        if ((await lstat(source)).isSymbolicLink())
+          throw new Error(
+            `Olive recipe snapshots cannot contain symbolic links: ${source}`,
+          );
+        return true;
+      },
     });
   signal.throwIfAborted();
   const script = `${plan.recipe ? `# Olive recipes commit: ${plan.recipe.revision}\n` : ""}import os\nimport subprocess\n\nsubprocess.run(${JSON.stringify([plan.executable, ...plan.args])}, cwd=${JSON.stringify(plan.cwd ?? homedir())}, env={**os.environ, **${JSON.stringify(environment)}}, check=True)\n`;

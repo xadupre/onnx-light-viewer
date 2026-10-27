@@ -6,6 +6,7 @@ const {
   readFile,
   readdir,
   rm,
+  symlink,
   writeFile,
 } = require("node:fs/promises");
 const { tmpdir } = require("node:os");
@@ -180,6 +181,75 @@ test("reports invalid or escaping metadata and cancellation without publishing a
   );
 });
 
+test("explains how to restore Git when it is missing from PATH", async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), "viewer-olive-no-git-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const cache = path.join(root, "cache");
+  const environment = Object.fromEntries(
+    Object.entries(process.env).filter(([key]) => key.toLowerCase() !== "path"),
+  );
+  environment.PATH = root;
+  await execute(
+    process.execPath,
+    [
+      "-e",
+      `
+const assert = require("node:assert/strict");
+const { OliveRecipes } = require(${JSON.stringify(require.resolve("../dist/oliveRecipes"))});
+new OliveRecipes(${JSON.stringify(cache)}).refresh(new AbortController().signal).then(
+  () => { throw new Error("Refresh unexpectedly succeeded without Git."); },
+  (error) => {
+    assert.match(error.message, /Git is required on PATH.*Install Git and restart VS Code/);
+    assert.equal(error.cause.code, "ENOENT");
+  },
+).catch((error) => { console.error(error); process.exitCode = 1; });
+`,
+    ],
+    { env: environment, cwd: root },
+  );
+  await assert.rejects(readdir(cache), { code: "ENOENT" });
+});
+
+test("rejects snapshot symlinks before running the recipe or writing its reproduction script", async (t) => {
+  for (const kind of process.platform === "win32"
+    ? ["junction"]
+    : ["file", "dir"]) {
+    await t.test(kind, async (t) => {
+      const { root, remote, cache, revision, signal } = await fixture(t);
+      const recipes = new OliveRecipes(cache, remote);
+      await recipes.refresh(signal);
+      const recipe = recipes.resolve("model/cpu/config.json", revision);
+      const outside = path.join(root, "outside");
+      await mkdir(outside);
+      const sentinel = path.join(outside, "keep.txt");
+      await writeFile(sentinel, "outside snapshot");
+      await symlink(
+        kind === "file" ? sentinel : outside,
+        path.join(recipe.snapshot, "linked-resource"),
+        kind,
+      );
+      const plan = exportPlan(
+        {
+          exporter: "olive-recipes",
+          model: recipe.name,
+          directory: path.join(root, "output"),
+          precision: "fp32",
+          provider: "cpu",
+        },
+        python,
+        undefined,
+        recipe,
+      );
+      await assert.rejects(
+        runExport(plan, signal, () => {}),
+        /Olive recipe snapshots cannot contain symbolic links: .*linked-resource/,
+      );
+      assert.equal(await readFile(sentinel, "utf8"), "outside snapshot");
+      await assert.rejects(readFile(plan.script), { code: "ENOENT" });
+    });
+  }
+});
+
 test("runs and reproduces a pinned recipe in an isolated checkout with its own relative resources and no forced offline mode", async (t) => {
   const { root, remote, cache, revision, signal } = await fixture(t);
   const recipes = new OliveRecipes(cache, remote);
@@ -195,6 +265,16 @@ test("runs and reproduces a pinned recipe in an isolated checkout with its own r
     precision: "fp32",
     provider: "cpu",
   };
+  assert.throws(
+    () =>
+      exportPlan(
+        { ...options, advancedOptions: { blockSize: 32 } },
+        python,
+        undefined,
+        recipe,
+      ),
+    /Advanced options are not supported for Olive recipes.*Clear advanced options/,
+  );
   const plan = await prepareExportPlan(
     exportPlan(options, python, undefined, recipe),
     signal,
@@ -315,6 +395,11 @@ shutil.copyfile(source, output / "quantized.onnx")
     { advancedOptions: { blockSize: 32 } },
   ])
     assert.throws(() => exportPlan({ ...options, ...invalid }, python));
+  assert.throws(
+    () =>
+      exportPlan({ ...options, advancedOptions: { blockSize: 32 } }, python),
+    /Advanced options are not supported for Olive quantization.*Clear advanced options/,
+  );
   assert.throws(
     () => exportPlan({ ...options, exporter: "olive-recipes" }, python),
     /pinned Olive recipe/,
