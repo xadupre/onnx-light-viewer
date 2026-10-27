@@ -49,6 +49,7 @@ test("releases retain Linux and Windows packages while macOS builds are paused",
   }
   assert.doesNotMatch(source, /os: macos-|target: darwin-/);
   assert.doesNotMatch(source, /sphinx|setup-python/);
+  assert.doesNotMatch(source, /vsce package[^\n]*--no-dependencies/);
 });
 
 test("README uses a PNG ONNX badge for VSIX packaging and retains the SVG source", () => {

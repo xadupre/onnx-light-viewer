@@ -41,7 +41,7 @@ jobs:
         shell: bash
         env:
           TARGET: ${{ matrix.target }}
-        run: npm exec --yes --package=@vscode/vsce@4.0.0 -- vsce package --target "$TARGET" --out "onnx-light-viewer-$TARGET.vsix" --no-dependencies
+        run: npm exec --yes --package=@vscode/vsce@4.0.0 -- vsce package --target "$TARGET" --out "onnx-light-viewer-$TARGET.vsix"
       - name: Test native binding
         run: node --test test/graph.test.cjs
       - uses: actions/upload-artifact@v7

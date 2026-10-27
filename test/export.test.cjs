@@ -187,6 +187,184 @@ test("cancels an active source download and cleans only its request metadata", a
   );
 });
 
+test("Olive exports model IDs and local checkpoints with parameters preserved through downloads, retries and reproduction", async (t) => {
+  const root = await directory(t);
+  const hub = await exportHub(t);
+  const previousEndpoint = process.env.HF_ENDPOINT;
+  const previousPythonPath = process.env.PYTHONPATH;
+  process.env.HF_ENDPOINT = hub.endpoint;
+  process.env.PYTHONPATH = root;
+  t.after(() => {
+    if (previousEndpoint === undefined) delete process.env.HF_ENDPOINT;
+    else process.env.HF_ENDPOINT = previousEndpoint;
+    if (previousPythonPath === undefined) delete process.env.PYTHONPATH;
+    else process.env.PYTHONPATH = previousPythonPath;
+  });
+  await mkdir(path.join(root, "olive"));
+  await writeFile(path.join(root, "olive", "__init__.py"), "");
+  await writeFile(
+    path.join(root, "olive", "__main__.py"),
+    `
+import argparse
+import os
+import pathlib
+import shutil
+parser = argparse.ArgumentParser()
+parser.add_argument("command", choices=["optimize"])
+parser.add_argument("-m", required=True)
+parser.add_argument("--output_path", required=True)
+parser.add_argument("--precision", choices=["fp32", "fp16", "bf16", "int4", "int8"], required=True)
+parser.add_argument("--device", choices=["cpu", "gpu"], required=True)
+parser.add_argument("--provider", choices=["CPUExecutionProvider", "CUDAExecutionProvider"], required=True)
+parser.add_argument("--exporter", choices=["model_builder", "dynamo_exporter", "torchscript_exporter"])
+parser.add_argument("--task")
+parser.add_argument("--trust_remote_code", action="store_true")
+parser.add_argument("--use_qdq_format", action="store_true")
+parser.add_argument("--block_size", type=int)
+parser.add_argument("--num_split", type=int)
+parser.add_argument("--memory", type=int)
+args = parser.parse_args()
+assert args.provider == ("CUDAExecutionProvider" if args.device == "gpu" else "CPUExecutionProvider")
+assert os.environ.get("HF_HUB_OFFLINE", "") == ${JSON.stringify(process.env.HF_HUB_OFFLINE ?? "")}
+assert os.environ.get("TRANSFORMERS_OFFLINE", "") == ${JSON.stringify(process.env.TRANSFORMERS_OFFLINE ?? "")}
+source = pathlib.Path(args.m)
+assert (source / "config.json").is_file()
+assert (source / "model.safetensors").read_bytes() == b"source weights"
+if args.precision == "int4":
+    assert args.exporter == "dynamo_exporter"
+    assert args.task == "text-generation-with-past"
+    assert args.trust_remote_code and args.use_qdq_format
+    assert args.block_size == 64 and args.num_split == 2 and args.memory == 8192
+    assert (source / "modeling_custom.py").is_file()
+else:
+    assert not args.trust_remote_code
+    assert not (source / "modeling_custom.py").exists()
+output = pathlib.Path(args.output_path)
+shutil.copyfile(${JSON.stringify(path.join(__dirname, "models", "relu.onnx"))}, output / "model.onnx")
+`,
+  );
+  const signal = new AbortController().signal;
+  const cache = path.join(root, "cache");
+  const advancedOptions = {
+    oliveExporter: "dynamo_exporter",
+    task: "text-generation-with-past",
+    trustRemoteCode: true,
+    useQdq: true,
+    blockSize: 64,
+    numSplits: 2,
+    memory: 8192,
+  };
+  for (const precision of ["fp32", "int4"]) {
+    const plan = exportPlan(
+      {
+        ...options(path.join(root, precision), "olive"),
+        model: "owner/custom",
+        precision,
+        provider: precision === "int4" ? "cuda" : "cpu",
+        ...(precision === "int4" ? { advancedOptions } : {}),
+      },
+      python,
+    );
+    assert.equal(plan.oliveWorkflow, "optimize");
+    await mkdir(plan.directory);
+    await writeFile(path.join(plan.directory, "keep.txt"), "Keep output");
+    const retry = await prepareExportPlan(plan, signal);
+    assert.notEqual(retry.directory, plan.directory);
+    const local = await downloadExportSource(retry, cache, signal, () => {});
+    assert.equal(local.oliveWorkflow, "optimize");
+    assert.deepEqual(local.advancedOptions, plan.advancedOptions);
+    assert.deepEqual(local.args.slice(6), retry.args.slice(6));
+    assert.deepEqual(await runExport(local, signal, () => {}), [
+      path.join(local.directory, "model.onnx"),
+    ]);
+    await promisify(execFile)(python, [local.script]);
+    assert.equal(
+      await readFile(path.join(plan.directory, "keep.txt"), "utf8"),
+      "Keep output",
+    );
+    const checkpoint = exportPlan(
+      { ...local, directory: path.join(root, `${precision}-checkpoint`) },
+      python,
+    );
+    assert.equal(
+      await downloadExportSource(checkpoint, cache, signal, () => {}),
+      checkpoint,
+    );
+    await runExport(checkpoint, signal, () => {});
+  }
+  assert.equal(
+    hub.requests.filter(
+      ({ method, pathname }) => method === "GET" && pathname.endsWith(".py"),
+    ).length,
+    1,
+  );
+  assert.ok(
+    hub.requests
+      .filter(({ pathname }) => pathname.includes("/resolve/"))
+      .every(({ pathname }) => pathname.includes(hub.revision)),
+  );
+});
+
+test("validates Olive precision, workflow and exporter-specific parameters", () => {
+  const base = options(path.join(tmpdir(), "olive-options"), "olive");
+  for (const invalid of [
+    { precision: "int2" },
+    { precision: "fp4" },
+    { oliveWorkflow: "--run" },
+    { advancedOptions: { oliveExporter: "--injected" } },
+    { advancedOptions: { task: "text-generation\n--trust_remote_code" } },
+    { advancedOptions: { trustRemoteCode: "true" } },
+    { advancedOptions: { numSplits: 0 } },
+    { advancedOptions: { memory: 1.5 } },
+    { advancedOptions: { memory: 2 ** 53 } },
+    { advancedOptions: { blockSize: 3 }, precision: "int4" },
+    { advancedOptions: { excludeEmbeds: true } },
+    { advancedOptions: { noWeights: true } },
+    { advancedOptions: { maxShardSize: "2GB" } },
+    { advancedOptions: { quantizationAlgorithm: "rtn" }, precision: "int4" },
+    { advancedOptions: { useQdq: true }, precision: "fp32" },
+  ])
+    assert.throws(
+      () => exportPlan({ ...base, ...invalid }, python),
+      Error,
+      JSON.stringify(invalid),
+    );
+  for (const precision of ["fp32", "fp16", "bf16", "int4", "int8"])
+    for (const provider of ["cpu", "cuda"])
+      assert.equal(
+        exportPlan({ ...base, precision, provider }, python).precision,
+        precision,
+      );
+  for (const advancedOptions of [
+    { oliveExporter: "model_builder" },
+    { task: "text-generation" },
+    { trustRemoteCode: true },
+    { numSplits: 2 },
+    { memory: 8192 },
+  ]) {
+    assert.throws(() =>
+      exportPlan(
+        {
+          ...base,
+          advancedOptions,
+          oliveWorkflow: "quantize",
+          model: path.join(tmpdir(), "model.onnx"),
+          precision: "int4",
+        },
+        python,
+      ),
+    );
+    assert.throws(() =>
+      exportPlan({ ...base, exporter: "mbext", advancedOptions }, python),
+    );
+  }
+  const int8 = exportPlan(
+    { ...base, precision: "int8", advancedOptions: { useQdq: true } },
+    python,
+  );
+  assert.ok(int8.args.includes("--use_qdq_format"));
+});
+
 test("persists bounded, deduplicated export suggestions", async () => {
   const root = path.join(tmpdir(), "downloads");
   const preferences = new Map();

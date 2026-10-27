@@ -169,6 +169,7 @@ test("inspects PYTHONPATH metadata and source versions without importing package
     [first, "onnx_light", '"99.2"'],
     [second, "onnx_light", '"1.0"'],
     [first, "yobx", '"98.4"'],
+    [first, "olive", '"0.8.2"'],
     [first, "torch", "calculate_version()"],
   ]) {
     const packageDirectory = path.join(root, name);
@@ -198,6 +199,11 @@ test("inspects PYTHONPATH metadata and source versions without importing package
     source: path.join(first, "onnx_light"),
   });
   assert.equal(packages.get("yet-another-onnx-builder").version, "98.4");
+  assert.deepEqual(packages.get("olive-ai"), {
+    name: "olive-ai",
+    version: "0.8.2",
+    source: path.join(first, "olive"),
+  });
   assert.equal(packages.get("skl2onnx").version, "97.3");
   assert.equal(packages.get("torch").version, null);
   assert.equal(packages.get("torch").source, path.join(first, "torch"));

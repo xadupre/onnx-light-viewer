@@ -75,7 +75,7 @@ ONNX and ONNX Runtime
 Exporters
 ----------
 
-Use **Convert** to run an installed mbext, modelbuilder or Mobius exporter, or
+Use **Convert** to run an installed mbext, modelbuilder, Mobius or Olive exporter, or
 open a model exported separately. See :doc:`features/exporting_models`.
 Supported models, operators and target runtimes vary by tool.
 
@@ -87,6 +87,16 @@ Supported models, operators and target runtimes vary by tool.
    Conversion runs in a separate Python process; opening the resulting model does
    not execute its graph.
 
+* `Olive <https://github.com/microsoft/Olive>`_:
+  model optimization and quantization with ``olive-ai``.
+  **Specialized for:** local ONNX INT4/INT8 quantization in the viewer.
+  `Documentation <https://microsoft.github.io/Olive/>`__.
+* `Olive recipes <https://github.com/microsoft/olive-recipes>`_:
+  model-specific export and optimization workflows, distinct from Olive's
+  quantization command. The viewer caches the catalogue by Git commit and shows
+  recipe-specific Olive version requirements.
+  **Specialized for:** model-specific ``olive-ai`` workflows.
+  `Recipe documentation <https://github.com/microsoft/olive-recipes#readme>`__.
 * `Mobius <https://github.com/onnxruntime/mobius>`_:
   builds ONNX graphs with ONNX Script and pretrained weights rather than
   tracing a PyTorch model.

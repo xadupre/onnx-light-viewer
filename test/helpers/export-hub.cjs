@@ -6,6 +6,9 @@ async function exportHub(t, onRequest = () => {}) {
   const revision = "1234567890abcdef1234567890abcdef12345678";
   const files = (model) => ({
     "config.json": Buffer.from(JSON.stringify({ modelId: model })),
+    ...(model === "owner/custom"
+      ? { "modeling_custom.py": Buffer.from("# Custom model code\n") }
+      : {}),
     ...(model === "owner/config-only"
       ? {}
       : model === "owner/sharded"

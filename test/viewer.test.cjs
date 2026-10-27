@@ -135,6 +135,211 @@ function submitOpen(document, window) {
     .dispatchEvent(new window.Event("submit", { cancelable: true }));
 }
 
+test("restores the Olive recipes exporter and checks the commit on every panel opening without duplicate requests", (t) => {
+  const { document, window, messages } = openViewer(t);
+  const byId = (id) => document.getElementById(id);
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  send({ type: "load-state", pending: false });
+  byId("export-model").click();
+  const settings = {
+    type: "settings-info",
+    application: { downloadDirectory: "/cache", pythonPath: "python3" },
+    viewer: { panels: { operator: true, find: true, metadata: false } },
+    trusted: true,
+    exportHistory: { exporter: "olive-recipes", models: [], directories: [] },
+  };
+  send(settings);
+  send(settings);
+  const requests = () =>
+    messages.filter((message) => message.type === "olive-recipes");
+  assert.equal(byId("export-tool").value, "olive-recipes");
+  assert.equal(requests().length, 1);
+  send({
+    type: "olive-recipes",
+    requestId: requests()[0].requestId,
+    revision: "a".repeat(40),
+    recipes: [
+      {
+        id: "model/config.json",
+        name: "model",
+        requirements: ["olive-ai==0.9.3"],
+        target: "CPU",
+      },
+    ],
+  });
+  byId("export-model").click();
+  byId("export-model").click();
+  assert.equal(requests().length, 2);
+  send({
+    type: "olive-recipes",
+    requestId: requests()[0].requestId,
+    error: "stale",
+  });
+  assert.match(byId("export-recipe-status").textContent, /Checking/);
+  send({
+    type: "olive-recipes",
+    requestId: requests()[1].requestId,
+    error: "Network unavailable",
+  });
+  assert.match(byId("export-recipe-status").textContent, /Network unavailable/);
+});
+
+test("Convert supports Olive checkpoint export, explicit ONNX quantization and pinned recipes", async (t) => {
+  const { document, window, messages, waitForMessage } = openViewer(t);
+  const byId = (id) => document.getElementById(id);
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  const change = (id, value) => {
+    if (typeof value === "boolean") byId(id).checked = value;
+    else byId(id).value = value;
+    byId(id).dispatchEvent(new window.Event("change", { bubbles: true }));
+  };
+  send({ type: "load-state", pending: false });
+  byId("export-model").click();
+  change("export-tool", "olive");
+  assert.equal(byId("export-source").disabled, false);
+  assert.equal(byId("export-olive-workflow").value, "optimize");
+  assert.equal(byId("export-target-options").hidden, false);
+  assert.equal(byId("export-advanced").hidden, false);
+  assert.equal(byId("export-olive-options").hidden, false);
+  const checkpointPreview = waitForMessage("export-preview");
+  change("export-source", "owner/model");
+  change("export-precision", "int4");
+  change("export-provider", "cuda");
+  change("export-olive-exporter", "dynamo_exporter");
+  change("export-olive-task", "text-generation-with-past");
+  change("export-olive-trust-code", true);
+  change("export-olive-splits", "2");
+  change("export-olive-memory", "8192");
+  change("export-use-qdq", true);
+  change("export-block-size", "64");
+  change("export-quantization-algorithm", "k_quant");
+  const checkpoint = structuredClone((await checkpointPreview).exportOptions);
+  assert.equal(checkpoint.model, "owner/model");
+  assert.equal(checkpoint.oliveWorkflow, "optimize");
+  assert.equal(checkpoint.precision, "int4");
+  assert.equal(checkpoint.provider, "cuda");
+  assert.deepEqual(checkpoint.advancedOptions, {
+    oliveExporter: "dynamo_exporter",
+    task: "text-generation-with-past",
+    trustRemoteCode: true,
+    numSplits: 2,
+    memory: 8192,
+    useQdq: true,
+    blockSize: 64,
+  });
+  byId("export-form").dispatchEvent(
+    new window.Event("submit", { cancelable: true }),
+  );
+  assert.deepEqual(
+    structuredClone(
+      messages.findLast(({ type }) => type === "export").exportOptions,
+    ),
+    checkpoint,
+  );
+  send({
+    type: "log-entry",
+    entry: {
+      id: messages.findLast(({ type }) => type === "export").actionId,
+      timestamp: new Date().toISOString(),
+      action: "Convert ONNX model",
+      status: "SUCCEEDED",
+    },
+  });
+  change("export-olive-workflow", "quantize");
+  assert.equal(byId("export-target-options").hidden, true);
+  assert.equal(byId("export-olive-quantization").hidden, false);
+  assert.equal(byId("export-olive-exporter").disabled, true);
+  assert.equal(byId("export-block-size").disabled, true);
+  change("export-source", "/models/model.onnx");
+  const quantizationPreview = waitForMessage("export-preview");
+  change("export-olive-precision", "int8");
+  const quantize = (await quantizationPreview).exportOptions;
+  assert.equal(quantize.exporter, "olive");
+  assert.equal(quantize.oliveWorkflow, "quantize");
+  assert.equal(quantize.model, "/models/model.onnx");
+  assert.equal(quantize.precision, "int8");
+  assert.equal(quantize.provider, "cpu");
+  assert.deepEqual(structuredClone(quantize.advancedOptions), { useQdq: true });
+  assert.equal("layerCount" in quantize, false);
+  change("export-tool", "olive-recipes");
+  const request = messages.findLast(
+    (message) => message.type === "olive-recipes",
+  );
+  assert.ok(request);
+  assert.equal(byId("export-recipe-options").hidden, false);
+  assert.equal(byId("export-source").disabled, true);
+  assert.equal(byId("export-olive-workflow").disabled, true);
+  assert.equal(byId("export-submit").disabled, true);
+  send({
+    type: "olive-recipes",
+    requestId: request.requestId - 1,
+    error: "stale failure",
+  });
+  assert.match(byId("export-recipe-status").textContent, /Checking/);
+  const revision = "a".repeat(40);
+  send({
+    type: "olive-recipes",
+    requestId: request.requestId,
+    revision,
+    recipes: [
+      {
+        id: "model/cpu/config.json",
+        name: "<img src=x> pinned model",
+        target: "CPUExecutionProvider",
+        requirements: ["olive-ai==0.9.3"],
+      },
+      {
+        id: "model/cpu/optimize.py",
+        name: "Manual model",
+        target: "CPU",
+        requirements: ["olive-ai==0.8.0"],
+        manualReason: "Follow source instructions.",
+      },
+    ],
+  });
+  assert.equal(byId("export-recipe").querySelector("img"), null);
+  assert.match(byId("export-recipe-status").textContent, new RegExp(revision));
+  const recipePreview = waitForMessage("export-preview");
+  change("export-recipe", "model/cpu/config.json");
+  const recipeOptions = (await recipePreview).exportOptions;
+  assert.equal(recipeOptions.recipeId, "model/cpu/config.json");
+  assert.equal(recipeOptions.recipeRevision, revision);
+  assert.equal("advancedOptions" in recipeOptions, false);
+  assert.match(byId("export-recipe-details").textContent, /olive-ai==0.9.3/);
+  assert.match(
+    byId("export-recipe-link").href,
+    new RegExp(`${revision}/model/cpu$`),
+  );
+  assert.equal(byId("export-submit").disabled, false);
+  change("export-recipe", "model/cpu/optimize.py");
+  assert.match(
+    byId("export-recipe-details").textContent,
+    /olive-ai==0.8.0.*Follow source instructions/,
+  );
+  assert.equal(byId("export-submit").disabled, true);
+  byId("export-recipe-refresh").click();
+  const refresh = messages.findLast(
+    (message) => message.type === "olive-recipes",
+  );
+  send({
+    type: "olive-recipes",
+    requestId: refresh.requestId,
+    error: "Git unavailable",
+  });
+  assert.match(
+    byId("export-recipe-status").textContent,
+    /refresh failed: Git unavailable/,
+  );
+  assert.equal(byId("export-recipe-refresh").disabled, false);
+  change("export-tool", "modelbuilder");
+  assert.equal(byId("export-source").disabled, false);
+  assert.equal(byId("export-precision").disabled, false);
+  assert.equal(byId("export-recipe").disabled, true);
+  assert.equal(byId("export-advanced").hidden, false);
+});
+
 function showStatistics(
   { document, window, messages },
   statistics,
@@ -4206,6 +4411,20 @@ for (const initialTab of ["model", "logs"]) {
     }
     const repositories = [
       [
+        "Olive",
+        "microsoft/Olive",
+        "repositories/olive.svg",
+        ["olive-ai"],
+        "https://microsoft.github.io/Olive/",
+      ],
+      [
+        "Olive recipes",
+        "microsoft/olive-recipes",
+        "repositories/olive.svg",
+        ["olive-ai"],
+        "https://github.com/microsoft/olive-recipes#readme",
+      ],
+      [
         "ONNX",
         "onnx/onnx",
         "repositories/onnx.png",
@@ -4340,7 +4559,7 @@ for (const initialTab of ["model", "logs"]) {
           .querySelectorAll(".repository-list")[2]
           .querySelectorAll(".repository-heading > a:first-child"),
       ].map((link) => link.textContent),
-      repositories.slice(8).map(([name]) => name),
+      repositories.slice(10).map(([name]) => name),
     );
     const cards = [...panel.querySelectorAll(".repository-list li")];
     assert.equal(cards.length, repositories.length);
@@ -5761,6 +5980,13 @@ test("builder layer limits reach previews and submissions without leaking into M
 test("advanced export options stay folded and omit hidden, unsupported or conflicting fields", async (t) => {
   const { document, window, messages, waitForMessage } = openViewer(t);
   const byId = (id) => document.getElementById(id);
+  for (const control of byId("export-advanced").querySelectorAll(
+    'input:not([type="checkbox"]), select',
+  )) {
+    const row = control.closest(".export-field");
+    assert.ok(row, `${control.id} must share a row with its label`);
+    assert.equal(row.querySelector("label"), control.labels[0], control.id);
+  }
   const change = (id, value) => {
     if (typeof value === "boolean") byId(id).checked = value;
     else byId(id).value = value;
@@ -5917,17 +6143,23 @@ test("export defaults follow the download directory without replacing chosen pat
     [
       ["modelbuilder", "modelbuilder (ONNX Runtime GenAI)"],
       ["mobius", "Mobius"],
+      ["olive", "Olive"],
+      ["olive-recipes", "Olive recipes (model export workflows)"],
       ["mbext", "mbext (fast export)"],
     ],
   );
   send(settings);
   assert.equal(byId("export-tool").value, "mobius");
   assert.deepEqual(
-    [...byId("export-precision").options].map((option) => option.value),
+    [...byId("export-precision").options]
+      .filter((option) => !option.disabled)
+      .map((option) => option.value),
     ["fp32", "fp16", "bf16", "int4", "int2", "fp4"],
   );
   assert.ok(
-    [...byId("export-precision").options].every((option) => !option.disabled),
+    [...byId("export-precision").options].every(
+      (option) => option.disabled === (option.value === "int8"),
+    ),
   );
   assert.equal(
     byId("export-directory").value,
