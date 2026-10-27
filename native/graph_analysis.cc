@@ -235,8 +235,9 @@ Napi::Object ModelMetadata(Napi::Env env, const ol::ModelProto &model, const Gra
     std::vector<std::string> unused;
     for (const auto &name : node.output()) {
       add_value(name);
+      const auto last_use = lifetimes.last_use.find(std::string(name));
       if (!name.empty() && !lifetimes.keep.contains(std::string(name)) &&
-          !lifetimes.last_use.contains(std::string(name)))
+          (last_use == lifetimes.last_use.end() || last_use->second == static_cast<int>(index)))
         unused.emplace_back(name);
     }
     auto item = Napi::Object::New(env);

@@ -5003,8 +5003,8 @@ test("analyzes constants, tags and last-use releases without reading weights or 
   assert.deepEqual(metadata.nodes[1].releaseAfter, ["constant"]);
   assert.deepEqual(metadata.nodes[1].lastUse, ["bias"]);
   assert.deepEqual(metadata.nodes[2].lastUse, ["input"]);
-  assert.deepEqual(metadata.nodes[3].releaseAfter, []);
-  assert.deepEqual(metadata.nodes[4].releaseAfter, []);
+  assert.deepEqual(metadata.nodes[3].releaseAfter, ["dimensions"]);
+  assert.deepEqual(metadata.nodes[4].releaseAfter, ["unused"]);
   assert.deepEqual(metadata.nodes[5].releaseAfter, [
     "shared;activation",
     "constant_sum",
