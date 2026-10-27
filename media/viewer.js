@@ -1782,7 +1782,9 @@ function render(graph, metadata) {
       name,
       fromHeight,
       toHeight,
-      route: points ? { points, from: { ...from }, to: { ...to } } : undefined,
+      route: points?.length
+        ? { points, from: { ...from }, to: { ...to } }
+        : undefined,
       create() {
         const group = element("g", {
           class: "connection",

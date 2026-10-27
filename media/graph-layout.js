@@ -37,12 +37,16 @@ function sugiyamaLayout(graph, sizes) {
       result.producers.delete(port.name);
     if (port.port === "output") {
       const route = result.routes.get(port.id)?.values().next().value;
-      if (route) result.outputRoutes.set(port.name, route);
+      if (route?.length) result.outputRoutes.set(port.name, route);
       result.routes.delete(port.id);
     }
   }
   for (const [target, routes] of result.routes) {
     for (const [source, points] of routes) {
+      if (!points.length) {
+        routes.delete(source);
+        continue;
+      }
       if (!inputNames.has(source)) continue;
       if (!result.inputRoutes.has(target))
         result.inputRoutes.set(target, new Map());

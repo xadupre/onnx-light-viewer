@@ -175,6 +175,21 @@ test("routes nested residual connections around intermediate operators", () => {
   assert.deepEqual([...layout(nodes).routes], [...result.routes]);
 });
 
+test("omits routes with no bend points after shortcutting", () => {
+  const result = layout([
+    node("a"),
+    node("b"),
+    node("c", ["b"]),
+    node("d", ["a", "c"]),
+  ]);
+  for (const routes of [result.routes.values(), result.inputRoutes.values()]) {
+    for (const targets of routes)
+      for (const points of targets.values()) assert.ok(points.length);
+  }
+  for (const points of result.outputRoutes.values()) assert.ok(points.length);
+  assert.equal(result.routes.get("d")?.has("a"), undefined);
+});
+
 test("places graph ports beside their consumers and producers in both layout engines", () => {
   for (const count of [8, 600, 2100]) {
     const nodes = Array.from({ length: count }, (_, index) =>
