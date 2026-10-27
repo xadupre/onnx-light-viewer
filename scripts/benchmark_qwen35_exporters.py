@@ -166,7 +166,13 @@ def download_recipe(cache: Path, revision: str, profile: str) -> dict:
     cache_hit = destination.is_file()
     if not cache_hit:
         with urlopen(url, timeout=60) as response:
+            if response.geturl() != url:
+                raise ValueError(
+                    f"Unexpected Olive recipe redirect: {response.geturl()}"
+                )
             config = json.load(response)
+        if not isinstance(config, dict):
+            raise ValueError("Invalid Olive recipe: expected a JSON object.")
         destination.parent.mkdir(parents=True, exist_ok=True)
         write_json(destination, config)
     config = json.loads(destination.read_text(encoding="utf-8"))
@@ -182,14 +188,18 @@ def download_recipe(cache: Path, revision: str, profile: str) -> dict:
 def recipe_config(
     original: dict, source: Path, output: Path, profile: str, cache: Path
 ) -> dict:
-    config = deepcopy(original)
-    passes = config.get("passes", {})
-    builder = passes.get("m", {})
-    surgery = passes.get("t", {})
+    passes = original.get("passes") if isinstance(original, dict) else None
+    builder = passes.get("m") if isinstance(passes, dict) else None
+    extra_options = (
+        builder.get("extra_options", {}) if isinstance(builder, dict) else None
+    )
+    engine = original.get("engine", {}) if isinstance(original, dict) else None
     if (
-        set(passes) != {"m", "t"}
+        not isinstance(passes, dict)
+        or set(passes) != {"m", "t"}
+        or not isinstance(builder, dict)
         or builder.get("type") != "ModelBuilder"
-        or surgery
+        or passes.get("t")
         != {"type": "GraphSurgeries", "surgeries": [{"surgeon": "TieWordEmbeddings"}]}
         or set(builder)
         - {
@@ -200,12 +210,17 @@ def recipe_config(
             "algo_config",
             "extra_options",
         }
-        or set(builder.get("extra_options", {})) - {"filename", "prune_lm_head"}
-        or set(config.get("engine", {})) - {"target"}
+        or not isinstance(extra_options, dict)
+        or set(extra_options) - {"filename", "prune_lm_head"}
+        or not isinstance(engine, dict)
+        or set(engine) - {"target"}
+        or not isinstance(original.get("input_model"), dict)
     ):
         raise ValueError(
             "Upstream recipe changed: review the unquantized benchmark adapter before running."
         )
+    config = deepcopy(original)
+    builder = config["passes"]["m"]
     device, precision, provider = PROFILES[profile]
     config["input_model"]["model_path"] = str(source)
     builder["precision"] = precision
@@ -341,12 +356,19 @@ def run_process(command: list[str], directory: Path, log: Path, timeout: float) 
             returncode = process.wait(timeout=timeout)
         except (KeyboardInterrupt, subprocess.TimeoutExpired):
             if os.name == "nt":
-                subprocess.run(
+                cleanup = subprocess.run(
                     ["taskkill", "/PID", str(process.pid), "/T", "/F"],
-                    check=True,
+                    check=False,
                     stdout=stream,
                     stderr=subprocess.STDOUT,
                 )
+                if cleanup.returncode and process.poll() is None:
+                    print(
+                        f"taskkill exited with status {cleanup.returncode}; killing the exporter process.",
+                        file=stream,
+                        flush=True,
+                    )
+                    process.kill()
             else:
                 try:
                     os.killpg(process.pid, signal.SIGKILL)
@@ -387,17 +409,19 @@ def validate_output(output: Path, precision: str) -> dict:
             raise ValueError(f"Invalid ONNX model: {path}") from error
         if any(node.op_type in quantized_ops for node in model.graph.node):
             raise ValueError(f"Unexpected quantization in {path}")
-        external_files = set()
+        external_locations = set()
         for tensor in model.graph.initializer:
             initializer_elements[
                 onnx.TensorProto.DataType.Name(tensor.data_type)
             ] += math.prod(tensor.dims)
-            external_files.update(
-                path.parent / entry.value
-                for entry in tensor.external_data
-                if entry.key == "location"
+            external_locations.update(
+                entry.value for entry in tensor.external_data if entry.key == "location"
             )
-        for external in external_files:
+        model_directory = path.parent.resolve()
+        for location in external_locations:
+            external = (model_directory / location).resolve()
+            if not external.is_relative_to(model_directory):
+                raise ValueError(f"External weights escape model directory: {location}")
             if not external.is_file() or external.stat().st_size == 0:
                 raise ValueError(f"Missing or empty external weights: {external}")
         model_names.append(str(path.relative_to(output)))
