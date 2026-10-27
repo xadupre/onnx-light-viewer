@@ -769,6 +769,7 @@ export async function runExport(
     await cp(plan.recipe.snapshot, join(plan.directory, "olive-recipe"), {
       recursive: true,
       filter: async (source) => {
+        signal.throwIfAborted();
         if (basename(source) === ".git") return false;
         if ((await lstat(source)).isSymbolicLink())
           throw new Error(

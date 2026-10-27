@@ -1,5 +1,6 @@
 const assert = require("node:assert/strict");
 const { execFile } = require("node:child_process");
+const { watch } = require("node:fs");
 const {
   mkdtemp,
   mkdir,
@@ -248,6 +249,61 @@ test("rejects snapshot symlinks before running the recipe or writing its reprodu
       await assert.rejects(readFile(plan.script), { code: "ENOENT" });
     });
   }
+});
+
+test("cancels the recipe snapshot copy before traversing the entire repository", async (t) => {
+  const { root, remote, cache, commit, signal } = await fixture(t);
+  const resources = path.join(remote, "resources");
+  await mkdir(resources);
+  const count = 64;
+  await Promise.all(
+    Array.from({ length: count }, (_, index) =>
+      writeFile(
+        path.join(resources, `resource-${index}.txt`),
+        "recipe resource",
+      ),
+    ),
+  );
+  const revision = await commit();
+  const recipes = new OliveRecipes(cache, remote);
+  await recipes.refresh(signal);
+  const recipe = recipes.resolve("model/cpu/config.json", revision);
+  const plan = exportPlan(
+    {
+      exporter: "olive-recipes",
+      model: recipe.name,
+      directory: path.join(root, "output"),
+      precision: "fp32",
+      provider: "cpu",
+    },
+    python,
+    undefined,
+    recipe,
+  );
+  await mkdir(plan.directory);
+  const controller = new AbortController();
+  const reason = new Error("Cancelled during recipe snapshot copying");
+  const watcher = watch(plan.directory, (_event, filename) => {
+    if (filename?.toString() === "olive-recipe") controller.abort(reason);
+  });
+  try {
+    await assert.rejects(
+      runExport(plan, controller.signal, () => {}),
+      (error) => error === reason,
+    );
+  } finally {
+    watcher.close();
+  }
+  assert.equal(controller.signal.aborted, true);
+  const copied = await readdir(path.join(plan.directory, "olive-recipe"), {
+    recursive: true,
+  });
+  assert.ok(
+    copied.filter((file) => path.basename(file).startsWith("resource-"))
+      .length < count,
+    "Cancellation must stop copying before all resources have been copied",
+  );
+  await assert.rejects(readFile(plan.script), { code: "ENOENT" });
 });
 
 test("runs and reproduces a pinned recipe in an isolated checkout with its own relative resources and no forced offline mode", async (t) => {
