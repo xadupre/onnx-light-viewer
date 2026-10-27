@@ -9,14 +9,22 @@ function createInspector({
   function statisticsButton(name) {
     const button = document.createElement("button");
     button.type = "button";
-    button.className = "tensor-statistics-button";
-    button.textContent = "Tensor statistics";
+    button.className = "icon-button tensor-statistics-button";
+    button.append(
+      byId("show-tensor-statistics").querySelector("svg").cloneNode(true),
+    );
     button.title = `Tensor statistics for ${name}`;
     button.setAttribute("aria-label", button.title);
     button.setAttribute("aria-haspopup", "dialog");
     button.addEventListener("click", () => openTensorStatistics(name));
     button.disabled = !name;
     return button;
+  }
+  function statisticsHeading(name, label) {
+    const heading = document.createElement("div");
+    heading.className = "tensor-statistics-heading";
+    heading.append(label, statisticsButton(name));
+    return heading;
   }
   const documentationMarkdown = markdownit({ html: false });
   documentationMarkdown.validateLink = (url) => /^https?:\/\//i.test(url);
@@ -143,11 +151,11 @@ function createInspector({
         summary.textContent = constant.name || constant.outputs.join(", ");
         const outputs = document.createElement("div");
         outputs.className = "tensor-info";
-        outputs.textContent = constant.outputs
-          .map((name) => `${name}: ${tensorDescription(name)}`)
-          .join("; ");
-        for (const name of constant.outputs)
-          outputs.append(statisticsButton(name));
+        for (const name of constant.outputs) {
+          const label = document.createElement("span");
+          label.textContent = `${name}: ${tensorDescription(name)}`;
+          outputs.append(statisticsHeading(name, label));
+        }
         const attributes = document.createElement("ul");
         attributes.append(...(constant.attributes ?? []).map(attributeItem));
         details.append(summary, outputs, attributes);
@@ -174,7 +182,7 @@ function createInspector({
           const information = document.createElement("span");
           information.className = "tensor-info";
           information.textContent = tensorDescription(name);
-          item.append(tensorName, information, statisticsButton(name));
+          item.append(statisticsHeading(name, tensorName), information);
           return item;
         }),
       );
@@ -184,8 +192,9 @@ function createInspector({
     byId("captured-inputs").replaceChildren(
       ...captures.map((name) => {
         const item = document.createElement("li");
-        item.textContent = `${name}: ${tensorDescription(name)}`;
-        item.append(statisticsButton(name));
+        const label = document.createElement("span");
+        label.textContent = `${name}: ${tensorDescription(name)}`;
+        item.append(statisticsHeading(name, label));
         return item;
       }),
     );
@@ -205,8 +214,7 @@ function createInspector({
         const shape = document.createElement("div");
         shape.className = "tensor-info";
         shape.textContent = `Shape: [${parameter.shape?.join(", ") ?? "?"}]`;
-        item.append(heading);
-        item.append(statisticsButton(parameter.name));
+        item.append(statisticsHeading(parameter.name, heading));
         if (parameter.shape !== undefined) item.append(shape);
         if (parameter.typeDetails) {
           item.append(typeTable("Logical type", parameter.typeDetails));

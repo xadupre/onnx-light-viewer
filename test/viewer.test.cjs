@@ -162,6 +162,12 @@ test("tensor statistics lazily browses selection, renders SDK summaries and cach
   const reply = (data) =>
     window.dispatchEvent(new window.MessageEvent("message", { data }));
   assert.equal(byId("show-tensor-statistics").disabled, true);
+  for (const id of ["show-tensor-statistics", "all-tensor-statistics"]) {
+    const button = byId(id);
+    assert.ok(button.querySelector('svg[aria-hidden="true"]'));
+    assert.ok(button.getAttribute("aria-label"));
+    assert.equal(button.textContent, "");
+  }
   load(demoGraph);
   byId("show-tensor-statistics").click();
   assert.equal(byId("tensor-statistics-dialog").open, true);
@@ -204,6 +210,48 @@ test("tensor statistics lazily browses selection, renders SDK summaries and cach
     /-2 to 0: 2 values/,
   );
   assert.match(content.textContent, /blue \(low\).*red \(high\)/);
+  const summary = content.querySelector(".status-details");
+  assert.equal(window.getComputedStyle(summary).alignItems, "baseline");
+  for (const term of summary.querySelectorAll("dt")) {
+    assert.equal(window.getComputedStyle(term).marginTop, "0px");
+    assert.equal(term.nextElementSibling.tagName, "DD");
+  }
+  assert.deepEqual(
+    [...content.querySelectorAll(".tensor-statistics-quartiles > div")].map(
+      (group) => [group.firstChild.textContent, group.lastChild.textContent],
+    ),
+    [
+      ["Q1 (25%)", "-0.75"],
+      ["Q2 (50%)", "0.5"],
+      ["Q3 (75%)", "1.75"],
+    ],
+  );
+  assert.deepEqual(
+    [...content.querySelectorAll("figcaption")].map(
+      (caption) => caption.textContent,
+    ),
+    ["Histogram — values per bin", "Heatmap — SDK 32 × 32 summary"],
+  );
+  assert.deepEqual(
+    [...content.querySelectorAll("svg")[0].querySelectorAll("text")].map(
+      (label) => label.textContent,
+    ),
+    ["4", "0", "-2", "3", "Value (bin range)", "Count"],
+  );
+  const inspectorButton = document.querySelector(
+    "#node-inputs .tensor-statistics-button",
+  );
+  assert.ok(inspectorButton.querySelector('svg[aria-hidden="true"]'));
+  assert.equal(inspectorButton.textContent, "");
+  assert.match(inspectorButton.getAttribute("aria-label"), /input/);
+  assert.equal(
+    inspectorButton.parentElement.className,
+    "tensor-statistics-heading",
+  );
+  assert.equal(
+    window.getComputedStyle(inspectorButton.parentElement).display,
+    "flex",
+  );
   byId("tensor-statistics-next").click();
   assert.equal(requests().length, 2);
   assert.equal(requests()[1].name, "output");

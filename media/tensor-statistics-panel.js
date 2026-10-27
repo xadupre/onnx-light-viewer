@@ -66,9 +66,6 @@ function createTensorStatisticsPanel({ byId, postMessage }) {
       ["Median", statistics.median],
       ["Minimum", statistics.min],
       ["Maximum", statistics.max],
-      ["Q1 (25%)", statistics.quantiles[0]],
-      ["Q2 (50%)", statistics.quantiles[1]],
-      ["Q3 (75%)", statistics.quantiles[2]],
       ...(statistics.distinctCount === undefined
         ? []
         : [["Distinct count", statistics.distinctCount]]),
@@ -79,9 +76,36 @@ function createTensorStatisticsPanel({ byId, postMessage }) {
       description.textContent = String(value ?? "Unavailable");
       summary.append(term, description);
     }
+    const quartiles = document.createElement("section");
+    const quartileTitle = document.createElement("h3");
+    quartileTitle.textContent = "Quartiles";
+    const quartileValues = document.createElement("dl");
+    quartileValues.className = "tensor-statistics-quartiles";
+    for (const [i, value] of statistics.quantiles.entries()) {
+      const group = document.createElement("div");
+      const term = document.createElement("dt");
+      term.textContent = `Q${i + 1} (${(i + 1) * 25}%)`;
+      const description = document.createElement("dd");
+      description.textContent = String(value ?? "Unavailable");
+      group.append(term, description);
+      quartileValues.append(group);
+    }
+    quartiles.append(quartileTitle, quartileValues);
     const charts = document.createElement("div");
     charts.className = "tensor-statistics-charts";
-    const histogram = plot(`Histogram for ${statistics.name}`, "0 0 320 180");
+    function figure(title, chart) {
+      const element = document.createElement("figure");
+      const caption = document.createElement("figcaption");
+      caption.textContent = title;
+      element.append(caption, chart);
+      return element;
+    }
+    function text(chart, value, x, y, attributes = {}) {
+      const label = svgElement("text", { x, y, ...attributes });
+      label.textContent = String(value);
+      chart.append(label);
+    }
+    const histogram = plot(`Histogram for ${statistics.name}`, "0 0 420 240");
     const counts = statistics.distribution.slice(0, 256).map(Number);
     const maximum = Math.max(0, ...counts.filter(Number.isFinite));
     for (const [i, count] of counts.entries()) {
@@ -91,7 +115,7 @@ function createTensorStatisticsPanel({ byId, postMessage }) {
         svgElement(
           "rect",
           {
-            x: (i * 320) / counts.length,
+            x: 70 + (i * 320) / counts.length,
             y: 170 - height,
             width: 320 / counts.length,
             height,
@@ -101,6 +125,26 @@ function createTensorStatisticsPanel({ byId, postMessage }) {
         ),
       );
     }
+    histogram.append(
+      svgElement("path", {
+        d: "M70 20V170H390",
+        fill: "none",
+        stroke: "currentColor",
+      }),
+    );
+    text(histogram, maximum, 64, 24, { "text-anchor": "end" });
+    text(histogram, 0, 64, 174, { "text-anchor": "end" });
+    text(histogram, statistics.binEdges[0] ?? "—", 70, 190);
+    text(histogram, statistics.binEdges[counts.length] ?? "—", 390, 190, {
+      "text-anchor": "end",
+    });
+    text(histogram, "Value (bin range)", 230, 220, {
+      "text-anchor": "middle",
+    });
+    text(histogram, "Count", 16, 95, {
+      transform: "rotate(-90 16 95)",
+      "text-anchor": "middle",
+    });
     const heatmap = plot(
       `32 by 32 tensor heatmap for ${statistics.name}`,
       "0 0 32 32",
@@ -136,8 +180,13 @@ function createTensorStatisticsPanel({ byId, postMessage }) {
     legend.textContent = finite.length
       ? `Heatmap: blue (low) ${low} → red (high) ${high}. Gray: non-finite. SDK 32 × 32 summary, not model execution.`
       : "Heatmap unavailable: no finite values. Gray: non-finite.";
-    charts.append(histogram, heatmap);
-    content.replaceChildren(summary, charts, legend);
+    const heatmapFigure = figure("Heatmap — SDK 32 × 32 summary", heatmap);
+    heatmapFigure.append(legend);
+    charts.append(
+      figure("Histogram — values per bin", histogram),
+      heatmapFigure,
+    );
+    content.replaceChildren(summary, quartiles, charts);
   }
 
   function show() {

@@ -18,8 +18,10 @@ test("tensor statistics shell exposes a labelled dialog and loads its controller
     "Tensor statistics",
   );
   assert.equal(
-    document.getElementById("show-tensor-statistics").textContent,
-    "Tensor statistics",
+    document
+      .getElementById("show-tensor-statistics")
+      .getAttribute("aria-label"),
+    "Tensor statistics for the current selection",
   );
   assert.equal(
     document.querySelector('label[for="tensor-statistics-name"]').textContent,

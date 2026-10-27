@@ -1565,16 +1565,27 @@ button:disabled {
 }
 
 #tensor-statistics-content .status-details {
-  grid-template-columns:
-    minmax(90px, 1fr) minmax(0, 1.4fr) minmax(90px, 1fr)
-    minmax(0, 1.4fr);
+  grid-template-columns: minmax(90px, max-content) minmax(0, 1fr);
   gap: 8px 12px;
+  align-items: baseline;
 }
 
-@media (max-width: 600px) {
-  #tensor-statistics-content .status-details {
-    grid-template-columns: minmax(90px, 1fr) minmax(0, 2fr);
-  }
+#tensor-statistics-content dt,
+#tensor-statistics-content dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.tensor-statistics-quartiles {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin: 8px 0 24px;
+}
+
+.tensor-statistics-quartiles > div {
+  display: grid;
+  gap: 6px;
 }
 
 .tensor-statistics-charts {
@@ -1589,12 +1600,45 @@ button:disabled {
   align-self: center;
 }
 
+.tensor-statistics-charts figure {
+  margin: 0;
+  min-width: 0;
+}
+
+.tensor-statistics-charts figcaption {
+  margin-bottom: 12px;
+  color: var(--text);
+}
+
+.tensor-statistics-charts text {
+  fill: var(--text);
+  font-size: 12px;
+}
+
 .tensor-statistics-legend {
-  border-bottom: 8px solid transparent;
-  border-image: linear-gradient(to right, blue, cyan, lime, yellow, red) 1;
+  color: var(--text);
+}
+
+.tensor-statistics-legend::before {
+  content: "";
+  display: block;
+  height: 8px;
+  margin-bottom: 8px;
+  background: linear-gradient(to right, blue, cyan, lime, yellow, red);
+}
+
+.tensor-statistics-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tensor-statistics-heading > :first-child {
+  min-width: 0;
 }
 
 .tensor-statistics-button {
-  margin: 4px;
-  font-size: 11px;
+  flex: none;
+  margin-left: auto;
+  padding: 3px;
 }
