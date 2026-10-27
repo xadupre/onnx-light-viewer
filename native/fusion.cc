@@ -873,12 +873,22 @@ void AddFusionMethods(Napi::Env env, Napi::Object result, std::shared_ptr<Stored
              }));
   result.Set("optimizationPatterns", Napi::Function::New(env, [](const Napi::CallbackInfo &call) {
                ol::onnx_patterns::RegisterPatterns();
+               const auto sets = ol::core::builder::RegisteredPatternSets();
+               const auto defaults = ol::core::builder::RegisteredPatternNames(false);
                auto values = Napi::Array::New(call.Env());
-               for (const auto &pattern : ol::core::builder::CreateRegisteredPatterns()) {
+               for (const auto &name : ol::core::builder::RegisteredPatternNames()) {
+                 const auto pattern = ol::core::builder::CreateRegisteredPattern(name);
                  auto item = Napi::Object::New(call.Env());
                  item.Set("name", pattern->Name());
                  item.Set("priority", pattern->priority);
                  item.Set("device", ol::core::symbolic::DeviceName(pattern->device));
+                 item.Set("enabledByDefault",
+                          std::find(defaults.begin(), defaults.end(), name) != defaults.end());
+                 auto groups = Napi::Array::New(call.Env());
+                 for (const auto &[group, members] : sets)
+                   if (std::find(members.begin(), members.end(), name) != members.end())
+                     groups.Set(groups.Length(), group);
+                 item.Set("groups", groups);
                  values.Set(values.Length(), item);
                }
                return values;
@@ -1060,7 +1070,8 @@ void AddFusionMethods(Napi::Env env, Napi::Object result, std::shared_ptr<Stored
                    operators.insert(node.op_type().value());
                  auto values = Napi::Array::New(call.Env());
                  uint32_t i = 0;
-                 for (const auto &pattern : ol::core::builder::CreateRegisteredPatterns()) {
+                 for (const auto &name : ol::core::builder::RegisteredPatternNames()) {
+                   const auto pattern = ol::core::builder::CreateRegisteredPattern(name);
                    const auto fast = pattern->FastOpType();
                    if (fast.empty() || std::any_of(fast.begin(), fast.end(), [&](const auto &name) {
                          return operators.contains(name);

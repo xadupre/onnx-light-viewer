@@ -276,7 +276,8 @@ export function webviewHtml(
             <h2 id="optimization-title" class="eyebrow panel-title">Global optimization</h2>
             <p>Run onnx-light's complete native optimization algorithm: canonicalization, repeated priority-ordered matching, constant evaluation and unused-code cleanup. Final native canonicalization rewires redundant identities without replacement operators. This is not a single matching pass.</p>
             <details id="optimization-picker" class="fusion-picker" open>
-              <summary>Patterns and priority groups</summary>
+              <summary>Patterns and groups</summary>
+              <fieldset id="optimization-pattern-group" disabled aria-label="Native pattern groups"><legend>Select pattern groups</legend></fieldset>
               <div class="fusion-selection-controls"><button id="select-optimization-patterns" disabled>Select all</button><button id="clear-optimization-patterns" disabled>Clear selection</button></div>
               <fieldset id="optimization-patterns" disabled aria-label="Optimization patterns"></fieldset>
               <button id="run-optimization" disabled>Run global optimization</button>
@@ -301,6 +302,7 @@ export function webviewHtml(
             </details>
             <details class="fusion-picker" open>
               <summary>Native patterns</summary>
+              <fieldset id="fusion-pattern-group" disabled aria-label="Native pattern groups"><legend>Select pattern groups</legend></fieldset>
               <div class="fusion-selection-controls"><button id="select-patterns" disabled>Select all</button><button id="clear-patterns" disabled>Clear selection</button></div>
               <fieldset id="fusion-pattern" disabled aria-label="Native patterns" aria-describedby="fusion-feedback"></fieldset>
               <button id="preview-fusion" disabled>Run Matching</button>
