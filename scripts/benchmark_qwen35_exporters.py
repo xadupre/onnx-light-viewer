@@ -1,53 +1,22 @@
 #!/usr/bin/env python3
-"""Compare five text-decoder export entry points, without quantization.
+"""Benchmark five text-only ONNX export entry points, without quantization/inference.
 
-Usage:
-    python scripts/benchmark_qwen35_exporters.py
-    python scripts/benchmark_qwen35_exporters.py --output qwen35-cpu.json \
-        --profiles cpu-fp32
-    python scripts/benchmark_qwen35_exporters.py --model Qwen/Qwen3-0.6B \
-        --output qwen3-cpu.json --profiles cpu-fp32
+Example:
+    python scripts/benchmark_qwen35_exporters.py --model Qwen/Qwen3-0.6B \\
+        --profiles cpu-fp32 --output results.json
 
-The default model is Qwen/Qwen3.5-4B. Other models must be text decoders supported
-by the selected exporters; this option does not add support to those exporters.
+Defaults: Qwen/Qwen3.5-4B, all exporters, FP32/CPU and FP16/CUDA.
+Requires Python >= 3.10, huggingface_hub, onnx and the selected exporters.
+PYTHONPATH is inherited unchanged; CUDA needs compatible dependencies.
 
-Requires Python >= 3.10, huggingface_hub, onnx and the selected exporters:
-modelbuilder (mbext), onnxruntime-genai, mobius-onnx and olive-ai. Install versions
-supporting the selected model yourself; PYTHONPATH is inherited, never modified.
-FP16/CUDA requires the corresponding exporter/runtime dependencies.
+One immutable checkpoint is shared. Downloads, creation (startup/imports/I/O
+included) and ONNX header validation are timed separately; no inference check,
+warmup or cache flushing. Olive wraps ModelBuilder; its Qwen recipe is reused
+as a pipeline template, not selected per model.
 
-The original HF checkpoint is downloaded once, at an immutable revision, and
-shared by all runs. Its stored dtype is not changed. Each exporter loads/casts
-it to FP32/CPU or FP16/CUDA during the separately timed creation phase.
-Download timing includes revision resolution and cache lookups; cache hits are
-identified, not presented as cold network transfers. Recipe downloads are timed
-separately as well.
-
-All five entry points export text only, including token embeddings and the LM
-head. Vision/embedding sidecar pipelines, quantization and inference are excluded.
-Olive uses capture-onnx-graph with ModelBuilder; the official recipe also uses
-ModelBuilder, followed by TieWordEmbeddings. These are five entry points, NOT five
-independent graph builders. The recipe is adapted to the requested precision,
-provider and unpruned logits, retaining its non-quantizing surgery. The pinned
-Qwen3.5 recipe is reused as a pipeline template with the selected checkpoint;
-changing --model does not select a different model-specific recipe.
-Mobius receives the same local snapshot through --model. Its text-only feature
-is enabled for checkpoints with a nested text_config, not plain text decoders.
-
-Creation time includes a fresh Python process, imports, loading/casting weights,
-graph construction/optimization and serialization. Each run has private output
-and Olive caches; only the source download is shared. ONNX header validation is
-timed separately and does not load external weights. Each selected exporter/profile
-is measured once, without warmup. Filesystem caches are not flushed.
-
-The output JSON file is updated after every export, including failures, and is
-replaced on subsequent invocations. It contains timings, logs and commands/configs.
-A final table of timings and output sizes, plus failure log tails, is printed to
-standard output; full logs remain in the JSON report.
-Exported models and per-run caches use temporary directories, removed after each
-measurement; only the shared download cache and the JSON report are retained.
-Runs need substantial RAM, CUDA resources where required, and temporary disk space
-for one exported model and its intermediate artifacts. TMPDIR controls its location.
+stdout shows timings, sizes and errors; --output keeps full logs in incremental
+JSON, overwritten on rerun. Temporary exports/caches are deleted; the shared
+checkpoint and JSON remain. Allow RAM/disk for one export; TMPDIR selects storage.
 """
 
 from __future__ import annotations
