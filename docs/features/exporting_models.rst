@@ -59,7 +59,7 @@ Olive and Olive recipes
 Both use the ``olive-ai`` Python package (``python -m olive``), but have distinct
 controls:
 
-* **Olive (export and quantization):** defaults to **Export checkpoint /
+* **Olive:** defaults to **Export checkpoint /
   optimize ONNX**. Enter a Hugging Face ID (for example
   ``Qwen/Qwen3-0.6B``), an absolute local checkpoint directory or an ONNX file.
   Select **FP32**, **FP16**, **BF16**, **INT4** or **INT8**, and **CPU** or **CUDA**.

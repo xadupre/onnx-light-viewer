@@ -6136,7 +6136,7 @@ test("export defaults follow the download directory without replacing chosen pat
     [
       ["modelbuilder", "modelbuilder (ONNX Runtime GenAI)"],
       ["mobius", "Mobius"],
-      ["olive", "Olive (export and quantization)"],
+      ["olive", "Olive"],
       ["olive-recipes", "Olive recipes (model export workflows)"],
       ["mbext", "mbext (fast export)"],
     ],

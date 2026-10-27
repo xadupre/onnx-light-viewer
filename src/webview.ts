@@ -86,11 +86,15 @@ export function webviewHtml(
             <p id="export-trust" hidden>Trust this workspace before running an exporter.</p>
             <form id="export-form">
               <fieldset id="export-fields">
-                <label for="export-tool">Exporter</label>
-                <select id="export-tool"><option value="modelbuilder">modelbuilder (ONNX Runtime GenAI)</option><option value="mobius">Mobius</option><option value="olive">Olive (export and quantization)</option><option value="olive-recipes">Olive recipes (model export workflows)</option><option value="mbext">mbext (fast export)</option></select>
+                <div class="export-field">
+                  <label for="export-tool">Exporter</label>
+                  <select id="export-tool"><option value="modelbuilder">modelbuilder (ONNX Runtime GenAI)</option><option value="mobius">Mobius</option><option value="olive">Olive</option><option value="olive-recipes">Olive recipes (model export workflows)</option><option value="mbext">mbext (fast export)</option></select>
+                </div>
                 <div id="export-olive-options" class="export-option" hidden>
-                  <label for="export-olive-workflow">Olive workflow</label>
-                  <select id="export-olive-workflow" disabled><option value="optimize">Export checkpoint / optimize ONNX</option><option value="quantize">Quantize existing ONNX (CPU, offline)</option></select>
+                  <div class="export-field">
+                    <label for="export-olive-workflow">Olive workflow</label>
+                    <select id="export-olive-workflow" disabled><option value="optimize">Export checkpoint / optimize ONNX</option><option value="quantize">Quantize existing ONNX (CPU, offline)</option></select>
+                  </div>
                   <p>Export accepts a Hugging Face ID or local checkpoint and produces ONNX. Olive may download calibration data; install its dependencies in Settings' Python environment first.</p>
                 </div>
                 <div id="export-source-options" class="export-option">
@@ -98,12 +102,16 @@ export function webviewHtml(
                 <input id="export-source" required placeholder="Qwen/Qwen3-0.6B" autocomplete="off" list="export-source-history"><datalist id="export-source-history"></datalist>
                 </div>
                 <div id="export-olive-quantization" class="export-option" hidden>
-                  <label for="export-olive-precision">Quantization precision (CPU, RTN)</label>
-                  <select id="export-olive-precision" disabled><option value="int4">INT4 (Olive)</option><option value="int8">INT8 (ONNX Runtime dynamic)</option></select>
+                  <div class="export-field">
+                    <label for="export-olive-precision">Quantization precision (CPU, RTN)</label>
+                    <select id="export-olive-precision" disabled><option value="int4">INT4 (Olive)</option><option value="int8">INT8 (ONNX Runtime dynamic)</option></select>
+                  </div>
                 </div>
                 <div id="export-recipe-options" hidden>
-                  <label for="export-recipe">Olive recipe</label>
-                  <select id="export-recipe" disabled required><option value="">Load the recipe list</option></select>
+                  <div class="export-field">
+                    <label for="export-recipe">Olive recipe</label>
+                    <select id="export-recipe" disabled required><option value="">Load the recipe list</option></select>
+                  </div>
                   <button id="export-recipe-refresh" type="button">Refresh recipes</button>
                   <p id="export-recipe-status" role="status"></p>
                   <p id="export-recipe-details"></p>
@@ -113,10 +121,14 @@ export function webviewHtml(
                 <label for="export-directory">Output directory or template</label>
                 <input id="export-directory" required placeholder="/path/to/new-export" autocomplete="off" list="export-directory-history"><datalist id="export-directory-history"></datalist>
                 <div id="export-target-options" class="export-option">
-                <label for="export-precision">Precision</label>
-                <select id="export-precision"><option value="fp32">FP32</option><option value="fp16">FP16</option><option value="bf16">BF16</option><option value="int4">INT4</option><option value="int8" hidden disabled>INT8</option><option value="int2">INT2</option><option value="fp4">FP4</option></select>
-                <label for="export-provider">Target device</label>
-                <select id="export-provider"><option value="cpu">CPU</option><option value="cuda">CUDA</option></select>
+                  <div class="export-field">
+                    <label for="export-precision">Precision</label>
+                    <select id="export-precision"><option value="fp32">FP32</option><option value="fp16">FP16</option><option value="bf16">BF16</option><option value="int4">INT4</option><option value="int8" hidden disabled>INT8</option><option value="int2">INT2</option><option value="fp4">FP4</option></select>
+                  </div>
+                  <div class="export-field">
+                    <label for="export-provider">Target device</label>
+                    <select id="export-provider"><option value="cpu">CPU</option><option value="cuda">CUDA</option></select>
+                  </div>
                 </div>
                 <details id="export-advanced" class="export-advanced">
                   <summary>Advanced options</summary>
@@ -133,8 +145,10 @@ export function webviewHtml(
                     <label><input id="export-prune-lm-head" type="checkbox" data-export-option="pruneLmHead" disabled> Last-token logits only</label>
                   </div>
                   <div class="export-option" data-exporters="olive" data-olive-workflows="optimize" hidden>
-                    <label for="export-olive-exporter">ONNX exporter</label>
-                    <select id="export-olive-exporter" data-export-option="oliveExporter" disabled><option value="">Olive default (model builder)</option><option value="model_builder">Model builder</option><option value="dynamo_exporter">PyTorch Dynamo</option><option value="torchscript_exporter">PyTorch TorchScript</option></select>
+                    <div class="export-field">
+                      <label for="export-olive-exporter">ONNX exporter</label>
+                      <select id="export-olive-exporter" data-export-option="oliveExporter" disabled><option value="">Olive default (model builder)</option><option value="model_builder">Model builder</option><option value="dynamo_exporter">PyTorch Dynamo</option><option value="torchscript_exporter">PyTorch TorchScript</option></select>
+                    </div>
                     <label for="export-olive-task">Hugging Face task</label>
                     <input id="export-olive-task" placeholder="Olive default" list="export-olive-tasks" data-export-option="task" disabled>
                     <datalist id="export-olive-tasks"><option value="text-generation-with-past"><option value="text-generation"><option value="text-classification"><option value="feature-extraction"></datalist>
@@ -148,12 +162,16 @@ export function webviewHtml(
                     <label><input id="export-use-qdq" type="checkbox" data-export-option="useQdq" disabled> Q/DQ quantization</label>
                   </div>
                   <div class="export-option" data-exporters="mbext modelbuilder olive" data-precisions="int4" data-olive-workflows="optimize" hidden>
-                    <label for="export-block-size">Quantization block size</label>
-                    <select id="export-block-size" data-export-option="blockSize" data-number disabled><option value="">Exporter default</option><option>16</option><option>32</option><option>64</option><option>128</option><option>256</option></select>
+                    <div class="export-field">
+                      <label for="export-block-size">Quantization block size</label>
+                      <select id="export-block-size" data-export-option="blockSize" data-number disabled><option value="">Exporter default</option><option>16</option><option>32</option><option>64</option><option>128</option><option>256</option></select>
+                    </div>
                   </div>
                   <div class="export-option" data-exporters="mbext modelbuilder" data-precisions="int4" hidden>
-                    <label for="export-quantization-algorithm">Quantization algorithm</label>
-                    <select id="export-quantization-algorithm" data-export-option="quantizationAlgorithm" disabled><option value="">Exporter default</option><option value="rtn">RTN</option><option value="rtn_last">RTN, INT8 last MatMul</option><option value="k_quant">K-quant</option><option value="k_quant_mixed">K-quant mixed</option><option value="k_quant_last">K-quant, INT8 last MatMul</option></select>
+                    <div class="export-field">
+                      <label for="export-quantization-algorithm">Quantization algorithm</label>
+                      <select id="export-quantization-algorithm" data-export-option="quantizationAlgorithm" disabled><option value="">Exporter default</option><option value="rtn">RTN</option><option value="rtn_last">RTN, INT8 last MatMul</option><option value="k_quant">K-quant</option><option value="k_quant_mixed">K-quant mixed</option><option value="k_quant_last">K-quant, INT8 last MatMul</option></select>
+                    </div>
                   </div>
                   <div class="export-option" data-exporters="mbext" hidden>
                     <label for="export-opset">ONNX opset</label>
@@ -165,12 +183,18 @@ export function webviewHtml(
                   </div>
                   <div class="export-option" data-exporters="mobius" hidden>
                     <label><input id="export-no-weights" type="checkbox" data-export-option="noWeights" disabled> Graph without weights</label>
-                    <label for="export-optimize">Graph optimizations</label>
-                    <select id="export-optimize" data-export-option="optimize" disabled><option value="">Exporter default</option><option value="all">All</option><option value="group_query_attention">Group Query Attention</option><option value="packed_attention">Packed Attention</option><option value="skip_norm">Skip normalization</option></select>
-                    <label for="export-external-data">Weight file format</label>
-                    <select id="export-external-data" data-export-option="externalData" disabled><option value="">Exporter default</option><option value="onnx">ONNX external data</option><option value="safetensors">Safetensors</option></select>
-                    <label for="export-runtime">Runtime configuration</label>
-                    <select id="export-runtime" data-export-option="runtime" disabled><option value="">None</option><option value="ort-genai">ONNX Runtime GenAI</option><option value="onnx-genai">ONNX GenAI</option></select>
+                    <div class="export-field">
+                      <label for="export-optimize">Graph optimizations</label>
+                      <select id="export-optimize" data-export-option="optimize" disabled><option value="">Exporter default</option><option value="all">All</option><option value="group_query_attention">Group Query Attention</option><option value="packed_attention">Packed Attention</option><option value="skip_norm">Skip normalization</option></select>
+                    </div>
+                    <div class="export-field">
+                      <label for="export-external-data">Weight file format</label>
+                      <select id="export-external-data" data-export-option="externalData" disabled><option value="">Exporter default</option><option value="onnx">ONNX external data</option><option value="safetensors">Safetensors</option></select>
+                    </div>
+                    <div class="export-field">
+                      <label for="export-runtime">Runtime configuration</label>
+                      <select id="export-runtime" data-export-option="runtime" disabled><option value="">None</option><option value="ort-genai">ONNX Runtime GenAI</option><option value="onnx-genai">ONNX GenAI</option></select>
+                    </div>
                     <label><input id="export-static-cache" type="checkbox" data-export-option="staticCache" disabled> Static KV cache</label>
                   </div>
                   <div class="export-option" data-exporters="mobius" data-requires="export-static-cache" hidden>
