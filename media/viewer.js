@@ -1429,8 +1429,11 @@ function connectionPath(connection) {
     let path = `M${points[0].x},${points[0].y}`;
     for (const segment of graphPathSegments(points, true)) {
       const end = segment.at(-1);
-      const control = segment[1];
-      path += ` Q${control.x},${control.y} ${end.x},${end.y}`;
+      if (segment.length === 2) path += ` L${end.x},${end.y}`;
+      else {
+        const control = segment[1];
+        path += ` Q${control.x},${control.y} ${end.x},${end.y}`;
+      }
     }
     return path;
   }

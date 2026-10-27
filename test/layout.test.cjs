@@ -5,11 +5,12 @@ const { runInNewContext } = require("node:vm");
 
 const {
   sugiyamaLayout,
+  layeredGraphLayout,
   shortenGraphRoutes,
   graphPathSegments,
   flattenGraphPath,
 } = runInNewContext(
-  `${readFileSync(require.resolve("../media/graph-layout.js"), "utf8")}\n({ sugiyamaLayout, shortenGraphRoutes, graphPathSegments, flattenGraphPath });`,
+  `${readFileSync(require.resolve("../media/graph-layout.js"), "utf8")}\n({ sugiyamaLayout, layeredGraphLayout, shortenGraphRoutes, graphPathSegments, flattenGraphPath });`,
   { dagre: require("@dagrejs/dagre") },
 );
 
@@ -101,7 +102,7 @@ function assertRouteAvoidsNodes(result, nodes, source, target) {
   }
 }
 
-test("smooths detours over their full span instead of rounding square corners", () => {
+test("rounds detour corners without pulling the exterior run into operator rows", () => {
   const points = [
     { x: 0, y: 0 },
     { x: 0, y: 100 },
@@ -111,21 +112,31 @@ test("smooths detours over their full span instead of rounding square corners", 
     { x: 0, y: 600 },
   ];
   const segments = graphPathSegments(points, true);
-  assert.ok(segments.every((segment) => segment.length === 3));
   assert.deepEqual(segments[0][0], points[0]);
   assert.deepEqual(segments.at(-1).at(-1), points.at(-1));
-  for (let index = 1; index < segments.length - 1; index++) {
+  for (let index = 1; index < segments.length; index++) {
     const previous = segments[index - 1];
     const current = segments[index];
     assert.deepEqual(previous.at(-1), current[0]);
-    for (const axis of ["x", "y"])
-      assert.equal(
-        previous[2][axis] - previous[1][axis],
-        current[1][axis] - current[0][axis],
-      );
+    const incoming = {
+      x: previous.at(-1).x - previous.at(-2).x,
+      y: previous.at(-1).y - previous.at(-2).y,
+    };
+    const outgoing = {
+      x: current[1].x - current[0].x,
+      y: current[1].y - current[0].y,
+    };
+    assert.ok(
+      Math.abs(incoming.x * outgoing.y - incoming.y * outgoing.x) < 1e-8,
+    );
+    assert.ok(incoming.x * outgoing.x + incoming.y * outgoing.y >= 0);
   }
   const curve = flattenGraphPath(points, true);
-  assert.ok(curve.some(({ x, y }) => x > 50 && y < 90));
+  assert.ok(curve.some(({ x, y }) => x > 0 && x < 16 && y > 84 && y < 100));
+  for (const { x, y } of curve) {
+    if (y > 116 && y < 484) assert.equal(x, 300);
+    if (y < 84 || y > 516) assert.equal(x, 0);
+  }
 });
 
 test("layers unsorted dependencies, captures and duplicate inputs with differently sized blocks", () => {
@@ -180,14 +191,15 @@ test("omits routes with no bend points after shortcutting", () => {
     node("a"),
     node("b"),
     node("c", ["b"]),
-    node("d", ["a", "c"]),
+    node("d", ["b", "c"]),
+    node("e", ["a", "c"]),
   ]);
   for (const routes of [result.routes.values(), result.inputRoutes.values()]) {
     for (const targets of routes)
       for (const points of targets.values()) assert.ok(points.length);
   }
   for (const points of result.outputRoutes.values()) assert.ok(points.length);
-  assert.equal(result.routes.get("d")?.has("a"), undefined);
+  assert.equal(result.routes.get("d")?.has("b"), undefined);
 });
 
 test("places graph ports beside their consumers and producers in both layout engines", () => {
@@ -271,6 +283,57 @@ test("shortens exterior routes through free interior corridors after placement",
       assertRouteAvoidsNodes(result, nodes, "source", "target");
     } else assert.equal(shortened.length, 0);
   }
+});
+
+test("checks the rendered cubic before removing every bend from a shortcut", () => {
+  const nodes = [node("source"), node("target", ["source"]), node("obstacle")];
+  const sizes = new Map(
+    nodes.map(({ id }) => [id, { width: 140, height: 88 }]),
+  );
+  const result = {
+    positions: new Map([
+      ["source", { x: 100, y: 200 }],
+      ["target", { x: 2100, y: 1288 }],
+      ["obstacle", { x: 412.5, y: 540.875 }],
+    ]),
+    producers: new Map(nodes.map(({ id }) => [id, id])),
+    routes: new Map([
+      [
+        "target",
+        new Map([
+          [
+            "source",
+            [
+              { x: 100, y: 300 },
+              { x: 2500, y: 300 },
+              { x: 2500, y: 1188 },
+              { x: 2100, y: 1188 },
+            ],
+          ],
+        ]),
+      ],
+    ]),
+    bounds: { width: 2600, height: 1500 },
+  };
+  shortenGraphRoutes({ nodes }, sizes, result);
+  assertRouteAvoidsNodes(result, nodes, "source", "target");
+});
+
+test("keeps initial and shortened fallback curves outside a wide consumer row", () => {
+  const consumers = Array.from({ length: 1999 }, (_, index) =>
+    node(`consumer${index}`, ["source"]),
+  );
+  const nodes = [
+    node("source"),
+    ...consumers,
+    node("target", ["source", consumers[0].id]),
+  ];
+  const sizes = new Map(
+    nodes.map(({ id }) => [id, { width: 140, height: 88 }]),
+  );
+  const initial = layeredGraphLayout({ nodes }, sizes);
+  assertRouteAvoidsNodes(initial, nodes, "source", "target");
+  assertRouteAvoidsNodes(layout(nodes), nodes, "source", "target");
 });
 
 test("keeps a detour when the direct shortcut would cross another arc", () => {

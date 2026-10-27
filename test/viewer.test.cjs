@@ -7403,7 +7403,10 @@ test("keeps residual routes attached while dragging and restores their bends wit
   assert.ok(connection, "Residual edge must follow the layout's routed bends");
   const path = connection.querySelector(".edge");
   assert.ok(path.getAttribute("d").includes("Q"), "Bends must be rounded");
-  assert.ok(!path.getAttribute("d").includes("L"), "No square detour segments");
+  assert.ok(
+    path.getAttribute("d").includes("L"),
+    "Long spans remain straight between rounded corners",
+  );
   assert.equal(
     connection.querySelector(".edge-hit").getAttribute("d"),
     path.getAttribute("d"),

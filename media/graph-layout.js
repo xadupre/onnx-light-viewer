@@ -64,19 +64,33 @@ function graphPathSegments(points, routed) {
     const middle = (start.y + end.y) / 2;
     return [[start, { x: start.x, y: middle }, { x: end.x, y: middle }, end]];
   }
+  points = points.filter(
+    (point, index) =>
+      !index ||
+      point.x !== points[index - 1].x ||
+      point.y !== points[index - 1].y,
+  );
   const segments = [];
   let start = points[0];
   for (let index = 1; index < points.length - 1; index++) {
+    const previous = points[index - 1];
     const point = points[index];
     const next = points[index + 1];
-    const end = {
-      x: (point.x + next.x) / 2,
-      y: (point.y + next.y) / 2,
+    const incoming = Math.hypot(point.x - previous.x, point.y - previous.y);
+    const outgoing = Math.hypot(next.x - point.x, next.y - point.y);
+    const radius = Math.min(graphRouteRadius, incoming / 2, outgoing / 2);
+    const before = {
+      x: point.x + ((previous.x - point.x) * radius) / incoming,
+      y: point.y + ((previous.y - point.y) * radius) / incoming,
     };
-    segments.push([start, point, end]);
-    start = end;
+    const after = {
+      x: point.x + ((next.x - point.x) * radius) / outgoing,
+      y: point.y + ((next.y - point.y) * radius) / outgoing,
+    };
+    segments.push([start, before], [before, point, after]);
+    start = after;
   }
-  segments.push([start, points.at(-1), points.at(-1)]);
+  segments.push([start, points.at(-1)]);
   return segments;
 }
 
@@ -283,7 +297,7 @@ function shortenGraphRoutes(graph, sizes, result) {
       const end = { x: to.x, y: to.y - sizes.get(node.id).height / 2 };
       const route = result.routes.get(node.id)?.get(source);
       const edge = { source, target: node.id, start, end, route };
-      setGeometry(edge, [start, ...(route ?? []), end], !!route);
+      setGeometry(edge, [start, ...(route ?? []), end], !!route?.length);
       edges.push(edge);
     }
   }
@@ -390,7 +404,8 @@ function shortenGraphRoutes(graph, sizes, result) {
         !clear(edge, candidate.routePoints, budget)
       )
         continue;
-      candidate.points = flattenGraphPath(candidate.routePoints, true);
+      const routed = candidate.routePoints.length > 2;
+      candidate.points = flattenGraphPath(candidate.routePoints, routed);
       candidate.length = 0;
       for (let index = 1; index < candidate.points.length; index++)
         candidate.length += Math.hypot(
@@ -416,7 +431,7 @@ function shortenGraphRoutes(graph, sizes, result) {
         continue;
       const route = candidate.routePoints.slice(1, -1);
       result.routes.get(edge.target).set(edge.source, route);
-      setGeometry(edge, candidate.routePoints, true);
+      setGeometry(edge, candidate.routePoints, routed);
       arcs.update(edge);
       break;
     }
