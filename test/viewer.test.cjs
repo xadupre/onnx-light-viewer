@@ -107,12 +107,19 @@ function openViewer(t, initialTab = "model", setup = () => {}) {
     document: dom.window.document,
     window: dom.window,
     messages,
-    waitForMessage: async (type) =>
-      (
-        await once(postedMessages, `message:${type}`, {
-          signal: AbortSignal.timeout(10000),
-        })
-      )[0],
+    waitForMessage: async (type) => {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 10000);
+      try {
+        return (
+          await once(postedMessages, `message:${type}`, {
+            signal: controller.signal,
+          })
+        )[0];
+      } finally {
+        clearTimeout(timer);
+      }
+    },
     events,
     load,
     resize,
@@ -5574,6 +5581,10 @@ test("advanced export options stay folded and omit hidden, unsupported or confli
   change("export-quantization-algorithm", "k_quant");
   change("export-opset", "20");
   change("export-max-shard-size", "2GB");
+  assert.equal(byId("export-max-shard-size").checkValidity(), true);
+  change("export-max-shard-size", "2");
+  assert.equal(byId("export-max-shard-size").checkValidity(), false);
+  change("export-max-shard-size", "2GB");
   const builderOptions = {
     excludeEmbeds: true,
     includeHiddenStates: true,
@@ -5603,17 +5614,20 @@ test("advanced export options stay folded and omit hidden, unsupported or confli
   assert.equal(byId("export-opset").disabled, true);
   assert.equal(byId("export-max-shard-size").disabled, true);
   assert.deepEqual((await preview()).advancedOptions, builderOptions);
-  change("export-precision", "fp32");
-  assert.equal(
-    byId("export-block-size").closest(".export-option").hidden,
-    true,
-  );
-  assert.equal(byId("export-use-qdq").disabled, true);
-  assert.deepEqual((await preview()).advancedOptions, {
-    excludeEmbeds: true,
-    includeHiddenStates: true,
-    pruneLmHead: true,
-  });
+  for (const precision of ["int2", "fp32"]) {
+    change("export-precision", precision);
+    assert.equal(
+      byId("export-block-size").closest(".export-option").hidden,
+      true,
+    );
+    assert.equal(byId("export-use-qdq").disabled, true);
+    assert.equal(byId("export-quantization-algorithm").disabled, true);
+    assert.deepEqual((await preview()).advancedOptions, {
+      excludeEmbeds: true,
+      includeHiddenStates: true,
+      pruneLmHead: true,
+    });
+  }
   change("export-tool", "mobius");
   assert.equal(byId("export-exclude-embeds").disabled, true);
   assert.equal(byId("export-no-weights").disabled, false);

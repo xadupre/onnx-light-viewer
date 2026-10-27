@@ -451,6 +451,8 @@ test("validates advanced option types, exporter compatibility and dependencies",
     ["mbext", { opset: 0 }],
     ["mbext", { opset: 1.5 }],
     ["mbext", { maxShardSize: "0GB" }],
+    ["mbext", { maxShardSize: "2" }],
+    ["mobius", { maxShardSize: "2" }],
     ["mbext", { maxShardSize: "2GB\n--reuse-weights" }],
     ["mbext", { excludeLmHead: true, includeHiddenStates: true }],
     ["mbext", { excludeLmHead: true, pruneLmHead: true }],
@@ -479,6 +481,56 @@ test("validates advanced option types, exporter compatibility and dependencies",
       Error,
       `${exporter}: ${JSON.stringify(advancedOptions)}`,
     );
+});
+
+test("restricts builder quantization options to INT4", () => {
+  const destination = path.join(tmpdir(), "quantization-options");
+  for (const exporter of ["mbext", "modelbuilder"]) {
+    for (const advancedOptions of [
+      { useQdq: true },
+      { blockSize: 32 },
+      { quantizationAlgorithm: "rtn" },
+    ]) {
+      assert.throws(
+        () =>
+          exportPlan(
+            {
+              ...options(destination, exporter),
+              precision: "int2",
+              advancedOptions,
+            },
+            python,
+          ),
+        /Quantization options require INT4 precision/,
+      );
+    }
+    assert.equal(
+      exportPlan(
+        { ...options(destination, exporter), precision: "int2" },
+        python,
+      ).precision,
+      "int2",
+    );
+  }
+});
+
+test("accepts explicit shard-size units", () => {
+  const destination = path.join(tmpdir(), "shard-size-options");
+  for (const exporter of ["mbext", "mobius"]) {
+    for (const size of ["2B", "2kb", "2MB", "2gb"]) {
+      const plan = exportPlan(
+        {
+          ...options(destination, exporter),
+          advancedOptions: { maxShardSize: size },
+        },
+        python,
+      );
+      assert.equal(
+        plan.args[plan.args.indexOf("--max-shard-size") + 1],
+        size.toUpperCase(),
+      );
+    }
+  }
 });
 
 test("preserves advanced options through cached downloads, retries and reproduction", async (t) => {

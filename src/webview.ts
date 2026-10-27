@@ -115,7 +115,7 @@ export function webviewHtml(
                     <label><input id="export-include-hidden-states" type="checkbox" data-export-option="includeHiddenStates" disabled> Include hidden states</label>
                     <label><input id="export-prune-lm-head" type="checkbox" data-export-option="pruneLmHead" disabled> Last-token logits only</label>
                   </div>
-                  <div class="export-option" data-exporters="mbext modelbuilder" data-precisions="int2 int4" hidden>
+                  <div class="export-option" data-exporters="mbext modelbuilder" data-precisions="int4" hidden>
                     <label><input id="export-use-qdq" type="checkbox" data-export-option="useQdq" disabled> Q/DQ quantization</label>
                     <label for="export-block-size">Quantization block size</label>
                     <select id="export-block-size" data-export-option="blockSize" data-number disabled><option value="">Exporter default</option><option>16</option><option>32</option><option>64</option><option>128</option><option>256</option></select>
@@ -128,7 +128,7 @@ export function webviewHtml(
                   </div>
                   <div class="export-option" data-exporters="mbext mobius" hidden>
                     <label for="export-max-shard-size">Maximum weight file size</label>
-                    <input id="export-max-shard-size" placeholder="2GB" pattern="[1-9][0-9]*([KkMmGg]?[Bb])?" data-export-option="maxShardSize" disabled>
+                    <input id="export-max-shard-size" placeholder="2GB" pattern="[1-9][0-9]*([KkMmGg]?[Bb])" data-export-option="maxShardSize" disabled>
                   </div>
                   <div class="export-option" data-exporters="mobius" hidden>
                     <label><input id="export-no-weights" type="checkbox" data-export-option="noWeights" disabled> Graph without weights</label>

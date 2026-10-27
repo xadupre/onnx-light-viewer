@@ -227,9 +227,11 @@ function exportAdvancedOptions(
         if (
           exporter === "modelbuilder" ||
           typeof entry !== "string" ||
-          !/^[1-9]\d*(?:B|KB|MB|GB)?$/i.test(entry)
+          !/^[1-9]\d*(?:B|KB|MB|GB)$/i.test(entry)
         )
-          throw new Error("Shard size must be positive bytes, KB, MB or GB.");
+          throw new Error(
+            "Shard size must be positive with a B, KB, MB or GB unit.",
+          );
         options.maxShardSize = entry.toUpperCase();
         break;
       case "optimize":
@@ -332,12 +334,12 @@ export function exportPlan(
     value.exporter,
   );
   if (
-    !["int2", "int4"].includes(value.precision) &&
+    value.precision !== "int4" &&
     (advancedOptions.useQdq ||
       advancedOptions.blockSize !== undefined ||
       advancedOptions.quantizationAlgorithm !== undefined)
   )
-    throw new Error("Quantization options require INT2 or INT4 precision.");
+    throw new Error("Quantization options require INT4 precision.");
   let directory = value.directory;
   if (directory.includes("<model_id>")) {
     const parts = isAbsolute(model) ? [basename(model)] : model.split(/[\\/]/);
