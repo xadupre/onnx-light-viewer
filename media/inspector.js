@@ -114,6 +114,27 @@ function createInspector({ byId, tensorDescription, subgraphLabel, navigate }) {
         `${id}-initializer-count`,
       );
     }
+    const constants = scope?.constants ?? [];
+    byId("node-constants").hidden = constants.length === 0;
+    byId("constant-count").textContent = constants.length;
+    byId("constant-nodes").replaceChildren(
+      ...constants.map((constant) => {
+        const item = document.createElement("li");
+        const details = document.createElement("details");
+        const summary = document.createElement("summary");
+        summary.textContent = constant.name || constant.outputs.join(", ");
+        const outputs = document.createElement("div");
+        outputs.className = "tensor-info";
+        outputs.textContent = constant.outputs
+          .map((name) => `${name}: ${tensorDescription(name)}`)
+          .join("; ");
+        const attributes = document.createElement("ul");
+        attributes.append(...(constant.attributes ?? []).map(attributeItem));
+        details.append(summary, outputs, attributes);
+        item.append(details);
+        return item;
+      }),
+    );
     for (const direction of ["inputs", "outputs"]) {
       const names =
         node?.[direction] ??
@@ -278,24 +299,24 @@ function createInspector({ byId, tensorDescription, subgraphLabel, navigate }) {
 
   function parameterList(id, parameters, countId) {
     byId(countId).textContent = parameters.length;
-    byId(`node-${id}`).replaceChildren(
-      ...parameters.map((parameter) => {
-        const item = document.createElement("li");
-        const heading = document.createElement("strong");
-        heading.textContent = `${parameter.name} (${parameter.type})${parameter.default ? " [default]" : ""}`;
-        const value = document.createElement("pre");
-        value.textContent = parameter.value;
-        item.append(heading, value);
-        for (const [index, graph] of (parameter.graphs ?? []).entries()) {
-          const button = document.createElement("button");
-          button.className = "icon-button";
-          button.textContent = `Open ${subgraphLabel(parameter, index)}: ${graph.name} (${graph.nodeCount} nodes)`;
-          button.addEventListener("click", () => navigate(graph.path));
-          item.append(button);
-        }
-        return item;
-      }),
-    );
+    byId(`node-${id}`).replaceChildren(...parameters.map(attributeItem));
+  }
+
+  function attributeItem(parameter) {
+    const item = document.createElement("li");
+    const heading = document.createElement("strong");
+    heading.textContent = `${parameter.name} (${parameter.type})${parameter.default ? " [default]" : ""}`;
+    const value = document.createElement("pre");
+    value.textContent = parameter.value;
+    item.append(heading, value);
+    for (const [index, graph] of (parameter.graphs ?? []).entries()) {
+      const button = document.createElement("button");
+      button.className = "icon-button";
+      button.textContent = `Open ${subgraphLabel(parameter, index)}: ${graph.name} (${graph.nodeCount} nodes)`;
+      button.addEventListener("click", () => navigate(graph.path));
+      item.append(button);
+    }
+    return item;
   }
   byId("show-doc").addEventListener("click", () => {
     if (!inspectedNode?.schema?.doc) return;

@@ -106,8 +106,30 @@ public:
       ol::core::compute::ComputeContext context;
       context.ComputeShapes(snapshot_);
       context.ComputeValueAndNodeTags(graph);
+      context.set_events_enabled(true);
       context.ComputeInPlaceReuseGraph(graph, context.Shapes(), false, context.ValueTags());
       context.ComputePeakMemory(graph, ol::core::symbolic::Device::kCPU);
+      const auto describe = [&](const auto &ports) {
+        std::vector<Tensor> tensors;
+        for (const auto &port : ports) {
+          const std::string name(port);
+          if (name.empty())
+            continue;
+          Tensor tensor;
+          tensor.name = name;
+          if (context.Shapes().Has(name)) {
+            const auto &descriptor = context.Shapes().Get(name);
+            tensor.type = ol::TensorProto::DataType_Name(
+                ol::core::symbolic::TensorTypeToDataType(descriptor.Dtype()));
+            tensor.shape = descriptor.Shape().ToString();
+          }
+          const auto tag = context.ValueTags().find(name);
+          if (tag != context.ValueTags().end())
+            tensor.tag = tag->second;
+          tensors.push_back(std::move(tensor));
+        }
+        return tensors;
+      };
       for (size_t index = 0; index < context.Memory().size(); ++index) {
         const auto &memory = context.NodeMemory(index);
         const auto scalar = [&](const char *key) {
@@ -119,9 +141,18 @@ public:
         const auto scratch = context.NodePeakMemory(index);
         if (scratch < 0 || scratch > maxSafeBytes - tensors)
           throw std::runtime_error("Estimated memory exceeds the exact integer range.");
-        events_.push_back({existing, outputs, scratch, tensors + scratch});
+        const auto &node = graph.node(index);
+        events_.push_back({existing,
+                           outputs,
+                           scratch,
+                           tensors + scratch,
+                           {},
+                           describe(node.input()),
+                           describe(node.output())});
         peak_ = std::max(peak_, tensors + scratch);
       }
+      for (const auto &decision : context.Events())
+        events_.at(decision.node_index).decisions.push_back(decision);
     } catch (const std::exception &error) {
       SetError(error.what());
     }
@@ -145,6 +176,29 @@ public:
       item.Set("outputBytes", Napi::Number::New(Env(), event.outputs));
       item.Set("scratchBytes", Napi::Number::New(Env(), event.scratch));
       item.Set("deviceBytes", Napi::Number::New(Env(), event.total));
+      // The SDK exposes the next pre-node snapshot, but no final post-release snapshot.
+      item.Set("afterBytes",
+               index + 1 < events_.size()
+                   ? Napi::Value(Napi::Number::New(Env(), events_[index + 1].existing))
+                   : Napi::Value(Env().Null()));
+      auto decisions = Napi::Array::New(Env(), event.decisions.size());
+      for (uint32_t i = 0; i < event.decisions.size(); ++i) {
+        const auto &decision = event.decisions[i];
+        auto value = Napi::Object::New(Env());
+        value.Set("action", ol::core::compute::ComputeEventActionName(decision.action));
+        value.Set("name", decision.name);
+        if (decision.action == ol::core::compute::ComputeEventAction::kInPlace) {
+          value.Set("input", std::string(node.input(decision.input_index)));
+          value.Set("output", std::string(node.output(decision.output_index)));
+          value.Set("kind", decision.kind == ol::core::compute::InPlaceReuseKind::kEqual
+                                ? "equal"
+                                : "greater");
+        }
+        decisions.Set(i, value);
+      }
+      item.Set("decisions", decisions);
+      item.Set("inputs", TensorDetails(event.inputs));
+      item.Set("outputs", TensorDetails(event.output_tensors));
       events.Set(index, item);
     }
     result.Set("events", events);
@@ -154,9 +208,29 @@ public:
   void OnError(const Napi::Error &error) override { deferred_.Reject(error.Value()); }
 
 private:
+  struct Tensor {
+    std::string name, type, shape, tag;
+  };
   struct Event {
     int64_t existing, outputs, scratch, total;
+    ol::core::compute::ComputeEventLog decisions;
+    std::vector<Tensor> inputs, output_tensors;
   };
+  Napi::Array TensorDetails(const std::vector<Tensor> &tensors) {
+    auto result = Napi::Array::New(Env(), tensors.size());
+    for (uint32_t index = 0; index < tensors.size(); ++index) {
+      const auto &tensor = tensors[index];
+      auto item = Napi::Object::New(Env());
+      item.Set("name", tensor.name);
+      for (const auto &[key, value] :
+           {std::pair{"type", tensor.type}, std::pair{"shape", tensor.shape},
+            std::pair{"tag", tensor.tag}})
+        item.Set(key, value.empty() ? Napi::Value(Env().Null())
+                                    : Napi::Value(Napi::String::New(Env(), value)));
+      result.Set(index, item);
+    }
+    return result;
+  }
   Napi::Promise::Deferred deferred_;
   std::shared_ptr<StoredModel> source_;
   ol::ModelProto snapshot_;

@@ -1,6 +1,7 @@
 /* global acquireVsCodeApi, createSidebar, createFilePanels, createInspector,
           createMetadataPanel, createFusionPanel, createSettingsPanel, createExportPanel,
-          createMemoryPanel, sugiyamaLayout */
+          createMemoryPanel, sugiyamaLayout, graphPathSegments,
+          flattenGraphPath, graphPointDistance */
 const vscode = acquireVsCodeApi();
 const svgNS = "http://www.w3.org/2000/svg";
 const byId = (id) => document.getElementById(id);
@@ -10,12 +11,14 @@ let layoutBounds = bounds;
 let zoom = 1;
 let pan = { x: 0, y: 0 };
 let nodeViews = new Map();
+let viewsByPosition = new WeakMap();
 let searchQuery;
 let searchMatches = [];
 let selected = new Set();
 let renderedSelection = new Set();
 let connectionsByPosition = new Map();
 let connections = [];
+let selectedConnection;
 let camera;
 let panFrame;
 let virtualized = false;
@@ -39,6 +42,8 @@ let unusedLabels = [];
 let hasModel = false;
 let fusionUndoCount = 0;
 let displayedGraph;
+let graphConstants = [];
+let constantsByOutput = new Map();
 let statisticsRequest = 0;
 let replacementPending = false;
 let nextAction = 0;
@@ -141,9 +146,12 @@ const fusionPanel = createFusionPanel({
 });
 
 function focusNodes(nodes) {
-  selected = new Set(nodes.map((index) => `node-${index}`));
-  updateSelection(nodes.length ? `node-${nodes[0]}` : undefined);
-  if (nodes.length) readableZoom();
+  const visible = nodes
+    .map((index) => `node-${index}`)
+    .filter((id) => nodeViews.has(id));
+  selected = new Set(visible);
+  updateSelection(visible[0]);
+  if (visible.length) readableZoom();
 }
 
 function showTab(name, focus = false) {
@@ -566,8 +574,12 @@ function label(parent, x, y, text, className, anchor = "middle") {
   return textNode;
 }
 
-function shortName(value, length = 22) {
-  return value.length > length ? `${value.slice(0, length - 1)}…` : value;
+function shortName(value, length = 22, middle = false) {
+  if (value.length <= length) return value;
+  if (!middle) return `${value.slice(0, length - 1)}…`;
+  const start = Math.ceil((length - 1) / 2);
+  const end = length - 1 - start;
+  return `${value.slice(0, start)}…${end ? value.slice(-end) : ""}`;
 }
 
 function subgraphLabel(attribute, index) {
@@ -649,6 +661,18 @@ function operatorSizes(nodes) {
           ...subgraphs.map((graph) => Math.ceil(graph.textWidth + 48)),
         ),
       );
+      let nameLength = node.name.length;
+      if (nameWidth > width - 24) {
+        let low = 1;
+        let high = nameLength;
+        while (low < high) {
+          const length = Math.ceil((low + high) / 2);
+          const name = shortName(node.name, length, true);
+          if (context.measureText(name).width <= width - 24) low = length;
+          else high = length - 1;
+        }
+        nameLength = low;
+      }
       return [
         node.id,
         {
@@ -656,8 +680,8 @@ function operatorSizes(nodes) {
           height: 88 + parameterRows.length * 16 + subgraphs.length * 20,
           parameterRows,
           subgraphs,
+          displayName: shortName(node.name, nameLength, true),
           typeFontSize: Math.min(16, (16 * (width - 24)) / (typeWidth || 1)),
-          nameFontSize: Math.min(10, (10 * (width - 24)) / (nameWidth || 1)),
         },
       ];
     }),
@@ -876,7 +900,7 @@ function requestMetadata() {
   requestAction("metadata", "Refresh metadata");
 }
 
-function inspectionScope() {
+function inspectionScope(view) {
   if (!displayedGraph) return;
   const step = displayedGraph.breadcrumbs?.at(-1)?.path.at(-1);
   const kind = step
@@ -898,12 +922,24 @@ function inspectionScope() {
     sparseInitializers: displayedGraph.sparseInitializers,
     encodedInitializers: displayedGraph.encodedInitializers,
     localFunctions: displayedGraph.localFunctions,
+    constants: view
+      ? [
+          ...new Set(
+            (view.node
+              ? [...view.node.inputs, ...(view.node.captures ?? [])]
+              : [view.port.name]
+            )
+              .map((name) => constantsByOutput.get(name))
+              .filter(Boolean),
+          ),
+        ]
+      : graphConstants,
   };
 }
 
 function inspect(view) {
   inspectedView = view;
-  inspector.inspect(view, inspectionScope());
+  inspector.inspect(view, inspectionScope(view));
   inspectMetadata();
 }
 
@@ -937,6 +973,7 @@ function registerNode(id, view) {
     ? [view.node.name.toLowerCase(), view.node.opType.toLowerCase()]
     : [];
   nodeViews.set(id, view);
+  viewsByPosition.set(view.position, view);
   if (!virtualized) mountNode(view);
 }
 
@@ -969,6 +1006,7 @@ function mountNode(view) {
 
 function selectNode(id, additive) {
   endGesture();
+  selectConnection(undefined);
   if (additive && selected.has(id)) {
     selected.delete(id);
   } else {
@@ -979,17 +1017,87 @@ function selectNode(id, additive) {
 }
 
 function updateConnection(connection) {
+  if (selectedConnection === connection) updateConnectionHighlight();
   if (!connection.group) return;
-  const { from, to, fromHeight, toHeight, path, text, information } =
-    connection;
-  const y1 = from.y + fromHeight;
-  const y2 = to.y - toHeight;
-  const middle = (y1 + y2) / 2;
-  path.setAttribute("d", connectionPath(connection));
-  text.setAttribute("x", (from.x + to.x) / 2 + 10);
-  text.setAttribute("y", middle);
-  information.setAttribute("x", (from.x + to.x) / 2 + 10);
-  information.setAttribute("y", middle + 14);
+  const { path, hit, text, information } = connection;
+  const { x, y } = connectionLabelPosition(connection);
+  const data = connectionPath(connection);
+  path.setAttribute("d", data);
+  hit.setAttribute("d", data);
+  text.setAttribute("x", x + 10);
+  text.setAttribute("y", y);
+  information.setAttribute("x", x + 10);
+  information.setAttribute("y", y + 14);
+}
+
+function selectConnection(connection) {
+  if (selectedConnection === connection) return;
+  selectedConnection?.group?.setAttribute("aria-pressed", "false");
+  selectedConnection = connection;
+  connection?.group?.setAttribute("aria-pressed", "true");
+  updateConnectionHighlight();
+}
+
+function updateConnectionHighlight() {
+  let highlight = byId("connection-highlight");
+  if (!selectedConnection) {
+    highlight?.remove();
+    return;
+  }
+  if (!highlight) {
+    highlight = element("g", {
+      id: "connection-highlight",
+      "aria-hidden": "true",
+    });
+    svg.append(highlight);
+  }
+  const { from, to } = selectedConnection;
+  highlight.replaceChildren(
+    element("path", {
+      class: "selected-edge",
+      d: connectionPath(selectedConnection),
+    }),
+    ...[...new Set([from, to])].map((position) => {
+      const { halfWidth, halfHeight } = viewsByPosition.get(position);
+      return element("rect", {
+        class: "connected-node",
+        x: position.x - halfWidth - 3,
+        y: position.y - halfHeight - 3,
+        width: halfWidth * 2 + 6,
+        height: halfHeight * 2 + 6,
+        rx: 12,
+      });
+    }),
+  );
+}
+
+function findConnectionAt(point, candidates, viewport) {
+  const [, , width] = svg.getAttribute("viewBox").split(" ").map(Number);
+  const tolerance = (10 * width) / viewport.width;
+  let closest;
+  let distance = tolerance;
+  for (const connection of candidates) {
+    if (
+      point.x < connection.left - tolerance ||
+      point.x > connection.right + tolerance ||
+      point.y < connection.top - tolerance ||
+      point.y > connection.bottom + tolerance
+    )
+      continue;
+    const points = flattenGraphPath(
+      connectionPoints(connection),
+      !!connection.route,
+      tolerance / 8,
+    );
+    for (let index = 1; index < points.length; index++) {
+      const next = graphPointDistance(point, points[index - 1], points[index]);
+      if (next < distance) {
+        closest = connection;
+        distance = next;
+      }
+    }
+  }
+  return closest;
 }
 
 function setVisible(view, group, visible) {
@@ -1037,22 +1145,28 @@ function updateNodeVisibility(view) {
 }
 
 function updateConnectionVisibility(connection) {
-  const { from, to, fromHeight, toHeight } = connection;
+  const points = connectionPoints(connection);
+  let left = Infinity,
+    top = Infinity,
+    right = -Infinity,
+    bottom = -Infinity;
+  for (const { x, y } of points) {
+    left = Math.min(left, x);
+    top = Math.min(top, y);
+    right = Math.max(right, x);
+    bottom = Math.max(bottom, y);
+  }
+  Object.assign(connection, { left, top, right, bottom });
+  const label = connectionLabelPosition(connection);
   const visible = intersectsCamera(
-    Math.min(from.x, to.x),
-    Math.min(from.y + fromHeight, to.y - toHeight),
-    Math.max(from.x, to.x) + 240,
-    Math.max(from.y + fromHeight, to.y - toHeight) + 28,
+    Math.min(left, label.x),
+    Math.min(top, label.y),
+    Math.max(right, label.x + 240),
+    Math.max(bottom, label.y + 28),
   );
-  const middle = (from.y + fromHeight + to.y - toHeight) / 2;
   const labelsVisible =
     !virtualized ||
-    intersectsCamera(
-      (from.x + to.x) / 2,
-      middle,
-      (from.x + to.x) / 2 + 240,
-      middle + 28,
-    );
+    intersectsCamera(label.x, label.y, label.x + 240, label.y + 28);
   if (virtualized && !overviewVisible && visible && !labelsVisible)
     crossingConnections.add(connection);
   else crossingConnections.delete(connection);
@@ -1196,6 +1310,15 @@ function reframe() {
     right = Math.max(right, position.x + halfWidth + 20);
     bottom = Math.max(bottom, position.y + halfHeight + 20);
   }
+  for (const connection of connections) {
+    if (!connection.route) continue;
+    for (const point of connectionPoints(connection)) {
+      x = Math.min(x, point.x - 20);
+      y = Math.min(y, point.y - 20);
+      right = Math.max(right, point.x + 20);
+      bottom = Math.max(bottom, point.y + 20);
+    }
+  }
   bounds = { x, y, width: right - x, height: bottom - y };
 }
 
@@ -1248,7 +1371,73 @@ function setZoomAreaMode(active) {
   svg.classList.toggle("zoom-area", active);
 }
 
-function connectionPath({ from, to, fromHeight, toHeight }) {
+function connectionPoints({ from, to, fromHeight, toHeight, route }) {
+  const start = { x: from.x, y: from.y + fromHeight };
+  const end = { x: to.x, y: to.y - toHeight };
+  if (!route) return [start, end];
+  const span = route.to.y - toHeight - route.from.y - fromHeight;
+  return [
+    start,
+    ...route.points.map((point, index) => {
+      // Translate the whole route for group drags, blend offsets for one endpoint.
+      const fraction = span
+        ? (point.y - route.from.y - fromHeight) / span
+        : (index + 1) / (route.points.length + 1);
+      return {
+        x:
+          point.x +
+          (from.x - route.from.x) * (1 - fraction) +
+          (to.x - route.to.x) * fraction,
+        y:
+          point.y +
+          (from.y - route.from.y) * (1 - fraction) +
+          (to.y - route.to.y) * fraction,
+      };
+    }),
+    end,
+  ];
+}
+
+function connectionLabelPosition(connection) {
+  const points = connectionPoints(connection);
+  let length = 0;
+  for (let i = 1; i < points.length; i++)
+    length += Math.hypot(
+      points[i].x - points[i - 1].x,
+      points[i].y - points[i - 1].y,
+    );
+  let remaining = length / 2;
+  for (let i = 1; i < points.length; i++) {
+    const start = points[i - 1],
+      end = points[i];
+    const segment = Math.hypot(end.x - start.x, end.y - start.y);
+    if (remaining <= segment && segment) {
+      const fraction = remaining / segment;
+      return {
+        x: start.x + (end.x - start.x) * fraction,
+        y: start.y + (end.y - start.y) * fraction,
+      };
+    }
+    remaining -= segment;
+  }
+  return points[0];
+}
+
+function connectionPath(connection) {
+  if (connection.route) {
+    const points = connectionPoints(connection);
+    let path = `M${points[0].x},${points[0].y}`;
+    for (const segment of graphPathSegments(points, true)) {
+      const end = segment.at(-1);
+      if (segment.length === 2) path += ` L${end.x},${end.y}`;
+      else {
+        const control = segment[1];
+        path += ` Q${control.x},${control.y} ${end.x},${end.y}`;
+      }
+    }
+    return path;
+  }
+  const { from, to, fromHeight, toHeight } = connection;
   const y1 = from.y + fromHeight;
   const y2 = to.y - toHeight;
   const middle = (y1 + y2) / 2;
@@ -1445,6 +1634,21 @@ function navigate(path, nodeIndex) {
 }
 
 function render(graph, metadata) {
+  graphConstants = [];
+  constantsByOutput = new Map();
+  const operators = [];
+  for (const node of graph.nodes) {
+    if (
+      node.opType === "Constant" &&
+      (!node.domain || node.domain === "ai.onnx") &&
+      !node.function &&
+      !node.pipelineModel
+    ) {
+      graphConstants.push(node);
+      for (const output of node.outputs) constantsByOutput.set(output, node);
+    } else operators.push(node);
+  }
+  graph = { ...graph, nodes: operators };
   byId("model-error").hidden = true;
   hasModel = true;
   byId("go-top").disabled = false;
@@ -1484,6 +1688,8 @@ function render(graph, metadata) {
   inspectedView = undefined;
   tensorLabels = [];
   nodeViews = new Map();
+  viewsByPosition = new WeakMap();
+  selectConnection(undefined);
   selected = new Set();
   renderedSelection = new Set();
   connectionsByPosition = new Map();
@@ -1529,11 +1735,9 @@ function render(graph, metadata) {
   bounds = layout.bounds;
   layoutBounds = bounds;
   const addPort = (name, index, output) => {
-    const count = output ? graph.outputs.length : graph.inputs.length;
-    const position = {
-      x: ((index + 1) * bounds.width) / (count + 1),
-      y: output ? bounds.height - 60 : 60,
-    };
+    const position = (
+      output ? layout.outputPositions : layout.inputPositions
+    ).get(name);
     const create = (position) => {
       const group = element("g", {
         class: `port${output ? " output" : ""}`,
@@ -1573,7 +1777,7 @@ function render(graph, metadata) {
   const inputPositions = new Map(
     graph.inputs.map((name, index) => [name, addPort(name, index, false)]),
   );
-  const connect = (from, to, name, fromHeight, toHeight) => {
+  const connect = (from, to, name, fromHeight, toHeight, points) => {
     if (!from || !to) return;
     const connection = {
       from,
@@ -1581,10 +1785,44 @@ function render(graph, metadata) {
       name,
       fromHeight,
       toHeight,
+      route: points?.length
+        ? { points, from: { ...from }, to: { ...to } }
+        : undefined,
       create() {
-        const group = element("g", {});
+        const group = element("g", {
+          class: "connection",
+          role: "button",
+          tabindex: "0",
+          "aria-label": `Connection: ${name}`,
+          "aria-pressed": String(selectedConnection === connection),
+        });
+        const hit = element("path", { class: "edge-hit" });
         const path = element("path", { class: "edge" });
-        group.append(path);
+        group.append(hit, path);
+        group.addEventListener("pointerdown", (event) => {
+          if (
+            event.button !== 0 ||
+            zoomAreaMode ||
+            event.altKey ||
+            svg.getAttribute("aria-busy") === "true"
+          )
+            return;
+          event.preventDefault();
+          event.stopPropagation();
+          endGesture();
+          selectConnection(connection);
+          group.focus({ preventScroll: true });
+        });
+        group.addEventListener("click", (event) => {
+          if (event.detail === 0 && !zoomAreaMode && !event.altKey)
+            selectConnection(connection);
+        });
+        group.addEventListener("keydown", (event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            selectConnection(connection);
+          }
+        });
         const text = label(
           group,
           0,
@@ -1601,6 +1839,7 @@ function render(graph, metadata) {
           fromHeight,
           toHeight,
           path,
+          hit,
           text,
           information,
         });
@@ -1653,11 +1892,12 @@ function render(graph, metadata) {
         group,
         position.x + size.width / 2 - 12,
         top + 15,
-        node.name,
+        size.displayName,
         "operator-name",
         "end",
       );
-      nameLabel.style.fontSize = `${size.nameFontSize}px`;
+      nameLabel.style.fontSize = "10px";
+      nameLabel.setAttribute("aria-label", node.name);
       if (node.outputs.length) {
         const information = tensorLabel(
           group,
@@ -1757,18 +1997,18 @@ function render(graph, metadata) {
         input,
         producer ? sizes.get(producer).height / 2 : 26,
         size.height / 2,
+        producer
+          ? layout.routes.get(node.id)?.get(producer)
+          : layout.inputRoutes.get(node.id)?.get(input),
       );
     }
   }
   graph.outputs.forEach((name, index) => {
     const producer = producers.get(name);
-    connect(
-      producer ? positions.get(producer) : inputPositions.get(name),
-      addPort(name, index, true),
-      name,
-      producer ? sizes.get(producer).height / 2 : 26,
-      26,
-    );
+    const from = producer ? positions.get(producer) : inputPositions.get(name);
+    const to = addPort(name, index, true);
+    const fromHeight = producer ? sizes.get(producer).height / 2 : 26;
+    connect(from, to, name, fromHeight, 26, layout.outputRoutes.get(name));
   });
   overviewDirty = true;
   zoom = 1;
@@ -1796,6 +2036,15 @@ svg.addEventListener("pointerdown", (event) => {
   if (!start) return;
   const group = event.target.closest(".graph-node, .port");
   const additive = event.ctrlKey || event.metaKey || event.shiftKey;
+  if (!zoomAreaMode && !event.altKey && !group && !additive) {
+    const connection = findConnectionAt(start, connections, viewport);
+    if (connection) {
+      event.preventDefault();
+      selectConnection(connection);
+      svg.focus({ preventScroll: true });
+      return;
+    }
+  }
   const originalSelected = new Set(selected);
   event.preventDefault();
   if (zoomAreaMode || event.altKey) {
@@ -1815,6 +2064,7 @@ svg.addEventListener("pointerdown", (event) => {
     };
     svg.classList.add("dragging");
   } else {
+    selectConnection(undefined);
     selected = additive ? new Set(selected) : new Set();
     updateSelection();
     svg.focus({ preventScroll: true });
@@ -1856,6 +2106,7 @@ svg.addEventListener("keydown", (event) => {
     if (gesture || zoomAreaMode) {
       endGesture(true);
     } else {
+      selectConnection(undefined);
       selected.clear();
       updateSelection();
     }

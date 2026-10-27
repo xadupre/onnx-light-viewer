@@ -1516,6 +1516,7 @@ test("opens, browses and saves encrypted copies through embedded selectors witho
   const dom = new JSDOM(extension.webview.html, { runScripts: "outside-only" });
   t.after(() => dom.window.close());
   const { window } = dom;
+  window.structuredClone = structuredClone;
   const { document } = window;
   const requests = [];
   window.HTMLCanvasElement.prototype.getContext = () => ({
@@ -3385,6 +3386,7 @@ for (const [type, buttonId, errorType, infoType] of [
     });
     t.after(() => dom.window.close());
     const { window } = dom;
+    window.structuredClone = structuredClone;
     const { document } = window;
     const requests = [];
     window.HTMLCanvasElement.prototype.getContext = () => ({
@@ -3607,6 +3609,7 @@ test("selects optimization groups and previews global passes through the real we
   const dom = new JSDOM(extension.webview.html, { runScripts: "outside-only" });
   t.after(() => dom.window.close());
   const { window } = dom;
+  window.structuredClone = structuredClone;
   const { document } = window;
   const requests = [];
   const reportDialog = document.getElementById("optimization-report");
@@ -3794,6 +3797,7 @@ test("matches multiple patterns and fuses checked candidates through the real we
   const dom = new JSDOM(extension.webview.html, { runScripts: "outside-only" });
   t.after(() => dom.window.close());
   const { window } = dom;
+  window.structuredClone = structuredClone;
   const { document } = window;
   const requests = [];
   window.HTMLCanvasElement.prototype.getContext = () => ({
@@ -3928,6 +3932,7 @@ test("keeps operation logs quiet and exposes real native exception recovery in S
   const dom = new JSDOM(extension.webview.html, { runScripts: "outside-only" });
   t.after(() => dom.window.close());
   const { window } = dom;
+  window.structuredClone = structuredClone;
   const { document } = window;
   const requests = [];
   window.HTMLCanvasElement.prototype.getContext = () => ({
@@ -4066,6 +4071,7 @@ test("shows missing-graph loading errors in the canvas even before the webview i
   const dom = new JSDOM(extension.webview.html, { runScripts: "outside-only" });
   t.after(() => dom.window.close());
   const { window } = dom;
+  window.structuredClone = structuredClone;
   const { document } = window;
   const requests = [];
   window.HTMLCanvasElement.prototype.getContext = () => ({

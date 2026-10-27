@@ -196,8 +196,6 @@ function createExportPanel({ byId, postMessage, requestAction, revealPanel }) {
     },
     handleMessage(data) {
       if (data?.type === "settings-info") {
-        byId("export-python").textContent =
-          `Python: ${data.application.pythonPath}. Change it in Settings.`;
         byId("export-trust").hidden = data.trusted;
         if (data.exportHistory) {
           historySuggestions(data.exportHistory);

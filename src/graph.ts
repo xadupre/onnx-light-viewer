@@ -262,6 +262,27 @@ export interface MemoryProfile {
     outputBytes: number;
     scratchBytes: number;
     deviceBytes: number;
+    /** Next pre-node snapshot; null for the final node until the SDK exposes it. */
+    afterBytes: number | null;
+    decisions: {
+      action: "inplace" | "release" | "release_shape_tag";
+      name: string;
+      input?: string;
+      output?: string;
+      kind?: "equal" | "greater";
+    }[];
+    inputs: {
+      name: string;
+      type: string | null;
+      shape: string | null;
+      tag: string | null;
+    }[];
+    outputs: {
+      name: string;
+      type: string | null;
+      shape: string | null;
+      tag: string | null;
+    }[];
   }[];
 }
 

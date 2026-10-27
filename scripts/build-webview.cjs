@@ -1,11 +1,25 @@
-const { copyFileSync, mkdirSync } = require("node:fs");
-const { resolve, join } = require("node:path");
+const {
+  copyFileSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+} = require("node:fs");
+const { resolve, join, dirname } = require("node:path");
 
 const output = resolve(__dirname, "../media/vendor");
 mkdirSync(output, { recursive: true });
 copyFileSync(
   require.resolve("markdown-it/browser"),
   join(output, "markdown-it.min.js"),
+);
+const dagre = dirname(require.resolve("@dagrejs/dagre/package.json"));
+writeFileSync(
+  join(output, "dagre.min.js"),
+  `${readFileSync(join(dagre, "dist", "dagre.min.js"), "utf8")}\nglobalThis.dagre = dagre;\n`,
+);
+copyFileSync(
+  join(dagre, "dist", "dagre.min.js.LEGAL.txt"),
+  join(output, "dagre.min.js.LEGAL.txt"),
 );
 
 for (const [name, license] of [
