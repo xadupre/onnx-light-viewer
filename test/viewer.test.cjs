@@ -7749,6 +7749,46 @@ test("arc selection preserves area zoom gestures and works on virtualized connec
   assert.equal(document.getElementById("connection-highlight"), null);
 });
 
+test("refreshes highlighted geometry for a never-mounted overview connection", (t) => {
+  const { document, window, load, pointer } = openViewer(t);
+  load(chainGraph(600));
+  const graph = document.getElementById("graph");
+  const positions = nodePositions(document);
+  const step = positions[1].y - positions[0].y;
+  graph.dispatchEvent(
+    new window.KeyboardEvent("keydown", { key: "a", ctrlKey: true }),
+  );
+  pointer(
+    document.querySelector(".graph-node"),
+    "pointerdown",
+    positions[0].x,
+    positions[0].y,
+  );
+  pointer(graph, "pointermove", positions[0].x + 80, positions[0].y + 50);
+  pointer(graph, "pointerup", positions[0].x + 80, positions[0].y + 50);
+  document.getElementById("zoom-fit").click();
+  const x = positions[0].x + 80;
+  const y = positions[0].y + 300.5 * step + 50;
+  pointer(graph, "pointerdown", x, y);
+  pointer(graph, "pointerup", x, y);
+  assert.equal(document.querySelectorAll(".connection").length, 0);
+  const selectedPath = () =>
+    document
+      .querySelector("#connection-highlight .selected-edge")
+      .getAttribute("d");
+  const moved = selectedPath();
+  assert.deepEqual(nodePositions(document, "#connection-highlight rect"), [
+    { x, y: positions[0].y + 300 * step + 50 },
+    { x, y: positions[0].y + 301 * step + 50 },
+  ]);
+  document.getElementById("refresh-positions").click();
+  assert.notEqual(selectedPath(), moved);
+  assert.deepEqual(nodePositions(document, "#connection-highlight rect"), [
+    { x: positions[0].x, y: positions[0].y + 300 * step },
+    { x: positions[0].x, y: positions[0].y + 301 * step },
+  ]);
+});
+
 test("selects a nearby arc from the background with a screen-space tolerance at different zooms", (t) => {
   const { document, window, load, pointer } = openViewer(t);
   load(chainGraph(6));

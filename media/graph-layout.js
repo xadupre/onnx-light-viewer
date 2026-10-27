@@ -243,10 +243,9 @@ function graphSegmentsCross(a, b, c, d) {
   return side(a, b, c) * side(a, b, d) < 0 && side(c, d, a) * side(c, d, b) < 0;
 }
 
-function shortenGraphRoutes(graph, sizes, result) {
-  if (!result.routes.size) return;
-  const boxes = graph.nodes.map(({ id }) => {
-    const position = result.positions.get(id);
+function graphNodeBoxes(graph, sizes, positions) {
+  return graph.nodes.map(({ id }) => {
+    const position = positions.get(id);
     const size = sizes.get(id);
     return {
       id,
@@ -258,7 +257,25 @@ function shortenGraphRoutes(graph, sizes, result) {
       },
     };
   });
-  const nodes = graphSpatialIndex(boxes);
+}
+
+function shortenGraphRoutes(graph, sizes, result) {
+  if (!result.routes.size) return;
+  const shortenable = new Set();
+  for (const [target, sources] of result.routes) {
+    const end = result.positions.get(target).y - sizes.get(target).height / 2;
+    for (const [source, points] of sources) {
+      // Inter-row doglegs already replace an obstructed direct curve.
+      if (points.length === 2 && points[0].y === points[1].y) continue;
+      const start =
+        result.positions.get(source).y + sizes.get(source).height / 2;
+      if (end - start > 144) shortenable.add(points);
+    }
+  }
+  if (!shortenable.size) return;
+  const nodes = graphSpatialIndex(
+    graphNodeBoxes(graph, sizes, result.positions),
+  );
   const edges = [];
   const setGeometry = (edge, points, routed) => {
     edge.rawPoints = points;
@@ -355,7 +372,7 @@ function shortenGraphRoutes(graph, sizes, result) {
   // Shorter branches first let later branches reuse the same unobstructed trunk.
   edges.sort((a, b) => a.end.y - a.start.y - (b.end.y - b.start.y));
   for (const edge of edges) {
-    if (!edge.route || edge.end.y - edge.start.y <= 144) continue;
+    if (!shortenable.has(edge.route)) continue;
     const exit = { x: edge.start.x, y: edge.start.y + 72 };
     const entry = { x: edge.end.x, y: edge.end.y - 72 };
     // Dense overlap must not turn the post-pass into an all-pairs traversal.
@@ -650,27 +667,73 @@ function layeredGraphLayout(graph, sizes) {
   });
   const routes = new Map();
   const lanes = new Map();
+  let obstacles;
+  const obstructed = (source, target, start, end) => {
+    obstacles ??= graphSpatialIndex(graphNodeBoxes(graph, sizes, positions));
+    const points = flattenGraphPath([start, end], false);
+    for (let index = 1; index < points.length; index++) {
+      const start = points[index - 1];
+      const end = points[index];
+      if (
+        obstacles.find(
+          graphSegmentBounds(start, end, 1),
+          (node) =>
+            node.id !== source &&
+            node.id !== target &&
+            graphSegmentHitsBox(start, end, node.bounds, 1),
+        )
+      )
+        return true;
+    }
+    return false;
+  };
   for (let index = 0; index < count; index++) {
     for (const parent of parents[index]) {
-      if (ranks[index] <= ranks[parent] + 1) continue;
-      if (!lanes.has(parent)) lanes.set(parent, lanes.size % 16);
+      if (ranks[index] <= ranks[parent]) continue;
+      const adjacent = ranks[index] === ranks[parent] + 1;
+      if (
+        adjacent &&
+        dimensions[parent].height === heights[ranks[parent]] &&
+        dimensions[index].height === heights[ranks[index]]
+      )
+        continue;
       const from = positions.get(graph.nodes[parent].id);
       const to = positions.get(graph.nodes[index].id);
-      const lane = lanes.get(parent) * 12;
-      const x = from.x + to.x < width ? -20 - lane : width + 20 + lane;
       const y1 = from.y + heights[ranks[parent]] / 2 + rankSeparation / 2;
-      const y2 = to.y - heights[ranks[index]] / 2 - rankSeparation / 2;
       const target = graph.nodes[index].id;
+      const source = graph.nodes[parent].id;
+      let points;
+      if (adjacent) {
+        if (
+          !obstructed(
+            source,
+            target,
+            { x: from.x, y: from.y + dimensions[parent].height / 2 },
+            { x: to.x, y: to.y - dimensions[index].height / 2 },
+          )
+        )
+          continue;
+        points = [
+          { x: from.x, y: y1 },
+          { x: to.x, y: y1 },
+        ];
+      } else {
+        if (!lanes.has(parent)) lanes.set(parent, lanes.size % 16);
+        const lane = lanes.get(parent) * 12;
+        const x = from.x + to.x < width ? -20 - lane : width + 20 + lane;
+        const y2 = to.y - heights[ranks[index]] / 2 - rankSeparation / 2;
+        points = [
+          { x: from.x, y: y1 },
+          { x, y: y1 },
+          { x, y: y2 },
+          { x: to.x, y: y2 },
+        ];
+      }
       if (!routes.has(target)) routes.set(target, new Map());
-      routes.get(target).set(graph.nodes[parent].id, [
-        { x: from.x, y: y1 },
-        { x, y: y1 },
-        { x, y: y2 },
-        { x: to.x, y: y2 },
-      ]);
+      routes.get(target).set(source, points);
     }
   }
-  if (routes.size) {
+  if (lanes.size) {
     const margin = 40 + Math.min(lanes.size - 1, 15) * 12;
     for (const position of positions.values()) position.x += margin;
     for (const targets of routes.values())

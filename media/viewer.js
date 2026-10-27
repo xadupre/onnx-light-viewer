@@ -1017,6 +1017,7 @@ function selectNode(id, additive) {
 }
 
 function updateConnection(connection) {
+  if (selectedConnection === connection) updateConnectionHighlight();
   if (!connection.group) return;
   const { path, hit, text, information } = connection;
   const { x, y } = connectionLabelPosition(connection);
@@ -1027,7 +1028,6 @@ function updateConnection(connection) {
   text.setAttribute("y", y);
   information.setAttribute("x", x + 10);
   information.setAttribute("y", y + 14);
-  if (selectedConnection === connection) updateConnectionHighlight();
 }
 
 function selectConnection(connection) {

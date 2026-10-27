@@ -66,20 +66,27 @@ function segmentEntersBox(start, end, center, width, height) {
   return low < high;
 }
 
-function assertRouteAvoidsNodes(result, nodes, source, target) {
+function assertRouteAvoidsNodes(
+  result,
+  nodes,
+  source,
+  target,
+  requireRoute = true,
+) {
   const from = nodes.find(({ id }) => id === source);
   const to = nodes.find(({ id }) => id === target);
   const start = result.positions.get(source);
   const end = result.positions.get(target);
   const route = result.routes.get(target)?.get(source);
-  assert.ok(route?.length, `Missing route for ${source} -> ${target}`);
+  if (requireRoute)
+    assert.ok(route?.length, `Missing route for ${source} -> ${target}`);
   const points = flattenGraphPath(
     [
       { x: start.x, y: start.y + (from.height ?? 88) / 2 },
-      ...route,
+      ...(route ?? []),
       { x: end.x, y: end.y - (to.height ?? 88) / 2 },
     ],
-    true,
+    !!route?.length,
   );
   for (const point of points) {
     assert.ok(point.x >= 0 && point.x <= result.bounds.width);
@@ -334,6 +341,69 @@ test("keeps initial and shortened fallback curves outside a wide consumer row", 
   const initial = layeredGraphLayout({ nodes }, sizes);
   assertRouteAvoidsNodes(initial, nodes, "source", "target");
   assertRouteAvoidsNodes(layout(nodes), nodes, "source", "target");
+});
+
+test("routes adjacent-rank graph outputs outside a wide fallback operator row", () => {
+  const operators = [
+    node("source"),
+    ...Array.from({ length: 2100 }, (_, index) =>
+      node(`consumer${index}`, ["source"]),
+    ),
+  ];
+  const port = node("output-port", ["source"], {
+    port: "output",
+    width: 120,
+    height: 52,
+  });
+  const nodes = [...operators, port];
+  const sizes = new Map(
+    nodes.map(({ id, width = 140, height = 88 }) => [id, { width, height }]),
+  );
+  assertRouteAvoidsNodes(
+    layeredGraphLayout({ nodes }, sizes),
+    nodes,
+    "source",
+    port.id,
+    false,
+  );
+  const result = layout(operators, [], ["source"]);
+  result.positions.set(port.id, result.outputPositions.get("source"));
+  result.routes.set(
+    port.id,
+    new Map([["source", result.outputRoutes.get("source")]]),
+  );
+  assertRouteAvoidsNodes(result, nodes, "source", port.id, false);
+});
+
+test("routes adjacent-rank graph inputs outside mixed-height fallback rows", () => {
+  const operators = [
+    node("tall-left", [], { height: 240 }),
+    node("tall-right", [], { height: 160 }),
+    ...Array.from({ length: 2100 }, (_, index) =>
+      node(`consumer${index}`, ["input"], { height: index % 3 ? 88 : 168 }),
+    ),
+  ];
+  const port = node("input-port", [], {
+    port: "input",
+    outputs: ["input"],
+    width: 120,
+    height: 52,
+  });
+  const nodes = [port, ...operators];
+  const sizes = new Map(
+    nodes.map(({ id, width = 140, height = 88 }) => [id, { width, height }]),
+  );
+  const initial = layeredGraphLayout({ nodes }, sizes);
+  const result = layout(operators, ["input"]);
+  result.positions.set(port.id, result.inputPositions.get("input"));
+  for (const target of ["consumer0", "consumer2099"]) {
+    assertRouteAvoidsNodes(initial, nodes, port.id, target, false);
+    if (!result.routes.has(target)) result.routes.set(target, new Map());
+    result.routes
+      .get(target)
+      .set(port.id, result.inputRoutes.get(target)?.get("input"));
+    assertRouteAvoidsNodes(result, nodes, port.id, target, false);
+  }
 });
 
 test("keeps a detour when the direct shortcut would cross another arc", () => {
