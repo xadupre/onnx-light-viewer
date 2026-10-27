@@ -53,7 +53,7 @@ public:
           const auto &tensor = graph.initializer(tensor_index);
           if (tensor.name() == name_) {
             if (IsPayloadOmitted(tensor)) {
-              RestoreModelPayloads(snapshot_, *source_, source_->file_path);
+              RestoreStatisticsPayloads(snapshot_, *source_, source_->file_path, {&tensor});
               // Restoring replaces messages, so resolve the graph and tensor again.
               selection = GraphScopes(snapshot_, path_);
               Compute(selection.scopes[index - 1]->initializer(tensor_index));
@@ -78,10 +78,13 @@ public:
               if (node.op_type() == "Constant" &&
                   (node.domain().empty() || node.domain() == "ai.onnx")) {
                 for (const auto &attribute : node.attribute()) {
+                  if (!attribute.ref_attr_name().empty())
+                    continue;
                   if (attribute.has_t()) {
                     if (IsPayloadOmitted(attribute.t())) {
                       const std::string attribute_name(attribute.name());
-                      RestoreModelPayloads(snapshot_, *source_, source_->file_path);
+                      RestoreStatisticsPayloads(snapshot_, *source_, source_->file_path,
+                                                {&attribute.t()});
                       selection = GraphScopes(snapshot_, path_);
                       const auto &restored = selection.scopes[index - 1]->node(node_index);
                       for (const auto &value : restored.attribute())
@@ -178,14 +181,56 @@ private:
     statistics_ = rt::ComputeTensorStatistics(tensor, 0, {0.25, 0.5, 0.75}, true, {32, 32});
   }
 
+  std::shared_ptr<const rt::QuantizationParameterCatalogue>
+  LoadQuantizationParameters(const std::string &reference) {
+    constexpr std::string_view prefix = "onnx_light.quantization.parameters:";
+    const auto &graph = snapshot_.graph();
+    const auto annotation =
+        std::find_if(graph.quantization_annotation().begin(), graph.quantization_annotation().end(),
+                     [&](const auto &candidate) {
+                       return candidate.tensor_name().value() == std::string(prefix) + reference;
+                     });
+    if (annotation == graph.quantization_annotation().end())
+      return rt::QuantizationParameterCatalogue::Build(snapshot_);
+
+    std::set<std::string> names;
+    std::set<std::string> numerical_names;
+    std::vector<const ol::TensorProto *> targets;
+    for (const auto &mapping : annotation->quant_parameter_tensor_names()) {
+      const auto &name = mapping.value().value();
+      names.insert(name);
+      if (mapping.key().value() != "storage_type" && mapping.key().value() != "logical_type")
+        numerical_names.insert(name);
+      for (const auto &tensor : graph.initializer())
+        if (tensor.name() == name)
+          targets.push_back(&tensor);
+    }
+    RestoreStatisticsPayloads(snapshot_, *source_, source_->file_path, targets);
+
+    auto &initializers = snapshot_.ref_graph().ref_initializer();
+    for (auto &tensor : initializers)
+      if (names.contains(tensor.name()) && numerical_names.contains(tensor.name())) {
+        auto loaded = tensor.SharedCopy();
+        Load(loaded);
+        tensor = std::move(loaded);
+      }
+
+    auto catalogue_model = snapshot_.SharedCopy();
+    auto &annotations = catalogue_model.ref_graph().ref_quantization_annotation();
+    annotations.clear();
+    annotations.push_back(*annotation);
+    return rt::QuantizationParameterCatalogue::Build(catalogue_model);
+  }
+
   void Compute(const ol::EncodedValueProto &tensor) {
     auto copy = tensor.SharedCopy();
     Load(copy);
     ol::StructTypeCatalogue catalogue;
     catalogue.Build(snapshot_);
     const auto stored_bytes = copy.raw_data().size();
+    std::shared_ptr<const rt::QuantizationParameterCatalogue> parameters;
     if (!copy.parameter_ref().empty()) {
-      const auto parameters = rt::QuantizationParameterCatalogue::Build(snapshot_);
+      parameters = LoadQuantizationParameters(copy.parameter_ref());
       copy = rt::MaterializeQuantizedValue(copy, parameters.get(), catalogue);
     }
     statistics_ =

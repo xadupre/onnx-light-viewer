@@ -5264,6 +5264,7 @@ for (const initialTab of ["model", "logs"]) {
 
 test("opens graph attributes and nested breadcrumbs, including empty graphs and failed navigation", (t) => {
   const { document, window, messages, load } = openViewer(t);
+  const byId = (id) => document.getElementById(id);
   const model = loadModel(
     readFileSync(require.resolve("./models/subgraphs.onnx")),
     "subgraphs.onnx",
@@ -5326,7 +5327,17 @@ test("opens graph attributes and nested breadcrumbs, including empty graphs and 
     );
   assert.equal(document.querySelectorAll("#node-attributes button").length, 2);
   document.querySelector("#node-attributes button").click();
-  load(model.graph(false, messages.at(-1).path));
+  const failedNavigation = messages.at(-1);
+  assert.equal(byId("show-tensor-statistics").disabled, true);
+  assert.equal(byId("all-tensor-statistics").disabled, true);
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: { type: "navigation-error", error: "temporarily unavailable" },
+    }),
+  );
+  assert.equal(byId("show-tensor-statistics").disabled, false);
+  assert.equal(byId("all-tensor-statistics").disabled, false);
+  load(model.graph(false, failedNavigation.path));
   assert.equal(document.querySelectorAll(".graph-node").length, 0);
   assert.equal(document.getElementById("node-title").textContent, "Graph");
   load(demoGraph);

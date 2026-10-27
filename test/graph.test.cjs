@@ -2074,6 +2074,17 @@ test("inspects models with training_info but rejects every export before unsuppo
     }
     assert.deepEqual(readFileSync(file), bytes);
   }
+
+  const statisticsFile = path.join(directory, "training-statistics.onnx");
+  writeFileSync(
+    statisticsFile,
+    Buffer.concat([matmulWithWeight(9, Buffer.alloc(256, 63)), training]),
+  );
+  const statisticsModel = await loadModelFile(
+    statisticsFile,
+    "training-statistics.onnx",
+  );
+  assert.equal((await statisticsModel.tensorStatistics("weight")).count, "64");
 });
 
 test("saves complete streamed weights, inferred shapes and authenticated encrypted copies", async (t) => {
@@ -5551,6 +5562,26 @@ test("tensor statistics inspect stored scalar and list Constant attributes", asy
     assert.equal(stats.dtype, dtype, name);
     assert.equal(stats.mean, mean, name);
   }
+  const unresolved = memoryTestModel([1], {
+    nodes: [
+      Buffer.concat([
+        bytesField(2, "constant"),
+        bytesField(4, "Constant"),
+        bytesField(
+          5,
+          Buffer.concat([
+            bytesField(1, "value_floats"),
+            bytesField(21, "values"),
+            varintField(20, 6),
+          ]),
+        ),
+      ]),
+    ],
+  });
+  await assert.rejects(
+    unresolved.tensorStatistics("constant"),
+    /No stored tensor data/,
+  );
 });
 
 test("tensor statistics resolve captures and prefer subgraph-local initializers", async () => {

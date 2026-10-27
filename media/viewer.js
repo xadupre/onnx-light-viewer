@@ -2462,6 +2462,7 @@ window.addEventListener("message", (event) => {
       `Could not undo fusion: ${event.data.error}`;
   } else if (event.data?.type === "navigation-error") {
     svg.setAttribute("aria-busy", "false");
+    updateTensorStatisticsButtons(replacementPending);
     byId("navigation-status").textContent =
       `Could not open graph: ${event.data.error}`;
     fit();
