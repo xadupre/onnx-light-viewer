@@ -626,6 +626,7 @@ source = pathlib.Path(args[args.index(source_flag) + 1])
 model = json.loads((source / "config.json").read_text())["modelId"]
 assert (source / "model.safetensors").read_bytes() == b"source weights"
 print("Working on ONNX export", flush=True)
+print(json.dumps(args), flush=True)
 if model == "wait":
     time.sleep(30)
 if model == "fail":
@@ -675,7 +676,15 @@ print("Saved model.onnx", flush=True)
     provider: "cpu",
   });
   for (const exporter of ["mbext", "modelbuilder", "mobius"]) {
-    const exportOptions = options(exporter, exporter);
+    const exportOptions = {
+      ...options(exporter, exporter),
+      advancedOptions:
+        exporter === "mobius"
+          ? { optimize: "all", staticCache: true, maxSequenceLength: 128 }
+          : { excludeEmbeds: true, includeHiddenStates: true },
+    };
+    const advancedArgument =
+      exporter === "mobius" ? "--max-seq-len" : "include_hidden_states=true";
     await extension.receive({
       type: "export-preview",
       requestId: 1,
@@ -689,6 +698,7 @@ print("Saved model.onnx", flush=True)
           exporter === "mbext" ? "modelbuilder.builder" : exporter,
         ),
     );
+    assert.ok(extension.messages.at(-1).command.includes(advancedArgument));
     await extension.receive({
       type: "export",
       actionId: `ui:export:${exporter}`,
@@ -708,6 +718,17 @@ print("Saved model.onnx", flush=True)
       exportOptions.directory,
     );
     assert.match(await readFile(result.script, "utf8"), /subprocess.run/);
+    assert.ok(
+      (await readFile(result.script, "utf8")).includes(advancedArgument),
+    );
+    assert.ok(
+      extension.events.some(
+        (event) =>
+          event.type === "export-progress" &&
+          event.actionId === `ui:export:${exporter}` &&
+          event.output?.includes(JSON.stringify(advancedArgument)),
+      ),
+    );
     assert.ok(
       extension.events.some(
         (event) =>

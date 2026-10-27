@@ -1156,6 +1156,7 @@ button:disabled {
 .save-grid label,
 .file-panel form > label,
 .file-panel fieldset > label,
+.file-panel .export-option > label,
 .file-panel #open-file-list > label,
 .file-panel > label {
   display: block;
@@ -1167,6 +1168,12 @@ button:disabled {
 }
 .file-panel p {
   line-height: 1.5;
+}
+.export-advanced {
+  margin-top: 12px;
+}
+.export-advanced > summary {
+  cursor: pointer;
 }
 #export-timings {
   width: 100%;

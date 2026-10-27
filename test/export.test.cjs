@@ -291,6 +291,376 @@ test("defaults to model/exporter folders and passes every listed precision/devic
       }
 });
 
+test("preserves the mbext layer limit through download, output retries and reproduction scripts", async (t) => {
+  const root = await directory(t);
+  const hub = await exportHub(t);
+  const previous = process.env.HF_ENDPOINT;
+  process.env.HF_ENDPOINT = hub.endpoint;
+  t.after(() => {
+    if (previous === undefined) delete process.env.HF_ENDPOINT;
+    else process.env.HF_ENDPOINT = previous;
+  });
+  const plan = exportPlan({ ...options(root), layerCount: 2 }, python);
+  assert.deepEqual(plan.args.slice(-3), [
+    "--extra_options",
+    "hf_remote=false",
+    "num_hidden_layers=2",
+  ]);
+  assert.match(plan.command, /num_hidden_layers=2/);
+  await writeFile(path.join(root, "existing.txt"), "Keep this output");
+  const retry = await prepareExportPlan(plan, new AbortController().signal);
+  assert.notEqual(retry.directory, root);
+  const local = await downloadExportSource(
+    retry,
+    path.join(root, "cache"),
+    new AbortController().signal,
+    () => {},
+  );
+  assert.equal(local.layerCount, 2);
+  assert.deepEqual(local.args.slice(-3), plan.args.slice(-3));
+  assert.equal(local.script, retry.script);
+  local.args = [
+    "-u",
+    "-c",
+    `import pathlib, shutil, sys
+assert sys.argv[-3:] == ["--extra_options", "hf_remote=false", "num_hidden_layers=2"]
+shutil.copyfile(sys.argv[1], pathlib.Path(sys.argv[2]) / "model.onnx")
+`,
+    path.join(__dirname, "models", "relu.onnx"),
+    local.directory,
+    ...local.args,
+  ];
+  assert.deepEqual(
+    await runExport(local, new AbortController().signal, () => {}),
+    [path.join(local.directory, "model.onnx")],
+  );
+  assert.match(await readFile(local.script, "utf8"), /num_hidden_layers=2/);
+});
+
+test("rejects invalid or unsupported exporter layer limits", () => {
+  const destination = path.join(tmpdir(), "layer-limit");
+  for (const layerCount of [0, -1, 1.5, NaN, Infinity, 2 ** 53, "2", null])
+    assert.throws(
+      () => exportPlan({ ...options(destination), layerCount }, python),
+      /layer limit must be a positive integer/,
+    );
+  assert.throws(
+    () =>
+      exportPlan({ ...options(destination, "mobius"), layerCount: 2 }, python),
+    /builder layer limit/,
+  );
+  assert.ok(
+    !exportPlan(options(destination), python).args.some((arg) =>
+      arg.startsWith("num_hidden_layers="),
+    ),
+  );
+});
+
+test("builds advanced arguments using each exporter's supported CLI", () => {
+  const destination = path.join(tmpdir(), "advanced-export");
+  for (const exporter of ["mbext", "modelbuilder"]) {
+    const plan = exportPlan(
+      {
+        ...options(destination, exporter),
+        precision: "int4",
+        layerCount: 2,
+        advancedOptions: {
+          excludeEmbeds: true,
+          includeHiddenStates: true,
+          pruneLmHead: true,
+          useQdq: true,
+          blockSize: 64,
+          quantizationAlgorithm: "k_quant",
+          ...(exporter === "mbext" ? { opset: 20, maxShardSize: "2gb" } : {}),
+        },
+      },
+      python,
+    );
+    assert.equal(
+      plan.args.filter((arg) => arg === "--extra_options").length,
+      1,
+    );
+    const extra = plan.args.slice(plan.args.indexOf("--extra_options") + 1);
+    assert.deepEqual(extra, [
+      ...(exporter === "mbext" ? ["hf_remote=false"] : []),
+      "num_hidden_layers=2",
+      "exclude_embeds=true",
+      "include_hidden_states=true",
+      "prune_lm_head=true",
+      "use_qdq=true",
+      ...(exporter === "mbext"
+        ? ["int4_block_size=64", "int4_algo_config=k_quant"]
+        : ["block_size=64", "algo_config=k_quant"]),
+      ...(exporter === "mbext" ? ["--max-shard-size", "2GB"] : []),
+    ]);
+    assert.equal(plan.args.includes("--onnx_opset"), exporter === "mbext");
+    if (exporter === "mbext")
+      assert.equal(plan.args[plan.args.indexOf("--onnx_opset") + 1], "20");
+    const headless = exportPlan(
+      {
+        ...options(destination, exporter),
+        advancedOptions: { excludeLmHead: true, useQdq: false },
+      },
+      python,
+    );
+    assert.ok(headless.args.includes("exclude_lm_head=true"));
+    assert.ok(!headless.args.includes("use_qdq=true"));
+  }
+  const plan = exportPlan(
+    {
+      ...options(destination, "mobius"),
+      advancedOptions: {
+        noWeights: true,
+        optimize: "all",
+        externalData: "safetensors",
+        maxShardSize: "2GB",
+        staticCache: true,
+        maxSequenceLength: 256,
+        runtime: "ort-genai",
+      },
+    },
+    python,
+  );
+  assert.deepEqual(plan.args.slice(12), [
+    "--no-weights",
+    "--features",
+    "static-cache",
+    "--optimize",
+    "all",
+    "--external-data",
+    "safetensors",
+    "--max-seq-len",
+    "256",
+    "--runtime",
+    "ort-genai",
+    "--max-shard-size",
+    "2GB",
+  ]);
+});
+
+test("validates advanced option types, exporter compatibility and dependencies", () => {
+  const destination = path.join(tmpdir(), "advanced-options");
+  for (const [exporter, advancedOptions, precision = "int4"] of [
+    ["mbext", null],
+    ["mbext", []],
+    ["mbext", "exclude_embeds=true"],
+    ["mbext", { arbitrary: true }],
+    ["mbext", { excludeEmbeds: "true" }],
+    ["mbext", { blockSize: 3 }],
+    ["mbext", { blockSize: "32" }],
+    ["mbext", { quantizationAlgorithm: "--injected" }],
+    ["mbext", { opset: 0 }],
+    ["mbext", { opset: 1.5 }],
+    ["mbext", { maxShardSize: "0GB" }],
+    ["mbext", { maxShardSize: "2" }],
+    ["mobius", { maxShardSize: "2" }],
+    ["mbext", { maxShardSize: "2GB\n--reuse-weights" }],
+    ["mbext", { excludeLmHead: true, includeHiddenStates: true }],
+    ["mbext", { excludeLmHead: true, pruneLmHead: true }],
+    ["mbext", { useQdq: true }, "fp32"],
+    ["mbext", { blockSize: 32 }, "fp16"],
+    ["mbext", { quantizationAlgorithm: "rtn" }, "bf16"],
+    ["mbext", { noWeights: true }],
+    ["modelbuilder", { opset: 20 }],
+    ["modelbuilder", { maxShardSize: "2GB" }],
+    ["mobius", { excludeEmbeds: true }],
+    ["mobius", { blockSize: 32 }],
+    ["mobius", { noWeights: "true" }],
+    ["mobius", { staticCache: 1 }],
+    ["mobius", { optimize: "--model" }],
+    ["mobius", { externalData: "unknown" }],
+    ["mobius", { runtime: "unknown" }],
+    ["mobius", { maxSequenceLength: 128 }],
+    ["mobius", { staticCache: true, maxSequenceLength: -1 }],
+  ])
+    assert.throws(
+      () =>
+        exportPlan(
+          { ...options(destination, exporter), precision, advancedOptions },
+          python,
+        ),
+      Error,
+      `${exporter}: ${JSON.stringify(advancedOptions)}`,
+    );
+});
+
+test("restricts builder quantization options to INT4", () => {
+  const destination = path.join(tmpdir(), "quantization-options");
+  for (const exporter of ["mbext", "modelbuilder"]) {
+    for (const advancedOptions of [
+      { useQdq: true },
+      { blockSize: 32 },
+      { quantizationAlgorithm: "rtn" },
+    ]) {
+      assert.throws(
+        () =>
+          exportPlan(
+            {
+              ...options(destination, exporter),
+              precision: "int2",
+              advancedOptions,
+            },
+            python,
+          ),
+        /Quantization options require INT4 precision/,
+      );
+    }
+    assert.equal(
+      exportPlan(
+        { ...options(destination, exporter), precision: "int2" },
+        python,
+      ).precision,
+      "int2",
+    );
+  }
+});
+
+test("accepts explicit shard-size units", () => {
+  const destination = path.join(tmpdir(), "shard-size-options");
+  for (const exporter of ["mbext", "mobius"]) {
+    for (const size of ["2B", "2kb", "2MB", "2gb"]) {
+      const plan = exportPlan(
+        {
+          ...options(destination, exporter),
+          advancedOptions: { maxShardSize: size },
+        },
+        python,
+      );
+      assert.equal(
+        plan.args[plan.args.indexOf("--max-shard-size") + 1],
+        size.toUpperCase(),
+      );
+    }
+  }
+});
+
+test("preserves advanced options through cached downloads, retries and reproduction", async (t) => {
+  const root = await directory(t);
+  const hub = await exportHub(t);
+  const previous = process.env.HF_ENDPOINT;
+  process.env.HF_ENDPOINT = hub.endpoint;
+  t.after(() => {
+    if (previous === undefined) delete process.env.HF_ENDPOINT;
+    else process.env.HF_ENDPOINT = previous;
+  });
+  for (const exporter of ["mbext", "modelbuilder", "mobius"]) {
+    const advancedOptions =
+      exporter === "mobius"
+        ? { noWeights: true, optimize: "skip_norm", maxShardSize: "1GB" }
+        : {
+            excludeEmbeds: true,
+            excludeLmHead: true,
+            blockSize: 64,
+            quantizationAlgorithm: "k_quant",
+          };
+    const plan = exportPlan(
+      {
+        ...options(path.join(root, exporter), exporter),
+        precision: "int4",
+        advancedOptions,
+      },
+      python,
+    );
+    await mkdir(plan.directory);
+    await writeFile(path.join(plan.directory, "existing.txt"), "Keep output");
+    const retry = await prepareExportPlan(plan, new AbortController().signal);
+    assert.notEqual(retry.directory, plan.directory);
+    const local = await downloadExportSource(
+      retry,
+      path.join(root, "cache"),
+      new AbortController().signal,
+      () => {},
+    );
+    assert.deepEqual(local.advancedOptions, advancedOptions);
+    assert.deepEqual(local.args.slice(8), retry.args.slice(8));
+    const expectedOptions =
+      exporter === "mobius"
+        ? ["--no-weights"]
+        : exporter === "mbext"
+          ? [
+              "exclude_lm_head=true",
+              "int4_block_size=64",
+              "int4_algo_config=k_quant",
+            ]
+          : ["exclude_lm_head=true", "block_size=64", "algo_config=k_quant"];
+    local.args = [
+      "-u",
+      "-c",
+      `import pathlib, shutil, sys
+assert all(option in sys.argv[3:] for option in ${JSON.stringify(expectedOptions)})
+pathlib.Path(sys.argv[2]).mkdir(parents=True, exist_ok=True)
+shutil.copyfile(sys.argv[1], pathlib.Path(sys.argv[2]) / "model.onnx")
+`,
+      path.join(__dirname, "models", "relu.onnx"),
+      local.directory,
+      ...local.args,
+    ];
+    await runExport(local, new AbortController().signal, () => {});
+    const script = await readFile(local.script, "utf8");
+    for (const option of expectedOptions) assert.ok(script.includes(option));
+    await promisify(execFile)(python, [local.script]);
+  }
+});
+
+test("Mobius graph-only conversion caches pinned metadata without downloading weights", async (t) => {
+  const root = await directory(t);
+  const hub = await exportHub(t);
+  const previous = process.env.HF_ENDPOINT;
+  process.env.HF_ENDPOINT = hub.endpoint;
+  t.after(() => {
+    if (previous === undefined) delete process.env.HF_ENDPOINT;
+    else process.env.HF_ENDPOINT = previous;
+  });
+  const plan = exportPlan(
+    { ...options(root, "mobius"), advancedOptions: { noWeights: true } },
+    python,
+  );
+  const cache = path.join(root, "cache");
+  const local = await downloadExportSource(
+    plan,
+    cache,
+    new AbortController().signal,
+    () => {},
+  );
+  assert.deepEqual(await readdir(local.model), ["config.json"]);
+  assert.ok(local.args.includes("--no-weights"));
+  assert.ok(
+    hub.requests
+      .filter(({ pathname }) => pathname.includes("/resolve/"))
+      .every(
+        ({ pathname }) =>
+          pathname.endsWith("/config.json") && pathname.includes(hub.revision),
+      ),
+  );
+  await downloadExportSource(
+    exportPlan(options(root, "mobius"), python),
+    cache,
+    new AbortController().signal,
+    () => {},
+  );
+  assert.deepEqual(await readdir(local.model), [
+    "config.json",
+    "model.safetensors",
+  ]);
+  const configOnly = { ...options(root, "mobius"), model: "owner/config-only" };
+  const metadata = await downloadExportSource(
+    exportPlan({ ...configOnly, advancedOptions: { noWeights: true } }, python),
+    cache,
+    new AbortController().signal,
+    () => {},
+  );
+  assert.deepEqual(await readdir(metadata.model), ["config.json"]);
+  await assert.rejects(
+    downloadExportSource(
+      exportPlan(configOnly, python),
+      cache,
+      new AbortController().signal,
+      () => {},
+    ),
+    /No supported root checkpoint found/,
+  );
+});
+
 test("expands model and exporter directory templates without allowing model path traversal", async (t) => {
   const root = await directory(t);
   const template = path.join("base", "<model_id>", "<exporter>");

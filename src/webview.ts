@@ -101,6 +101,50 @@ export function webviewHtml(
                 <p>All precisions are available for every exporter and device. Unsupported combinations are reported by the exporter.</p>
                 <label for="export-provider">Target device</label>
                 <select id="export-provider"><option value="cpu">CPU</option><option value="cuda">CUDA</option></select>
+                <details id="export-advanced" class="export-advanced">
+                  <summary>Advanced options</summary>
+                  <div id="export-layer-options" class="export-option" data-exporters="mbext modelbuilder" hidden>
+                    <label for="export-layer-count">Layer limit (test model)</label>
+                    <input id="export-layer-count" type="number" min="1" step="1" placeholder="All layers" disabled>
+                  </div>
+                  <div class="export-option" data-exporters="mbext modelbuilder" hidden>
+                    <label><input id="export-exclude-embeds" type="checkbox" data-export-option="excludeEmbeds" disabled> Exclude embeddings</label>
+                    <label><input id="export-exclude-lm-head" type="checkbox" data-export-option="excludeLmHead" disabled> Exclude language modeling head</label>
+                  </div>
+                  <div class="export-option" data-exporters="mbext modelbuilder" data-excludes="export-exclude-lm-head" hidden>
+                    <label><input id="export-include-hidden-states" type="checkbox" data-export-option="includeHiddenStates" disabled> Include hidden states</label>
+                    <label><input id="export-prune-lm-head" type="checkbox" data-export-option="pruneLmHead" disabled> Last-token logits only</label>
+                  </div>
+                  <div class="export-option" data-exporters="mbext modelbuilder" data-precisions="int4" hidden>
+                    <label><input id="export-use-qdq" type="checkbox" data-export-option="useQdq" disabled> Q/DQ quantization</label>
+                    <label for="export-block-size">Quantization block size</label>
+                    <select id="export-block-size" data-export-option="blockSize" data-number disabled><option value="">Exporter default</option><option>16</option><option>32</option><option>64</option><option>128</option><option>256</option></select>
+                    <label for="export-quantization-algorithm">Quantization algorithm</label>
+                    <select id="export-quantization-algorithm" data-export-option="quantizationAlgorithm" disabled><option value="">Exporter default</option><option value="rtn">RTN</option><option value="rtn_last">RTN, INT8 last MatMul</option><option value="k_quant">K-quant</option><option value="k_quant_mixed">K-quant mixed</option><option value="k_quant_last">K-quant, INT8 last MatMul</option></select>
+                  </div>
+                  <div class="export-option" data-exporters="mbext" hidden>
+                    <label for="export-opset">ONNX opset</label>
+                    <input id="export-opset" type="number" min="1" step="1" placeholder="Exporter default" data-export-option="opset" disabled>
+                  </div>
+                  <div class="export-option" data-exporters="mbext mobius" hidden>
+                    <label for="export-max-shard-size">Maximum weight file size</label>
+                    <input id="export-max-shard-size" placeholder="2GB" pattern="[1-9][0-9]*([KkMmGg]?[Bb])" data-export-option="maxShardSize" disabled>
+                  </div>
+                  <div class="export-option" data-exporters="mobius" hidden>
+                    <label><input id="export-no-weights" type="checkbox" data-export-option="noWeights" disabled> Graph without weights</label>
+                    <label for="export-optimize">Graph optimizations</label>
+                    <select id="export-optimize" data-export-option="optimize" disabled><option value="">Exporter default</option><option value="all">All</option><option value="group_query_attention">Group Query Attention</option><option value="packed_attention">Packed Attention</option><option value="skip_norm">Skip normalization</option></select>
+                    <label for="export-external-data">Weight file format</label>
+                    <select id="export-external-data" data-export-option="externalData" disabled><option value="">Exporter default</option><option value="onnx">ONNX external data</option><option value="safetensors">Safetensors</option></select>
+                    <label for="export-runtime">Runtime configuration</label>
+                    <select id="export-runtime" data-export-option="runtime" disabled><option value="">None</option><option value="ort-genai">ONNX Runtime GenAI</option><option value="onnx-genai">ONNX GenAI</option></select>
+                    <label><input id="export-static-cache" type="checkbox" data-export-option="staticCache" disabled> Static KV cache</label>
+                  </div>
+                  <div class="export-option" data-exporters="mobius" data-requires="export-static-cache" hidden>
+                    <label for="export-max-sequence-length">Maximum sequence length</label>
+                    <input id="export-max-sequence-length" type="number" min="1" step="1" placeholder="Model default" data-export-option="maxSequenceLength" disabled>
+                  </div>
+                </details>
               </fieldset>
               <p id="export-script"></p>
               <progress id="export-progress" aria-label="Converting ONNX model" hidden></progress>

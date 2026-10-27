@@ -1,4 +1,5 @@
 const assert = require("node:assert/strict");
+const { EventEmitter, once } = require("node:events");
 const { readFileSync } = require("node:fs");
 const { test } = require("node:test");
 const { JSDOM } = require("jsdom");
@@ -12,6 +13,7 @@ const { webviewHtml } = require("../dist/webview");
 
 function openViewer(t, initialTab = "model", setup = () => {}) {
   const messages = [];
+  const postedMessages = new EventEmitter();
   const events = [];
   const dom = new JSDOM(
     webviewHtml(
@@ -35,7 +37,10 @@ function openViewer(t, initialTab = "model", setup = () => {}) {
   dom.window.acquireVsCodeApi = () => ({
     postMessage: (message) => {
       events.push(message);
-      if (message.type !== "interaction") messages.push(message);
+      if (message.type !== "interaction") {
+        messages.push(message);
+        postedMessages.emit(`message:${message.type}`, message);
+      }
     },
   });
   let viewport = { width: 1060, height: 350 };
@@ -102,6 +107,19 @@ function openViewer(t, initialTab = "model", setup = () => {}) {
     document: dom.window.document,
     window: dom.window,
     messages,
+    waitForMessage: async (type) => {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 10000);
+      try {
+        return (
+          await once(postedMessages, `message:${type}`, {
+            signal: controller.signal,
+          })
+        )[0];
+      } finally {
+        clearTimeout(timer);
+      }
+    },
     events,
     load,
     resize,
@@ -5464,6 +5482,197 @@ test("renders the demo, inspects its operator and requests a real file", (t) => 
   assert.notEqual(graph.getAttribute("viewBox"), initialViewBox);
   document.getElementById("zoom-fit").click();
   assert.equal(graph.getAttribute("viewBox"), initialViewBox);
+});
+
+test("builder layer limits reach previews and submissions without leaking into Mobius", async (t) => {
+  const { document, window, messages, waitForMessage } = openViewer(t);
+  const byId = (id) => document.getElementById(id);
+  const change = (id, value) => {
+    byId(id).value = value;
+    byId(id).dispatchEvent(new window.Event("change", { bubbles: true }));
+  };
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: { type: "load-state", pending: false },
+    }),
+  );
+  byId("export-model").click();
+  assert.equal(byId("export-advanced").open, false);
+  assert.equal(byId("export-layer-options").hidden, false);
+  assert.equal(byId("export-layer-count").disabled, false);
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: {
+        type: "settings-info",
+        application: { downloadDirectory: "/downloads", pythonPath: "python3" },
+        viewer: { panels: { operator: true, find: true, metadata: false } },
+        trusted: true,
+        exportHistory: { exporter: "mbext", models: [], directories: [] },
+      },
+    }),
+  );
+  assert.equal(byId("export-layer-options").hidden, false);
+  assert.equal(byId("export-layer-count").disabled, false);
+  change("export-source", "owner/model");
+  change("export-directory", "/tmp/layer-limit");
+  change("export-layer-count", "2");
+  assert.equal(
+    (await waitForMessage("export-preview")).exportOptions.layerCount,
+    2,
+  );
+  for (const exporter of ["modelbuilder", "mobius"]) {
+    change("export-tool", exporter);
+    assert.equal(byId("export-layer-options").hidden, exporter === "mobius");
+    assert.equal(byId("export-layer-count").disabled, exporter === "mobius");
+    assert.equal(
+      (await waitForMessage("export-preview")).exportOptions.layerCount,
+      exporter === "mobius" ? undefined : 2,
+    );
+  }
+  change("export-tool", "mbext");
+  assert.equal(byId("export-layer-count").value, "2");
+  change("export-layer-count", "");
+  assert.equal(
+    (await waitForMessage("export-preview")).exportOptions.layerCount,
+    undefined,
+  );
+  change("export-layer-count", "2");
+  byId("export-form").dispatchEvent(
+    new window.Event("submit", { cancelable: true }),
+  );
+  assert.equal(
+    messages.findLast((message) => message.type === "export").exportOptions
+      .layerCount,
+    2,
+  );
+});
+
+test("advanced export options stay folded and omit hidden, unsupported or conflicting fields", async (t) => {
+  const { document, window, messages, waitForMessage } = openViewer(t);
+  const byId = (id) => document.getElementById(id);
+  const change = (id, value) => {
+    if (typeof value === "boolean") byId(id).checked = value;
+    else byId(id).value = value;
+    byId(id).dispatchEvent(new window.Event("change", { bubbles: true }));
+  };
+  const preview = async () => {
+    return structuredClone(
+      (await waitForMessage("export-preview")).exportOptions,
+    );
+  };
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: { type: "load-state", pending: false },
+    }),
+  );
+  byId("export-model").click();
+  assert.equal(byId("export-advanced").open, false);
+  change("export-source", "owner/model");
+  change("export-directory", "/tmp/advanced-export");
+  assert.equal((await preview()).advancedOptions, undefined);
+  byId("export-advanced").open = true;
+  change("export-tool", "mbext");
+  change("export-precision", "int4");
+  change("export-exclude-embeds", true);
+  change("export-include-hidden-states", true);
+  change("export-prune-lm-head", true);
+  change("export-use-qdq", true);
+  change("export-block-size", "64");
+  change("export-quantization-algorithm", "k_quant");
+  change("export-opset", "20");
+  change("export-max-shard-size", "2GB");
+  assert.equal(byId("export-max-shard-size").checkValidity(), true);
+  change("export-max-shard-size", "2");
+  assert.equal(byId("export-max-shard-size").checkValidity(), false);
+  change("export-max-shard-size", "2GB");
+  const builderOptions = {
+    excludeEmbeds: true,
+    includeHiddenStates: true,
+    pruneLmHead: true,
+    useQdq: true,
+    blockSize: 64,
+    quantizationAlgorithm: "k_quant",
+  };
+  assert.deepEqual((await preview()).advancedOptions, {
+    ...builderOptions,
+    opset: 20,
+    maxShardSize: "2GB",
+  });
+  change("export-exclude-lm-head", true);
+  assert.equal(
+    byId("export-include-hidden-states").closest(".export-option").hidden,
+    true,
+  );
+  assert.equal(byId("export-prune-lm-head").disabled, true);
+  const headless = (await preview()).advancedOptions;
+  assert.equal(headless.excludeLmHead, true);
+  assert.equal(headless.includeHiddenStates, undefined);
+  assert.equal(headless.pruneLmHead, undefined);
+  change("export-exclude-lm-head", false);
+  assert.equal(byId("export-include-hidden-states").checked, true);
+  change("export-tool", "modelbuilder");
+  assert.equal(byId("export-opset").disabled, true);
+  assert.equal(byId("export-max-shard-size").disabled, true);
+  assert.deepEqual((await preview()).advancedOptions, builderOptions);
+  for (const precision of ["int2", "fp32"]) {
+    change("export-precision", precision);
+    assert.equal(
+      byId("export-block-size").closest(".export-option").hidden,
+      true,
+    );
+    assert.equal(byId("export-use-qdq").disabled, true);
+    assert.equal(byId("export-quantization-algorithm").disabled, true);
+    assert.deepEqual((await preview()).advancedOptions, {
+      excludeEmbeds: true,
+      includeHiddenStates: true,
+      pruneLmHead: true,
+    });
+  }
+  change("export-tool", "mobius");
+  assert.equal(byId("export-exclude-embeds").disabled, true);
+  assert.equal(byId("export-no-weights").disabled, false);
+  assert.equal(byId("export-max-sequence-length").disabled, true);
+  change("export-no-weights", true);
+  change("export-optimize", "all");
+  change("export-external-data", "safetensors");
+  change("export-runtime", "ort-genai");
+  change("export-static-cache", true);
+  assert.equal(byId("export-max-sequence-length").disabled, false);
+  change("export-max-sequence-length", "128");
+  const mobiusOptions = {
+    maxShardSize: "2GB",
+    noWeights: true,
+    optimize: "all",
+    externalData: "safetensors",
+    runtime: "ort-genai",
+    staticCache: true,
+    maxSequenceLength: 128,
+  };
+  assert.deepEqual((await preview()).advancedOptions, mobiusOptions);
+  change("export-max-sequence-length", "-1");
+  assert.equal(byId("export-form").checkValidity(), false);
+  change("export-static-cache", false);
+  assert.equal(
+    byId("export-max-sequence-length").closest(".export-option").hidden,
+    true,
+  );
+  assert.equal(byId("export-max-sequence-length").disabled, true);
+  assert.equal(byId("export-form").checkValidity(), true);
+  assert.equal((await preview()).advancedOptions.maxSequenceLength, undefined);
+  change("export-static-cache", true);
+  change("export-max-sequence-length", "128");
+  byId("export-advanced").open = false;
+  assert.deepEqual((await preview()).advancedOptions, mobiusOptions);
+  byId("export-form").dispatchEvent(
+    new window.Event("submit", { cancelable: true }),
+  );
+  assert.deepEqual(
+    {
+      ...messages.findLast((message) => message.type === "export").exportOptions
+        .advancedOptions,
+    },
+    mobiusOptions,
+  );
 });
 
 test("export defaults follow the download directory without replacing chosen paths, and histories fill safe suggestions", async (t) => {
