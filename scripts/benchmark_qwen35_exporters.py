@@ -2,8 +2,8 @@
 """Compare five Qwen3.5-4B text-decoder export entry points, without quantization.
 
 Usage:
-    python scripts/benchmark_qwen35_exporters.py --output /data/qwen35-benchmark
-    python scripts/benchmark_qwen35_exporters.py --output /data/qwen35-cpu \
+    python scripts/benchmark_qwen35_exporters.py
+    python scripts/benchmark_qwen35_exporters.py --output qwen35-cpu.json \
         --profiles cpu-fp32
 
 Requires Python >= 3.10, huggingface_hub, onnx and the selected exporters:
@@ -31,10 +31,12 @@ and Olive caches; only the source download is shared. ONNX header validation is
 timed separately and does not load external weights. Each selected exporter/profile
 is measured once, without warmup. Filesystem caches are not flushed.
 
-results.json is updated after every run, including failures. See each run.log
-and recorded command/config for reproduction. Existing output is never reused.
-Full runs need substantial RAM, CUDA resources where required, and disk space:
-the ten FP32/FP16 exports can retain well over 100 GB.
+The output JSON file is updated after every export, including failures, and is
+replaced on subsequent invocations. It contains timings, logs and commands/configs.
+Exported models and per-run caches use temporary directories, removed after each
+measurement; only the shared download cache and the JSON report are retained.
+Runs need substantial RAM, CUDA resources where required, and temporary disk space
+for one exported model and its intermediate artifacts. TMPDIR controls its location.
 """
 
 from __future__ import annotations
@@ -54,6 +56,7 @@ from copy import deepcopy
 from importlib.metadata import PackageNotFoundError, version
 from importlib.util import find_spec
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from urllib.request import urlopen
 
 MODEL = "Qwen/Qwen3.5-4B"
@@ -352,7 +355,9 @@ def run_process(command: list[str], directory: Path, log: Path, timeout: float) 
             process.wait()
             raise
     if returncode:
-        raise RuntimeError(f"Exporter exited with status {returncode}; see {log}")
+        raise RuntimeError(
+            f"Exporter exited with status {returncode}; see log in report"
+        )
 
 
 def validate_output(output: Path, precision: str) -> dict:
@@ -459,8 +464,8 @@ def main() -> int:
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("qwen35-benchmark"),
-        help="New directory for models, logs and results.json (default: %(default)s).",
+        default=Path("qwen35-benchmark.json"),
+        help="JSON results file (default: %(default)s).",
     )
     default_cache = (
         Path(os.environ.get("HF_HOME", Path.home() / ".cache" / "huggingface")) / "hub"
@@ -495,7 +500,6 @@ def main() -> int:
     if not re.fullmatch(r"[a-f0-9]{40}", args.recipe_revision):
         parser.error("--recipe-revision must be an immutable 40-character commit.")
     output = args.output.expanduser().resolve()
-    output.mkdir(parents=True, exist_ok=False)
     cache = args.cache_dir.expanduser().resolve()
     report = {
         "model": MODEL,
@@ -505,7 +509,7 @@ def main() -> int:
         "arguments": vars(args) | {"output": str(output), "cache_dir": str(cache)},
         "results": [],
     }
-    report_path = output / "results.json"
+    report_path = output
     try:
         print(f"Downloading shared checkpoint: {MODEL}", flush=True)
         report["model_download"] = download_model(cache, args.revision)
@@ -527,69 +531,73 @@ def main() -> int:
                 )
         for profile in dict.fromkeys(args.profiles):
             for exporter in dict.fromkeys(args.exporters):
-                directory = (
-                    output / f"{len(report['results']) + 1:03d}-{profile}-{exporter}"
-                )
-                directory.mkdir()
-                artifact = directory / "model"
-                row = {
-                    "exporter": exporter,
-                    "profile": profile,
-                    "status": "incomplete",
-                    "log": str(directory / "run.log"),
-                    "backend": (
-                        "ModelBuilder"
-                        if exporter in ("modelbuilder", "olive", "olive-recipes")
-                        else exporter
-                    ),
-                }
-                try:
-                    row["command"] = export_command(
-                        exporter,
-                        source,
-                        artifact,
-                        profile,
-                        directory,
-                        recipes.get(profile, {}).get("config"),
-                    )
-                    print(
-                        f"{profile:10} {exporter:13}: creating model",
-                        flush=True,
-                    )
-                    start = time.perf_counter()
+                with TemporaryDirectory(prefix=f"qwen35-{profile}-{exporter}-") as work:
+                    directory = Path(work)
+                    artifact = directory / "model"
+                    log = directory / "run.log"
+                    row = {
+                        "exporter": exporter,
+                        "profile": profile,
+                        "status": "incomplete",
+                        "backend": (
+                            "ModelBuilder"
+                            if exporter in ("modelbuilder", "olive", "olive-recipes")
+                            else exporter
+                        ),
+                    }
                     try:
-                        run_process(
-                            row["command"], directory, Path(row["log"]), args.timeout
+                        row["command"] = export_command(
+                            exporter,
+                            source,
+                            artifact,
+                            profile,
+                            directory,
+                            recipes.get(profile, {}).get("config"),
                         )
-                    finally:
-                        row["creation_seconds"] = time.perf_counter() - start
-                    validation_start = time.perf_counter()
-                    try:
-                        row.update(validate_output(artifact, PROFILES[profile][1]))
-                    finally:
-                        row["validation_seconds"] = (
-                            time.perf_counter() - validation_start
+                        if exporter == "olive-recipes":
+                            row["recipe_config"] = json.loads(
+                                (directory / "recipe.json").read_text(encoding="utf-8")
+                            )
+                        print(
+                            f"{profile:10} {exporter:13}: creating model",
+                            flush=True,
                         )
-                    row["status"] = "ok"
-                except (
-                    OSError,
-                    ValueError,
-                    RuntimeError,
-                    ImportError,
-                    subprocess.SubprocessError,
-                ) as error:
-                    row.update(status="failed", error=str(error))
-                    print(
-                        f"FAILED {profile} {exporter}: {error}",
-                        file=sys.stderr,
-                        flush=True,
-                    )
-                except KeyboardInterrupt:
-                    row["status"] = "cancelled"
-                    raise
-                finally:
-                    report["results"].append(row)
-                    write_json(report_path, report)
+                        start = time.perf_counter()
+                        try:
+                            run_process(row["command"], directory, log, args.timeout)
+                        finally:
+                            row["creation_seconds"] = time.perf_counter() - start
+                        validation_start = time.perf_counter()
+                        try:
+                            row.update(validate_output(artifact, PROFILES[profile][1]))
+                        finally:
+                            row["validation_seconds"] = (
+                                time.perf_counter() - validation_start
+                            )
+                        row["status"] = "ok"
+                    except (
+                        OSError,
+                        ValueError,
+                        RuntimeError,
+                        ImportError,
+                        subprocess.SubprocessError,
+                    ) as error:
+                        row.update(status="failed", error=str(error))
+                        print(
+                            f"FAILED {profile} {exporter}: {error}",
+                            file=sys.stderr,
+                            flush=True,
+                        )
+                    except KeyboardInterrupt:
+                        row["status"] = "cancelled"
+                        raise
+                    finally:
+                        if log.is_file():
+                            row["log"] = log.read_text(
+                                encoding="utf-8", errors="replace"
+                            )
+                        report["results"].append(row)
+                        write_json(report_path, report)
                 elapsed = row.get("creation_seconds")
                 duration = "not started" if elapsed is None else f"{elapsed:.3f}s"
                 print(
