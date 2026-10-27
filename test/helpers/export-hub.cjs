@@ -16,6 +16,9 @@ async function exportHub(t, onRequest = () => {}) {
           : {}),
       }),
     ),
+    ...(model === "owner/custom"
+      ? { "modeling_custom.py": Buffer.from("# Custom model code\n") }
+      : {}),
     ...(model === "owner/config-only"
       ? {}
       : model === "owner/sharded"

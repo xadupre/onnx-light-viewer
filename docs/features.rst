@@ -39,7 +39,7 @@ See :doc:`features/backend_tests`; this opens graphs, not a test runner.
 Converting models
 ^^^^^^^^^^^^^^^^^
 
-Run installed mbext, modelbuilder or Mobius exporters with visible commands,
+Run installed mbext, modelbuilder, Mobius or Olive exporters with visible commands,
 live output, cancellation and a saved reproduction script; open their output.
 See :doc:`features/exporting_models`. Requires Python and a trusted workspace;
 exporter packages and checkpoints are not installed automatically.
@@ -49,6 +49,28 @@ exporter packages and checkpoints are not installed automatically.
    :width: 100%
 
    Configure an exporter before launching conversion.
+
+Olive export, quantization and recipes
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Export a Hugging Face model ID or local checkpoint to ONNX with Olive, optimize
+an ONNX model, or select a model-specific recipe. Configure precision, CPU/CUDA
+target and advanced export parameters. Local-only ONNX quantization remains a
+separate workflow.
+The recipe catalogue is cached by Git commit, retains version-pinned entries and
+shows their required Olive version. See :doc:`features/exporting_models`.
+
+.. figure:: _static/feature-olive.png
+   :alt: Olive checkpoint export with model ID, target, precision and advanced parameters.
+   :width: 100%
+
+   Export checkpoints without preparing an ONNX file first.
+
+.. figure:: _static/feature-olive-recipes.png
+   :alt: Olive recipe controls showing the pinned Git commit and Olive requirements.
+   :width: 100%
+
+   Model-specific recipes retain their own source and parameters.
 
 Navigation
 ^^^^^^^^^^

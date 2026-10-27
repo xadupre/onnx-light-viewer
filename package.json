@@ -95,5 +95,8 @@
     "node-addon-api": "^8.9.2",
     "prettier": "^3.6.0",
     "typescript": "^7.0.2"
+  },
+  "dependencies": {
+    "yaml": "^2.9.1"
   }
 }
