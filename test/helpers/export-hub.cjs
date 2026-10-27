@@ -5,7 +5,17 @@ async function exportHub(t, onRequest = () => {}) {
   const requests = [];
   const revision = "1234567890abcdef1234567890abcdef12345678";
   const files = (model) => ({
-    "config.json": Buffer.from(JSON.stringify({ modelId: model })),
+    "config.json": Buffer.from(
+      JSON.stringify({
+        modelId: model,
+        ...(model === "Qwen/Qwen3.5-4B"
+          ? {
+              model_type: "qwen3_5",
+              text_config: { model_type: "qwen3_5_text" },
+            }
+          : {}),
+      }),
+    ),
     ...(model === "owner/config-only"
       ? {}
       : model === "owner/sharded"

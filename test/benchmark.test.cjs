@@ -58,10 +58,16 @@ if args[0] == "run":
     assert config["passes"]["m"]["precision"] == "fp32"
     assert "prune_lm_head" not in config["passes"]["m"]["extra_options"]
 else:
-    flag = "--config" if args[0] == "build" else "-m" if args[0] == "capture-onnx-graph" else "-i"
+    flag = "--model" if args[0] == "build" else "-m" if args[0] == "capture-onnx-graph" else "-i"
     source = Path(args[args.index(flag) + 1])
 assert source.name == ${JSON.stringify(hub.revision)}
-model = json.loads((source / "config.json").read_text())["modelId"]
+config = json.loads((source / "config.json").read_text())
+if args[0] == "build":
+    assert "--config" not in args
+    assert ("--features" in args) == isinstance(config.get("text_config"), dict)
+    if "--features" in args:
+        assert args[args.index("--features") + 1] == "text-only"
+model = config["modelId"]
 print("source-model=" + model, flush=True)
 print("Fixture stops before model creation and ONNX validation.", flush=True)
 sys.exit(23)

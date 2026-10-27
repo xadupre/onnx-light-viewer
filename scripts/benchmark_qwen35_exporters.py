@@ -31,6 +31,8 @@ independent graph builders. The recipe is adapted to the requested precision,
 provider and unpruned logits, retaining its non-quantizing surgery. The pinned
 Qwen3.5 recipe is reused as a pipeline template with the selected checkpoint;
 changing --model does not select a different model-specific recipe.
+Mobius receives the same local snapshot through --model. Its text-only feature
+is enabled for checkpoints with a nested text_config, not plain text decoders.
 
 Creation time includes a fresh Python process, imports, loading/casting weights,
 graph construction/optimization and serialization. Each run has private output
@@ -292,7 +294,7 @@ def export_command(
         command += [
             "mobius",
             "build",
-            "--config",
+            "--model",
             str(source),
             "--output",
             str(output),
@@ -300,9 +302,10 @@ def export_command(
             "f32" if precision == "fp32" else "f16",
             "--ep",
             device,
-            "--features",
-            "text-only",
         ]
+        config = json.loads((source / "config.json").read_text(encoding="utf-8"))
+        if isinstance(config.get("text_config"), dict):
+            command += ["--features", "text-only"]
     elif exporter == "olive":
         command += [
             "olive",
