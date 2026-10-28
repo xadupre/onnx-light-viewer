@@ -4889,6 +4889,39 @@ test("selects optimization groups and previews global passes through the real we
   const results = document.getElementById("optimization-results");
   assert.match(results.textContent, /MatMulAdd/);
   assert.match(results.textContent, /GemmTranspose/);
+  const matchedPatterns = results.textContent;
+  const restoreOriginal = document.getElementById(
+    "optimization-restore-original",
+  );
+  const unfuseOptimization = document.getElementById(
+    "optimization-unfuse-last",
+  );
+  assert.equal(restoreOriginal.disabled, false);
+  assert.equal(unfuseOptimization.disabled, false);
+  document.getElementById("optimize-model").click();
+  document.getElementById("optimize-model").click();
+  await flush();
+  assert.equal(results.textContent, matchedPatterns);
+  document.getElementById("optimizer-onnxscript").click();
+  assert.equal(
+    document.getElementById("native-optimization-history").hidden,
+    true,
+  );
+  document.getElementById("optimizer-onnx-light").click();
+  assert.equal(
+    document.getElementById("native-optimization-history").hidden,
+    false,
+  );
+  assert.equal(results.textContent, matchedPatterns);
+  document.getElementById("run-optimization").click();
+  await flush();
+  assert.equal(
+    extension.messages.findLast(
+      (message) => message.type === "optimization-info",
+    ).changed,
+    false,
+  );
+  assert.equal(results.textContent, matchedPatterns);
   assert.equal(reportDialog.open, false);
   document.getElementById("show-optimization-report").click();
   assert.equal(reportDialog.open, true);
@@ -4913,9 +4946,23 @@ test("selects optimization groups and previews global passes through the real we
   assert.ok(document.querySelectorAll(".graph-node.selected").length);
   document.getElementById("undo-fusion").click();
   assert.equal(document.querySelectorAll("#unfuse-history > li").length, 1);
-  document.getElementById("unfuse-last").click();
+  unfuseOptimization.click();
+  assert.equal(restoreOriginal.disabled, true);
   await flush();
   assert.equal(count(), original);
+  assert.equal(document.getElementById("optimization-panel").hidden, false);
+  assert.equal(restoreOriginal.disabled, true);
+  assert.equal(unfuseOptimization.disabled, true);
+  assert.equal(results.querySelectorAll("button").length, 0);
+  document.getElementById("run-optimization").click();
+  await flush();
+  assert.ok(count() < original);
+  restoreOriginal.click();
+  await flush();
+  assert.equal(count(), original);
+  assert.equal(document.getElementById("optimization-panel").hidden, false);
+  assert.equal(restoreOriginal.disabled, true);
+  assert.equal(results.querySelectorAll("button").length, 0);
   assert.deepEqual(extension.errors, []);
 });
 

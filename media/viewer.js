@@ -2476,7 +2476,11 @@ window.addEventListener("message", (event) => {
     tensorListPanel.setGraph(displayedGraph);
     tensorStatisticsPanel.reset();
     memoryPanel.setGraph(displayedGraph);
-    fusionPanel.reset(displayedGraph, event.data.fusionRequestId);
+    fusionPanel.reset(
+      displayedGraph,
+      event.data.fusionRequestId,
+      event.data.file,
+    );
     render(event.data.graph, event.data.metadata);
     if (!byId("statistics-view").hidden) requestStatistics();
     else {
@@ -2487,6 +2491,7 @@ window.addEventListener("message", (event) => {
     fusionPanel.refresh();
     if (event.data.selectedNodes) focusNodes(event.data.selectedNodes);
   } else if (event.data?.type === "undo-fusion-error") {
+    fusionPanel.undoFailed(event.data);
     byId("undo-fusion").setAttribute("aria-busy", "false");
     setLoading(replacementPending);
     byId("fusion-status").textContent =

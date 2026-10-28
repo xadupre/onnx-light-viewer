@@ -173,9 +173,15 @@ no-op passes produce no candidates.
 Closing Fuse, navigating or replacing the graph discards previews.
 
 Each native optimization or applied pass is one **Unfuse** operation.
+With **onnx-light** selected, Optimize also offers **Unfuse last** and
+**Back to original model**. Undo one complete operation at a time, or restore
+the original model by undoing all session operations, including other pipeline
+stages. Optimize stays open so you can select patterns and optimize again.
 Applied patterns are listed in the optimization results and in **Unfuse**;
 click an entry to highlight its surviving result nodes. Folding a node entirely
 into an initializer leaves no operator to select.
+Optimize's **Matched patterns** list follows the active history for the current
+model or pipeline stage, including after reopening Optimize or a no-change run.
 **Save → Include fusion rewritings** works for these operations too:
 unchecked saves the optimized graph; checked saves the original and its
 replayable plan, including any initializer-preparation functions.
