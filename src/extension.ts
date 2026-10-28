@@ -2024,7 +2024,7 @@ async function configurePanel(
                 graphRevision++;
                 navigationRequest++;
                 panel.title = `ONNX: ${current.fileName ?? graph.name}${undoHistory(model).length ? " (modified)" : ""}`;
-                await sendGraph();
+                await sendGraph(undefined, message.requestId);
                 return;
               }
               if (!(

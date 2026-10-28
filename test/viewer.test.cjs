@@ -4262,6 +4262,98 @@ test("chooses the optimizer backend without losing native pattern selection", (t
   assert.deepEqual(selected(), []);
 });
 
+test("optimizer restore handles errors and ignores completion after close or navigation", (t) => {
+  const { document, window, messages } = openViewer(t);
+  const source = loadModel(
+    readFileSync(require.resolve("./models/fusion.onnx")),
+    "fusion",
+  );
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  const edited = {
+    type: "graph",
+    graph: {
+      ...source.graph(),
+      canFuse: true,
+      breadcrumbs: [
+        ...source.graph().breadcrumbs,
+        { name: "Prefill", path: [{ pipeline: "prefill" }] },
+      ],
+    },
+    file: {
+      fusionCount: 3,
+      fusionHistory: [
+        {
+          stage: "prefill",
+          matches: [{ pattern: "First pattern", nodes: [0] }],
+        },
+        {
+          stage: "prefill",
+          matches: [{ pattern: "Removed pattern", nodes: [] }],
+        },
+        { stage: "decode", matches: [{ pattern: "Other stage", nodes: [1] }] },
+      ],
+    },
+  };
+  send(edited);
+  document.getElementById("optimize-model").click();
+  send({
+    type: "fusion-patterns",
+    requestId: messages.at(-1).requestId,
+    patterns: source.fusionPatterns(),
+    optimizationPatterns: source.optimizationPatterns(),
+  });
+  const results = document.getElementById("optimization-results");
+  assert.match(results.textContent, /First pattern/);
+  assert.doesNotMatch(results.textContent, /Other stage/);
+  assert.equal(results.querySelectorAll("button")[1].disabled, true);
+  const restore = document.getElementById("optimization-restore-original");
+  restore.click();
+  let request = messages.at(-1);
+  assert.equal(request.type, "undo-fusion");
+  assert.equal(request.all, true);
+  assert.equal(restore.disabled, true);
+  send({
+    type: "undo-fusion-error",
+    requestId: request.requestId,
+    error: "Could not recover model",
+  });
+  assert.equal(restore.disabled, false);
+  assert.match(
+    document.getElementById("optimization-status").textContent,
+    /Could not recover model/,
+  );
+  restore.click();
+  request = messages.at(-1);
+  document.getElementById("optimize-model").click();
+  send({
+    type: "graph",
+    graph: source.graph(),
+    fusionRequestId: request.requestId,
+  });
+  assert.equal(document.getElementById("optimization-panel").hidden, true);
+  send(edited);
+  document.getElementById("optimize-model").click();
+  send({
+    type: "fusion-patterns",
+    requestId: messages.at(-1).requestId,
+    patterns: source.fusionPatterns(),
+    optimizationPatterns: source.optimizationPatterns(),
+  });
+  restore.click();
+  request = messages.at(-1);
+  document.querySelector("#graph-navigation button").click();
+  send({
+    type: "graph",
+    graph: source.graph(),
+    fusionRequestId: request.requestId,
+  });
+  assert.equal(document.getElementById("optimization-panel").hidden, true);
+  assert.equal(restore.disabled, true);
+  assert.notEqual(messages.at(-1).type, "fusion-patterns");
+  assert.equal(results.querySelectorAll("button").length, 0);
+});
+
 test("explains the selected pattern/node and distinguishes rejection, missing diagnostics and matches", async (t) => {
   const { document, window, messages, load } = openViewer(t);
   const source = loadModel(

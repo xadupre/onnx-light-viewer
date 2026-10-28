@@ -291,7 +291,12 @@ export function webviewHtml(
               </div>
               <button id="run-optimization" disabled>Run global optimization</button>
               <p id="optimization-status" role="status"></p>
-              <ol id="optimization-results" aria-label="Applied optimization patterns"></ol>
+              <section id="native-optimization-history">
+                <div class="fusion-selection-controls"><button id="optimization-unfuse-last" disabled>Unfuse last</button><button id="optimization-restore-original" disabled>Back to original model</button></div>
+                <p>Unfuse last reverses one complete operation. Back to original model undoes all session operations, including other pipeline stages.</p>
+                <h3>Matched patterns</h3>
+                <ol id="optimization-results" aria-label="Applied optimization patterns"></ol>
+              </section>
             </details>
             <div id="optimization-report-section" hidden>
               <button id="show-optimization-report" disabled aria-haspopup="dialog">Show optimization report</button>

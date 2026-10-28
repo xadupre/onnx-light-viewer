@@ -223,6 +223,15 @@ See :doc:`features/fusion_patterns`.
 
    Choose the optimizer before running it.
 
+With **onnx-light**, inspect **Matched patterns**, undo the last operation or
+choose **Back to original model** without leaving Optimize.
+
+.. figure:: _static/feature-optimizer-history.png
+   :alt: Native Optimize panel with matched patterns, highlighted result nodes, Unfuse last and Back to original model.
+   :width: 100%
+
+   Inspect native matches and return to the original model.
+
 Pattern groups
 ^^^^^^^^^^^^^^
 

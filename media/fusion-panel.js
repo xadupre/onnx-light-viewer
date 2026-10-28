@@ -18,6 +18,9 @@ function createFusionPanel({
   let optimizationReport;
   let optimizationBackend = "onnx-light";
   let selectedOptimizationResult = false;
+  let optimizationHistory = [];
+  let undoCount = 0;
+  let restoreRequest;
   let scenarios = [];
   let selectedStep;
   let diagnosticRequest = 0;
@@ -308,6 +311,13 @@ function createFusionPanel({
       optimizationBackend !== "onnx-light";
     byId("onnxscript-optimization-note").hidden =
       optimizationBackend !== "onnxscript";
+    byId("native-optimization-history").hidden =
+      optimizationBackend !== "onnx-light";
+    for (const id of [
+      "optimization-unfuse-last",
+      "optimization-restore-original",
+    ])
+      byId(id).disabled = busy || !canFuse() || !undoCount;
     for (const control of byId("fusion-matches").querySelectorAll(
       "input, button",
     ))
@@ -347,7 +357,7 @@ function createFusionPanel({
     for (const button of byId("optimization-results").querySelectorAll(
       "button",
     ))
-      button.disabled = busy || button.dataset.empty === "true";
+      button.disabled = busy || !canFuse() || button.dataset.empty === "true";
     updateScenario();
     if (message) byId("fusion-feedback").textContent = message;
     else if (fusionPreview) updateFusionSelection();
@@ -532,9 +542,14 @@ function createFusionPanel({
     fusionControls(fusionBusy);
   }
 
-  function showOptimizationResults(data) {
+  function showOptimizationResults() {
     byId("optimization-results").replaceChildren();
-    for (const match of data.matches) {
+    const path = fusionGraph?.breadcrumbs?.at(-1)?.path ?? [];
+    const stage = path.length === 1 ? path[0].pipeline : undefined;
+    const matches = optimizationHistory
+      .filter((operation) => operation.stage === stage)
+      .flatMap((operation) => operation.matches);
+    for (const match of matches) {
       const item = document.createElement("li");
       const button = document.createElement("button");
       button.textContent = `${match.pattern} (${match.nodes.length} nodes)`;
@@ -550,7 +565,11 @@ function createFusionPanel({
       item.append(button);
       byId("optimization-results").append(item);
     }
-    byId("optimization-picker").open = true;
+    if (!matches.length) {
+      const item = document.createElement("li");
+      item.textContent = "No applied pattern matches in this graph.";
+      byId("optimization-results").append(item);
+    }
   }
 
   function previewFusion() {
@@ -696,6 +715,7 @@ function createFusionPanel({
     byId("optimize-model").setAttribute("aria-expanded", String(!panel.hidden));
     clearFusionPreview();
     if (panel.hidden) {
+      restoreRequest = undefined;
       fusionRequest++;
       postMessage({ type: "cancel-fusion" });
     } else {
@@ -718,8 +738,21 @@ function createFusionPanel({
       optimizationBackend = backend;
       showOptimizationReport(null);
       byId("optimization-status").textContent = "";
-      byId("optimization-results").replaceChildren();
+      showOptimizationResults();
       fusionControls(fusionBusy);
+    });
+  for (const [id, all] of [
+    ["optimization-unfuse-last", false],
+    ["optimization-restore-original", true],
+  ])
+    byId(id).addEventListener("click", () => {
+      const requestId = ++fusionRequest;
+      requestAction("undo-fusion", "Undo optimization", { all, requestId });
+      restoreRequest = requestId;
+      fusionControls(true);
+      byId("optimization-status").textContent = all
+        ? "Restoring the original model…"
+        : "Unfusing the last operation…";
     });
   for (const [id, checked] of [
     ["select-optimization-patterns", true],
@@ -955,7 +988,8 @@ function createFusionPanel({
         if (data.type === "optimization-info") {
           byId("optimization-status").textContent =
             byId("fusion-status").textContent;
-          showOptimizationResults(data);
+          showOptimizationResults();
+          byId("optimization-picker").open = true;
         }
       }
     } else if (data?.type === "fusion-preview") {
@@ -972,8 +1006,13 @@ function createFusionPanel({
     }
     return true;
   }
-  function reset(graph, operationRequestId) {
+  function reset(graph, operationRequestId, file) {
+    const restoring =
+      restoreRequest !== undefined && restoreRequest === operationRequestId;
+    restoreRequest = undefined;
     fusionGraph = graph;
+    optimizationHistory = file?.fusionHistory ?? [];
+    undoCount = file?.fusionCount ?? 0;
     selectedStep = undefined;
     fusionCompletion =
       operationRequestId === fusionRequest ? operationRequestId : undefined;
@@ -992,13 +1031,26 @@ function createFusionPanel({
     byId("fusion-status").textContent = "";
     showScenarios([]);
     byId("optimization-patterns").replaceChildren();
-    byId("optimization-results").replaceChildren();
+    showOptimizationResults();
     byId("optimization-feedback").textContent = "";
     byId("optimization-status").textContent = "";
+    if (restoring) {
+      byId("optimization-panel").hidden = false;
+      byId("optimize-model").setAttribute("aria-expanded", "true");
+      fusionControls(true);
+      requestAction("fusion-patterns", "List optimization patterns", {
+        requestId: ++fusionRequest,
+      });
+    }
   }
   function setEnabled(enabled) {
     byId("fuse-pattern").disabled = !enabled;
     byId("optimize-model").disabled = !enabled;
+    for (const id of [
+      "optimization-unfuse-last",
+      "optimization-restore-original",
+    ])
+      byId(id).disabled = !enabled || fusionBusy || !undoCount;
     diagnosticControls();
   }
 
@@ -1007,13 +1059,22 @@ function createFusionPanel({
     reset,
     setEnabled,
     selectionChanged,
-    refresh: () => fusionControls(false),
+    refresh: () => fusionControls(fusionBusy),
     invalidate: () => {
+      restoreRequest = undefined;
       fusionRequest++;
       fusionCompletion = undefined;
       clearFusionPreview();
       clearDiagnostic();
       showOptimizationReport(null);
+    },
+    undoFailed: (data) => {
+      if (restoreRequest === undefined || data.requestId !== restoreRequest)
+        return;
+      restoreRequest = undefined;
+      fusionControls(false);
+      byId("optimization-status").textContent =
+        `Could not undo optimization: ${data.error}`;
     },
   };
 }
