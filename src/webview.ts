@@ -276,7 +276,6 @@ export function webviewHtml(
           </section>
           <section id="optimization-panel" class="inspector-panel" aria-labelledby="optimization-title" hidden>
             <h2 id="optimization-title" class="eyebrow panel-title">Global optimization</h2>
-            <p>Run onnx-light's complete native optimization algorithm: canonicalization, repeated priority-ordered matching, constant evaluation and unused-code cleanup. Final native canonicalization rewires redundant identities without replacement operators. This is not a single matching pass.</p>
             <details id="optimization-picker" class="fusion-picker" open>
               <summary>Patterns and groups</summary>
               <fieldset id="optimization-pattern-group" disabled aria-label="Native pattern groups"><legend>Select pattern groups</legend></fieldset>

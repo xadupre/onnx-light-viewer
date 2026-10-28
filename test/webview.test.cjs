@@ -5,6 +5,24 @@ const { JSDOM } = require("jsdom");
 const { huggingFaceTasks } = require("../dist/huggingFaceTasks");
 const { webviewHtml } = require("../dist/webview");
 
+test("optimization panel keeps its controls without introductory text", (t) => {
+  const dom = new JSDOM(
+    webviewHtml((name) => name, "test-source", "test-nonce", "test"),
+  );
+  t.after(() => dom.window.close());
+  const panel = dom.window.document.getElementById("optimization-panel");
+  assert.equal(panel.querySelector(":scope > p"), null);
+  assert.equal(
+    panel.querySelector("#optimization-title").nextElementSibling.id,
+    "optimization-picker",
+  );
+  assert.ok(panel.querySelector("#optimization-patterns"));
+  assert.equal(
+    panel.querySelector("#run-optimization").textContent,
+    "Run global optimization",
+  );
+});
+
 test("tensor statistics shell exposes a labelled dialog and loads its controller before the viewer", (t) => {
   const dom = new JSDOM(
     webviewHtml((name) => name, "test-source", "test-nonce", "test"),
