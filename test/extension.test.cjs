@@ -14,7 +14,7 @@ const {
   link,
 } = require("node:fs/promises");
 const { createCipheriv, createHash, pbkdf2Sync } = require("node:crypto");
-const { spawnSync } = require("node:child_process");
+const { execFileSync, spawnSync } = require("node:child_process");
 const { createServer } = require("node:http");
 const { homedir, tmpdir } = require("node:os");
 const { createRequire } = require("node:module");
@@ -2486,7 +2486,7 @@ const hasOnnxScript =
     .status === 0;
 
 test(
-  "ONNX Script checkpoints the current snapshot and keeps native undo segments separate",
+  "ONNX Script checkpoints the current snapshot without fabricating native rewriting history",
   {
     skip:
       !hasOnnxScript &&
@@ -2625,8 +2625,93 @@ test(
     const unchanged = latest().graph;
     await optimizePython();
     assert.equal(extension.messages.at(-1).changed, false);
+    assert.equal(extension.messages.at(-1).undoSupported, true);
+    assert.match(extension.messages.at(-1).notice, /history is retained/);
     assert.deepEqual(latest().graph, unchanged);
     assert.equal(latest().file.fusionCount, 0);
+  },
+);
+
+test(
+  "ONNX Script retains source weight ownership after importing embedded results",
+  {
+    skip:
+      !hasOnnxScript &&
+      "Install onnx and onnxscript or set ONNX_SCRIPT_PYTHON.",
+  },
+  async (t) => {
+    const directory = await mkdtemp(path.join(__dirname, "onnxscript-host-"));
+    t.after(() => rm(directory, { recursive: true, force: true }));
+    const source = path.join(directory, "source.onnx");
+    const weights = path.join(directory, "weights.bin");
+    execFileSync(onnxScriptPython, [
+      "-P",
+      "-c",
+      `
+import sys, onnx
+model = onnx.load(sys.argv[1])
+onnx.save_model(model, sys.argv[2], save_as_external_data=True,
+                all_tensors_to_one_file=True, location="weights.bin", size_threshold=0)
+`,
+      require.resolve("../examples/optimization.onnx"),
+      source,
+    ]);
+    const sourceBytes = await readFile(source);
+    const weightBytes = await readFile(weights);
+    const alias = path.join(directory, "weight-alias.bin");
+    const extension = await openExtension(
+      undefined,
+      undefined,
+      true,
+      directory,
+      undefined,
+      new Map([
+        [
+          "applicationSettings",
+          {
+            downloadDirectory: directory,
+            pythonPath: onnxScriptPython,
+          },
+        ],
+      ]),
+    );
+    t.after(() => extension.dispose());
+    await extension.openFile(source);
+    await extension.receive({
+      type: "apply-optimization",
+      backend: "onnxscript",
+      operation: "Optimize",
+      patterns: [],
+      requestId: 223,
+    });
+    const result = extension.messages.at(-1);
+    assert.equal(result.type, "optimization-info", JSON.stringify(result));
+    assert.equal(result.changed, true);
+    const copy = path.join(directory, "embedded.onnx");
+    await extension.save(copy);
+    assert.equal(extension.messages.at(-1).type, "save-info");
+    const embedded = await require("../dist/graph").loadModelFile(
+      copy,
+      "embedded",
+    );
+    assert.deepEqual(embedded.externalDataLocations(), []);
+    await link(weights, alias);
+    const writeCount = extension.writes.length;
+    for (const destination of [weights, alias]) {
+      await extension.receive({
+        type: "save",
+        location: destination,
+        overwrite: true,
+        storage: "embedded",
+        encrypted: false,
+      });
+      assert.equal(extension.messages.at(-1).type, "save-error");
+      assert.match(extension.messages.at(-1).error, /different destination/);
+      assert.equal(extension.writes.length, writeCount);
+      assert.deepEqual(await readFile(source), sourceBytes);
+      assert.deepEqual(await readFile(weights), weightBytes);
+      assert.deepEqual(await readFile(alias), weightBytes);
+    }
   },
 );
 
