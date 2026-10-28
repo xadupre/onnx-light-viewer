@@ -227,6 +227,11 @@ export function activate(context: vscode.ExtensionContext): void {
     );
   };
   context.subscriptions.push(
+    vscode.commands.registerCommand(
+      "onnxLightViewer.openFile",
+      (uri: vscode.Uri) =>
+        vscode.commands.executeCommand("vscode.openWith", uri, viewType),
+    ),
     vscode.commands.registerCommand("onnxLightViewer.showLogs", () => {
       if (current) {
         current.panel.reveal();

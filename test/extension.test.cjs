@@ -148,6 +148,11 @@ async function openExtension(
     ViewColumn: { One: 1 },
     ProgressLocation: { Notification: 15 },
     commands: {
+      executeCommand: async (command, resource, editorViewType) => {
+        assert.equal(command, "vscode.openWith");
+        assert.equal(editorViewType, "onnxLightViewer.graph");
+        await editor.resolveCustomEditor({ uri: resource }, panel);
+      },
       registerCommand: (name, callback) => {
         commands.set(name, callback);
         return disposable();
@@ -411,6 +416,10 @@ async function openExtension(
     saveDialogs,
     writes,
     webview,
+    openFromExplorer: (name) =>
+      commands.get("onnxLightViewer.openFile")(
+        uri(path.resolve(__dirname, "models", name)),
+      ),
     resolveCustomEditor: (name) =>
       editor.resolveCustomEditor(
         { uri: uri(path.resolve(__dirname, "models", name)) },
@@ -554,6 +563,51 @@ test("retains webview context while hidden for both editor creation paths", asyn
     true,
   );
   extension.dispose();
+});
+
+test("the Explorer context menu offers ONNX Light Viewer only for supported model filenames", () => {
+  const { contributes } = require("../package.json");
+  const menu = contributes.menus["explorer/context"].find(
+    ({ command }) => command === "onnxLightViewer.openFile",
+  );
+  assert.ok(menu);
+  assert.match(menu.when, /!explorerResourceIsFolder/);
+  const [, expression, flags] = menu.when.match(
+    /resourceFilename =~ \/(.+)\/([a-z]*)/,
+  );
+  const filename = new RegExp(expression, flags);
+  for (const name of [
+    "model.onnx",
+    "model.onnx.enc",
+    "model.pipe-onnx",
+    "MODEL.ONNX",
+    "MODEL.ONNX.ENC",
+    "MODEL.PIPE-ONNX",
+  ])
+    assert.ok(filename.test(name), name);
+  for (const name of [
+    "model.txt",
+    "model.onnx.data",
+    "model.onnx.backup",
+    "model.onnx.enc.data",
+    "not-onnx",
+    "model.enc",
+  ])
+    assert.equal(filename.test(name), false, name);
+});
+
+test("opens Explorer files with the custom editor for local and virtual resources", async (t) => {
+  for (const localFiles of [false, true]) {
+    const extension = await openExtension(undefined, undefined, localFiles);
+    t.after(() => extension.dispose());
+    await extension.openFromExplorer("inference.onnx");
+    await extension.receive({ type: "ready" });
+    assert.equal(extension.messages.at(-1).type, "graph");
+    assert.equal(extension.messages.at(-1).graph.name, "Shape inference");
+    await extension.receive({ type: "refresh-shapes" });
+    assert.equal(extension.messages.at(-1).type, "shape-info");
+    assert.deepEqual(extension.errors, []);
+  }
 });
 
 test("defaults model saves to a workspace cache subdirectory without moving the open directory", async (t) => {
