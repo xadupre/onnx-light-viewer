@@ -144,6 +144,7 @@ function createFilePanels({
     byId("open-path-selection").textContent = "";
     byId("open-path-error").textContent = "";
     byId("open-files").replaceChildren();
+    byId("open-parent").disabled = true;
     pathDialog.showModal();
     if (browse) browseFiles("open");
     byId("open-location").focus();
