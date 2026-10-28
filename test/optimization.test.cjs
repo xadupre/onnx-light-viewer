@@ -10,6 +10,7 @@ const {
 const path = require("node:path");
 const { test } = require("node:test");
 const { optimizeWithOnnxScript } = require("../dist/optimization");
+const { loadModel } = require("../dist/graph");
 
 const python =
   process.env.ONNX_SCRIPT_PYTHON ??
@@ -47,6 +48,15 @@ onnx.save(oh.make_model(graph, opset_imports=[oh.make_opsetid("", 18)]), sys.arg
     const original = await readFile(source);
     const result = await optimizeWithOnnxScript(original, python, directory);
     assert.equal(result.changed, true);
+    assert.match(result.logs, /Input: 2 main-graph nodes, 1 Identity nodes/);
+    assert.match(
+      result.logs,
+      /After optimization: 1 main-graph nodes, 0 Identity nodes/,
+    );
+    assert.match(
+      result.logs,
+      /After fusion: 1 main-graph nodes, 0 Identity nodes/,
+    );
     const output = path.join(directory, "result.onnx");
     await writeFile(output, result.bytes);
     const nodes = JSON.parse(
@@ -78,6 +88,47 @@ print(json.dumps([node.op_type for node in model.graph.node]))
       "result.onnx",
       "source.onnx",
     ]);
+  },
+);
+
+test(
+  "ONNX Script reports the fusion fixture's output-preserving Identity nodes",
+  {
+    skip:
+      !available && "Install onnx and onnxscript or set ONNX_SCRIPT_PYTHON.",
+  },
+  async (t) => {
+    const directory = await mkdtemp(path.join(__dirname, "onnxscript-"));
+    t.after(() => rm(directory, { recursive: true, force: true }));
+    const result = await optimizeWithOnnxScript(
+      await readFile(require.resolve("./models/fusion.onnx")),
+      python,
+      directory,
+    );
+    assert.equal(result.changed, true);
+    assert.match(result.logs, /Input: 5 main-graph nodes, 0 Identity nodes/);
+    assert.match(
+      result.logs,
+      /After fusion: 3 main-graph nodes, 2 Identity nodes/,
+    );
+    const graph = loadModel(result.bytes, "fusion").graph();
+    assert.deepEqual(graph.outputs, ["a", "b", "z"]);
+    assert.deepEqual(
+      graph.nodes
+        .filter((node) => node.opType === "Identity")
+        .map((node) => ({
+          inputs: node.inputs,
+          outputs: node.outputs,
+        })),
+      [
+        { inputs: ["x"], outputs: ["a"] },
+        { inputs: ["a"], outputs: ["b"] },
+      ],
+    );
+    assert.equal(
+      graph.nodes.some((node) => node.opType === "Transpose"),
+      false,
+    );
   },
 );
 

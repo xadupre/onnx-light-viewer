@@ -311,6 +311,8 @@ function createFusionPanel({
       optimizationBackend !== "onnx-light";
     byId("onnxscript-optimization-note").hidden =
       optimizationBackend !== "onnxscript";
+    const output = byId("onnxscript-optimization-output");
+    output.hidden = optimizationBackend !== "onnxscript" || !output.textContent;
     byId("native-optimization-history").hidden =
       optimizationBackend !== "onnx-light";
     for (const id of [
@@ -767,6 +769,7 @@ function createFusionPanel({
     });
   byId("run-optimization").addEventListener("click", () => {
     clearFusionPreview();
+    byId("onnxscript-optimization-output").textContent = "";
     fusionControls(true);
     byId("optimization-status").textContent =
       optimizationBackend === "onnxscript"
@@ -932,6 +935,9 @@ function createFusionPanel({
       showScenarios(data.scenarios, data.name);
       showOptimizationPatterns(data.optimizationPatterns);
       showOptimizationReport(data.optimizationReport);
+      if (data.type === "optimization-info")
+        byId("onnxscript-optimization-output").textContent =
+          data.backend === "onnxscript" ? (data.logs ?? "") : "";
       if (data.type === "fusion-patterns")
         byId("optimization-status").textContent = "";
       byId("fusion-pattern").replaceChildren();
@@ -966,7 +972,9 @@ function createFusionPanel({
         byId("fusion-status").textContent =
           data.type === "optimization-info"
             ? data.backend === "onnxscript"
-              ? `ONNX Script: ${data.changed ? "optimization and fusion completed. Save a copy to keep changes." : "no changes."}`
+              ? data.changed
+                ? ""
+                : "ONNX Script: no changes."
               : data.changed
                 ? `${data.operation}: applied ${data.matches.length} rewriting steps. Use Unfuse to undo, or Save with or without rewritings.`
                 : `${data.operation}: no changes.`
@@ -989,13 +997,17 @@ function createFusionPanel({
           byId("optimization-status").textContent =
             byId("fusion-status").textContent;
           showOptimizationResults();
-          byId("optimization-picker").open = true;
         }
       }
     } else if (data?.type === "fusion-preview") {
       if (data.requestId === fusionRequest) showFusionMatches(data);
     } else if (data?.type === "fusion-error") {
       if (data.requestId !== fusionRequest) return true;
+      if (
+        optimizationBackend === "onnxscript" &&
+        !byId("optimization-panel").hidden
+      )
+        byId("onnxscript-optimization-output").textContent = data.error;
       fusionControls(false, data.error);
       byId("fusion-status").textContent = `Fusion failed: ${data.error}`;
       if (!byId("optimization-panel").hidden)
@@ -1028,6 +1040,8 @@ function createFusionPanel({
     byId("diagnostic-pattern").replaceChildren();
     diagnosticControls();
     showOptimizationReport(null);
+    byId("onnxscript-optimization-output").textContent = "";
+    byId("onnxscript-optimization-output").hidden = true;
     byId("fusion-status").textContent = "";
     showScenarios([]);
     byId("optimization-patterns").replaceChildren();
