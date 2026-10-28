@@ -1,6 +1,11 @@
 cmake_minimum_required(VERSION 3.24)
 project(onnx_light_viewer LANGUAGES C CXX)
 
+if(MSVC)
+  # Override cmake-js's static CRT before creating CPU dependency targets.
+  set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreadedDLL")
+endif()
+
 include(FetchContent)
 
 set(ONNX_LIGHT_VERSION "0.2.1")
