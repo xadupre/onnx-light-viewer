@@ -20,6 +20,10 @@ It combines the selected groups without duplicating
 overlapping members. **Default** contains the SDK-default patterns, excluding
 ``RepeatedLayer``; **All** includes opt-in patterns too.
 The other sets, ``L1``, ``L2`` and ``Layer``, come from onnx-light.
+The ``onnx-light-cpu`` group gathers the bundled CPU library's patterns.
+Select its tile in **Fuse** or **Optimize** to enable them.
+CPU shape inference and memory metadata functions are registered at startup,
+independently of pattern selection, so memory profiling needs no group enabled.
 In **Fuse**, only members with compatible anchors in the current graph are
 selected; global passes are not part of these sets.
 Unchecking a group keeps members covered by another checked group.
@@ -101,7 +105,7 @@ Initially, only SDK-default patterns are checked: ``RepeatedLayer`` is opt-in.
 Choose ``Layer``, **All**, **Select all** or its individual checkbox to enable it.
 
 .. figure:: ../_static/feature-pattern-groups.png
-   :alt: Optimize panel showing Default and Layer tiles selected together, with RepeatedLayer enabled.
+   :alt: Optimize panel showing Default, Layer and onnx-light-cpu tiles selected together.
    :width: 100%
 
    Combine named sets, then refine individual patterns before running optimization.

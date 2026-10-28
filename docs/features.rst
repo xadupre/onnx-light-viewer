@@ -194,7 +194,7 @@ Native estimation, not model execution or measured RAM/GPU usage.
 Pattern groups
 ^^^^^^^^^^^^^^
 
-Combine **Default**, ``L1``, ``L2``, ``Layer`` or **All** in **Fuse**
+Combine **Default**, ``L1``, ``L2``, ``Layer``, ``onnx-light-cpu`` or **All** in **Fuse**
 or **Optimize**, even when their members overlap, then refine individual patterns.
 Fuse selects only graph-applicable members; Optimize starts with **Default**
 and leaves the opt-in ``RepeatedLayer`` unchecked. **All** includes it.
@@ -202,7 +202,7 @@ See :doc:`features/fusion_patterns`.
 Choosing groups alone does not transform or save the model.
 
 .. figure:: _static/feature-pattern-groups.png
-   :alt: Optimize group tiles combining Default and Layer, including the opt-in RepeatedLayer pattern.
+   :alt: Optimize group tiles combining Default, Layer and onnx-light-cpu patterns.
    :width: 100%
 
    Named pattern sets are separate from optimization priorities.

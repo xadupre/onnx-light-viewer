@@ -106,7 +106,7 @@ function memoryTestModel(
   );
 }
 
-test("native CPU support supplies custom shapes and memory estimates", async () => {
+test("native CPU support supplies custom shapes and memory estimates before pattern selection", async () => {
   const source = memoryTestModel([2, 3], {
     outputDimensions: ["Rows", "Columns"],
     extraOpsets: [["com.microsoft", 1]],
@@ -134,8 +134,60 @@ test("native CPU support supplies custom shapes and memory estimates", async () 
   );
   const profile = await source.memoryProfile({});
   assert.equal(profile.events.length, 1);
-  assert.ok(Number.isFinite(profile.peakBytes));
+  assert.equal(profile.peakBytes, 40);
+  assert.equal(profile.events[0].scratchBytes, 0);
   assert.equal(profile.events[0].outputs[0].shape, "[2,2]");
+  assert.deepEqual(
+    source
+      .optimizationPatterns()
+      .filter((pattern) => pattern.groups.includes("onnx-light-cpu"))
+      .map((pattern) => pattern.name)
+      .sort(),
+    [
+      "MicrosoftBiasGelu",
+      "MicrosoftCDist",
+      "MicrosoftGroupQueryAttention",
+      "MicrosoftLinearAttention",
+      "MicrosoftMatMulNBitsBias",
+      "MicrosoftNormalizationCast",
+    ],
+  );
+});
+
+test("CPU patterns fuse custom operators with shape and memory metadata", async () => {
+  const source = memoryTestModel([3], {
+    opset: 20,
+    nodes: [
+      Buffer.concat([
+        bytesField(1, "x"),
+        bytesField(1, "x"),
+        bytesField(2, "added"),
+        bytesField(4, "Add"),
+      ]),
+      Buffer.concat([
+        bytesField(1, "added"),
+        bytesField(2, "y"),
+        bytesField(4, "Gelu"),
+      ]),
+    ],
+  });
+  const preview = await source.previewFusion("MicrosoftBiasGelu");
+  assert.equal(preview.matches.length, 1);
+  const fused = await preview.model.applyFusion("MicrosoftBiasGelu", [
+    preview.matches[0].anchor,
+  ]);
+  assert.deepEqual(
+    fused.graph(true).nodes.map(({ domain, opType }) => [domain, opType]),
+    [["com.microsoft", "BiasGelu"]],
+  );
+  const profile = await fused.memoryProfile({});
+  assert.equal(profile.events.length, 1);
+  assert.equal(profile.events[0].outputs[0].shape, "[3]");
+  assert.equal(profile.events[0].scratchBytes, 0);
+  assert.deepEqual(
+    source.graph().nodes.map(({ opType }) => opType),
+    ["Add", "Gelu"],
+  );
 });
 
 test("memory estimates bind anonymous and repeated dimensions and retain zero-sized tensors", async () => {
