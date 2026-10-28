@@ -6,6 +6,7 @@
 #include <limits>
 #include <map>
 #include <onnx_core/graph/graph_manipulations.h>
+#include <onnx_core/runtime/memory/simple_tensor.h>
 #include <onnx_op/operator_sets.h>
 #include <onnx_proto/onnx_helper.h>
 #include <onnx_proto/onnx_verify.h>
@@ -616,6 +617,24 @@ Napi::Object TensorInformation(Napi::Env env, std::string_view name,
 }
 
 template <typename Dims>
+Napi::Object TensorDistribution(Napi::Env env, ol::TensorProto::DataType data_type,
+                                const Dims &dims, const char *kind) {
+  ol::core::runtime::Tensor metadata;
+  for (const auto dimension : dims)
+    metadata.shape.push_back(dimension);
+  const auto count = metadata.element_count();
+  auto result = Napi::Object::New(env);
+  result.Set("kind", kind);
+  result.Set("elementCount", Text(env, std::to_string(count)));
+  result.Set("logicalSizeBytes",
+             ol::FixedBitWidth(data_type)
+                 ? Napi::Value(Text(
+                       env, std::to_string(ol::core::runtime::PackedByteSize(data_type, count))))
+                 : Napi::Value(env.Null()));
+  return result;
+}
+
+template <typename Dims>
 Napi::Object InitializerInformation(Napi::Env env, std::string_view name,
                                     ol::TensorProto::DataType data_type, const Dims &dims,
                                     bool sparse = false) {
@@ -629,6 +648,39 @@ Napi::Object InitializerInformation(Napi::Env env, std::string_view name,
     shape.Set(index++, Text(env, std::to_string(dimension)));
   }
   result.Set("shape", shape);
+  return result;
+}
+
+Napi::Array ConstantOutputs(Napi::Env env, const ol::NodeProto &node) {
+  auto result = Napi::Array::New(env);
+  if (node.output_size() != 1 || node.output(0).empty())
+    return result;
+  const auto add = [&](ol::TensorProto::DataType type, const auto &dims, bool sparse = false) {
+    auto information = InitializerInformation(env, node.output(0), type, dims, sparse);
+    information.Set("distribution",
+                    TensorDistribution(env, type, dims, sparse ? "sparse" : "dense"));
+    result.Set(0u, information);
+  };
+  for (const auto &attribute : node.attribute()) {
+    if (!attribute.ref_attr_name().empty())
+      continue;
+    if (attribute.name() == "value" && attribute.has_t())
+      add(attribute.t().data_type(), attribute.t().dims());
+    else if (attribute.name() == "sparse_value" && attribute.has_sparse_tensor())
+      add(attribute.sparse_tensor().values().data_type(), attribute.sparse_tensor().dims(), true);
+    else if (attribute.name() == "value_float" && attribute.has_f())
+      add(ol::TensorProto::FLOAT, std::vector<int64_t>{});
+    else if (attribute.name() == "value_int" && attribute.has_i())
+      add(ol::TensorProto::INT64, std::vector<int64_t>{});
+    else if (attribute.name() == "value_string" && attribute.has_s())
+      add(ol::TensorProto::STRING, std::vector<int64_t>{});
+    else if (attribute.name() == "value_floats")
+      add(ol::TensorProto::FLOAT, std::vector<int64_t>{attribute.floats_size()});
+    else if (attribute.name() == "value_ints")
+      add(ol::TensorProto::INT64, std::vector<int64_t>{attribute.ints_size()});
+    else if (attribute.name() == "value_strings")
+      add(ol::TensorProto::STRING, std::vector<int64_t>{attribute.strings_size()});
+  }
   return result;
 }
 
@@ -912,6 +964,8 @@ Napi::Object ModelGraph(Napi::Env env, const ol::ModelProto &model, const std::s
         tensor_information.insert_or_assign(
             name, InitializerInformation(env, name, tensor.data_type(), tensor.dims()));
         auto parameter = InitializerInformation(env, name, tensor.data_type(), tensor.dims());
+        parameter.Set("distribution",
+                      TensorDistribution(env, tensor.data_type(), tensor.dims(), "dense"));
         parameter.Set("storage", StorageInformation(env, tensor));
         if (const auto value = TinyTensorValues(tensor))
           parameter.Set("value", *value);
@@ -929,6 +983,8 @@ Napi::Object ModelGraph(Napi::Env env, const ol::ModelProto &model, const std::s
             InitializerInformation(env, name, tensor.values().data_type(), tensor.dims(), true));
         auto parameter =
             InitializerInformation(env, name, tensor.values().data_type(), tensor.dims(), true);
+        parameter.Set("distribution", TensorDistribution(env, tensor.values().data_type(),
+                                                         tensor.dims(), "sparse"));
         parameter.Set("storage", StorageInformation(env, tensor.values()));
         parameter.Set("indicesStorage", StorageInformation(env, tensor.indices()));
         const auto values = TinyTensorValues(tensor.values());
@@ -959,6 +1015,22 @@ Napi::Object ModelGraph(Napi::Env env, const ol::ModelProto &model, const std::s
         parameter.Set(key, information.Get(key));
       }
       parameter.Set("storage", StorageInformation(env, value));
+      auto distribution = Napi::Object::New(env);
+      distribution.Set("kind", "encoded");
+      distribution.Set("elementCount", env.Null());
+      distribution.Set("logicalSizeBytes", env.Null());
+      if (value.has_logical_type() && value.logical_type().has_tensor_type()) {
+        const auto &type = value.logical_type().tensor_type();
+        std::vector<int64_t> dims;
+        bool concrete = type.has_shape();
+        for (const auto &dimension : type.shape().dim()) {
+          concrete &= dimension.has_dim_value() && dimension.dim_value() >= 0;
+          dims.push_back(dimension.dim_value());
+        }
+        if (concrete)
+          distribution = TensorDistribution(env, type.elem_type(), dims, "encoded");
+      }
+      parameter.Set("distribution", distribution);
       if (value.has_logical_type())
         parameter.Set("typeDetails",
                       TypeTable(env, struct_declarations).Logical(value.logical_type()));
@@ -1029,6 +1101,8 @@ Napi::Object ModelGraph(Napi::Env env, const ol::ModelProto &model, const std::s
       link.Set("nodeCount", definition.node_size());
       result.Set("function", link);
     }
+    if (node.op_type() == "Constant" && domain == "ai.onnx" && function == functions.end())
+      result.Set("storedOutputs", ConstantOutputs(env, node));
     auto attributes = Napi::Array::New(env);
     uint32_t attribute_index = 0;
     for (const auto &attribute : node.attribute()) {

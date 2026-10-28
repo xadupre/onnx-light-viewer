@@ -104,6 +104,30 @@ both examples from the repository root:
 
    python examples/generate_quantized.py
 
+Stored tensor distributions
+---------------------------
+
+Open **Tensors** to group stored weights and constants by type or shape.
+Each group shows its tensor count, element count and theoretical logical size
+in bytes, calculated by onnx-light from metadata alone. No payloads are read
+or decoded for these distributions, and the graph is not executed.
+
+Dense tensors, sparse tensors and encoded values have separate tables.
+Sparse and encoded sizes are dense-equivalent logical data sizes, not compressed
+storage sizes or execution peaks. Unknown shapes and variable-width byte sizes
+remain explicitly unknown. Scalars ``[]`` count as one element; zero dimensions
+count as zero. Each table pages through at most 100 groups at a time.
+
+Distributions describe the current graph's stored tensor catalogue, including
+consumed initializers captured from parent graphs. Tensor-list filters below
+do not change these totals. Inputs and intermediate activations are excluded.
+
+.. figure:: ../_static/feature-tensor-distributions.png
+   :alt: Tensors tab grouping stored tensors by type and shape with exact element counts and logical bytes.
+   :width: 100%
+
+   Review stored tensor sizes without computing value statistics.
+
 Tensor statistics
 -----------------
 

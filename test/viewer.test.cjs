@@ -724,6 +724,152 @@ test("tensor browser combines type filtering with search, pagination and inferre
   assert.equal(filter.querySelector('option[value="DOUBLE"]'), null);
 });
 
+test("tensor distributions group exact logical sizes and shapes separately by storage kind without loading values", (t) => {
+  const { document, window, load, messages } = openViewer(t);
+  const tensor = (
+    name,
+    type,
+    shape,
+    elementCount,
+    logicalSizeBytes,
+    kind = "dense",
+  ) => ({
+    name,
+    type,
+    shape,
+    distribution: { kind, elementCount, logicalSizeBytes },
+  });
+  const first = tensor("first", "FLOAT", ["2", "3"], "6", "24");
+  const captured = tensor(
+    "captured",
+    "FLOAT",
+    ["2", "3"],
+    "6",
+    "24",
+    "encoded",
+  );
+  load({
+    ...demoGraph,
+    tensors: [
+      ...demoGraph.tensors,
+      { name: "constant", type: "FLOAT", shape: ["999"] },
+      { name: "activation", type: "FLOAT", shape: ["150000", "1024"] },
+    ],
+    initializers: [
+      first,
+      tensor("second", "FLOAT", ["2", "3"], "6", "24"),
+      tensor("empty", "FLOAT", ["0"], "0", "0"),
+      tensor("unknown-float", "FLOAT", null, null, null),
+      tensor("scalar", "INT64", [], "1", "8"),
+      tensor("strings", "STRING", ["2"], "2", null),
+      tensor(
+        "huge",
+        "UINT8",
+        ["9007199254740993"],
+        "9007199254740993",
+        "9007199254740993",
+      ),
+    ],
+    sparseInitializers: [
+      tensor("sparse", "SPARSE FLOAT", ["2", "3"], "6", "24", "sparse"),
+    ],
+    encodedInitializers: [
+      tensor("unknown", "ENCODED", null, null, null, "encoded"),
+    ],
+    nodes: [
+      { ...demoGraph.nodes[0], parameters: [first, captured] },
+      {
+        ...demoGraph.nodes[0],
+        id: "node-1",
+        opType: "Constant",
+        inputs: [],
+        outputs: ["constant"],
+        storedOutputs: [tensor("constant", "INT64", ["2"], "2", "16")],
+      },
+    ],
+  });
+  document.getElementById("tensors-tab").click();
+  const table = (kind, group) =>
+    document.querySelector(
+      `[data-kind="${kind}"] table[data-group-by="${group}"]`,
+    );
+  const groups = (kind, group) =>
+    Object.fromEntries(
+      [...table(kind, group).tBodies[0].rows].map((row) => [
+        [...row.cells][0].textContent,
+        [...row.cells].slice(1).map((cell) => cell.textContent),
+      ]),
+    );
+  assert.deepEqual(groups("dense", "type"), {
+    FLOAT: ["4", "12 + 1 unknown", "48 + 1 unknown"],
+    INT64: ["2", "3", "24"],
+    STRING: ["1", "2", "Unknown (1 tensor)"],
+    UINT8: ["1", "9,007,199,254,740,993", "9,007,199,254,740,993"],
+  });
+  assert.deepEqual(groups("dense", "shape")["[2, 3]"], ["2", "12", "48"]);
+  assert.deepEqual(groups("dense", "shape")["[]"], ["1", "1", "8"]);
+  assert.deepEqual(groups("dense", "shape")["[0]"], ["1", "0", "0"]);
+  assert.deepEqual(groups("sparse", "type"), {
+    "SPARSE FLOAT": ["1", "6", "24"],
+  });
+  assert.deepEqual(groups("encoded", "type"), {
+    ENCODED: ["1", "Unknown (1 tensor)", "Unknown (1 tensor)"],
+    FLOAT: ["1", "6", "24"],
+  });
+  const original = table("dense", "type");
+  const search = document.getElementById("tensor-list-search");
+  search.value = "first";
+  search.dispatchEvent(new window.Event("input"));
+  assert.equal(document.querySelectorAll("#tensor-list-rows tr").length, 1);
+  assert.equal(table("dense", "type"), original);
+  assert.equal(
+    messages.some((message) => message.type === "tensor-statistics"),
+    false,
+  );
+  load(demoGraph);
+  assert.equal(
+    document.querySelectorAll("#tensor-distribution-groups table").length,
+    0,
+  );
+});
+
+test("tensor distribution pages bound unique-shape DOM for large catalogues", (t) => {
+  const { document, load } = openViewer(t);
+  load({
+    ...demoGraph,
+    initializers: Array.from({ length: 10000 }, (_, index) => ({
+      name: `weight-${index}`,
+      type: "FLOAT",
+      shape: [String(index + 1)],
+      distribution: {
+        kind: "dense",
+        elementCount: String(index + 1),
+        logicalSizeBytes: String((index + 1) * 4),
+      },
+    })),
+  });
+  document.getElementById("tensors-tab").click();
+  const details = document
+    .querySelector('[data-kind="dense"] table[data-group-by="shape"]')
+    .closest("details");
+  assert.equal(details.querySelectorAll("tbody tr").length, 100);
+  assert.match(
+    details.querySelector('[role="status"]').textContent,
+    /1–100 of 10000/,
+  );
+  details.querySelector("nav button:last-child").click();
+  assert.equal(details.querySelectorAll("tbody tr").length, 100);
+  assert.match(
+    details.querySelector('[role="status"]').textContent,
+    /101–200 of 10000/,
+  );
+  details.querySelector("nav button:first-child").click();
+  assert.match(
+    details.querySelector('[role="status"]').textContent,
+    /1–100 of 10000/,
+  );
+});
+
 test("tensor inspection displays small values without charts or statistics and caches them", (t) => {
   const { document, window, messages, load } = openViewer(t);
   const byId = (id) => document.getElementById(id);
