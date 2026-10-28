@@ -3826,7 +3826,15 @@ test("selects optimization groups and previews global passes through the real we
   );
   assert.equal(groupInput("optimization-pattern-group", "all").checked, false);
   assert.deepEqual(checked(patterns), members("Default"));
-  for (const name of ["Default", "Layer", "L1", "L2", "all"]) {
+  assert.ok(members("onnx-light-cpu").length > 0);
+  for (const name of [
+    "Default",
+    "Layer",
+    "L1",
+    "L2",
+    "onnx-light-cpu",
+    "all",
+  ]) {
     document.getElementById("clear-optimization-patterns").click();
     chooseGroup("optimization-pattern-group", name);
     assert.deepEqual(checked(patterns), members(name));
@@ -3886,6 +3894,14 @@ test("selects optimization groups and previews global passes through the real we
   const available = [...fusionPatterns.querySelectorAll("input")].map(
     (input) => input.value,
   );
+  document.getElementById("clear-patterns").click();
+  chooseGroup("fusion-pattern-group", "onnx-light-cpu");
+  assert.deepEqual(
+    checked(fusionPatterns),
+    members("onnx-light-cpu").filter((name) => available.includes(name)),
+  );
+  assert.ok(checked(fusionPatterns).length > 0);
+  chooseGroup("fusion-pattern-group", "onnx-light-cpu");
   chooseGroup("fusion-pattern-group", "Layer");
   assert.deepEqual(checked(fusionPatterns), ["RepeatedLayer"]);
   chooseGroup("fusion-pattern-group", "Default");
