@@ -280,9 +280,8 @@ export function webviewHtml(
               <button id="optimizer-onnx-light" aria-pressed="true">onnx-light</button>
               <button id="optimizer-onnxscript" aria-pressed="false">onnxscript</button>
             </div>
-            <p id="onnxscript-optimization-note" hidden>Runs ONNX Script optimization and fusion using the Python executable in Settings. Requires onnx and onnxscript in that environment and a trusted workspace. Python transformations cannot be exported as native rewriting scenarios.</p>
-            <details id="optimization-picker" class="fusion-picker" open>
-              <summary>Optimization</summary>
+            <p id="onnxscript-optimization-note" hidden>Runs ONNX Script with Python.</p>
+            <div id="optimization-picker" class="fusion-picker">
               <div id="native-optimization-patterns">
               <fieldset id="optimization-pattern-group" disabled aria-label="Native pattern groups"><legend>Select pattern groups</legend></fieldset>
               <div class="fusion-selection-controls"><button id="select-optimization-patterns" disabled>Select all</button><button id="clear-optimization-patterns" disabled>Clear selection</button></div>
@@ -290,21 +289,22 @@ export function webviewHtml(
               <p id="optimization-feedback" role="status"></p>
               </div>
               <button id="run-optimization" disabled>Run global optimization</button>
+              <pre id="onnxscript-optimization-output" class="native-report" aria-label="ONNX Script output" hidden></pre>
               <p id="optimization-status" role="status"></p>
               <section id="native-optimization-history">
                 <div class="fusion-selection-controls"><button id="optimization-unfuse-last" disabled>Unfuse last</button><button id="optimization-restore-original" disabled>Back to original model</button></div>
-                <p>Unfuse last reverses one complete operation. Back to original model undoes all session operations, including other pipeline stages.</p>
+                <p>Unfuse last reverses one complete native operation. Back to original model undoes all available native operations, including other pipeline stages. ONNX Script changes cannot be undone.</p>
                 <h3>Matched patterns</h3>
                 <ol id="optimization-results" aria-label="Applied optimization patterns"></ol>
               </section>
-            </details>
+            </div>
             <div id="optimization-report-section" hidden>
               <button id="show-optimization-report" disabled aria-haspopup="dialog">Show optimization report</button>
             </div>
           </section>
           <section id="fusion-panel" class="inspector-panel" aria-labelledby="fusion-title" hidden>
             <h2 id="fusion-title" class="eyebrow panel-title">Fusion patterns</h2>
-            <p>Select patterns or global passes, then click Run Matching. Check candidates and click Fuse selected. IdentityRemoval, ConstantFolding and RemoveUnusedNodes use this same workflow; each global pass applies to the whole graph and must be selected individually.</p>
+            <p>Select patterns, run matching, then fuse selected candidates. Run global passes one at a time.</p>
             <details id="rewriting-scenarios" class="fusion-picker">
               <summary>Saved rewriting scenarios</summary>
               <label for="rewriting-scenario">Scenario</label><select id="rewriting-scenario" disabled></select>

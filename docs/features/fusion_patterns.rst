@@ -113,8 +113,9 @@ standard ONNX model, not a ``PipelineProto``. Native pattern selections
 are preserved when switching backends, but do not configure ONNX Script.
 Python errors leave the displayed model unchanged. Save a copy to keep the result.
 Native matching diagnostics and timing reports apply only to **onnx-light**.
-Changed Python results have a session-local **Unfuse** checkpoint, including
-earlier native edits. Python transformations cannot be exported as native
+Changed Python results clear earlier native undo history and cannot be undone
+with **Unfuse**. Later native edits can still be undone, back to the Python result.
+Python transformations cannot be exported as native
 rewriting scenarios; saving with rewritings includes only native edits made
 after the Python result.
 

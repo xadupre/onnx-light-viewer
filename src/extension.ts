@@ -112,31 +112,12 @@ interface LoadedModel {
   metadata?: GraphMetadata;
   fusionCount?: number;
   fusionHistory?: FusionOperation[];
-  /** Host checkpoint; Python edits are never represented as native rewritings. */
-  pythonPrevious?: LoadedModel;
+  /** Materialized Python edits remain modified after undoing later native edits. */
+  pythonOptimized?: boolean;
   source?: { uri: vscode.Uri };
   /** Original source ownership survives materializing or removing external data. */
   sourceWeightLocations?: readonly string[];
   fileName?: string;
-}
-
-function undoHistory(model: LoadedModel): FusionOperation[] {
-  const previous = model.pythonPrevious;
-  return [
-    ...(previous
-      ? [
-          ...undoHistory(previous).map((operation) => ({
-            ...operation,
-            matches: operation.matches.map((match) => ({
-              ...match,
-              nodes: [],
-            })),
-          })),
-          { matches: [{ pattern: "ONNX Script checkpoint", nodes: [] }] },
-        ]
-      : []),
-    ...(model.fusionHistory ?? []),
-  ];
 }
 
 async function modelFiles(model: LoadedModel, native: NativeModel) {
@@ -713,8 +694,8 @@ async function configurePanel(
       ...(fusionRequestId === undefined ? {} : { fusionRequestId }),
       ...(selectedNodes ? { selectedNodes } : {}),
       file: {
-        fusionCount: undoHistory(current).length,
-        fusionHistory: undoHistory(current),
+        fusionCount: current.fusionCount ?? 0,
+        fusionHistory: current.fusionHistory ?? [],
         ...(current.graph.pipeline ? { pipeline: true } : {}),
         directory: locationText(directoryUri()),
         saveDirectory: locationText(saveDirectoryUri()),
@@ -1965,7 +1946,7 @@ async function configurePanel(
                     : message.type === "preview-fusion"
                       ? "Preview fusion pattern"
                       : "List fusion patterns",
-            async () => {
+            async (id) => {
               const current = requireModel();
               if (message.type === "undo-fusion") {
                 if (
@@ -1973,35 +1954,16 @@ async function configurePanel(
                   typeof message.all !== "boolean"
                 )
                   throw new Error("Expected a boolean unfuse-all option.");
-                let restored = current;
                 let edited = await nativeModel(
-                  restored,
+                  current,
                   log,
                   () => void sendStatus(),
                 );
                 if (!isCurrent()) return;
                 if (message.all === true) {
-                  while (true) {
-                    while (edited.fusionCount()) edited = edited.undoFusion();
-                    if (!restored.pythonPrevious) break;
-                    restored = restored.pythonPrevious;
-                    edited = await nativeModel(
-                      restored,
-                      log,
-                      () => void sendStatus(),
-                    );
-                    if (!isCurrent()) return;
-                  }
-                } else if (edited.fusionCount() || !restored.pythonPrevious) {
-                  edited = edited.undoFusion();
+                  while (edited.fusionCount()) edited = edited.undoFusion();
                 } else {
-                  restored = restored.pythonPrevious;
-                  edited = await nativeModel(
-                    restored,
-                    log,
-                    () => void sendStatus(),
-                  );
-                  if (!isCurrent()) return;
+                  edited = edited.undoFusion();
                 }
                 const currentPath =
                   current.graph.breadcrumbs.at(-1)?.path ?? [];
@@ -2012,7 +1974,7 @@ async function configurePanel(
                 const graph = edited.graph(false, path);
                 const retained = edited.clone();
                 model = {
-                  ...restored,
+                  ...current,
                   native: edited,
                   nativeReload: undefined,
                   graph,
@@ -2023,7 +1985,7 @@ async function configurePanel(
                 };
                 graphRevision++;
                 navigationRequest++;
-                panel.title = `ONNX: ${current.fileName ?? graph.name}${undoHistory(model).length ? " (modified)" : ""}`;
+                panel.title = `ONNX: ${current.fileName ?? graph.name}${model.pythonOptimized || model.fusionCount ? " (modified)" : ""}`;
                 await sendGraph(undefined, message.requestId);
                 return;
               }
@@ -2085,7 +2047,6 @@ async function configurePanel(
                   let replacement = current;
                   if (result.changed) {
                     const retained = edited.clone();
-                    const checkpoint = native.clone();
                     replacement = {
                       ...current,
                       native: edited,
@@ -2094,12 +2055,7 @@ async function configurePanel(
                       metadata: undefined,
                       fusionCount: edited.fusionCount(),
                       fusionHistory: edited.fusionHistory(),
-                      pythonPrevious: {
-                        ...current,
-                        native: checkpoint,
-                        nativeReload: undefined,
-                        reload: () => checkpoint.clone(),
-                      },
+                      pythonOptimized: true,
                       reload: () => retained.clone(),
                     };
                   }
@@ -2107,7 +2063,7 @@ async function configurePanel(
                   model = replacement;
                   graphRevision++;
                   navigationRequest++;
-                  panel.title = `ONNX: ${current.fileName ?? replacement.graph.name}${undoHistory(replacement).length ? " (modified)" : ""}`;
+                  panel.title = `ONNX: ${current.fileName ?? replacement.graph.name}${replacement.pythonOptimized || replacement.fusionCount ? " (modified)" : ""}`;
                   await sendGraph(undefined, message.requestId);
                   if (
                     !active ||
@@ -2115,17 +2071,24 @@ async function configurePanel(
                     fusionRequest !== generation + 1
                   )
                     return;
+                  log.record(
+                    "SUCCEEDED",
+                    "Optimize ONNX model",
+                    id,
+                    result.logs,
+                  );
                   await postMessage({
                     type: "optimization-info",
                     requestId: message.requestId,
                     backend: "onnxscript",
                     operation: "Optimize",
                     changed: result.changed,
+                    logs: result.logs,
                     matches: [],
                     optimizationReport: null,
-                    undoSupported: true,
+                    undoSupported: false,
                     notice: result.changed
-                      ? "Use Unfuse to restore the previous checkpoint. ONNX Script changes are materialized and are not exported as native rewritings."
+                      ? undefined
                       : "No changes. Existing native undo history is retained.",
                     patterns: edited.fusionPatterns(),
                     optimizationPatterns: edited.optimizationPatterns(),
@@ -2182,7 +2145,7 @@ async function configurePanel(
                 model = replacement;
                 graphRevision++;
                 navigationRequest++;
-                panel.title = `ONNX: ${current.fileName ?? graph.name}${undoHistory(replacement).length ? " (modified)" : ""}`;
+                panel.title = `ONNX: ${current.fileName ?? graph.name}${replacement.pythonOptimized || replacement.fusionCount ? " (modified)" : ""}`;
                 await sendGraph(undefined, message.requestId);
                 if (
                   !active ||
@@ -2701,7 +2664,7 @@ async function configurePanel(
                   typeof message.operation === "number" &&
                   Number.isSafeInteger(message.operation) &&
                   message.operation >= 0
-                    ? undoHistory(current)[message.operation]
+                    ? current.fusionHistory?.[message.operation]
                     : undefined;
                 const match =
                   typeof message.match === "number" &&

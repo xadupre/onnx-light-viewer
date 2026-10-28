@@ -2486,7 +2486,7 @@ const hasOnnxScript =
     .status === 0;
 
 test(
-  "ONNX Script checkpoints the current snapshot without fabricating native rewriting history",
+  "ONNX Script materializes the current snapshot without retaining undo checkpoints",
   {
     skip:
       !hasOnnxScript &&
@@ -2517,7 +2517,6 @@ test(
     await extension.openFile(source);
     const latest = () =>
       extension.messages.findLast(({ type }) => type === "graph");
-    const original = latest().graph;
     await extension.receive({
       type: "apply-optimization",
       operation: "Optimize",
@@ -2530,7 +2529,6 @@ test(
       JSON.stringify(extension.messages.at(-1)),
     );
     assert.equal(latest().file.fusionCount, 1);
-    const nativeEdited = latest().graph;
     // The host must optimize its current edited handle, not reload this source.
     await writeFile(source, "source replaced after loading");
     await extension.receive({
@@ -2549,16 +2547,22 @@ test(
     assert.ok(Array.isArray(response.patterns));
     assert.ok(Array.isArray(response.optimizationPatterns));
     assert.deepEqual(response.scenarios, []);
-    assert.equal(response.undoSupported, true);
-    assert.match(response.notice, /Unfuse.*checkpoint/);
-    assert.equal(latest().fusionRequestId, 2);
-    assert.equal(latest().file.fusionCount, 2);
-    assert.equal(latest().file.fusionHistory.length, 2);
+    assert.equal(response.changed, true);
+    assert.equal(response.undoSupported, false);
+    assert.equal(response.notice, undefined);
+    assert.match(response.logs, /After optimization:.*Identity nodes/);
+    assert.match(response.logs, /After fusion:.*Identity nodes/);
     assert.ok(
-      latest().file.fusionHistory.every((operation) =>
-        operation.matches.every((match) => !match.nodes.length),
+      extension.logs.some(
+        (entry) =>
+          entry.includes("[SUCCEEDED] Optimize ONNX model") &&
+          entry.includes("After optimization:") &&
+          entry.includes("After fusion:"),
       ),
     );
+    assert.equal(latest().fusionRequestId, 2);
+    assert.equal(latest().file.fusionCount, 0);
+    assert.deepEqual(latest().file.fusionHistory, []);
     const optimized = latest().graph;
     assert.equal(
       optimized.nodes.some(({ name }) => name === "constant_sum"),
@@ -2603,29 +2607,25 @@ test(
       });
     await optimizeNative(["GemmTranspose"]);
     assert.equal(extension.messages.at(-1).type, "optimization-info");
-    assert.equal(latest().file.fusionCount, 3);
-    await extension.receive({ type: "undo-fusion" });
-    assert.deepEqual(latest().graph, optimized);
-    assert.equal(latest().file.fusionCount, 2);
-    await extension.receive({ type: "undo-fusion" });
-    assert.deepEqual(latest().graph, nativeEdited);
     assert.equal(latest().file.fusionCount, 1);
     await extension.receive({ type: "undo-fusion" });
-    assert.deepEqual(latest().graph, original);
+    assert.deepEqual(latest().graph, optimized);
     assert.equal(latest().file.fusionCount, 0);
-    await optimizeNative(["MatMulAdd"]);
-    await optimizePython();
-    assert.equal(latest().file.fusionCount, 2);
+    await extension.receive({ type: "undo-fusion" });
+    assert.equal(extension.messages.at(-1).type, "undo-fusion-error");
+    assert.match(extension.messages.at(-1).error, /No fusion operation/);
+    assert.deepEqual(latest().graph, optimized);
+    assert.equal(latest().file.fusionCount, 0);
     await optimizeNative(["GemmTranspose"]);
-    assert.equal(latest().file.fusionCount, 3);
+    assert.equal(latest().file.fusionCount, 1);
     await extension.receive({ type: "undo-fusion", all: true });
-    assert.deepEqual(latest().graph, original);
+    assert.deepEqual(latest().graph, optimized);
     assert.equal(latest().file.fusionCount, 0);
     await extension.openFile(require.resolve("./models/relu.onnx"));
     const unchanged = latest().graph;
     await optimizePython();
     assert.equal(extension.messages.at(-1).changed, false);
-    assert.equal(extension.messages.at(-1).undoSupported, true);
+    assert.equal(extension.messages.at(-1).undoSupported, false);
     assert.match(extension.messages.at(-1).notice, /history is retained/);
     assert.deepEqual(latest().graph, unchanged);
     assert.equal(latest().file.fusionCount, 0);
@@ -4644,7 +4644,8 @@ test("selects optimization groups and previews global passes through the real we
   const patterns = document.getElementById("optimization-patterns");
   assert.equal(document.getElementById("optimization-panel").hidden, false);
   assert.equal(document.getElementById("fusion-panel").hidden, true);
-  assert.equal(document.getElementById("optimization-picker").open, true);
+  assert.equal(document.getElementById("optimization-picker").tagName, "DIV");
+  assert.equal(document.querySelector("#optimization-picker > summary"), null);
   assert.ok(patterns.querySelector('input[value="GemmTranspose"]'));
   const nativeCatalog = extension.messages.at(-1).optimizationPatterns;
   assert.equal(

@@ -4172,7 +4172,15 @@ test("chooses the optimizer backend without losing native pattern selection", (t
   );
   const send = (data) =>
     window.dispatchEvent(new window.MessageEvent("message", { data }));
-  load(source.graph());
+  send({
+    type: "graph",
+    graph: source.graph(),
+    file: {
+      fusionCount: 1,
+      fusionHistory: [{ matches: [{ pattern: "MatMulAdd", nodes: [0] }] }],
+    },
+  });
+  assert.equal(document.getElementById("undo-fusion").disabled, false);
   document.getElementById("optimize-model").click();
   send({
     type: "fusion-patterns",
@@ -4184,6 +4192,9 @@ test("chooses the optimizer backend without losing native pattern selection", (t
   const script = document.getElementById("optimizer-onnxscript");
   const run = document.getElementById("run-optimization");
   const patterns = document.getElementById("native-optimization-patterns");
+  const output = document.getElementById("onnxscript-optimization-output");
+  assert.equal(output.previousElementSibling, run);
+  assert.equal(output.hidden, true);
   const selected = () =>
     [
       ...document.querySelectorAll(
@@ -4228,18 +4239,22 @@ test("chooses the optimizer backend without losing native pattern selection", (t
     document.getElementById("optimization-status").textContent,
     /Install onnxscript/,
   );
+  assert.equal(output.hidden, false);
+  assert.match(output.textContent, /Install onnxscript/);
   run.click();
+  assert.equal(output.hidden, true);
+  assert.equal(output.textContent, "");
   const completion = messages.at(-1);
   load(source.graph(), completion.requestId);
+  const logs = "After fusion: 3 main-graph nodes, 2 Identity nodes\n<output>";
   send({
     type: "optimization-info",
     backend: "onnxscript",
     operation: "Optimize",
     requestId: completion.requestId,
     changed: true,
+    logs,
     matches: [],
-    notice:
-      "Python transformations cannot be exported as native rewriting scenarios.",
     patterns: source.fusionPatterns(),
     optimizationPatterns: source.optimizationPatterns(),
   });
@@ -4249,17 +4264,40 @@ test("chooses the optimizer backend without losing native pattern selection", (t
     document.getElementById("optimization-report-section").hidden,
     true,
   );
-  assert.match(
-    document.getElementById("optimization-status").textContent,
-    /ONNX Script: optimization and fusion completed/,
-  );
-  assert.match(
-    document.getElementById("optimization-status").textContent,
-    /Python transformations cannot be exported as native rewriting scenarios/,
-  );
+  assert.equal(document.getElementById("optimization-status").textContent, "");
+  assert.equal(document.getElementById("fusion-status").textContent, "");
+  assert.equal(output.hidden, false);
+  assert.equal(output.textContent, logs);
+  assert.equal(output.children.length, 0);
   native.click();
+  assert.equal(output.hidden, true);
   assert.equal(run.disabled, true);
   assert.deepEqual(selected(), []);
+  for (const id of [
+    "undo-fusion",
+    "unfuse-last",
+    "unfuse-all",
+    "optimization-unfuse-last",
+    "optimization-restore-original",
+  ])
+    assert.equal(document.getElementById(id).disabled, true, id);
+  assert.equal(document.getElementById("unfuse-history").children.length, 0);
+  assert.equal(
+    document.getElementById("optimization-results").textContent,
+    "No applied pattern matches in this graph.",
+  );
+  script.click();
+  assert.equal(output.hidden, false);
+  assert.equal(output.textContent, logs);
+  load(source.graph());
+  send({
+    type: "optimization-info",
+    backend: "onnxscript",
+    requestId: completion.requestId,
+    logs: "stale output",
+  });
+  assert.equal(output.textContent, "");
+  assert.equal(output.hidden, true);
 });
 
 test("optimizer restore handles errors and ignores completion after close or navigation", (t) => {
