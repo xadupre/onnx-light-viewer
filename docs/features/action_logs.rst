@@ -14,6 +14,11 @@ recreated. Initial loading failures also appear there. The
 **ONNX Light Viewer: Show Logs** command selects the viewer's **Logs** tab,
 or opens an empty viewer if none exists.
 
+ONNX Script optimization records captured Python output in its completed log
+entry, including main-graph node and ``Identity`` counts before and after each
+stage. The same output appears below **Run global optimization** in **Optimize**;
+see :doc:`fusion_patterns`.
+
 Shape and metadata algorithms first call onnx-light's structural ``VerifyModel``.
 Invalid graphs can still be inspected, but verification failures prevent these
 algorithms from running. Errors identify the failing native algorithm.
