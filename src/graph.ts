@@ -79,6 +79,14 @@ export interface GraphTypeDetails {
   })[];
 }
 
+/** Metadata-only logical tensor size, serialized as exact decimal integers. */
+export interface TensorDistribution {
+  kind: "dense" | "sparse" | "encoded";
+  elementCount: string | null;
+  /** Dense-equivalent size; null for unknown shapes or variable-width types. */
+  logicalSizeBytes: string | null;
+}
+
 /** Dense, sparse or encoded weight metadata with bounded previews. */
 export interface GraphInitializer {
   name: string;
@@ -91,6 +99,7 @@ export interface GraphInitializer {
   storage: InitializerStorage;
   /** Present for sparse initializers, describing their indices tensor. */
   indicesStorage?: InitializerStorage;
+  distribution?: TensorDistribution;
   /** Inline values (<16 elements per dense tensor or sparse component), with exact integers. */
   value?: string;
 }
@@ -117,6 +126,8 @@ export interface GraphNode {
   opset: string | null;
   attributes: GraphAttribute[];
   parameters: GraphInitializer[];
+  /** Stored Constant outputs, without reading or decoding their payloads. */
+  storedOutputs?: (TensorInformation & { distribution: TensorDistribution })[];
   /** Null for local function calls or when no native operator schema is available. */
   schema: OperatorSchema | null;
   /** Local function called by this node, matched by domain, name and overload. */

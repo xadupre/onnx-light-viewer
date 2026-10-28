@@ -114,6 +114,21 @@ are supported. See :doc:`features/inspection`.
 
    Statistics describe stored values, without executing the graph.
 
+Stored tensor distributions
+^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The **Tensors** tab groups stored weights and constants by type and shape,
+showing tensor counts, elements and theoretical logical bytes. Dense, sparse
+and encoded values stay separate; unknown sizes remain explicit.
+No payload reads, decoding or execution are needed for these totals.
+See :doc:`features/inspection`.
+
+.. figure:: _static/feature-tensor-distributions.png
+   :alt: Stored tensor distributions grouped by type and shape in the Tensors tab.
+   :width: 100%
+
+   Compare logical sizes independently of tensor-list filters.
+
 Subgraphs and functions
 ^^^^^^^^^^^^^^^^^^^^^^^
 

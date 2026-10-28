@@ -474,6 +474,11 @@ export function webviewHtml(
     <section id="tensors-view" role="tabpanel" aria-labelledby="tensors-tab" tabindex="0" hidden>
       <h2>Tensors</h2>
       <p>Dense, sparse and encoded initializers and constants in the displayed graph. Inputs and intermediate tensors without stored data are not listed. Highlighted rows belong to the selected operator or tensor. The model is not executed.</p>
+      <details id="tensor-distributions" open>
+        <summary>Stored tensor distributions</summary>
+        <p>All stored tensors in this graph, grouped by type and shape. Logical sizes are dense-equivalent data sizes, not file sizes or execution peaks. Sparse and encoded tensors are counted separately. Unknown sizes remain explicit. Filters below affect only the tensor list.</p>
+        <div id="tensor-distribution-groups"></div>
+      </details>
       <label for="tensor-list-search">Filter by name, category or consumer</label>
       <input id="tensor-list-search" type="search" autocomplete="off">
       <label for="tensor-list-type">Filter by tensor type</label>

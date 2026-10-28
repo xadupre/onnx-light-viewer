@@ -102,9 +102,149 @@ function createTensorListPanel({ byId, openStatistics }) {
   let highlighted = new Set();
   let page = 0;
   let busy = false;
+  let distributionsDirty = true;
 
   function tensorType(entry) {
-    return tensors.get(entry.name)?.type ?? entry.information?.type ?? "?";
+    return entry.information?.type ?? tensors.get(entry.name)?.type ?? "?";
+  }
+
+  function renderDistributions() {
+    if (!distributionsDirty) return;
+    distributionsDirty = false;
+    const container = byId("tensor-distribution-groups");
+    container.replaceChildren();
+    for (const [kind, title] of [
+      ["dense", "Dense tensors"],
+      ["sparse", "Sparse tensors"],
+      ["encoded", "Encoded values"],
+    ]) {
+      const entries = records.filter((entry) => {
+        const category =
+          entry.information?.distribution?.kind ??
+          (entry.categories.has("Sparse initializer")
+            ? "sparse"
+            : entry.categories.has("Encoded initializer")
+              ? "encoded"
+              : "dense");
+        return category === kind;
+      });
+      const section = document.createElement("section");
+      section.dataset.kind = kind;
+      const heading = document.createElement("h3");
+      heading.textContent = `${title} (${entries.length.toLocaleString("en-US")})`;
+      section.append(heading);
+      container.append(section);
+      if (!entries.length) continue;
+      for (const groupBy of ["type", "shape"]) {
+        const groups = new Map();
+        for (const entry of entries) {
+          const information = entry.information ?? tensors.get(entry.name);
+          const shape = information?.shape;
+          const key =
+            groupBy === "type"
+              ? tensorType(entry)
+              : JSON.stringify(shape ?? null);
+          if (!groups.has(key))
+            groups.set(key, {
+              label:
+                groupBy === "type"
+                  ? key
+                  : Array.isArray(shape)
+                    ? `[${shape.join(", ")}]`
+                    : "Unknown",
+              count: 0,
+              elementCount: 0n,
+              logicalSizeBytes: 0n,
+              unknownElements: 0,
+              unknownBytes: 0,
+            });
+          const group = groups.get(key);
+          group.count++;
+          const distribution = entry.information?.distribution;
+          for (const [field, unknown] of [
+            ["elementCount", "unknownElements"],
+            ["logicalSizeBytes", "unknownBytes"],
+          ]) {
+            if (distribution?.[field] == null) group[unknown]++;
+            else group[field] += BigInt(distribution[field]);
+          }
+        }
+        const rows = [...groups.values()].sort(
+          (left, right) =>
+            right.count - left.count || left.label.localeCompare(right.label),
+        );
+        const details = document.createElement("details");
+        details.open = true;
+        const summary = document.createElement("summary");
+        summary.textContent = `By ${groupBy} (${rows.length.toLocaleString("en-US")} ${rows.length === 1 ? "group" : "groups"})`;
+        const wrapper = document.createElement("div");
+        wrapper.className = "tensor-list-table";
+        const table = document.createElement("table");
+        table.dataset.groupBy = groupBy;
+        table.setAttribute("aria-label", `${title} by ${groupBy}`);
+        const header = table.createTHead().insertRow();
+        for (const label of [
+          groupBy === "type" ? "Type" : "Shape",
+          "Tensors",
+          "Elements",
+          "Logical size (bytes)",
+        ]) {
+          const cell = document.createElement("th");
+          cell.scope = "col";
+          cell.textContent = label;
+          header.append(cell);
+        }
+        const body = table.createTBody();
+        const previous = document.createElement("button");
+        previous.type = "button";
+        previous.textContent = "Previous";
+        const next = document.createElement("button");
+        next.type = "button";
+        next.textContent = "Next";
+        const range = document.createElement("span");
+        range.setAttribute("role", "status");
+        const navigation = document.createElement("nav");
+        navigation.className = "tensor-distribution-pages";
+        navigation.setAttribute("aria-label", `${title} by ${groupBy} pages`);
+        navigation.append(previous, range, next);
+        let groupPage = 0;
+        const value = (known, unknown) =>
+          unknown
+            ? known
+              ? `${known.toLocaleString("en-US")} + ${unknown} unknown`
+              : `Unknown (${unknown} tensor${unknown === 1 ? "" : "s"})`
+            : known.toLocaleString("en-US");
+        const renderPage = () => {
+          body.replaceChildren();
+          const start = groupPage * pageSize;
+          for (const row of rows.slice(start, start + pageSize)) {
+            const element = body.insertRow();
+            for (const text of [
+              row.label,
+              row.count.toLocaleString("en-US"),
+              value(row.elementCount, row.unknownElements),
+              value(row.logicalSizeBytes, row.unknownBytes),
+            ])
+              element.insertCell().textContent = text;
+          }
+          previous.disabled = groupPage === 0;
+          next.disabled = start + pageSize >= rows.length;
+          range.textContent = `${start + 1}–${Math.min(start + pageSize, rows.length)} of ${rows.length}`;
+        };
+        previous.addEventListener("click", () => {
+          groupPage--;
+          renderPage();
+        });
+        next.addEventListener("click", () => {
+          groupPage++;
+          renderPage();
+        });
+        renderPage();
+        wrapper.append(table);
+        details.append(summary, wrapper, navigation);
+        section.append(details);
+      }
+    }
   }
 
   function updateTypeFilter() {
@@ -150,7 +290,12 @@ function createTensorListPanel({ byId, openStatistics }) {
         !node.function &&
         !node.pipelineModel;
       if (constant)
-        for (const name of node.outputs ?? []) add(name, "Constant");
+        for (const name of node.outputs ?? []) {
+          const information = node.storedOutputs?.find(
+            (tensor) => tensor.name === name,
+          );
+          add(name, "Constant", information);
+        }
       for (const tensor of node.parameters ?? []) {
         const entry = add(tensor.name, undefined, tensor);
         if (!entry.categories.size)
@@ -190,6 +335,7 @@ function createTensorListPanel({ byId, openStatistics }) {
       return;
     }
     if (!records) build();
+    renderDistributions();
     const query = search.value.trim().toLowerCase();
     const matching = records.filter(
       (entry) =>
@@ -211,7 +357,7 @@ function createTensorListPanel({ byId, openStatistics }) {
       const row = document.createElement("tr");
       row.dataset.name = entry.name;
       row.classList.toggle("tensor-highlighted", highlighted.has(entry.name));
-      const information = tensors.get(entry.name) ?? entry.information;
+      const information = entry.information ?? tensors.get(entry.name);
       const shape = information
         ? information.shape === undefined
           ? information.type
@@ -298,6 +444,8 @@ function createTensorListPanel({ byId, openStatistics }) {
         (graph?.tensors ?? []).map((tensor) => [tensor.name, tensor]),
       );
       highlighted.clear();
+      distributionsDirty = true;
+      byId("tensor-distribution-groups").replaceChildren();
       search.value = "";
       typeFilter.value = "";
       updateTypeFilter();
@@ -307,6 +455,7 @@ function createTensorListPanel({ byId, openStatistics }) {
     },
     updateTypes(values) {
       tensors = new Map(values.map((tensor) => [tensor.name, tensor]));
+      distributionsDirty = true;
       updateTypeFilter();
       if (!byId("tensors-view").hidden) render();
     },

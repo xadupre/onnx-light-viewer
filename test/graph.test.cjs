@@ -1774,14 +1774,21 @@ test("keeps encoded parameter fields separate from common tensor metadata", () =
     const graph = loadModel(encodedModel(options), "encoded").graph();
     const [parameter] = graph.nodes[0].parameters;
     const tensor = graph.tensors.find((tensor) => tensor.name === "weight");
-    const { storage, encoding, typeDetails, encodingDetails, ...metadata } =
-      parameter;
+    const {
+      storage,
+      encoding,
+      typeDetails,
+      encodingDetails,
+      distribution,
+      ...metadata
+    } = parameter;
     assert.notStrictEqual(parameter, tensor);
     assert.deepEqual(metadata, tensor);
     assert.deepEqual(storage, { external: false, location: null });
     assert.equal(typeof encoding, "string");
     assert.equal(Object.hasOwn(tensor, "storage"), false);
     assert.equal(Object.hasOwn(tensor, "encoding"), false);
+    assert.equal(Object.hasOwn(tensor, "distribution"), false);
     parameter.type = "changed";
     assert.notEqual(tensor.type, parameter.type);
   }
@@ -1880,8 +1887,14 @@ test("resolves model-scoped logical types of encoded initializers", () => {
   const [parameter] = graph.nodes[0].parameters;
   const tensor = graph.tensors.find((tensor) => tensor.name === "weight");
   assert.match(parameter.type, /^STRUCT .*handle.*Record/);
-  const { storage, encoding, typeDetails, encodingDetails, ...metadata } =
-    parameter;
+  const {
+    storage,
+    encoding,
+    typeDetails,
+    encodingDetails,
+    distribution,
+    ...metadata
+  } = parameter;
   assert.deepEqual(metadata, tensor);
   assert.equal(typeDetails.kind, "STRUCT");
   assert.ok(
@@ -5417,6 +5430,7 @@ test("exposes connected initializer metadata and tiny values without external re
     type: "FLOAT",
     shape: ["1"],
     storage: { external: false, location: null },
+    distribution: { kind: "dense", elementCount: "1", logicalSizeBytes: "4" },
     value: "[9.25]",
   });
   assert.deepEqual(parameters[10].storage, {
@@ -5429,6 +5443,7 @@ test("exposes connected initializer metadata and tiny values without external re
     shape: ["1"],
     storage: { external: true, location: "weights/values.bin" },
     indicesStorage: { external: true, location: "weights/indices.bin" },
+    distribution: { kind: "sparse", elementCount: "1", logicalSizeBytes: "4" },
   });
   assert.ok(parameters.slice(0, 10).every((parameter) => "value" in parameter));
   assert.equal("value" in parameters[10], false);
@@ -5436,6 +5451,80 @@ test("exposes connected initializer metadata and tiny values without external re
     loadModel(modelBytes("initializers.onnx"), "initializers.onnx").graph(),
     graph,
   );
+});
+
+test("stored tensor distributions use SDK logical sizes without reading external or encoded data", () => {
+  const graph = loadModel(
+    modelBytes("tiny-initializers.onnx"),
+    "sizes.onnx",
+  ).graph();
+  const find = (name) =>
+    [...graph.initializers, ...graph.sparseInitializers].find(
+      (tensor) => tensor.name === name,
+    ).distribution;
+  for (const [name, elementCount, logicalSizeBytes] of [
+    ["typed_floats", "3", "12"],
+    ["uint4", "3", "2"],
+    ["empty", "0", "0"],
+    ["scalar", "1", "8"],
+    ["strings", "2", null],
+    ["large_sparse", "1000000", "4000000"],
+  ])
+    assert.deepEqual(find(name), {
+      kind: name === "large_sparse" ? "sparse" : "dense",
+      elementCount,
+      logicalSizeBytes,
+    });
+  const encoded = loadModel(
+    encodedModel({ external: "missing-payload.bin" }),
+    "encoded.onnx",
+  ).graph().encodedInitializers[0];
+  assert.deepEqual(encoded.distribution, {
+    kind: "encoded",
+    elementCount: "8",
+    logicalSizeBytes: "32",
+  });
+  for (const options of [
+    { logical: false },
+    { logicalType: bytesField(1, varintField(1, 1)) },
+    {
+      logicalType: bytesField(
+        1,
+        Buffer.concat([
+          varintField(1, 1),
+          bytesField(2, bytesField(1, bytesField(2, "batch"))),
+        ]),
+      ),
+    },
+  ]) {
+    const unknown = loadModel(encodedModel(options), "opaque.onnx").graph()
+      .encodedInitializers[0];
+    assert.deepEqual(unknown.distribution, {
+      kind: "encoded",
+      elementCount: null,
+      logicalSizeBytes: null,
+    });
+  }
+});
+
+test("stored tensor sizes retain integer precision above JavaScript's safe range", () => {
+  const huge = Buffer.concat([
+    varint(8),
+    Buffer.from([0x81, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x10]),
+    varintField(2, 2),
+    bytesField(8, "huge"),
+    bytesField(
+      13,
+      Buffer.concat([bytesField(1, "location"), bytesField(2, "missing.bin")]),
+    ),
+    varintField(14, 1),
+  ]);
+  const graph = memoryTestModel([1], { initializers: [huge] }).graph();
+  assert.deepEqual(graph.initializers[0].distribution, {
+    kind: "dense",
+    elementCount: "9007199254740993",
+    logicalSizeBytes: "9007199254740993",
+  });
 });
 
 test("tensor inspection returns values below 32 elements and retains statistics at the boundary", async (t) => {
@@ -5806,6 +5895,104 @@ test("tensor statistics restore omitted function Constants and nested initialize
   }
 });
 
+test("stored Constant metadata covers external tensors, sparse values, strings and unresolved references", () => {
+  const externalTensor = (type = 1) =>
+    Buffer.concat([
+      varintField(1, 3),
+      varintField(2, type),
+      bytesField(8, "payload"),
+      bytesField(
+        13,
+        Buffer.concat([
+          bytesField(1, "location"),
+          bytesField(2, "missing.bin"),
+        ]),
+      ),
+      varintField(14, 1),
+    ]);
+  for (const [name, type, value, dtype, shape, kind, count, bytes] of [
+    [
+      "value",
+      4,
+      bytesField(5, externalTensor()),
+      "FLOAT",
+      ["3"],
+      "dense",
+      "3",
+      "12",
+    ],
+    [
+      "sparse_value",
+      11,
+      bytesField(
+        22,
+        Buffer.concat([
+          bytesField(1, externalTensor()),
+          bytesField(2, externalTensor(7)),
+          varintField(3, 1000000),
+        ]),
+      ),
+      "SPARSE FLOAT",
+      ["1000000"],
+      "sparse",
+      "1000000",
+      "4000000",
+    ],
+    [
+      "value_string",
+      3,
+      bytesField(4, "hello"),
+      "STRING",
+      [],
+      "dense",
+      "1",
+      null,
+    ],
+    [
+      "value_strings",
+      8,
+      Buffer.concat([bytesField(9, "a"), bytesField(9, "b")]),
+      "STRING",
+      ["2"],
+      "dense",
+      "2",
+      null,
+    ],
+    ["value_floats", 6, bytesField(21, "unresolved")],
+  ]) {
+    const graph = memoryTestModel([1], {
+      nodes: [
+        Buffer.concat([
+          bytesField(2, "constant"),
+          bytesField(4, "Constant"),
+          bytesField(
+            5,
+            Buffer.concat([bytesField(1, name), varintField(20, type), value]),
+          ),
+        ]),
+      ],
+    }).graph();
+    assert.deepEqual(
+      graph.nodes[0].storedOutputs,
+      count
+        ? [
+            {
+              name: "constant",
+              type: dtype,
+              shape,
+              distribution: {
+                kind,
+                elementCount: count,
+                logicalSizeBytes: bytes,
+              },
+            },
+          ]
+        : [],
+      name,
+    );
+  }
+});
+
 test("tensor statistics inspect stored scalar and list Constant attributes", async () => {
   const cases = [
     ["value_int", varintField(3, 7), 2, [], "INT64", 7],
@@ -5852,6 +6039,19 @@ test("tensor statistics inspect stored scalar and list Constant attributes", asy
         ]),
       ],
     });
+    const count = shape.length ? 2 : 1;
+    assert.deepEqual(model.graph().nodes[0].storedOutputs, [
+      {
+        name: "constant",
+        type: dtype,
+        shape,
+        distribution: {
+          kind: "dense",
+          elementCount: String(count),
+          logicalSizeBytes: String(count * (dtype === "FLOAT" ? 4 : 8)),
+        },
+      },
+    ]);
     const stats = await model.tensorStatistics("constant");
     assert.deepEqual(stats.shape, shape, name);
     assert.equal(stats.dtype, dtype, name);
