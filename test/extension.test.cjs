@@ -156,6 +156,9 @@ async function openExtension(
     workspace: {
       isTrusted: true,
       fs: {
+        createDirectory: async (uri) => {
+          await mkdir(uri.path, { recursive: true });
+        },
         stat: async (uri) => {
           const details = await stat(uri.path);
           return {
@@ -373,6 +376,12 @@ async function openExtension(
     setTrusted: (trusted) => {
       vscode.workspace.isTrusted = trusted;
     },
+    setWorkspaceFolders: (paths) => {
+      vscode.workspace.workspaceFolders = paths.map((folder) => ({
+        uri: uri(folder),
+        name: path.basename(folder),
+      }));
+    },
     selectExportedFile: (name) => {
       exportedFileSelection = name;
     },
@@ -404,7 +413,7 @@ async function openExtension(
     webview,
     resolveCustomEditor: (name) =>
       editor.resolveCustomEditor(
-        { uri: uri(path.join(__dirname, "models", name)) },
+        { uri: uri(path.resolve(__dirname, "models", name)) },
         panel,
       ),
     deferRead: (name) => {
@@ -547,6 +556,104 @@ test("retains webview context while hidden for both editor creation paths", asyn
   extension.dispose();
 });
 
+test("defaults model saves to a workspace cache subdirectory without moving the open directory", async (t) => {
+  const extension = await openExtension(undefined, undefined, true);
+  t.after(() => extension.dispose());
+  const workspace = await mkdtemp(
+    path.join(tmpdir(), "viewer-save-workspace-"),
+  );
+  t.after(() => rm(workspace, { recursive: true, force: true }));
+  const saveDirectory = path.join(workspace, ".cache", ".onnx-light-viewer");
+  extension.setWorkspaceFolders([
+    workspace,
+    path.join(__dirname, "other-workspace"),
+  ]);
+  await extension.receive({ type: "ready" });
+  const latestFile = () =>
+    extension.messages.filter(({ type }) => type === "graph").at(-1).file;
+  assert.equal(latestFile().saveDirectory, saveDirectory);
+  assert.equal(path.dirname(latestFile().savePath), saveDirectory);
+  await assert.rejects(stat(saveDirectory), { code: "ENOENT" });
+  await extension.open("relu.onnx");
+  const sourceDirectory = path.join(__dirname, "models");
+  assert.equal(latestFile().directory, sourceDirectory);
+  assert.equal(latestFile().saveDirectory, saveDirectory);
+  assert.equal(
+    latestFile().savePath,
+    path.join(saveDirectory, "relu-copy.onnx"),
+  );
+  await extension.receive({
+    type: "browse-files",
+    target: "save",
+    source: "local",
+    requestId: 1,
+  });
+  assert.ok((await stat(saveDirectory)).isDirectory());
+  const listing = extension.messages
+    .filter(({ type }) => type === "file-list")
+    .at(-1);
+  assert.equal(listing.location, saveDirectory);
+  await rm(saveDirectory, { recursive: true });
+  await extension.save();
+  assert.ok((await stat(saveDirectory)).isDirectory());
+  assert.equal(
+    extension.saveDialogs.at(-1).defaultUri.fsPath,
+    latestFile().savePath,
+  );
+  await rm(saveDirectory, { recursive: true });
+  const destination = latestFile().savePath;
+  await extension.save(destination);
+  const { loadModel } = require("../dist/graph");
+  const saved = loadModel(await readFile(destination), "relu-copy.onnx");
+  assert.equal(saved.graph().nodes[0].opType, "Relu");
+  extension.setWorkspaceFolders([]);
+  await extension.open("relu.onnx");
+  assert.equal(latestFile().saveDirectory, sourceDirectory);
+  assert.equal(
+    latestFile().savePath,
+    path.join(sourceDirectory, "relu-copy.onnx"),
+  );
+  await extension.save();
+  assert.equal(
+    extension.saveDialogs.at(-1).defaultUri.fsPath,
+    latestFile().savePath,
+  );
+});
+
+test("opens the save dialog when the suggested directory cannot be created but rejects an unwritable selected destination", async (t) => {
+  const directory = await mkdtemp(
+    path.join(tmpdir(), "viewer-save-directory-error-"),
+  );
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const workspace = path.join(directory, "workspace");
+  await mkdir(workspace);
+  await writeFile(path.join(workspace, ".cache"), "Not a directory");
+  const extension = await openExtension("relu.onnx", undefined, true);
+  t.after(() => extension.dispose());
+  extension.setWorkspaceFolders([workspace]);
+  const destination = path.join(directory, "saved.onnx");
+  await extension.save(destination);
+  assert.equal(extension.saveDialogs.length, 1);
+  assert.equal(extension.messages.at(-1).type, "save-info");
+  assert.deepEqual(extension.errors, []);
+  const saved = await readFile(destination);
+  const { loadModel } = require("../dist/graph");
+  assert.equal(loadModel(saved, "saved").graph().nodes[0].opType, "Relu");
+  assert.match(
+    extension.logs.join("\n"),
+    /\[FAILED\] Prepare suggested save directory/,
+  );
+  const writes = extension.writes.length;
+  await extension.save(
+    path.join(workspace, ".cache", ".onnx-light-viewer", "saved.onnx"),
+  );
+  assert.equal(extension.saveDialogs.length, 2);
+  assert.equal(extension.messages.at(-1).type, "save-error");
+  assert.equal(extension.errors.length, 1);
+  assert.equal(extension.writes.length, writes);
+  assert.deepEqual(await readFile(destination), saved);
+});
+
 test("persists only viewer preferences across closed extension panels", async () => {
   const preferences = new Map();
   const first = await openExtension(
@@ -584,6 +691,109 @@ test("persists only viewer preferences across closed extension panels", async ()
     },
   );
   second.dispose();
+});
+
+test("Settings removes stored histories and resets only viewer preferences without deleting files", async (t) => {
+  const directory = await mkdtemp(
+    path.join(tmpdir(), "viewer-settings-history-"),
+  );
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const saved = path.join(directory, "saved.onnx");
+  await writeFile(saved, "keep this file");
+  const entry = { source: "local", kind: "file", path: saved };
+  const application = { downloadDirectory: directory, pythonPath: "python3" };
+  const viewer = {
+    width: 420,
+    panels: { operator: false, find: false, metadata: true },
+  };
+  const preferences = new Map([
+    ["applicationSettings", application],
+    ["viewerSettings", viewer],
+    ["pathHistory", { open: [entry], save: [entry] }],
+    [
+      "exportHistory",
+      {
+        models: ["owner/model", "owner/other"],
+        directories: [directory],
+        exporter: "mobius",
+      },
+    ],
+  ]);
+  const extension = await openExtension(
+    undefined,
+    undefined,
+    true,
+    undefined,
+    undefined,
+    preferences,
+  );
+  t.after(() => extension.dispose());
+  await extension.receive({ type: "ready" });
+  await extension.receive({ type: "get-settings" });
+  const settings = () =>
+    extension.messages.filter(({ type }) => type === "settings-info").at(-1);
+  const conversionHistory = () =>
+    extension.messages.filter(({ type }) => type === "export-history").at(-1)
+      .history;
+  assert.deepEqual(settings().pathHistory, { open: [entry], save: [entry] });
+  assert.equal(settings().application.downloadDirectory, directory);
+  assert.equal(typeof settings().saveDirectory, "string");
+  await extension.receive({
+    type: "path-history-edit",
+    target: "open",
+    historyAction: "remove",
+    historyEntry: entry,
+  });
+  assert.deepEqual(preferences.get("pathHistory"), {
+    open: [],
+    save: [entry],
+  });
+  await extension.receive({
+    type: "path-history-edit",
+    target: "save",
+    historyAction: "clear",
+  });
+  assert.deepEqual(preferences.get("pathHistory"), { open: [], save: [] });
+  await extension.receive({
+    type: "export-history-edit",
+    target: "models",
+    historyAction: "remove",
+    historyEntry: "owner/model",
+  });
+  assert.deepEqual(conversionHistory(), {
+    models: ["owner/other"],
+    directories: [directory],
+    exporter: "mobius",
+  });
+  await extension.receive({
+    type: "export-history-edit",
+    target: "directories",
+    historyAction: "remove",
+    historyEntry: directory,
+  });
+  assert.deepEqual(conversionHistory().directories, []);
+  await extension.receive({
+    type: "export-history-edit",
+    historyAction: "clear",
+  });
+  assert.deepEqual(conversionHistory(), { models: [], directories: [] });
+  await extension.receive({
+    type: "export-history-edit",
+    target: "unexpected",
+    historyAction: "remove",
+    historyEntry: "owner/other",
+  });
+  assert.match(
+    extension.messages.at(-1).error,
+    /Invalid conversion history edit/,
+  );
+  await extension.receive({ type: "reset-viewer-settings" });
+  assert.deepEqual(settings().viewer, {
+    panels: { operator: true, find: true, metadata: false },
+  });
+  assert.equal(preferences.get("viewerSettings"), undefined);
+  assert.deepEqual(preferences.get("applicationSettings"), application);
+  assert.equal(await readFile(saved, "utf8"), "keep this file");
 });
 
 test("Olive host enforces workspace trust, quantizes without a checkpoint download and rejects unpinned recipe paths", async (t) => {
@@ -1033,6 +1243,28 @@ print("Saved model.onnx", flush=True)
   });
   assert.equal(extension.messages.at(-1).type, "export-info");
   assert.equal(extension.messages.at(-1).loaded, false);
+  const cancelledDirectory = path.join(root, "output-multiple-cancelled");
+  assert.deepEqual(
+    preferences
+      .get("pathHistory")
+      .open.filter(
+        (entry) =>
+          entry.kind === "file" &&
+          path.dirname(entry.path) === cancelledDirectory,
+      )
+      .map((entry) => path.basename(entry.path))
+      .sort(),
+    ["model.onnx", "second.onnx"],
+  );
+  assert.equal(
+    preferences
+      .get("pathHistory")
+      .open.filter(
+        (entry) =>
+          entry.kind === "directory" && entry.path === cancelledDirectory,
+      ).length,
+    1,
+  );
   assert.ok(
     Number.isFinite(extension.messages.at(-1).durationMs) &&
       extension.messages.at(-1).durationMs > 0,
@@ -1049,6 +1281,10 @@ print("Saved model.onnx", flush=True)
   assert.equal(
     extension.messages.at(-1).path,
     path.join(root, "output-multiple-selected", "second.onnx"),
+  );
+  assert.equal(
+    preferences.get("pathHistory").open[0].path,
+    extension.messages.at(-1).path,
   );
   const graphs = extension.messages.filter(
     (message) => message.type === "graph",
@@ -1137,7 +1373,7 @@ test("Settings reports defaults, versions and persisted paths without running Py
   assert.equal(info.type, "settings-info");
   assert.equal(
     info.application.downloadDirectory,
-    path.join(homedir(), ".cache", "onnx-light-viewer", "downloads"),
+    path.join(homedir(), ".cache", "onnx-light-viewer"),
   );
   assert.equal(info.appVersion, require("../package.json").version);
   assert.equal(info.nativeVersion, require("../dist/graph").onnxLightVersion);
@@ -1612,6 +1848,52 @@ test("publishes replacement graphs before delayed Open history persistence", asy
       source === "local" ? "local" : "backend",
     );
   }
+});
+
+test("records models opened directly by the editor and restores their Open history", async (t) => {
+  const directory = await mkdtemp(
+    path.join(tmpdir(), "viewer-editor-history-"),
+  );
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const file = path.join(directory, "model.onnx");
+  await copyFile(require.resolve("./models/relu.onnx"), file);
+  const preferences = new Map();
+  const extension = await openExtension(
+    undefined,
+    undefined,
+    true,
+    undefined,
+    undefined,
+    preferences,
+  );
+  t.after(() => extension.dispose());
+  await extension.resolveCustomEditor(file);
+  await extension.receive({ type: "ready" });
+  const expected = [
+    { source: "local", kind: "file", path: file },
+    { source: "local", kind: "directory", path: directory },
+  ];
+  assert.deepEqual(preferences.get("pathHistory").open, expected);
+  assert.deepEqual(
+    extension.events.findLast(({ type }) => type === "path-history").history
+      .open,
+    expected,
+  );
+  const reopened = await openExtension(
+    undefined,
+    undefined,
+    true,
+    undefined,
+    undefined,
+    preferences,
+  );
+  t.after(() => reopened.dispose());
+  await reopened.receive({ type: "ready" });
+  assert.deepEqual(
+    reopened.events.findLast(({ type }) => type === "path-history").history
+      .open,
+    expected,
+  );
 });
 
 test("publishes initial editor graphs before delayed Open history persistence", async (t) => {
@@ -3152,6 +3434,89 @@ test("estimates root and pipeline memory on request and reports errors without i
   }
 });
 
+test("tensor statistics requests validate transport and keep native handles usable", async (t) => {
+  const extension = await openExtension("tiny-initializers.onnx");
+  t.after(() => extension.dispose());
+  const request = {
+    type: "tensor-statistics",
+    requestId: 1,
+    name: "typed_floats",
+    path: [],
+  };
+  await extension.receive(request);
+  assert.equal(extension.messages.at(-1).type, "tensor-statistics-info");
+  assert.equal(extension.messages.at(-1).statistics.values, "[0.5, -2, 3]");
+  assert.equal(extension.messages.at(-1).statistics.mean, undefined);
+  for (const invalid of [
+    { requestId: "1" },
+    { requestId: 0 },
+    { name: 7 },
+    { name: "" },
+    { path: "root" },
+    { path: [{ node: -1, attribute: 0, graph: 0 }] },
+  ]) {
+    await extension.receive({ ...request, ...invalid });
+    assert.equal(extension.messages.at(-1).type, "tensor-statistics-error");
+    assert.match(
+      extension.messages.at(-1).error,
+      /Invalid tensor statistics request/,
+    );
+  }
+  await extension.receive({ ...request, name: "absent", requestId: 2 });
+  assert.equal(extension.messages.at(-1).type, "tensor-statistics-error");
+  assert.match(extension.messages.at(-1).error, /No stored tensor data/);
+  await extension.receive({ ...request, requestId: 3 });
+  assert.equal(extension.messages.at(-1).type, "tensor-statistics-info");
+  assert.equal(extension.nativeModels.length, 1);
+});
+
+test("tensor statistics discard delayed computations after navigation, replacement or disposal", async () => {
+  for (const action of ["navigate", "replace", "dispose", "new-request"]) {
+    for (const fail of [false, true]) {
+      const extension = await openExtension("tiny-initializers.onnx");
+      try {
+        const native = extension.nativeModels.at(-1);
+        const original = native.tensorStatistics;
+        let resume;
+        const gate = new Promise((resolve) => {
+          resume = resolve;
+        });
+        native.tensorStatistics = async (...args) => {
+          await gate;
+          if (fail) throw new Error("Delayed tensor failure");
+          return original(...args);
+        };
+        const pending = extension.receive({
+          type: "tensor-statistics",
+          requestId: 1,
+          name: "typed_floats",
+          path: [],
+        });
+        await new Promise((resolve) => setImmediate(resolve));
+        if (action === "replace") await extension.open("relu.onnx");
+        else if (action === "navigate")
+          await extension.receive({ type: "navigate", path: [] });
+        else if (action === "dispose") extension.dispose();
+        else {
+          native.tensorStatistics = original;
+          await extension.receive({
+            type: "tensor-statistics",
+            requestId: 2,
+            name: "scalar",
+            path: [],
+          });
+        }
+        const count = extension.messages.length;
+        resume();
+        await pending;
+        assert.equal(extension.messages.length, count, `${action}: ${fail}`);
+      } finally {
+        extension.dispose();
+      }
+    }
+  }
+});
+
 test("statistics list external dense and sparse files with current physical sizes", async (t) => {
   const directory = await mkdtemp(
     path.join(tmpdir(), "onnx-light-statistics-files-"),
@@ -3320,6 +3685,7 @@ test("ignores stale recovery results and errors after replacing a local model", 
     "get-statistics",
     "memory-inputs",
     "memory-profile",
+    "tensor-statistics",
     "metadata",
     "refresh-shapes",
     "verify",
@@ -3335,6 +3701,7 @@ test("ignores stale recovery results and errors after replacing a local model", 
       const recovery = extension.receive({
         type,
         requestId: 1,
+        name: "weight",
         dimensions: {},
         path,
         scenario: "scenario",
@@ -3424,6 +3791,7 @@ test("ignores delayed recovery results and errors after disposing the panel", as
     { type: "get-statistics", requestId: 1 },
     { type: "memory-inputs", requestId: 1 },
     { type: "memory-profile", requestId: 1, dimensions: {} },
+    { type: "tensor-statistics", requestId: 1, name: "weight", path: [] },
     { type: "navigate", path: [{ node: 9999, attribute: 0, graph: 0 }] },
     { type: "metadata" },
     { type: "refresh-shapes" },
@@ -4355,6 +4723,85 @@ test("shows missing-graph loading errors in the canvas even before the webview i
   while (requests.length) await Promise.all(requests.splice(0));
   assert.equal(error.hidden, false);
   assert.equal(document.getElementById("nodes").innerHTML, graph);
+});
+
+test("reports a deleted history file as soon as opening fails and allows retry", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "onnx-viewer-missing-"));
+  t.after(() => rm(directory, { recursive: true }));
+  const source = require.resolve("./models/relu.onnx");
+  const deleted = path.join(directory, "deleted.onnx");
+  await copyFile(source, deleted);
+  const preferences = new Map();
+  const extension = await openExtension(
+    undefined,
+    undefined,
+    true,
+    undefined,
+    undefined,
+    preferences,
+  );
+  t.after(() => extension.dispose());
+  await extension.openFile(deleted);
+  const history = structuredClone(preferences.get("pathHistory"));
+  await rm(deleted);
+  const dom = new JSDOM(extension.webview.html, { runScripts: "outside-only" });
+  t.after(() => dom.window.close());
+  const { window } = dom;
+  const { document } = window;
+  const byId = (id) => document.getElementById(id);
+  window.structuredClone = structuredClone;
+  window.HTMLCanvasElement.prototype.getContext = () => ({
+    font: "",
+    measureText: (text) => ({ width: text.length * 8 }),
+  });
+  byId("canvas").getBoundingClientRect = () =>
+    new window.DOMRect(0, 0, 1060, 350);
+  const requests = [];
+  window.acquireVsCodeApi = () => ({
+    postMessage: (message) => requests.push(extension.receive(message)),
+  });
+  let failureFeedback;
+  extension.connect((data) => {
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+    if (
+      data.type === "log-entry" &&
+      data.entry.action === "Open ONNX model" &&
+      data.entry.status === "FAILED"
+    )
+      failureFeedback = {
+        visible: !byId("model-error").hidden,
+        message: byId("open-error").textContent,
+      };
+  });
+  for (const script of document.querySelectorAll("script[src]"))
+    window.eval(readFileSync(new URL(script.src), "utf8"));
+  while (requests.length) await Promise.all(requests.splice(0));
+  const graph = byId("nodes").innerHTML;
+  byId("open-model").click();
+  [...byId("open-history-entries").querySelectorAll("button")]
+    .find((button) => button.textContent === deleted)
+    .click();
+  byId("open-form").requestSubmit();
+  while (requests.length) await Promise.all(requests.splice(0));
+  assert.equal(failureFeedback.visible, true);
+  assert.match(failureFeedback.message, /ENOENT/);
+  assert.ok(failureFeedback.message.includes(deleted));
+  assert.equal(byId("nodes").innerHTML, graph);
+  assert.equal(byId("open-panel").hidden, false);
+  assert.equal(byId("load-progress").hidden, true);
+  assert.equal(byId("open-progress").hidden, true);
+  assert.equal(byId("model-view").getAttribute("aria-busy"), "false");
+  assert.equal(byId("open-submit").disabled, false);
+  assert.equal(byId("open-model").disabled, false);
+  assert.equal(byId("save-model").disabled, false);
+  assert.ok(extension.errors.some((error) => error.includes(deleted)));
+  assert.deepEqual(preferences.get("pathHistory"), history);
+  byId("open-file").value = source;
+  byId("open-form").requestSubmit();
+  while (requests.length) await Promise.all(requests.splice(0));
+  assert.equal(byId("model-error").hidden, true);
+  assert.equal(byId("open-panel").hidden, true);
+  assert.equal(byId("open-model").disabled, false);
 });
 
 test("keeps failed initial loading inspectable and can open Logs before any model", async () => {

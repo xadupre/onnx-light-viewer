@@ -133,8 +133,9 @@ bool IsPackedTensorField(uint32_t field) {
 class PayloadSkippingStream : public ol::utils::BinaryStream {
 public:
   PayloadSkippingStream(ol::utils::BinaryStream &stream, uint64_t threshold,
-                        ProtoKind kind = ProtoKind::Model)
-      : stream_(stream), threshold_(threshold) {
+                        ProtoKind kind = ProtoKind::Model,
+                        const std::vector<SkippedTensorPayload> *retained_paths = nullptr)
+      : stream_(stream), threshold_(threshold), retained_paths_(retained_paths) {
     ProtoFrame root;
     root.kind = kind;
     frames_.push_back(std::move(root));
@@ -159,8 +160,10 @@ public:
     const uint64_t prefix_size =
         frame.field == 6 ? static_cast<uint64_t>(stream_.tell() - before) : 0;
     const uint64_t size = length + prefix_size;
-    const bool skip = frame.field == 9 ? length >= threshold_
-                                       : frame.payload_sizes[frame.field] + size >= threshold_;
+    const bool retain_path = RetainPath(frame);
+    const bool skip =
+        !retain_path && (frame.field == 9 ? length >= threshold_
+                                          : frame.payload_sizes[frame.field] + size >= threshold_);
     frame.payload_sizes[frame.field] += size;
     if (!skip) {
       if (IsPackedTensorField(frame.field))
@@ -256,7 +259,23 @@ public:
 private:
   void LimitTo(uint64_t) override {}
 
+  bool RetainPath(const ProtoFrame &frame) const {
+    if (!retained_paths_)
+      return false;
+    return std::any_of(retained_paths_->begin(), retained_paths_->end(), [&](const auto &payload) {
+      if (payload.path.size() != frame.path.size())
+        return false;
+      for (size_t index = 0; index < frame.path.size(); ++index)
+        if (payload.path[index].field != frame.path[index].field ||
+            payload.path[index].index != frame.path[index].index)
+          return false;
+      return true;
+    });
+  }
+
   void RecordScalarBytes(ProtoFrame &frame, uint64_t size) {
+    if (RetainPath(frame))
+      return;
     frame.payload_sizes[frame.field] += size;
     if (frame.payload_sizes[frame.field] >= threshold_)
       frame.skipped_fields.insert(frame.field);
@@ -267,6 +286,7 @@ private:
   std::vector<ProtoFrame> frames_;
   std::vector<LimitScope> limit_scopes_;
   std::vector<SkippedTensorPayload> skipped_;
+  const std::vector<SkippedTensorPayload> *retained_paths_;
   bool has_training_info_ = false;
 };
 
@@ -604,6 +624,78 @@ std::optional<std::string> ReadPassword(const Napi::Value &value) {
   return value.As<Napi::String>().Utf8Value();
 }
 
+namespace {
+void ReadSourceModel(ol::ModelProto &model, ol::utils::BinaryStream &stream,
+                     const StoredModel &source,
+                     const std::vector<SkippedTensorPayload> *retained_paths) {
+  const auto read_stage = [&](ol::utils::BinaryStream &stage) {
+    if (retained_paths) {
+      PayloadSkippingStream selected(stage, 0, ProtoKind::Model, retained_paths);
+      ReadModel(model, selected, ol::ParseOptions{});
+    } else {
+      ReadModel(model, stage, ol::ParseOptions{});
+    }
+  };
+  if (source.pipeline_stage.empty()) {
+    read_stage(stream);
+    return;
+  }
+
+  const uint64_t stage = source.pipeline_stage == "embedding" ? 7
+                         : source.pipeline_stage == "prefill" ? 8
+                         : source.pipeline_stage == "decode"  ? 9
+                                                              : 0;
+  if (!stage)
+    throw std::runtime_error("Unknown source pipeline stage: " + source.pipeline_stage);
+  bool found = false;
+  std::vector<uint64_t> groups;
+  const auto skip = [&](uint64_t size) {
+    stream.CanRead(size, "Truncated source pipeline field.");
+    stream.skip_bytes(static_cast<ol::utils::offset_t>(size));
+  };
+  while (stream.NotEnd()) {
+    const auto field = stream.next_field();
+    if (groups.empty() && field.field_number == stage && field.wire_type == 2) {
+      const auto size = stream.next_uint64();
+      stream.CanRead(size, "Truncated source pipeline stage.");
+      stream.LimitToNext(size);
+      read_stage(stream);
+      stream.Restore();
+      found = true;
+      break;
+    }
+    switch (field.wire_type) {
+    case 0:
+      stream.next_uint64();
+      break;
+    case 1:
+      skip(8);
+      break;
+    case 2:
+      skip(stream.next_uint64());
+      break;
+    case 3:
+      if (groups.size() >= static_cast<size_t>(ol::ParseOptions{}.max_recursion_depth))
+        throw std::runtime_error("Protobuf group nesting exceeds the pipeline parser limit.");
+      groups.push_back(field.field_number);
+      break;
+    case 4:
+      if (groups.empty() || groups.back() != field.field_number)
+        throw std::runtime_error("Invalid protobuf group in source pipeline.");
+      groups.pop_back();
+      break;
+    case 5:
+      skip(4);
+      break;
+    default:
+      throw std::runtime_error("Invalid protobuf wire type in source pipeline.");
+    }
+  }
+  if (!found)
+    throw std::runtime_error("Could not reopen the source pipeline stage.");
+}
+} // namespace
+
 void RestoreModelPayloads(ol::ModelProto &snapshot, const StoredModel &source,
                           const std::string &file_path) {
   if (source.has_training_info)
@@ -623,62 +715,7 @@ void RestoreModelPayloads(ol::ModelProto &snapshot, const StoredModel &source,
     throw std::system_error(errno, std::generic_category(), "Could not reopen source model");
   ol::utils::FdReadStream stream(file.get());
   ol::ModelProto original;
-  if (source.pipeline_stage.empty()) {
-    ReadModel(original, stream, ol::ParseOptions{});
-  } else {
-    const uint64_t stage = source.pipeline_stage == "embedding" ? 7
-                           : source.pipeline_stage == "prefill" ? 8
-                           : source.pipeline_stage == "decode"  ? 9
-                                                                : 0;
-    if (!stage)
-      throw std::runtime_error("Unknown source pipeline stage: " + source.pipeline_stage);
-    bool found = false;
-    std::vector<uint64_t> groups;
-    const auto skip = [&](uint64_t size) {
-      stream.CanRead(size, "Truncated source pipeline field.");
-      stream.skip_bytes(static_cast<ol::utils::offset_t>(size));
-    };
-    while (stream.NotEnd()) {
-      const auto field = stream.next_field();
-      if (groups.empty() && field.field_number == stage && field.wire_type == 2) {
-        const auto size = stream.next_uint64();
-        stream.CanRead(size, "Truncated source pipeline stage.");
-        stream.LimitToNext(size);
-        ReadModel(original, stream, ol::ParseOptions{});
-        stream.Restore();
-        found = true;
-        break;
-      }
-      switch (field.wire_type) {
-      case 0:
-        stream.next_uint64();
-        break;
-      case 1:
-        skip(8);
-        break;
-      case 2:
-        skip(stream.next_uint64());
-        break;
-      case 3:
-        if (groups.size() >= static_cast<size_t>(ol::ParseOptions{}.max_recursion_depth))
-          throw std::runtime_error("Protobuf group nesting exceeds the pipeline parser limit.");
-        groups.push_back(field.field_number);
-        break;
-      case 4:
-        if (groups.empty() || groups.back() != field.field_number)
-          throw std::runtime_error("Invalid protobuf group in source pipeline.");
-        groups.pop_back();
-        break;
-      case 5:
-        skip(4);
-        break;
-      default:
-        throw std::runtime_error("Invalid protobuf wire type in source pipeline.");
-      }
-    }
-    if (!found)
-      throw std::runtime_error("Could not reopen the source pipeline stage.");
-  }
+  ReadSourceModel(original, stream, source, nullptr);
   check_source();
   for (const auto &payload : source.skipped) {
     auto *target = FindTensor(snapshot, payload);
@@ -689,6 +726,71 @@ void RestoreModelPayloads(ol::ModelProto &snapshot, const StoredModel &source,
         !std::equal(target->dims().begin(), target->dims().end(), tensor->dims().begin()))
       throw std::runtime_error("Could not restore an omitted tensor payload.");
     *target = tensor->SharedCopy();
+  }
+}
+
+void RestoreStatisticsPayloads(ol::ModelProto &snapshot, const StoredModel &source,
+                               const std::string &file_path,
+                               const std::vector<SkippedTensorPayload> &payloads) {
+  struct Target {
+    SkippedTensorPayload payload;
+    std::string name;
+    bool has_name;
+    int data_type;
+    std::vector<int64_t> dims;
+  };
+  std::vector<Target> targets;
+  for (const auto &requested : payloads) {
+    const auto found =
+        std::find_if(source.skipped.begin(), source.skipped.end(),
+                     [&](const auto &payload) { return payload.path == requested.path; });
+    if (found == source.skipped.end())
+      continue;
+    if (std::none_of(targets.begin(), targets.end(),
+                     [&](const auto &target) { return target.payload.path == found->path; })) {
+      const auto *tensor = FindTensor(snapshot, *found);
+      if (!tensor)
+        throw std::runtime_error("Could not locate an omitted tensor payload.");
+      targets.push_back({*found,
+                         tensor->str_name(),
+                         tensor->has_name(),
+                         tensor->data_type(),
+                         {tensor->dims().begin(), tensor->dims().end()}});
+    }
+  }
+  if (targets.empty())
+    return;
+
+  const auto path = ModelFilePath(file_path);
+  const auto check_source = [&] {
+    if (std::filesystem::file_size(path) != source.source_size ||
+        std::filesystem::last_write_time(path) != source.source_time)
+      throw std::runtime_error("The source model changed on disk. Reopen it before saving.");
+  };
+  check_source();
+  FileDescriptor file(OpenModelFile(file_path));
+  if (file.get() < 0)
+    throw std::system_error(errno, std::generic_category(), "Could not reopen source model");
+  ol::utils::FdReadStream stream(file.get());
+  ol::ModelProto original;
+  std::vector<SkippedTensorPayload> retained_paths;
+  retained_paths.reserve(targets.size());
+  for (const auto &target : targets)
+    retained_paths.push_back(target.payload);
+  ReadSourceModel(original, stream, source, &retained_paths);
+  check_source();
+
+  for (const auto &target : targets) {
+    auto *destination = FindTensor(snapshot, target.payload);
+    auto *tensor = FindTensor(original, target.payload);
+    if (!destination || !tensor)
+      throw std::runtime_error("Could not locate an omitted tensor payload.");
+    if (destination->str_name() != target.name || destination->has_name() != target.has_name ||
+        tensor->str_name() != target.name || tensor->has_name() != target.has_name ||
+        tensor->data_type() != target.data_type || tensor->dims().size() != target.dims.size() ||
+        !std::equal(tensor->dims().begin(), tensor->dims().end(), target.dims.begin()))
+      throw std::runtime_error("Could not restore an omitted tensor payload.");
+    *destination = tensor->SharedCopy();
   }
 }
 

@@ -80,18 +80,6 @@ std::string SparsePreview(const ol::SparseTensorProto &tensor) {
   return result.str();
 }
 
-template <typename Dims> std::optional<size_t> TinyElementCount(const Dims &dims) {
-  if (std::find(dims.begin(), dims.end(), 0) != dims.end())
-    return 0;
-  size_t count = 1;
-  for (const auto dim : dims) {
-    if (dim < 0 || dim >= 16 || count > 15 / static_cast<size_t>(dim))
-      return std::nullopt;
-    count *= static_cast<size_t>(dim);
-  }
-  return count;
-}
-
 template <typename T> T TensorElement(const ol::core::runtime::Tensor &tensor, size_t index) {
   std::array<uint8_t, sizeof(T)> bytes;
   std::copy_n(tensor.bytes() + index * sizeof(T), sizeof(T), bytes.begin());
@@ -151,9 +139,10 @@ std::string AttributePreview(const ol::AttributeProto &attribute) {
   }
 }
 
-std::optional<std::string> TinyTensorValues(const ol::TensorProto &tensor) {
+std::optional<std::string> TinyTensorValues(const ol::TensorProto &tensor, size_t limit,
+                                            bool truncate_strings) {
   using namespace ol::core::runtime;
-  const auto count = TinyElementCount(tensor.dims());
+  const auto count = TinyElementCount(tensor.dims(), limit);
   if (!count || tensor.data_location() == ol::TensorProto::EXTERNAL ||
       !tensor.external_data().empty())
     return std::nullopt;
@@ -178,8 +167,9 @@ std::optional<std::string> TinyTensorValues(const ol::TensorProto &tensor) {
                                std::to_string(tensor.string_data().size()) + ".");
     for (size_t index = 0; index < *count; ++index) {
       const auto &text = tensor.string_data(index);
-      values << (index ? ", " : "") << std::quoted(std::string(text.substr(0, 128)));
-      if (text.size() > 128)
+      values << (index ? ", " : "")
+             << std::quoted(truncate_strings ? text.substr(0, 128) : std::string(text));
+      if (truncate_strings && text.size() > 128)
         values << "...";
     }
   } else {

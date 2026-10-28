@@ -135,6 +135,1162 @@ function submitOpen(document, window) {
     .dispatchEvent(new window.Event("submit", { cancelable: true }));
 }
 
+function tensorStatistics(name = "weight") {
+  return {
+    name,
+    dtype: "FLOAT",
+    shape: ["2", "3"],
+    count: "6",
+    sizeBytes: "24",
+    min: -2,
+    max: 3,
+    mean: 0.5,
+    median: 0.5,
+    quantiles: [-0.75, 0.5, 1.75],
+    distribution: ["2", "4"],
+    binEdges: [-2, 0, 3],
+    rectangleMap: Array.from({ length: 1024 }, (_, i) => (i % 6) - 2),
+    rectangleShape: [32, 32],
+    distinctCount: "6",
+  };
+}
+
+function weightsGraph() {
+  const initializers = ["weight", "other-weight"].map((name) => ({
+    name,
+    type: "FLOAT",
+    shape: ["2", "3"],
+  }));
+  return {
+    ...demoGraph,
+    initializers,
+    nodes: [
+      {
+        ...demoGraph.nodes[0],
+        opType: "Add",
+        inputs: ["input", "weight"],
+        parameters: [initializers[0]],
+      },
+      {
+        ...demoGraph.nodes[0],
+        id: "node-1",
+        opType: "Add",
+        name: "second",
+        inputs: ["output", "other-weight"],
+        outputs: ["final"],
+        parameters: [initializers[1]],
+      },
+    ],
+    outputs: ["final"],
+  };
+}
+
+function inspectTensor(document, name) {
+  if (document.getElementById("tensor-statistics-dialog").open)
+    document.getElementById("close-tensor-statistics").click();
+  const row = [...document.querySelectorAll("#tensor-list-rows tr")].find(
+    (row) => row.dataset.name === name,
+  );
+  assert.ok(row, `Tensor row not found: ${name}`);
+  row.querySelector(".tensor-list-statistics").click();
+}
+
+test("save defaults use the workspace cache directory while Open stays beside the source model", (t) => {
+  const { document, window } = openViewer(t);
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: {
+        type: "graph",
+        graph: demoGraph,
+        file: {
+          directory: "/source",
+          saveDirectory: "/workspace/.cache/.onnx-light-viewer",
+          savePath: "/workspace/.cache/.onnx-light-viewer/model-copy.onnx",
+        },
+      },
+    }),
+  );
+  assert.equal(document.getElementById("open-location").value, "/source");
+  assert.equal(
+    document.getElementById("save-location").value,
+    "/workspace/.cache/.onnx-light-viewer",
+  );
+  assert.equal(
+    document.getElementById("save-file").value,
+    "/workspace/.cache/.onnx-light-viewer/model-copy.onnx",
+  );
+});
+
+test("tensor icons open data directly while the tensor browser lists metadata and consumers", (t) => {
+  const { document, window, messages, load, pointer } = openViewer(t);
+  const weight = "<weight>";
+  const parameter = { name: weight, type: "FLOAT", shape: ["150000", "1024"] };
+  const graph = {
+    ...demoGraph,
+    name: "weights",
+    initializers: [parameter, { name: "unused", type: "INT64", shape: [] }],
+    sparseInitializers: [{ name: "sparse", type: "FLOAT", shape: ["8"] }],
+    encodedInitializers: [{ name: "encoded", type: "FLOAT16", shape: ["4"] }],
+    nodes: [
+      {
+        ...demoGraph.nodes[0],
+        opType: "MatMul",
+        name: "<matmul>",
+        inputs: ["input", weight, weight, "constant"],
+        parameters: [parameter],
+      },
+      {
+        ...demoGraph.nodes[0],
+        id: "node-1",
+        name: "other",
+        opType: "Add",
+        inputs: ["output", weight],
+        outputs: ["final"],
+      },
+      {
+        ...demoGraph.nodes[0],
+        id: "node-2",
+        name: "scalar",
+        opType: "Constant",
+        inputs: [],
+        outputs: ["constant"],
+      },
+    ],
+    tensors: [
+      ...demoGraph.tensors,
+      { name: "constant", type: null, shape: null },
+      { name: "final", type: null, shape: null },
+    ],
+    outputs: ["final"],
+  };
+  load(graph);
+  const tabs = [...document.querySelectorAll(".viewer-tabs button")];
+  assert.equal(
+    tabs[tabs.indexOf(document.getElementById("status-tab")) - 1].id,
+    "tensors-tab",
+  );
+  const group = document.querySelector('[data-id="node-0"]');
+  const link = group.querySelector(".node-statistics-link");
+  const body = group.querySelector("rect");
+  const hit = link.querySelector("rect");
+  for (const [coordinate, dimension] of [
+    ["x", "width"],
+    ["y", "height"],
+  ]) {
+    assert.ok(
+      Number(hit.getAttribute(coordinate)) >=
+        Number(body.getAttribute(coordinate)),
+    );
+    assert.ok(
+      Number(hit.getAttribute(coordinate)) +
+        Number(hit.getAttribute(dimension)) <=
+        Number(body.getAttribute(coordinate)) +
+          Number(body.getAttribute(dimension)),
+    );
+  }
+  const before = nodePositions(document);
+  const x = Number(hit.getAttribute("x")) + 5;
+  const y = Number(hit.getAttribute("y")) + 5;
+  pointer(link.querySelector("path"), "pointerdown", x, y);
+  pointer(document.getElementById("graph"), "pointermove", x + 20, y + 20);
+  pointer(document.getElementById("graph"), "pointerup", x + 20, y + 20);
+  assert.deepEqual(nodePositions(document), before);
+  link.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  assert.equal(document.getElementById("tensors-view").hidden, true);
+  assert.equal(document.getElementById("tensor-statistics-dialog").open, true);
+  assert.equal(
+    messages.filter((message) => message.type === "tensor-statistics").length,
+    1,
+  );
+  assert.equal(messages.at(-1).name, weight);
+  document.getElementById("close-tensor-statistics").click();
+  document.getElementById("tensors-tab").click();
+  const rows = [...document.querySelectorAll("#tensor-list-rows tr")];
+  const row = (name) => rows.find((row) => row.dataset.name === name);
+  assert.deepEqual(
+    [...row(weight).cells].slice(0, 5).map((cell) => cell.textContent),
+    [
+      weight,
+      "Initializer",
+      "FLOAT",
+      "[150000, 1024]",
+      "MatMul (<matmul>)\nAdd (other)",
+    ],
+  );
+  assert.equal(row(weight).querySelector("matmul"), null);
+  assert.equal(row(weight).classList.contains("tensor-highlighted"), true);
+  assert.equal(row("constant").classList.contains("tensor-highlighted"), true);
+  assert.equal(row("unused").classList.contains("tensor-highlighted"), false);
+  assert.equal(row("unused").cells[3].textContent, "[]");
+  assert.equal(row("constant").cells[1].textContent, "Constant");
+  assert.equal(row("constant").cells[2].textContent, "?");
+  assert.equal(row("constant").cells[3].textContent, "?");
+  assert.equal(row("sparse").cells[1].textContent, "Sparse initializer");
+  assert.equal(row("encoded").cells[1].textContent, "Encoded initializer");
+  assert.deepEqual(
+    rows.map((row) => row.dataset.name),
+    [weight, "unused", "sparse", "encoded", "constant"],
+  );
+  for (const name of ["input", "output", "final"])
+    assert.equal(row(name), undefined);
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: {
+        type: "shape-info",
+        tensors: [
+          ...graph.tensors.filter((tensor) => tensor.name !== "constant"),
+          { name: "constant", type: "INT64", shape: [] },
+        ],
+      },
+    }),
+  );
+  const updated = [...document.querySelectorAll("#tensor-list-rows tr")].find(
+    (row) => row.dataset.name === "constant",
+  );
+  assert.equal(updated.cells[2].textContent, "INT64");
+  assert.equal(updated.cells[3].textContent, "[]");
+  inspectTensor(document, weight);
+  assert.equal(document.getElementById("tensor-statistics-dialog").open, true);
+  assert.equal(
+    document.getElementById("tensor-statistics-picker").hidden,
+    true,
+  );
+  assert.equal(messages.at(-1).name, weight);
+  document.getElementById("close-tensor-statistics").click();
+  assert.equal(document.getElementById("tensors-view").hidden, false);
+  const search = document.getElementById("tensor-list-search");
+  search.value = "other";
+  search.dispatchEvent(new window.Event("input"));
+  assert.deepEqual(
+    [...document.querySelectorAll("#tensor-list-rows tr")].map(
+      (row) => row.dataset.name,
+    ),
+    [weight],
+  );
+  search.value = "does-not-exist";
+  search.dispatchEvent(new window.Event("input"));
+  assert.equal(document.querySelectorAll("#tensor-list-rows tr").length, 0);
+  assert.match(
+    document.getElementById("tensor-list-status").textContent,
+    /0–0 of 0/,
+  );
+  load(demoGraph);
+  assert.equal(search.value, "");
+  assert.equal(document.querySelectorAll(".tensor-highlighted").length, 0);
+  assert.equal(document.querySelectorAll("#tensor-list-rows tr").length, 0);
+});
+
+test("tensor browser highlights the current selection across pages without clearing filters", (t) => {
+  const { document, window, load, messages } = openViewer(t);
+  const byId = (id) => document.getElementById(id);
+  const graph = weightsGraph();
+  graph.initializers.unshift(
+    ...Array.from({ length: 105 }, (_, index) => ({
+      name: `integer-${index}`,
+      type: "INT64",
+      shape: [],
+    })),
+  );
+  graph.nodes.push({
+    ...demoGraph.nodes[0],
+    id: "node-2",
+    opType: "Constant",
+    inputs: [],
+    outputs: ["constant"],
+    parameters: [],
+  });
+  graph.outputs.push("constant");
+  load(graph);
+  const select = (selector, ctrlKey = false) => {
+    byId("model-tab").click();
+    document
+      .querySelector(selector)
+      .dispatchEvent(
+        new window.MouseEvent("click", { bubbles: true, ctrlKey }),
+      );
+    byId("tensors-tab").click();
+  };
+  const highlighted = () =>
+    [...document.querySelectorAll(".tensor-highlighted")].map(
+      (row) => row.dataset.name,
+    );
+  select('[data-id="node-0"]');
+  assert.deepEqual(highlighted(), ["weight"]);
+  assert.equal(byId("tensor-list-previous").disabled, false);
+  assert.match(byId("tensor-list-status").textContent, /1 highlighted/);
+  const filter = byId("tensor-list-type");
+  filter.value = "FLOAT";
+  filter.dispatchEvent(new window.Event("change"));
+  const search = byId("tensor-list-search");
+  search.value = "weight";
+  search.dispatchEvent(new window.Event("input"));
+  select('[data-id="node-1"]');
+  assert.deepEqual(highlighted(), ["other-weight"]);
+  assert.equal(filter.value, "FLOAT");
+  assert.equal(search.value, "weight");
+  select('[data-id="node-0"]', true);
+  assert.deepEqual(highlighted(), ["weight", "other-weight"]);
+  assert.equal(filter.value, "FLOAT");
+  assert.equal(search.value, "weight");
+  byId("model-tab").click();
+  byId("graph").dispatchEvent(
+    new window.KeyboardEvent("keydown", { key: "Escape" }),
+  );
+  byId("tensors-tab").click();
+  assert.deepEqual(highlighted(), []);
+  filter.value = "";
+  filter.dispatchEvent(new window.Event("change"));
+  search.value = "";
+  search.dispatchEvent(new window.Event("input"));
+  select('[data-id="output-1"]');
+  assert.deepEqual(highlighted(), ["constant"]);
+  assert.equal(
+    messages.some((message) => message.type === "tensor-statistics"),
+    false,
+  );
+});
+
+test("operator tensor icons preserve area zoom and support keyboard activation", (t) => {
+  const { document, window, load, pointer } = openViewer(t);
+  const svg = document.getElementById("graph");
+  for (const mode of ["alt", "area"]) {
+    load(weightsGraph());
+    if (mode === "area") document.getElementById("zoom-area").click();
+    const link = document.querySelector(".node-statistics-link");
+    const hit = link.querySelector("rect");
+    const x = Number(hit.getAttribute("x")) + 5;
+    const y = Number(hit.getAttribute("y")) + 5;
+    const modifiers = { altKey: mode === "alt" };
+    const before = svg.getAttribute("viewBox");
+    pointer(link.querySelector("path"), "pointerdown", x, y, modifiers);
+    pointer(svg, "pointermove", x + 50, y + 50, modifiers);
+    pointer(svg, "pointerup", x + 50, y + 50, modifiers);
+    link.dispatchEvent(
+      new window.MouseEvent("click", { bubbles: true, detail: 1 }),
+    );
+    assert.equal(document.getElementById("model-view").hidden, false);
+    assert.notEqual(svg.getAttribute("viewBox"), before);
+    if (mode === "area") document.getElementById("zoom-area").click();
+  }
+  document
+    .querySelector(".node-statistics-link")
+    .dispatchEvent(
+      new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+    );
+  assert.equal(document.getElementById("tensors-view").hidden, true);
+  assert.equal(document.getElementById("tensor-statistics-dialog").open, true);
+});
+
+test("operator statistics icons require a consumed initializer or standard Constant", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const parameter = { name: "weight", type: "FLOAT", shape: ["1"] };
+  for (const kind of [
+    "none",
+    "unrelated",
+    "initializers",
+    "sparseInitializers",
+    "encodedInitializers",
+    "constant",
+    "capture",
+    "custom",
+  ]) {
+    const node = {
+      ...demoGraph.nodes[0],
+      inputs: ["input"],
+      captures: [],
+      parameters: [],
+    };
+    const graph = {
+      ...demoGraph,
+      nodes: [node],
+      initializers: [],
+      sparseInitializers: [],
+      encodedInitializers: [],
+    };
+    const expected = !["none", "unrelated", "custom"].includes(kind);
+    if (kind === "unrelated") graph.initializers.push(parameter);
+    else if (kind === "capture") {
+      node.captures.push("weight");
+      node.parameters.push(parameter);
+    } else if (kind === "constant" || kind === "custom") {
+      node.inputs.push("weight");
+      graph.nodes.push({
+        ...demoGraph.nodes[0],
+        id: "node-1",
+        opType: "Constant",
+        domain: kind === "custom" ? "custom" : "ai.onnx",
+        inputs: [],
+        outputs: ["weight"],
+      });
+    } else if (expected) {
+      node.inputs.push("weight");
+      graph[kind].push(parameter);
+    }
+    load(graph);
+    document.getElementById("model-tab").click();
+    const link = document.querySelector(
+      '[data-id="node-0"] .node-statistics-link',
+    );
+    assert.equal(Boolean(link), expected, kind);
+    if (link) {
+      link.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+      assert.equal(
+        document.getElementById("tensor-statistics-dialog").open,
+        true,
+        kind,
+      );
+      assert.equal(document.getElementById("tensors-view").hidden, true, kind);
+      assert.equal(messages.at(-1).name, "weight", kind);
+    }
+  }
+});
+
+test("tensor columns resize independently with pointer and keyboard and retain widths after filtering", (t) => {
+  const { document, window, load } = openViewer(t);
+  const byId = (id) => document.getElementById(id);
+  load(weightsGraph());
+  byId("tensors-tab").click();
+  const table = byId("tensor-list-rows").closest("table");
+  const headers = [...table.querySelectorAll("th")];
+  const widths = [180, 160, 100, 140, 200, 90];
+  for (const [index, header] of headers.entries())
+    header.getBoundingClientRect = () =>
+      new window.DOMRect(0, 0, widths[index], 32);
+  const handles = [...table.querySelectorAll(".tensor-column-resizer")];
+  assert.equal(handles.length, headers.length);
+  const handle = handles[0];
+  assert.equal(handle.getAttribute("aria-label"), "Resize Name column");
+  const captures = new Set();
+  handle.setPointerCapture = (id) => captures.add(id);
+  handle.hasPointerCapture = (id) => captures.has(id);
+  handle.releasePointerCapture = (id) => {
+    captures.delete(id);
+    pointer("lostpointercapture", 0, id);
+  };
+  function pointer(type, clientX, pointerId = 7, button = 0) {
+    const event = new window.MouseEvent(type, {
+      bubbles: true,
+      cancelable: true,
+      clientX,
+      button,
+    });
+    Object.defineProperty(event, "pointerId", { value: pointerId });
+    handle.dispatchEvent(event);
+  }
+  const columnWidths = () =>
+    [...table.querySelectorAll("col")].map((col) => col.style.width);
+  pointer("pointerdown", 100, 7, 2);
+  assert.equal(table.style.width, "");
+  pointer("pointerdown", 100);
+  pointer("pointermove", 300, 8);
+  assert.equal(columnWidths()[0], "180px");
+  pointer("pointermove", 175);
+  assert.deepEqual(columnWidths(), [
+    "255px",
+    "160px",
+    "100px",
+    "140px",
+    "200px",
+    "90px",
+  ]);
+  assert.equal(table.style.width, "945px");
+  assert.equal(table.style.tableLayout, "fixed");
+  assert.equal(handle.getAttribute("aria-valuenow"), "255");
+  assert.equal(document.activeElement, handle);
+  pointer("pointerup", 175);
+  assert.equal(captures.size, 0);
+  assert.equal(
+    document.body.classList.contains("resizing-tensor-column"),
+    false,
+  );
+  pointer("pointermove", 900);
+  assert.equal(columnWidths()[0], "255px");
+  byId("tensor-list-search").value = "other";
+  byId("tensor-list-search").dispatchEvent(new window.Event("input"));
+  assert.equal(byId("tensor-list-rows").children.length, 1);
+  assert.equal(table.style.width, "945px");
+  assert.equal(columnWidths()[0], "255px");
+  for (const end of ["pointercancel", "lostpointercapture", "blur"]) {
+    pointer("pointerdown", 175);
+    pointer("pointermove", -1000);
+    assert.equal(columnWidths()[0], "64px");
+    if (end === "blur") window.dispatchEvent(new window.Event("blur"));
+    else pointer(end, -1000);
+    pointer("pointermove", 300);
+    assert.equal(columnWidths()[0], "64px");
+    assert.equal(
+      document.body.classList.contains("resizing-tensor-column"),
+      false,
+    );
+  }
+  for (const [key, width] of [
+    ["ArrowRight", "80px"],
+    ["ArrowLeft", "64px"],
+    ["ArrowLeft", "64px"],
+  ]) {
+    handle.dispatchEvent(
+      new window.KeyboardEvent("keydown", {
+        key,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    assert.equal(columnWidths()[0], width);
+  }
+  handles[1].dispatchEvent(
+    new window.KeyboardEvent("keydown", {
+      key: "Home",
+      bubbles: true,
+      cancelable: true,
+    }),
+  );
+  assert.deepEqual(columnWidths(), [
+    "64px",
+    "64px",
+    "100px",
+    "140px",
+    "200px",
+    "90px",
+  ]);
+});
+
+test("tensor browser combines type filtering with search, pagination and inferred types", (t) => {
+  const { document, window, load } = openViewer(t);
+  const byId = (id) => document.getElementById(id);
+  const names = () =>
+    [...byId("tensor-list-rows").children].map((row) => row.dataset.name);
+  load({
+    ...demoGraph,
+    initializers: [
+      ...Array.from({ length: 105 }, (_, i) => ({
+        name: `float-${i}`,
+        type: "FLOAT",
+        shape: ["32"],
+      })),
+      { name: "integer", type: "INT64", shape: [] },
+      { name: "unknown", type: null, shape: null },
+    ],
+  });
+  byId("tensors-tab").click();
+  const filter = byId("tensor-list-type");
+  assert.deepEqual(
+    [...filter.options].map((option) => option.value),
+    ["", "?", "FLOAT", "INT64"],
+  );
+  byId("tensor-list-next").click();
+  filter.value = "INT64";
+  filter.dispatchEvent(new window.Event("change"));
+  assert.deepEqual(names(), ["integer"]);
+  assert.equal(byId("tensor-list-previous").disabled, true);
+  assert.equal(byId("tensor-list-next").disabled, true);
+  const search = byId("tensor-list-search");
+  search.value = "float-10";
+  search.dispatchEvent(new window.Event("input"));
+  assert.deepEqual(names(), []);
+  filter.value = "FLOAT";
+  filter.dispatchEvent(new window.Event("change"));
+  assert.deepEqual(names(), [
+    "float-10",
+    "float-100",
+    "float-101",
+    "float-102",
+    "float-103",
+    "float-104",
+  ]);
+  search.value = "";
+  search.dispatchEvent(new window.Event("input"));
+  filter.value = "?";
+  filter.dispatchEvent(new window.Event("change"));
+  assert.deepEqual(names(), ["unknown"]);
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: {
+        type: "shape-info",
+        tensors: [{ name: "unknown", type: "DOUBLE", shape: [] }],
+      },
+    }),
+  );
+  assert.equal(filter.value, "");
+  assert.deepEqual(
+    [...filter.options].map((option) => option.value),
+    ["", "DOUBLE", "FLOAT", "INT64"],
+  );
+  filter.value = "DOUBLE";
+  filter.dispatchEvent(new window.Event("change"));
+  assert.deepEqual(names(), ["unknown"]);
+  load(weightsGraph());
+  byId("tensors-tab").click();
+  assert.equal(filter.value, "");
+  assert.equal(filter.querySelector('option[value="DOUBLE"]'), null);
+});
+
+test("tensor inspection displays small values without charts or statistics and caches them", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const byId = (id) => document.getElementById(id);
+  load(weightsGraph());
+  byId("tensors-tab").click();
+  inspectTensor(document, "weight");
+  const request = messages
+    .filter((message) => message.type === "tensor-statistics")
+    .at(-1);
+  const values = '["<img src=x onerror=alert(1)>", 1152921504606846977]';
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: {
+        type: "tensor-statistics-info",
+        requestId: request.requestId,
+        statistics: {
+          name: "weight",
+          dtype: "INT64",
+          shape: ["2"],
+          count: "2",
+          sizeBytes: "16",
+          values,
+        },
+      },
+    }),
+  );
+  const content = byId("tensor-statistics-content");
+  assert.equal(byId("tensor-statistics-title").textContent, "Tensor values");
+  assert.equal(content.querySelector("pre").textContent, values);
+  assert.equal(content.querySelector("img"), null);
+  assert.equal(content.querySelector("svg"), null);
+  assert.equal(content.querySelector(".tensor-statistics-quartiles"), null);
+  assert.doesNotMatch(content.textContent, /Average|Median|Minimum|Maximum/);
+  assert.equal(byId("tensor-statistics-progress").hidden, true);
+  byId("close-tensor-statistics").click();
+  const count = messages.length;
+  inspectTensor(document, "weight");
+  assert.equal(messages.length, count);
+  assert.equal(content.querySelector("pre").textContent, values);
+});
+
+test("tensor statistics lazily browses selection, renders SDK summaries and caches successes", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const byId = (id) => document.getElementById(id);
+  const requests = () => messages.filter((m) => m.type === "tensor-statistics");
+  const reply = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  assert.equal(byId("show-tensor-statistics"), null);
+  assert.equal(byId("all-tensor-statistics"), null);
+  assert.ok(byId("tensors-tab").querySelector('svg[aria-hidden="true"]'));
+  load(weightsGraph());
+  byId("tensors-tab").click();
+  assert.equal(byId("tensors-view").hidden, false);
+  assert.equal(
+    requests().length,
+    0,
+    "listing metadata does not compute statistics",
+  );
+  inspectTensor(document, "weight");
+  assert.equal(byId("tensor-statistics-dialog").open, true);
+  const progress = byId("tensor-statistics-progress");
+  assert.equal(progress.hidden, false);
+  assert.equal(progress.hasAttribute("value"), false);
+  assert.equal(
+    byId("tensor-statistics-dialog").getAttribute("aria-busy"),
+    "true",
+  );
+  assert.equal(requests().length, 1);
+  const first = requests()[0];
+  assert.equal(first.name, "weight");
+  assert.equal(
+    Number.isSafeInteger(first.requestId) && first.requestId > 0,
+    true,
+  );
+  assert.deepEqual(Array.from(first.path), []);
+  reply({
+    type: "tensor-statistics-info",
+    requestId: first.requestId,
+    statistics: tensorStatistics(),
+  });
+  const content = byId("tensor-statistics-content");
+  assert.equal(progress.hidden, true);
+  assert.equal(
+    byId("tensor-statistics-dialog").getAttribute("aria-busy"),
+    "false",
+  );
+  assert.match(content.textContent, /Average0.5Median0.5/);
+  assert.match(content.textContent, /Q1 \(25%\)-0.75/);
+  assert.match(content.textContent, /DtypeFLOATShape\[2, 3\]Count6/);
+  assert.equal(content.querySelectorAll("svg").length, 2);
+  assert.equal(
+    content.querySelectorAll("svg")[0].querySelectorAll("rect").length,
+    2,
+  );
+  assert.equal(
+    content.querySelectorAll("svg")[1].querySelectorAll("rect").length,
+    1024,
+  );
+  assert.equal(
+    content.querySelectorAll("svg")[1].getAttribute("viewBox"),
+    "0 0 32 32",
+  );
+  assert.match(
+    content.querySelector("svg > title").textContent,
+    /Histogram for weight/,
+  );
+  assert.match(
+    content.querySelector("rect > title").textContent,
+    /-2 to 0: 2 values/,
+  );
+  assert.match(content.textContent, /blue \(low\).*red \(high\)/);
+  const summary = content.querySelector(".status-details");
+  const details = content.querySelector(".tensor-statistics-details");
+  const quartiles = content.querySelector(".tensor-statistics-quartiles");
+  assert.equal(details.firstElementChild, summary);
+  assert.equal(details.lastElementChild, quartiles.parentElement);
+  assert.equal(window.getComputedStyle(details).display, "grid");
+  assert.equal(
+    window.getComputedStyle(details).gridTemplateColumns,
+    "minmax(0, 1fr) minmax(180px, 0.8fr)",
+  );
+  assert.equal(
+    window.getComputedStyle(quartiles).gridTemplateColumns,
+    "minmax(0, 1fr)",
+  );
+  assert.equal(window.getComputedStyle(summary).alignItems, "baseline");
+  for (const term of summary.querySelectorAll("dt")) {
+    assert.equal(window.getComputedStyle(term).marginTop, "0px");
+    assert.equal(term.nextElementSibling.tagName, "DD");
+  }
+  assert.deepEqual(
+    [...content.querySelectorAll(".tensor-statistics-quartiles > div")].map(
+      (group) => [group.firstChild.textContent, group.lastChild.textContent],
+    ),
+    [
+      ["Minimum", "-2"],
+      ["Q1 (25%)", "-0.75"],
+      ["Q2 (50%)", "0.5"],
+      ["Q3 (75%)", "1.75"],
+      ["Maximum", "3"],
+    ],
+  );
+  assert.deepEqual(
+    [...content.querySelectorAll("figcaption")].map(
+      (caption) => caption.textContent,
+    ),
+    ["Histogram — values per bin", "Heatmap — SDK 32 × 32 summary"],
+  );
+  assert.deepEqual(
+    [...content.querySelectorAll("svg")[0].querySelectorAll("text")].map(
+      (label) => label.textContent,
+    ),
+    ["4", "0", "-2", "3", "Value (bin range)", "Count"],
+  );
+  const inspectorButton = document.querySelector(
+    "#node-initializers .tensor-statistics-button",
+  );
+  assert.ok(inspectorButton.querySelector('svg[aria-hidden="true"]'));
+  assert.equal(inspectorButton.textContent, "");
+  assert.match(inspectorButton.getAttribute("aria-label"), /weight/);
+  assert.equal(
+    inspectorButton.parentElement.className,
+    "tensor-statistics-heading",
+  );
+  assert.equal(
+    window.getComputedStyle(inspectorButton.parentElement).display,
+    "flex",
+  );
+  inspectTensor(document, "other-weight");
+  assert.equal(requests().length, 2);
+  assert.equal(progress.hidden, false);
+  assert.equal(requests()[1].name, "other-weight");
+  reply({
+    type: "tensor-statistics-error",
+    requestId: requests()[1].requestId,
+    error: "No stored data",
+  });
+  assert.match(
+    byId("tensor-statistics-status").textContent,
+    /unavailable.*not executed.*Choose another/,
+  );
+  assert.equal(progress.hidden, true);
+  inspectTensor(document, "weight");
+  assert.equal(requests().length, 2);
+  assert.equal(progress.hidden, true);
+  assert.match(content.textContent, /Average0.5/);
+  inspectTensor(document, "other-weight");
+  assert.equal(requests().length, 3, "failures are not cached");
+});
+
+test("tensor statistics ignores changed names, close, Escape, reload and navigation responses", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const byId = (id) => document.getElementById(id);
+  const requests = () => messages.filter((m) => m.type === "tensor-statistics");
+  const reply = (request, type = "tensor-statistics-info") =>
+    window.dispatchEvent(
+      new window.MessageEvent("message", {
+        data: {
+          type,
+          requestId: request.requestId,
+          statistics: tensorStatistics(request.name),
+          error: "stale error",
+        },
+      }),
+    );
+  const open = () => {
+    byId("tensors-tab").click();
+    inspectTensor(document, "weight");
+    return requests().at(-1);
+  };
+  load(weightsGraph());
+  const first = open();
+  byId("tensor-statistics-name").value = "other-weight";
+  byId("tensor-statistics-name").dispatchEvent(new window.Event("input"));
+  assert.equal(byId("tensor-statistics-progress").hidden, true);
+  reply(first);
+  assert.equal(byId("tensor-statistics-content").children.length, 0);
+  byId("tensor-statistics-name").dispatchEvent(new window.Event("change"));
+  assert.match(byId("tensor-statistics-status").textContent, /Choose/);
+  inspectTensor(document, "other-weight");
+  const second = requests().at(-1);
+  reply(first, "tensor-statistics-error");
+  assert.match(
+    byId("tensor-statistics-status").textContent,
+    /Loading.*other-weight/,
+  );
+  assert.equal(byId("tensor-statistics-progress").hidden, false);
+  byId("close-tensor-statistics").click();
+  assert.equal(byId("tensor-statistics-progress").hidden, true);
+  reply(second);
+  const third = open();
+  assert.ok(third.requestId > second.requestId);
+  byId("tensor-statistics-dialog").dispatchEvent(new window.Event("cancel"));
+  assert.equal(byId("tensor-statistics-progress").hidden, true);
+  reply(third, "tensor-statistics-error");
+  assert.doesNotMatch(
+    byId("tensor-statistics-status").textContent,
+    /stale error/,
+  );
+  byId("close-tensor-statistics").click();
+  const fourth = open();
+  reply(fourth);
+  byId("close-tensor-statistics").click();
+  load(weightsGraph());
+  const fifth = open();
+  assert.ok(
+    fifth.requestId > fourth.requestId,
+    "same-path graph replacement clears cache",
+  );
+  reply(fourth, "tensor-statistics-error");
+  assert.match(byId("tensor-statistics-status").textContent, /Loading/);
+  load(weightsGraph());
+  assert.equal(byId("tensor-statistics-dialog").open, false);
+  assert.equal(byId("tensor-statistics-progress").hidden, true);
+  reply(fifth);
+  assert.equal(byId("tensor-statistics-content").children.length, 0);
+  const path = [{ node: 0, attribute: "body" }];
+  load({
+    ...weightsGraph(),
+    breadcrumbs: [
+      { name: "root", path: [] },
+      { name: "body", path },
+    ],
+  });
+  const sixth = open();
+  assert.equal(JSON.stringify(sixth.path), JSON.stringify(path));
+  document.querySelector("#graph-navigation button").click();
+  assert.equal(byId("tensor-statistics-dialog").open, false);
+  reply(sixth);
+  assert.equal(byId("tensor-statistics-content").children.length, 0);
+});
+
+test("tensor statistics icons open stored tensors directly and never appear on input/output rows", (t) => {
+  const { document, window, messages, load, pointer } = openViewer(t);
+  const byId = (id) => document.getElementById(id);
+  const names = () =>
+    [...byId("tensor-list-rows").children].map((row) => row.dataset.name);
+  const request = () =>
+    messages.filter((m) => m.type === "tensor-statistics").at(-1);
+  const graph = {
+    ...demoGraph,
+    nodes: [
+      {
+        ...demoGraph.nodes[0],
+        inputs: ["input", "weight"],
+        captures: ["capture", "runtime-capture"],
+        parameters: [
+          { name: "weight", type: "FLOAT", shape: ["1"] },
+          { name: "capture", type: "FLOAT", shape: ["1"] },
+        ],
+      },
+      {
+        ...demoGraph.nodes[0],
+        id: "node-1",
+        name: "second",
+        inputs: ["output"],
+        outputs: ["final"],
+      },
+      {
+        ...demoGraph.nodes[0],
+        id: "node-2",
+        name: "unused constant",
+        opType: "Constant",
+        inputs: [],
+        outputs: ["unused-constant"],
+      },
+    ],
+    initializers: [
+      { name: "weight", type: "FLOAT", shape: ["1"] },
+      { name: "unused-dense", type: "FLOAT", shape: ["1"] },
+    ],
+    sparseInitializers: [
+      { name: "unused-sparse", type: "FLOAT", shape: ["1"] },
+    ],
+    encodedInitializers: [
+      { name: "unused-encoded", type: "FLOAT", shape: ["1"] },
+    ],
+  };
+  load(graph);
+  document
+    .querySelector('[data-id="node-1"]')
+    .dispatchEvent(
+      new window.KeyboardEvent("keydown", { key: "Enter", shiftKey: true }),
+    );
+  document
+    .querySelector('[data-id="node-0"] .node-statistics-link')
+    .dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  assert.equal(byId("tensor-statistics-dialog").open, true);
+  assert.equal(byId("tensors-view").hidden, true);
+  assert.equal(request().name, "weight");
+  assert.equal(byId("tensor-statistics-picker").hidden, false);
+  byId("tensor-statistics-next").click();
+  assert.equal(request().name, "capture");
+  byId("close-tensor-statistics").click();
+  document
+    .querySelector('[data-id="node-0"]')
+    .dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter" }));
+  document
+    .querySelector("#node-initializers .tensor-statistics-button")
+    .click();
+  assert.equal(byId("tensor-statistics-dialog").open, true);
+  assert.equal(byId("tensor-statistics-picker").hidden, true);
+  assert.equal(request().name, "weight");
+  assert.equal(byId("tensors-view").hidden, true);
+  assert.equal(
+    document.querySelectorAll(
+      "#node-inputs .tensor-statistics-button, #node-outputs .tensor-statistics-button",
+    ).length,
+    0,
+  );
+  byId("close-tensor-statistics").click();
+  document.querySelector("#captured-inputs .tensor-statistics-button").click();
+  assert.equal(byId("tensor-statistics-dialog").open, true);
+  assert.equal(request().name, "capture");
+  assert.equal(
+    document.querySelectorAll("#captured-inputs .tensor-statistics-button")
+      .length,
+    1,
+  );
+  byId("close-tensor-statistics").click();
+  document
+    .querySelector(".port")
+    .dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter" }));
+  assert.equal(
+    document.querySelectorAll(
+      "#node-inputs .tensor-statistics-button, #node-outputs .tensor-statistics-button",
+    ).length,
+    0,
+  );
+  assert.equal(byId("tensor-statistics-dialog").open, false);
+  document
+    .querySelector("#edges [role=button]")
+    .dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter" }));
+  assert.equal(
+    document.querySelectorAll(
+      "#node-inputs .tensor-statistics-button, #node-outputs .tensor-statistics-button",
+    ).length,
+    0,
+  );
+  const svg = byId("graph");
+  pointer(svg, "pointerdown", 0, 0);
+  pointer(svg, "pointerup", 0, 0);
+  assert.equal(byId("scope-initializers").hidden, false);
+  for (const [id, name] of [
+    ["scope-dense-initializers", "weight"],
+    ["scope-sparse-initializers", "unused-sparse"],
+    ["scope-encoded-initializers", "unused-encoded"],
+    ["constant-nodes", "unused-constant"],
+  ]) {
+    byId(id).querySelector(".tensor-statistics-button").click();
+    assert.equal(byId("tensor-statistics-dialog").open, true);
+    assert.equal(request().name, name);
+    assert.equal(byId("tensors-view").hidden, true);
+    byId("close-tensor-statistics").click();
+  }
+  byId("tensors-tab").click();
+  for (const name of [
+    "weight",
+    "capture",
+    "unused-dense",
+    "unused-sparse",
+    "unused-encoded",
+    "unused-constant",
+  ])
+    assert.ok(names().includes(name), name);
+  for (const name of ["input", "output", "final"])
+    assert.ok(!names().includes(name), name);
+});
+
+test("inspector retains initializer details and fills missing node parameters from the displayed graph", (t) => {
+  const { document, messages, load } = openViewer(t);
+  const graph = weightsGraph();
+  graph.nodes[0].parameters = [];
+  graph.nodes[0].inputs.push("sparse", "encoded");
+  graph.nodes[0].captures = ["runtime-capture"];
+  graph.initializers[0].value = "[1, 2, 3, 4, 5, 6]";
+  graph.sparseInitializers = [
+    {
+      name: "sparse",
+      type: "FLOAT",
+      shape: ["2"],
+      value: "values: [1]; indices: [0]",
+    },
+  ];
+  graph.encodedInitializers = [
+    { name: "encoded", type: "FLOAT16", shape: ["2"], encoding: "STRUCT" },
+  ];
+  load(graph);
+  const list = document.getElementById("node-initializers");
+  assert.equal(document.getElementById("node-parameters").hidden, false);
+  assert.equal(list.children.length, 3);
+  assert.match(
+    list.textContent,
+    /weight \(FLOAT\).*Shape: \[2, 3\].*Values: \[1, 2, 3, 4, 5, 6\]/,
+  );
+  assert.match(
+    list.textContent,
+    /sparse \(FLOAT\).*values: \[1\]; indices: \[0\]/,
+  );
+  assert.match(list.textContent, /encoded \(FLOAT16\).*Encoding: STRUCT/);
+  assert.equal(
+    document.querySelectorAll("#captured-inputs .tensor-statistics-button")
+      .length,
+    0,
+  );
+  list.querySelector(".tensor-statistics-button").click();
+  assert.equal(document.getElementById("tensor-statistics-dialog").open, true);
+  assert.equal(messages.at(-1).name, "weight");
+  assert.equal(document.getElementById("tensors-view").hidden, true);
+  document.getElementById("close-tensor-statistics").click();
+  load(demoGraph);
+  assert.equal(list.children.length, 0);
+  assert.equal(
+    document.querySelector("#node-inputs .tensor-statistics-button"),
+    null,
+  );
+});
+
+test("tensor browser bounds table DOM and statistics evicts successful summaries beyond 32", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const byId = (id) => document.getElementById(id);
+  const requests = () => messages.filter((m) => m.type === "tensor-statistics");
+  load({
+    ...demoGraph,
+    initializers: Array.from({ length: 2000 }, (_, i) => ({
+      name: `tensor-${i}`,
+      type: "FLOAT",
+      shape: ["1"],
+    })),
+  });
+  byId("tensors-tab").click();
+  assert.equal(requests().length, 0);
+  assert.equal(byId("tensor-list-rows").children.length, 100);
+  const names = [...byId("tensor-list-rows").children].map(
+    (row) => row.dataset.name,
+  );
+  for (let i = 0; i < 33; i++) {
+    inspectTensor(document, names[i]);
+    const request = requests().at(-1);
+    window.dispatchEvent(
+      new window.MessageEvent("message", {
+        data: {
+          type: "tensor-statistics-info",
+          requestId: request.requestId,
+          statistics: tensorStatistics(request.name),
+        },
+      }),
+    );
+  }
+  const count = requests().length;
+  inspectTensor(document, names[1]);
+  assert.equal(requests().length, count);
+  inspectTensor(document, names[0]);
+  assert.equal(requests().length, count + 1);
+  assert.equal(requests().at(-1).name, names[0]);
+  byId("close-tensor-statistics").click();
+  byId("tensor-list-next").click();
+  assert.equal(byId("tensor-list-rows").children.length, 100);
+  assert.notEqual(byId("tensor-list-rows").firstChild.dataset.name, names[0]);
+});
+
+test("tensor statistics renders non-finite scalar summaries safely and invalidates on model loading", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const byId = (id) => document.getElementById(id);
+  load(weightsGraph());
+  byId("tensors-tab").click();
+  inspectTensor(document, "weight");
+  const request = messages.find((m) => m.type === "tensor-statistics");
+  const statistics = {
+    ...tensorStatistics(),
+    min: "-Infinity",
+    max: "Infinity",
+    mean: "NaN",
+    rectangleMap: ["NaN", "Infinity", "-Infinity"],
+  };
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: {
+        type: "tensor-statistics-info",
+        requestId: request.requestId,
+        statistics,
+      },
+    }),
+  );
+  assert.match(byId("tensor-statistics-content").textContent, /AverageNaN/);
+  assert.match(
+    byId("tensor-statistics-content").textContent,
+    /Minimum-Infinity/,
+  );
+  assert.match(
+    byId("tensor-statistics-content").textContent,
+    /MaximumInfinity/,
+  );
+  assert.doesNotMatch(byId("tensor-statistics-content").innerHTML, /hsl\(NaN/);
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: { type: "load-state", pending: true },
+    }),
+  );
+  assert.equal(byId("tensor-statistics-dialog").open, false);
+  assert.equal(byId("all-tensor-statistics"), null);
+  assert.ok(
+    [...document.querySelectorAll(".tensor-list-statistics")].every(
+      (button) => button.disabled,
+    ),
+  );
+  const count = messages.filter((m) => m.type === "tensor-statistics").length;
+  document
+    .querySelector("#node-initializers .tensor-statistics-button")
+    .click();
+  assert.equal(byId("tensor-statistics-dialog").open, false);
+  assert.equal(
+    messages.filter((m) => m.type === "tensor-statistics").length,
+    count,
+  );
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: {
+        type: "tensor-statistics-error",
+        requestId: request.requestId,
+        error: "stale",
+      },
+    }),
+  );
+  assert.doesNotMatch(byId("tensor-statistics-status").textContent, /stale/);
+});
+
 test("restores the Olive recipes exporter and checks the commit on every panel opening without duplicate requests", (t) => {
   const { document, window, messages } = openViewer(t);
   const byId = (id) => document.getElementById(id);
@@ -3340,6 +4496,14 @@ test("closes Open only after a successful opening and allows reopening the selec
     assert.equal(panel.hidden, false);
     assert.equal(open.getAttribute("aria-expanded"), "true");
     assert.equal(document.activeElement, document.getElementById("open-file"));
+    if (status === "FAILED") {
+      assert.equal(document.getElementById("model-error").hidden, false);
+      assert.match(
+        document.getElementById("open-error").textContent,
+        /Opening the model failed/,
+      );
+      assert.equal(document.getElementById("open-submit").disabled, false);
+    }
   }
   document.getElementById("open-file").focus();
   submitOpen(document, window);
@@ -3360,6 +4524,33 @@ test("closes Open only after a successful opening and allows reopening the selec
   complete("SUCCEEDED");
   assert.equal(panel.hidden, true);
   assert.equal(document.activeElement, other);
+});
+
+test("folds local file filtering and results with Browse folders without hiding other sources", (t) => {
+  const { document, load } = openViewer(t);
+  const byId = (id) => document.getElementById(id);
+  load(demoGraph);
+  byId("open-model").click();
+  const browser = byId("open-browser");
+  const summary = byId("open-browser-title");
+  for (const source of ["local", "huggingface", "backend", "local"]) {
+    byId(`open-source-${source}`).click();
+    const local = source === "local";
+    assert.equal(browser.contains(byId("open-filter")), local, source);
+    assert.equal(browser.contains(byId("open-files")), local, source);
+    assert.equal(browser.contains(byId("open-form")), false, source);
+    if (local) {
+      assert.equal(browser.open, true);
+      summary.click();
+      assert.equal(browser.open, false);
+      assert.equal(byId("open-filter").closest("details"), browser);
+      assert.equal(byId("open-files").closest("details"), browser);
+      summary.click();
+      assert.equal(browser.open, true);
+    } else {
+      assert.equal(byId("open-files").closest("details"), null, source);
+    }
+  }
 });
 
 test("browses folders inline, selects files without opening and ignores stale listings", (t) => {
@@ -4146,6 +5337,92 @@ test("switches all tabs without logging clicks or changing graph, selection or c
   );
 });
 
+test("Settings exposes histories, removes selected entries, clears categories and resets viewer preferences", (t) => {
+  const { document, window, messages } = openViewer(t);
+  const byId = (id) => document.getElementById(id);
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  const entry = {
+    source: "local",
+    kind: "file",
+    path: "/models/<weight>.onnx",
+  };
+  const settings = {
+    type: "settings-info",
+    application: { downloadDirectory: "/downloads", pythonPath: "python3" },
+    pathHistory: { open: [entry], save: [entry] },
+    exportHistory: {
+      models: ["owner/model"],
+      directories: ["/exports"],
+      exporter: "mobius",
+    },
+    saveDirectory: "/workspace/.cache/.onnx-light-viewer",
+    viewer: {
+      width: 420,
+      panels: { operator: false, find: false, metadata: true },
+    },
+    trusted: true,
+  };
+  byId("settings-tab").click();
+  send(settings);
+  assert.equal(byId("settings-cache-download").textContent, "/downloads");
+  assert.equal(
+    byId("settings-cache-saves").textContent,
+    settings.saveDirectory,
+  );
+  assert.equal(byId("settings-open-count").textContent, "1");
+  assert.equal(byId("settings-export-count").textContent, "2");
+  assert.equal(byId("settings-open-history").querySelector("weight"), null);
+  byId("settings-open-history").querySelector("button").click();
+  assert.deepEqual(JSON.parse(JSON.stringify(messages.at(-1))), {
+    type: "path-history-edit",
+    target: "open",
+    historyAction: "remove",
+    historyEntry: entry,
+  });
+  send({ type: "path-history", history: { open: [], save: [entry] } });
+  assert.equal(byId("settings-open-history").children.length, 0);
+  assert.equal(byId("settings-clear-open").disabled, true);
+  byId("settings-clear-save").click();
+  assert.equal(messages.at(-1).target, "save");
+  assert.equal(messages.at(-1).historyAction, "clear");
+  byId("settings-export-history").querySelector("button").click();
+  assert.deepEqual(JSON.parse(JSON.stringify(messages.at(-1))), {
+    type: "export-history-edit",
+    target: "models",
+    historyAction: "remove",
+    historyEntry: "owner/model",
+  });
+  byId("settings-export-history")
+    .lastElementChild.querySelector("button")
+    .click();
+  assert.equal(messages.at(-1).target, "directories");
+  byId("settings-clear-export").click();
+  assert.equal(messages.at(-1).type, "export-history-edit");
+  assert.equal(messages.at(-1).historyAction, "clear");
+  send({ type: "export-history", history: { models: [], directories: [] } });
+  assert.equal(byId("settings-clear-export").disabled, true);
+  assert.equal(byId("export-source-history").children.length, 0);
+  send({ type: "settings-error", error: "Could not persist history" });
+  assert.equal(
+    byId("settings-history-feedback").textContent,
+    "Could not persist history",
+  );
+  byId("settings-reset-viewer").click();
+  assert.equal(messages.at(-1).type, "reset-viewer-settings");
+  assert.equal(byId("settings-reset-viewer").disabled, true);
+  send({
+    ...settings,
+    viewer: { panels: { operator: true, find: true, metadata: false } },
+  });
+  assert.equal(byId("settings-reset-viewer").disabled, false);
+  assert.equal(byId("settings-width").value, "");
+  assert.equal(byId("operator-panel").hidden, false);
+  assert.equal(byId("find-panel").hidden, false);
+  assert.equal(byId("metadata-panel").hidden, true);
+  assert.equal(byId("settings-download").value, "/downloads");
+});
+
 test("Settings edits saved paths and existing sidebar preferences and renders package versions safely", (t) => {
   const { document, window, messages } = openViewer(t);
   const send = (data) =>
@@ -4918,6 +6195,7 @@ for (const initialTab of ["model", "logs"]) {
 
 test("opens graph attributes and nested breadcrumbs, including empty graphs and failed navigation", (t) => {
   const { document, window, messages, load } = openViewer(t);
+  const byId = (id) => document.getElementById(id);
   const model = loadModel(
     readFileSync(require.resolve("./models/subgraphs.onnx")),
     "subgraphs.onnx",
@@ -4980,7 +6258,15 @@ test("opens graph attributes and nested breadcrumbs, including empty graphs and 
     );
   assert.equal(document.querySelectorAll("#node-attributes button").length, 2);
   document.querySelector("#node-attributes button").click();
-  load(model.graph(false, messages.at(-1).path));
+  const failedNavigation = messages.at(-1);
+  assert.equal(byId("graph").getAttribute("aria-busy"), "true");
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: { type: "navigation-error", error: "temporarily unavailable" },
+    }),
+  );
+  assert.equal(byId("graph").getAttribute("aria-busy"), "false");
+  load(model.graph(false, failedNavigation.path));
   assert.equal(document.querySelectorAll(".graph-node").length, 0);
   assert.equal(document.getElementById("node-title").textContent, "Graph");
   load(demoGraph);
@@ -5013,8 +6299,20 @@ test("opens every subgraph from its operator rectangle with pointer and keyboard
     assert.equal(group.getAttribute("role"), "group");
     assert.equal(link.getAttribute("role"), "button");
     assert.equal(link.getAttribute("tabindex"), "0");
+    const icon = link.querySelector(".subgraph-icon");
+    assert.ok(icon?.querySelector("path"));
+    assert.equal(icon.getAttribute("aria-hidden"), "true");
+    assert.ok(
+      Number(icon.getAttribute("x")) + Number(icon.getAttribute("width")) <
+        Number(link.querySelector("text").getAttribute("x")),
+    );
     const body = group.querySelector("rect");
     const row = link.querySelector("rect");
+    assert.ok(
+      Number(icon.getAttribute("y")) >= Number(row.getAttribute("y")) &&
+        Number(icon.getAttribute("y")) + Number(icon.getAttribute("height")) <=
+          Number(row.getAttribute("y")) + Number(row.getAttribute("height")),
+    );
     assert.ok(
       Number(row.getAttribute("y")) >=
         Number(group.querySelector(".node-tensor-info").getAttribute("y")) + 8,
@@ -5032,13 +6330,13 @@ test("opens every subgraph from its operator rectangle with pointer and keyboard
     } else {
       const x = Number(row.getAttribute("x")) + 10;
       const y = Number(row.getAttribute("y")) + 10;
-      pointer(link.querySelector("text"), "pointerdown", x, y);
+      pointer(icon.querySelector("path"), "pointerdown", x, y);
       pointer(document.getElementById("graph"), "pointermove", x + 10, y + 10);
       pointer(document.getElementById("graph"), "pointerup", x + 10, y + 10);
       assert.deepEqual(nodePositions(document), positions);
       assert.equal(messages.length, count);
       link
-        .querySelector("text")
+        .querySelector(".subgraph-icon path")
         .dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
     }
     assert.equal(messages.length, count + 1);
@@ -5061,6 +6359,7 @@ test("opens every subgraph from its operator rectangle with pointer and keyboard
   assert.equal(messages.at(-1).type, "navigate");
   load(demoGraph);
   assert.equal(document.querySelectorAll(".subgraph-link").length, 0);
+  assert.equal(document.querySelectorAll(".subgraph-icon").length, 0);
 });
 
 test("sizes subgraph operators for their links and preserves dragging, selection and connection anchors", (t) => {
@@ -5821,6 +7120,7 @@ test("opens local functions from the operator or inspector and returns using bre
   assert.equal(button.hidden, false);
   assert.match(button.textContent, /example::Transform/);
   const link = document.querySelector(".subgraph-link");
+  assert.ok(link.querySelector(".subgraph-icon path"));
   assert.match(
     link.getAttribute("aria-label"),
     /Open Function: example::Transform/,
@@ -6953,7 +8253,15 @@ test("model inspection lists dense, sparse and encoded weights and clears them o
   const unsafe = '<img src=x onerror="alert(1)">';
   graph.initializers[10].storage.location = unsafe;
   load(graph);
-  assert.equal(document.getElementById("scope-initializers").hidden, true);
+  assert.equal(document.getElementById("scope-initializers").hidden, false);
+  assert.equal(
+    document.getElementById("scope-dense-initializers").children.length,
+    11,
+  );
+  assert.equal(
+    document.getElementById("node-initializers").children.length,
+    graph.nodes[0].parameters.length,
+  );
   inspectModel();
   assert.equal(document.getElementById("scope-initializers").hidden, false);
   assert.equal(document.getElementById("node-parameters").hidden, true);
@@ -6970,6 +8278,7 @@ test("model inspection lists dense, sparse and encoded weights and clears them o
     "0",
   );
   const dense = document.getElementById("scope-dense-initializers");
+  const firstInitializer = dense.firstElementChild;
   assert.equal(dense.children.length, 11);
   assert.match(
     dense.children[9].textContent,
@@ -6984,8 +8293,9 @@ test("model inspection lists dense, sparse and encoded weights and clears them o
   document
     .querySelector(".graph-node")
     .dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter" }));
-  assert.equal(document.getElementById("scope-initializers").hidden, true);
-  assert.equal(dense.children.length, 0);
+  assert.equal(document.getElementById("scope-initializers").hidden, false);
+  assert.equal(dense.children.length, 11);
+  assert.equal(dense.firstElementChild, firstInitializer);
   const encoded = decodeGraph(
     readFileSync(require.resolve("../examples/quantized-2bit.onnx")),
     "quantized-2bit.onnx",
@@ -10068,7 +11378,7 @@ test("drags graph inputs and outputs independently at zoom and updates their edg
     [".port:not(.output)", 0, "Graph input", "input", 0],
     [".port.output", 2, "Graph output", "output", 1],
   ]) {
-    const before = nodePositions(document, "#nodes rect");
+    const before = nodePositions(document, "#nodes > g > rect");
     const paths = Array.from(document.querySelectorAll(".edge"), (edge) =>
       edge.getAttribute("d"),
     );
@@ -10077,7 +11387,7 @@ test("drags graph inputs and outputs independently at zoom and updates their edg
     pointer(graph, "pointermove", start.x + 45, start.y - 30);
     assertMoved(
       before,
-      nodePositions(document, "#nodes rect"),
+      nodePositions(document, "#nodes > g > rect"),
       [index],
       45,
       -30,
@@ -10105,7 +11415,7 @@ test("rectangle and modifier selections mix ports with operators and move as one
   const { document, load, pointer, window } = openViewer(t);
   load(demoGraph);
   const graph = document.getElementById("graph");
-  const before = nodePositions(document, "#nodes rect");
+  const before = nodePositions(document, "#nodes > g > rect");
   const input = before[0];
   pointer(graph, "pointerdown", input.x + 75, input.y - 5);
   pointer(graph, "pointerup", input.x + 61, input.y + 5);
@@ -10141,7 +11451,7 @@ test("rectangle and modifier selections mix ports with operators and move as one
   pointer(graph, "pointerup", before[2].x - 40, before[2].y + 25);
   assertMoved(
     before,
-    nodePositions(document, "#nodes rect"),
+    nodePositions(document, "#nodes > g > rect"),
     [0, 1, 2],
     -40,
     25,

@@ -1,6 +1,6 @@
 /* global acquireVsCodeApi, createSidebar, createFilePanels, createInspector,
           createMetadataPanel, createFusionPanel, createSettingsPanel, createExportPanel,
-          createMemoryPanel, sugiyamaLayout, graphPathSegments,
+          createMemoryPanel, createTensorListPanel, createTensorStatisticsPanel, sugiyamaLayout, graphPathSegments,
           flattenGraphPath, graphPointDistance */
 const vscode = acquireVsCodeApi();
 const svgNS = "http://www.w3.org/2000/svg";
@@ -69,6 +69,7 @@ const tabs = [
   "logs",
   "statistics",
   "memory",
+  "tensors",
   "status",
   "controls",
   "repositories",
@@ -98,7 +99,33 @@ const inspector = createInspector({
   tensorDescription,
   subgraphLabel,
   navigate,
+  openTensorStatistics: (name) => openTensorStatistics([name]),
+  hasStoredTensor: (name) => tensorListPanel.hasStoredTensor(name),
+  nodeInitializers: (node) => tensorListPanel.nodeInitializers(node),
 });
+const tensorStatisticsPanel = createTensorStatisticsPanel({
+  byId,
+  postMessage: (message) => vscode.postMessage(message),
+});
+const tensorListPanel = createTensorListPanel({
+  byId,
+  openStatistics: openTensorStatistics,
+});
+
+function openTensorStatistics(names) {
+  if (
+    !hasModel ||
+    replacementPending ||
+    byId("model-view").getAttribute("aria-busy") === "true" ||
+    svg.getAttribute("aria-busy") === "true"
+  )
+    return;
+  tensorStatisticsPanel.open(
+    names,
+    displayedGraph?.breadcrumbs?.at(-1)?.path ?? [],
+  );
+}
+
 const metadataPanel = createMetadataPanel({ byId, tensorDescription });
 const memoryPanel = createMemoryPanel({
   byId,
@@ -166,7 +193,22 @@ function showTab(name, focus = false) {
   if (name === "model") fit();
   else if (name === "statistics") requestStatistics();
   else if (name === "memory") memoryPanel.open();
-  else if (name === "settings") vscode.postMessage({ type: "get-settings" });
+  else if (name === "tensors") {
+    const names = [...selected].flatMap((id) => {
+      const view = nodeViews.get(id);
+      return view?.node
+        ? [
+            ...view.node.inputs,
+            ...(view.node.captures ?? []),
+            ...view.node.outputs,
+          ]
+        : view?.port
+          ? [view.port.name]
+          : [];
+    });
+    if (selectedConnection) names.push(selectedConnection.name);
+    tensorListPanel.open(names);
+  } else if (name === "settings") vscode.postMessage({ type: "get-settings" });
   else if (name === "logs")
     byId("logs-view").scrollTop = byId("logs-view").scrollHeight;
 }
@@ -213,8 +255,13 @@ function displayLog(entry) {
         (pending) => pending === "open" || pending === "export",
       );
       setLoading(replacementPending);
-      if (type === "open") filePanels.finishOpening(entry.status);
-      else exportPanel.finish(entry.status);
+      if (type === "open") {
+        filePanels.finishOpening(entry.status);
+        if (entry.status === "FAILED")
+          showLoadError(
+            entry.details || "Opening the model failed. See Logs for details.",
+          );
+      } else exportPanel.finish(entry.status);
     } else if (type === "save") {
       filePanels.finishSaving(entry.status, replacementPending || !hasModel);
     }
@@ -253,6 +300,8 @@ function requestAction(type, action, parameters = {}) {
 }
 
 function setLoading(pending, message = "") {
+  if (pending) tensorStatisticsPanel.reset();
+  tensorListPanel.setBusy(pending);
   if (pending) byId("model-error").hidden = true;
   byId("load-progress").hidden = !pending;
   byId("model-view").setAttribute("aria-busy", String(pending));
@@ -586,6 +635,29 @@ function subgraphLabel(attribute, index) {
   return `${attribute.name}${attribute.graphs.length > 1 ? ` [${index}]` : ""}`;
 }
 
+function bindGraphLink(link, activate) {
+  let suppressPointerClick = false;
+  link.addEventListener("pointerdown", (event) => {
+    suppressPointerClick = zoomAreaMode || event.altKey;
+    if (!suppressPointerClick) event.stopPropagation();
+  });
+  link.addEventListener("click", (event) => {
+    event.stopPropagation();
+    if (suppressPointerClick) {
+      suppressPointerClick = false;
+      if (event.detail > 0) return;
+    }
+    if (svg.getAttribute("aria-busy") !== "true") activate();
+  });
+  link.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      event.stopPropagation();
+      if (svg.getAttribute("aria-busy") !== "true") activate();
+    }
+  });
+}
+
 function operatorSizes(nodes) {
   const context = document.createElement("canvas").getContext("2d");
   const family = getComputedStyle(svg).fontFamily;
@@ -658,7 +730,7 @@ function operatorSizes(nodes) {
           ...parameterRows.map((parameter) =>
             Math.ceil(parameter.textWidth + 24),
           ),
-          ...subgraphs.map((graph) => Math.ceil(graph.textWidth + 48)),
+          ...subgraphs.map((graph) => Math.ceil(graph.textWidth + 68)),
         ),
       );
       let nameLength = node.name.length;
@@ -740,6 +812,7 @@ function updateTensorInformation(tensors) {
     "name",
   );
   tensorInformation = new Map(tensors.map((tensor) => [tensor.name, tensor]));
+  tensorListPanel.updateTypes(tensors);
   for (const entry of tensorLabels) updateTensorLabel(entry);
   return updates;
 }
@@ -913,6 +986,7 @@ function inspectionScope(view) {
       ? "Pipeline"
       : "Model";
   return {
+    graph: displayedGraph,
     kind,
     name: displayedGraph.name,
     opsets: displayedGraph.opsets,
@@ -1623,6 +1697,8 @@ function findNode(event) {
 }
 
 function navigate(path, nodeIndex) {
+  tensorStatisticsPanel.reset();
+  tensorListPanel.setBusy(true);
   endGesture();
   byId("navigation-status").textContent = "Opening graph…";
   svg.setAttribute("aria-busy", "true");
@@ -1864,6 +1940,9 @@ function render(graph, metadata) {
   for (const node of graph.nodes) {
     const position = positions.get(node.id);
     const size = sizes.get(node.id);
+    const storedInputs = node.pipelineModel
+      ? []
+      : tensorListPanel.storedInputs(node);
     const create = (position) => {
       const top = position.y - size.height / 2;
       const group = element("g", {
@@ -1898,6 +1977,29 @@ function render(graph, metadata) {
       );
       nameLabel.style.fontSize = "10px";
       nameLabel.setAttribute("aria-label", node.name);
+      if (storedInputs.length) {
+        const link = element("g", {
+          class: "node-statistics-link",
+          role: "button",
+          tabindex: "0",
+          "aria-label": `Inspect stored tensors for ${node.opType}: ${node.name}`,
+        });
+        const x = position.x - size.width / 2 + 8;
+        const y = top + 18;
+        link.append(
+          element("title", {}, "Browse tensors and weight statistics"),
+          element("rect", { x, y, width: 20, height: 20, rx: 4 }),
+        );
+        const icon = byId("tensors-tab").querySelector("svg").cloneNode(true);
+        icon.setAttribute("class", "node-statistics-icon");
+        icon.setAttribute("x", String(x + 1));
+        icon.setAttribute("y", String(y + 1));
+        link.append(icon);
+        link.setAttribute("aria-controls", "tensor-statistics-dialog");
+        link.setAttribute("aria-haspopup", "dialog");
+        bindGraphLink(link, () => openTensorStatistics(storedInputs));
+        group.append(link);
+      }
       if (node.outputs.length) {
         const information = tensorLabel(
           group,
@@ -1938,15 +2040,30 @@ function render(graph, metadata) {
             rx: 4,
           }),
         );
+        const icon = element("svg", {
+          class: "subgraph-icon",
+          x: position.x - size.width / 2 + 10,
+          y: y + 2,
+          width: 16,
+          height: 16,
+          viewBox: "0 0 24 24",
+          "aria-hidden": "true",
+        });
+        icon.append(
+          element("path", {
+            d: "M7 12h3M10 5v14M10 5h5M10 19h5M1 9h6v6H1ZM15 2h7v6h-7ZM15 16h7v6h-7Z",
+          }),
+        );
+        link.append(icon);
         const text = label(
           link,
-          position.x - size.width / 2 + 12,
+          position.x - size.width / 2 + 32,
           y + 14,
           graph.label,
           "subgraph-label",
           "start",
         );
-        text.style.fontSize = `${Math.min(10, (10 * (size.width - 48)) / (graph.textWidth || 1))}px`;
+        text.style.fontSize = `${Math.min(10, (10 * (size.width - 68)) / (graph.textWidth || 1))}px`;
         label(
           link,
           position.x + size.width / 2 - 12,
@@ -1955,26 +2072,7 @@ function render(graph, metadata) {
           "subgraph-label",
           "end",
         );
-        let suppressPointerClick = false;
-        link.addEventListener("pointerdown", (event) => {
-          suppressPointerClick = zoomAreaMode || event.altKey;
-          if (!suppressPointerClick) event.stopPropagation();
-        });
-        link.addEventListener("click", (event) => {
-          event.stopPropagation();
-          if (suppressPointerClick) {
-            suppressPointerClick = false;
-            if (event.detail > 0) return;
-          }
-          if (svg.getAttribute("aria-busy") !== "true") navigate(graph.path);
-        });
-        link.addEventListener("keydown", (event) => {
-          if (event.key === "Enter" || event.key === " ") {
-            event.preventDefault();
-            event.stopPropagation();
-            if (svg.getAttribute("aria-busy") !== "true") navigate(graph.path);
-          }
-        });
+        bindGraphLink(link, () => navigate(graph.path));
         group.append(link);
       });
       return group;
@@ -2261,6 +2359,7 @@ svg.addEventListener(
   { passive: false },
 );
 window.addEventListener("message", (event) => {
+  settingsPanel.receive(event.data);
   if (event.data?.type === "model-progress") {
     if (
       event.data.actionId !== undefined &&
@@ -2271,6 +2370,7 @@ window.addEventListener("message", (event) => {
     return;
   }
   if (
+    tensorStatisticsPanel.handleMessage(event.data) ||
     memoryPanel.handleMessage(event.data) ||
     exportPanel.handleMessage(event.data) ||
     filePanels.handleMessage(event.data) ||
@@ -2289,7 +2389,6 @@ window.addEventListener("message", (event) => {
   ) {
     if (event.data.type === "settings-info")
       sidebar.restoreSettings(event.data.viewer);
-    settingsPanel.receive(event.data);
   } else if (event.data?.type === "log-entry") {
     displayLog(event.data.entry);
   } else if (event.data?.type === "log-history") {
@@ -2374,6 +2473,8 @@ window.addEventListener("message", (event) => {
     }
     filePanels.reset();
     displayedGraph = event.data.graph;
+    tensorListPanel.setGraph(displayedGraph);
+    tensorStatisticsPanel.reset();
     memoryPanel.setGraph(displayedGraph);
     fusionPanel.reset(displayedGraph, event.data.fusionRequestId);
     render(event.data.graph, event.data.metadata);
@@ -2392,6 +2493,7 @@ window.addEventListener("message", (event) => {
       `Could not undo fusion: ${event.data.error}`;
   } else if (event.data?.type === "navigation-error") {
     svg.setAttribute("aria-busy", "false");
+    tensorListPanel.setBusy(replacementPending);
     byId("navigation-status").textContent =
       `Could not open graph: ${event.data.error}`;
     fit();

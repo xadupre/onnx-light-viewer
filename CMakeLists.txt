@@ -68,6 +68,7 @@ add_library(onnx_light_viewer SHARED
   native/memory_profile.cc
   native/graph_snapshot.cc
   native/tensor_preview.cc
+  native/tensor_statistics.cc
   ${CMAKE_JS_SRC}
 )
 target_compile_features(onnx_light_viewer PRIVATE cxx_std_20)
