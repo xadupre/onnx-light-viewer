@@ -17,11 +17,11 @@ Opening models
 Open local ``.onnx`` and ``.pipe-onnx`` files, bundled demos or public Hugging Face
 models with persistent caching. See :doc:`features/opening_models`.
 No authentication or automatic external weight downloads.
-**Model path options** keeps the VS Code file picker and adds an in-app folder
+Buttons below **Model path** offer the VS Code file picker and an in-app folder
 dialog for paths outside the workspace.
 
 .. figure:: _static/feature-opening.png
-   :alt: Open panel with Model path options offering in-app browsing and the VS Code file picker.
+   :alt: Open panel with compact buttons below Model path for in-app browsing and the VS Code file picker.
    :width: 100%
 
    Choose how to fill Model path without loading a model.

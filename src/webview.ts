@@ -349,12 +349,10 @@ export function webviewHtml(
             <form id="open-form">
               <label for="open-file">Model path, URL or backend test ID</label>
               <input id="open-file" type="text" required autocomplete="off" list="open-file-history"><datalist id="open-file-history"></datalist>
-              <details id="open-path-options"><summary>Model path options</summary>
-                <div class="path-picker-actions">
-                  <button id="open-path-browse" type="button" aria-haspopup="dialog" aria-controls="open-path-dialog">Browse folders...</button>
-                  <button id="open-native-picker" type="button">VS Code file picker...</button>
-                </div>
-              </details>
+              <div id="open-path-options" class="path-picker-actions" role="group" aria-label="Model path selection">
+                <button id="open-path-browse" type="button" aria-haspopup="dialog" aria-controls="open-path-dialog">Browse folders...</button>
+                <button id="open-native-picker" type="button">VS Code file picker...</button>
+              </div>
               <label for="open-password">Password (encrypted models only)</label>
               <input id="open-password" type="password" autocomplete="off">
               <progress id="open-progress" aria-label="Opening ONNX model" aria-describedby="open-progress-status" hidden></progress><p id="open-progress-status" role="status" hidden></p>

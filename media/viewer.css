@@ -1380,8 +1380,11 @@ button:disabled {
 .path-picker-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 8px;
+  gap: 4px;
+  margin-top: 4px;
+}
+.path-picker-actions button {
+  padding: 4px 6px;
 }
 #open-path-dialog {
   width: min(760px, 90vw);

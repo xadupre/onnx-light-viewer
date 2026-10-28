@@ -7,7 +7,7 @@ Opening models
 
 * **Open** toggles an embedded file selector in the right sidebar, offering
   **Local file**, **Hugging Face** or **Backend test**. Enter a model path or use
-  **Model path options** to choose a local file, then click **Open model**.
+  the buttons below it to choose a local file, then click **Open model**.
   The panel closes after a successful opening;
   **Open** can show it again. Errors and cancellations keep the panel open.
   Opening an ``.onnx`` or ``.pipe-onnx`` file in VS Code
@@ -24,8 +24,8 @@ Opening models
 Choosing a local path
 ---------------------
 
-**Model path options** offers both the existing **VS Code file picker** and
-**Browse folders**, an in-app dialog. The latter accepts any accessible directory,
+Buttons directly below **Model path** offer both the existing **VS Code file picker**
+and **Browse folders**, an in-app dialog. The latter accepts any accessible directory,
 including outside the VS Code workspace; enter a directory, click **Browse**,
 or use **Parent folder**. Filter the list, select a model and click **Choose path**
 (or double-click it) to fill **Model path** without loading the model.

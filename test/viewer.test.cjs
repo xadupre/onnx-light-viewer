@@ -4534,12 +4534,14 @@ test("closes Open only after a successful opening and allows reopening the selec
   assert.equal(document.activeElement, other);
 });
 
-test("keeps local browsing in Model path options and a dialog without hiding other sources", (t) => {
+test("shows local path buttons directly below the field without hiding other sources", (t) => {
   const { document, messages, load } = openViewer(t);
   const byId = (id) => document.getElementById(id);
   load(demoGraph);
   byId("open-model").click();
   const browser = byId("open-browser");
+  assert.equal(byId("open-path-browse").closest("details"), null);
+  assert.equal(byId("open-native-picker").closest("details"), null);
   assert.equal(
     messages.some(({ type }) => type === "browse-files"),
     false,

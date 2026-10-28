@@ -139,7 +139,6 @@ function createFilePanels({
   function openPathBrowser(browse = true) {
     if (isReplacing()) return;
     invalidateNativePicker();
-    byId("open-path-options").open = false;
     selectedPath = undefined;
     byId("choose-open-path").disabled = true;
     byId("open-path-selection").textContent = "";
@@ -158,7 +157,6 @@ function createFilePanels({
   byId("choose-open-path").addEventListener("click", choosePath);
   byId("open-native-picker").addEventListener("click", () => {
     if (isReplacing()) return;
-    byId("open-path-options").open = false;
     byId("open-error").textContent = "";
     byId("open-native-picker").disabled = true;
     postMessage({ type: "select-model-path", requestId: ++nativePathRequest });
@@ -248,7 +246,6 @@ function createFilePanels({
     byId("open-browser").hidden = !hub;
     byId("open-browser").open = false;
     byId("open-path-options").hidden = source !== "local";
-    byId("open-path-options").open = false;
     byId("open-location-label").textContent = hub
       ? "Hugging Face repository / URL"
       : "Directory";
