@@ -345,9 +345,30 @@ export function webviewHtml(
               <p id="hf-search-status" role="status"></p>
               <ul id="hf-search-results" class="file-list" aria-label="Hugging Face ONNX repositories"></ul>
             </section>
-            <details id="open-browser" open><summary id="open-browser-title">Browse folders</summary>
+            <details id="open-browser" hidden><summary id="open-browser-title">Or enter a repository / URL</summary></details>
+            <form id="open-form">
+              <label for="open-file">Model path, URL or backend test ID</label>
+              <input id="open-file" type="text" required autocomplete="off" list="open-file-history"><datalist id="open-file-history"></datalist>
+              <details id="open-path-options"><summary>Model path options</summary>
+                <div class="path-picker-actions">
+                  <button id="open-path-browse" type="button" aria-haspopup="dialog" aria-controls="open-path-dialog">Browse folders...</button>
+                  <button id="open-native-picker" type="button">VS Code file picker...</button>
+                </div>
+              </details>
+              <label for="open-password">Password (encrypted models only)</label>
+              <input id="open-password" type="password" autocomplete="off">
+              <progress id="open-progress" aria-label="Opening ONNX model" aria-describedby="open-progress-status" hidden></progress><p id="open-progress-status" role="status" hidden></p>
+              <p id="open-error" role="alert"></p>
+              <footer><button id="cancel-open" type="button">Close</button><button id="open-submit" class="primary" type="submit">Open model</button></footer>
+            </form>
+            ${historyControls("open")}
+          </section>
+          <dialog id="open-path-dialog" class="file-panel" aria-labelledby="open-path-title" aria-describedby="open-path-help">
+            <h2 id="open-path-title">Choose a model path</h2>
+            <p id="open-path-help">Enter any accessible directory, including outside the VS Code workspace. Select a model to fill Model path without opening it.</p>
+            <div id="open-path-content">
             <form id="open-browse" class="file-browse">
-              <label for="open-location">Directory or Hugging Face repository / URL</label>
+              <label id="open-location-label" for="open-location">Directory</label>
               <input id="open-location" type="text" autocomplete="off" list="open-location-history"><datalist id="open-location-history"></datalist>
               <div><button type="submit">Browse</button><button id="open-parent" type="button" disabled>Parent folder</button></div>
             </form>
@@ -358,18 +379,11 @@ export function webviewHtml(
             <input id="open-filter" type="search" aria-controls="open-files">
             <ul id="open-files" class="file-list" aria-label="Models and folders"></ul>
             </div>
-            </details>
-            <form id="open-form">
-              <label for="open-file">Model path, URL or backend test ID</label>
-              <input id="open-file" type="text" required autocomplete="off" list="open-file-history"><datalist id="open-file-history"></datalist>
-              <label for="open-password">Password (encrypted models only)</label>
-              <input id="open-password" type="password" autocomplete="off">
-              <progress id="open-progress" aria-label="Opening ONNX model" aria-describedby="open-progress-status" hidden></progress><p id="open-progress-status" role="status" hidden></p>
-              <p id="open-error" role="alert"></p>
-              <footer><button id="cancel-open" type="button">Close</button><button id="open-submit" class="primary" type="submit">Open model</button></footer>
-            </form>
-            ${historyControls("open")}
-          </section>
+            </div>
+            <p id="open-path-error" role="alert"></p>
+            <p id="open-path-selection" role="status"></p>
+            <footer><button id="cancel-open-path" type="button">Cancel</button><button id="choose-open-path" class="primary" type="button" disabled>Choose path</button></footer>
+          </dialog>
           <section id="save-options" class="inspector-panel file-panel" aria-labelledby="save-title" hidden>
             <h2 id="save-title" class="eyebrow panel-title">Save model copy</h2>
             <form id="save-browse" class="file-browse">

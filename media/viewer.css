@@ -1377,6 +1377,24 @@ button:disabled {
 .file-panel p {
   line-height: 1.5;
 }
+.path-picker-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+#open-path-dialog {
+  width: min(760px, 90vw);
+  max-height: 85vh;
+  overflow: auto;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+#open-path-dialog::backdrop {
+  background: #0008;
+}
 .export-advanced {
   margin-top: 12px;
 }
@@ -1438,6 +1456,7 @@ button:disabled {
 }
 #save-options-error,
 #open-error,
+#open-path-error,
 #export-error,
 #export-trust {
   color: var(--vscode-errorForeground, #f88);

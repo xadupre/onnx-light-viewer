@@ -2574,6 +2574,7 @@ test("resets sidebar controllers together when the viewer replaces the graph", (
   document.getElementById("show-doc").click();
   assert.equal(document.getElementById("operator-doc").open, true);
   document.getElementById("open-model").click();
+  document.getElementById("open-path-browse").click();
   const browse = messages.at(-1);
   assert.equal(browse.type, "browse-files");
   document.getElementById("fuse-pattern").click();
@@ -3106,12 +3107,13 @@ test("reports missing or unavailable repository sizes without accepting stale me
   assert.match(label.textContent, /unavailable: HTTP 429/);
 });
 
-test("opens backend tests on double click while keeping single clicks and local files selection-only", (t) => {
+test("opens backend tests on double click while local file clicks only choose a path", (t) => {
   const { document, window, messages, load } = openViewer(t);
   load(demoGraph);
   document.getElementById("open-model").click();
   function list(value) {
     document.getElementById(`open-source-${value}`).click();
+    if (value === "local") document.getElementById("open-path-browse").click();
     const request = messages.at(-1);
     window.dispatchEvent(
       new window.MessageEvent("message", {
@@ -3129,6 +3131,8 @@ test("opens backend tests on double click while keeping single clicks and local 
   const local = list("local");
   local.click();
   local.dispatchEvent(new window.MouseEvent("dblclick", { bubbles: true }));
+  assert.equal(document.getElementById("open-path-dialog").open, false);
+  assert.equal(document.getElementById("open-file").value, "42");
   assert.equal(messages.filter(({ type }) => type === "open").length, 0);
   const backend = list("backend");
   backend.click();
@@ -3201,6 +3205,9 @@ test("suggests remembered paths without submitting forms and supports per-entry 
     .querySelector("button")
     .click();
   assert.equal(document.getElementById("open-location").value, "/models");
+  assert.equal(document.getElementById("open-path-dialog").open, true);
+  assert.equal(document.activeElement.id, "open-location");
+  document.getElementById("cancel-open-path").click();
   document.querySelector("#save-history-entries li button").click();
   assert.equal(document.getElementById("save-file").value, saved.path);
   assert.equal(messages.length, count);
@@ -4435,6 +4442,7 @@ test("makes Open and Save mutually exclusive while preserving other sidebar pane
       second === "open" ? "open-panel" : "save-options",
     );
     if (firstPanel.hidden) document.getElementById(`${first}-model`).click();
+    if (first === "open") document.getElementById("open-path-browse").click();
     const previous = messages.at(-1);
     document.getElementById(`${first}-password`).value = "temporary";
     document.getElementById(`${second}-model`).click();
@@ -4526,34 +4534,39 @@ test("closes Open only after a successful opening and allows reopening the selec
   assert.equal(document.activeElement, other);
 });
 
-test("folds local file filtering and results with Browse folders without hiding other sources", (t) => {
-  const { document, load } = openViewer(t);
+test("keeps local browsing in Model path options and a dialog without hiding other sources", (t) => {
+  const { document, messages, load } = openViewer(t);
   const byId = (id) => document.getElementById(id);
   load(demoGraph);
   byId("open-model").click();
   const browser = byId("open-browser");
-  const summary = byId("open-browser-title");
+  assert.equal(
+    messages.some(({ type }) => type === "browse-files"),
+    false,
+  );
+  const dialog = byId("open-path-dialog");
   for (const source of ["local", "huggingface", "backend", "local"]) {
     byId(`open-source-${source}`).click();
     const local = source === "local";
-    assert.equal(browser.contains(byId("open-filter")), local, source);
-    assert.equal(browser.contains(byId("open-files")), local, source);
-    assert.equal(browser.contains(byId("open-form")), false, source);
+    assert.equal(byId("open-path-options").hidden, !local, source);
+    assert.equal(dialog.contains(byId("open-filter")), local, source);
+    assert.equal(dialog.contains(byId("open-files")), local, source);
+    assert.equal(dialog.contains(byId("open-form")), false, source);
+    assert.equal(browser.hidden, source !== "huggingface", source);
     if (local) {
-      assert.equal(browser.open, true);
-      summary.click();
-      assert.equal(browser.open, false);
-      assert.equal(byId("open-filter").closest("details"), browser);
-      assert.equal(byId("open-files").closest("details"), browser);
-      summary.click();
-      assert.equal(browser.open, true);
+      assert.equal(dialog.open, false);
+      byId("open-path-browse").click();
+      assert.equal(dialog.open, true);
+      byId("cancel-open-path").click();
+      assert.equal(dialog.open, false);
+      assert.equal(document.activeElement, byId("open-file"));
     } else {
-      assert.equal(byId("open-files").closest("details"), null, source);
+      assert.equal(byId("open-files").closest("dialog"), null, source);
     }
   }
 });
 
-test("browses folders inline, selects files without opening and ignores stale listings", (t) => {
+test("browses folders in a dialog, reports errors there and ignores stale listings", (t) => {
   const { document, window, messages, load } = openViewer(t);
   load(demoGraph);
   const send = (data) =>
@@ -4562,6 +4575,7 @@ test("browses folders inline, selects files without opening and ignores stale li
   open.click();
   assert.equal(document.getElementById("open-panel").hidden, false);
   assert.equal(open.getAttribute("aria-expanded"), "true");
+  document.getElementById("open-path-browse").click();
   const request = messages.at(-1);
   assert.equal(request.type, "browse-files");
   assert.equal(
@@ -4594,8 +4608,9 @@ test("browses folders inline, selects files without opening and ignores stale li
     .getElementById("open-filter")
     .dispatchEvent(new window.Event("input"));
   list.querySelectorAll("button")[1].click();
+  assert.equal(document.getElementById("open-file").value, "");
   assert.equal(
-    document.getElementById("open-file").value,
+    document.getElementById("open-path-selection").textContent,
     "/models/<model>.onnx",
   );
   assert.equal(
@@ -4605,13 +4620,14 @@ test("browses folders inline, selects files without opening and ignores stale li
   list.querySelector("button").click();
   const nested = messages.at(-1);
   assert.equal(nested.location, "/models/nested");
+  assert.equal(document.getElementById("choose-open-path").disabled, true);
   send({
     type: "file-list-error",
     target: "open",
     requestId: request.requestId,
     error: "Old error",
   });
-  assert.equal(document.getElementById("open-error").textContent, "");
+  assert.equal(document.getElementById("open-path-error").textContent, "");
   send({
     type: "file-list-error",
     target: "open",
@@ -4619,13 +4635,14 @@ test("browses folders inline, selects files without opening and ignores stale li
     error: "Access denied",
   });
   assert.equal(
-    document.getElementById("open-error").textContent,
+    document.getElementById("open-path-error").textContent,
     "Access denied",
   );
   assert.equal(list.children.length, 0);
   document.getElementById("open-password").value = "not-persisted";
   open.click();
   assert.equal(document.getElementById("open-panel").hidden, true);
+  assert.equal(document.getElementById("open-path-dialog").open, false);
   assert.equal(document.getElementById("open-password").value, "");
   send({
     type: "file-list",
@@ -4637,6 +4654,101 @@ test("browses folders inline, selects files without opening and ignores stale li
   assert.equal(
     document.getElementById("open-location").value,
     "/models/nested",
+  );
+});
+
+test("choosing a path fills Model path while Cancel and Escape preserve it without opening a model", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const byId = (id) => document.getElementById(id);
+  load(demoGraph);
+  byId("open-model").click();
+  byId("open-file").value = "/previous.onnx";
+  for (const action of ["cancel", "escape", "choose"]) {
+    byId("open-path-browse").click();
+    const request = messages.at(-1);
+    window.dispatchEvent(
+      new window.MessageEvent("message", {
+        data: {
+          type: "file-list",
+          target: "open",
+          requestId: request.requestId,
+          location: "/outside/workspace",
+          parent: "/outside",
+          entries: [
+            {
+              name: "model.onnx",
+              path: "/outside/workspace/model.onnx",
+              directory: false,
+            },
+          ],
+        },
+      }),
+    );
+    byId("open-files").querySelector("button").click();
+    assert.equal(byId("open-file").value, "/previous.onnx");
+    if (action === "escape")
+      byId("open-path-dialog").dispatchEvent(
+        new window.Event("cancel", { cancelable: true }),
+      );
+    else
+      byId(
+        action === "choose" ? "choose-open-path" : "cancel-open-path",
+      ).click();
+    assert.equal(byId("open-path-dialog").open, false);
+    assert.equal(
+      byId("open-file").value,
+      action === "choose" ? "/outside/workspace/model.onnx" : "/previous.onnx",
+    );
+  }
+  assert.equal(
+    messages.some(({ type }) => type === "open"),
+    false,
+  );
+  byId("open-form").dispatchEvent(
+    new window.Event("submit", { cancelable: true }),
+  );
+  assert.equal(messages.at(-1).type, "open");
+  assert.equal(messages.at(-1).location, "/outside/workspace/model.onnx");
+});
+
+test("VS Code path picking fills the field without opening and discards late results", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const byId = (id) => document.getElementById(id);
+  const reply = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  load(demoGraph);
+  byId("open-model").click();
+  byId("open-file").value = "/previous.onnx";
+  for (const result of [
+    { location: "/native/model.onnx" },
+    { location: null },
+    { error: "Picker failed" },
+  ]) {
+    byId("open-native-picker").click();
+    const request = messages.at(-1);
+    assert.equal(request.type, "select-model-path");
+    assert.equal(byId("open-native-picker").disabled, true);
+    reply({
+      type: "model-path-selected",
+      requestId: request.requestId,
+      ...result,
+    });
+    assert.equal(byId("open-native-picker").disabled, false);
+    assert.equal(byId("open-file").value, "/native/model.onnx");
+  }
+  assert.equal(byId("open-error").textContent, "Picker failed");
+  byId("open-native-picker").click();
+  const old = messages.at(-1);
+  byId("open-source-backend").click();
+  reply({
+    type: "model-path-selected",
+    requestId: old.requestId,
+    location: "/stale.onnx",
+  });
+  assert.equal(byId("open-file").value, "");
+  assert.equal(
+    messages.some(({ type }) => type === "open"),
+    false,
   );
 });
 
