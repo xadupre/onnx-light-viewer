@@ -208,6 +208,21 @@ Native estimation, not model execution or measured RAM/GPU usage.
 
    Estimate memory for concrete input dimensions without executing the model.
 
+Optimizer backends
+^^^^^^^^^^^^^^^^^^
+
+In **Optimize**, choose **onnx-light** for native pattern selection or
+**onnxscript** for Python optimization and fusion. ONNX Script requires a
+trusted workspace and ``onnx`` and ``onnxscript`` in the configured Python
+environment. Both operate on the current in-memory model, not the source file.
+See :doc:`features/fusion_patterns`.
+
+.. figure:: _static/feature-optimizer-backends.png
+   :alt: Optimize panel with onnx-light and onnxscript buttons and Python requirements.
+   :width: 100%
+
+   Choose the optimizer before running it.
+
 Pattern groups
 ^^^^^^^^^^^^^^
 

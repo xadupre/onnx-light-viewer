@@ -4164,6 +4164,104 @@ test("renders report details safely and closes the report immediately on navigat
   );
 });
 
+test("chooses the optimizer backend without losing native pattern selection", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const source = loadModel(
+    readFileSync(require.resolve("./models/fusion.onnx")),
+    "fusion",
+  );
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  load(source.graph());
+  document.getElementById("optimize-model").click();
+  send({
+    type: "fusion-patterns",
+    requestId: messages.at(-1).requestId,
+    patterns: source.fusionPatterns(),
+    optimizationPatterns: source.optimizationPatterns(),
+  });
+  const native = document.getElementById("optimizer-onnx-light");
+  const script = document.getElementById("optimizer-onnxscript");
+  const run = document.getElementById("run-optimization");
+  const patterns = document.getElementById("native-optimization-patterns");
+  const selected = () =>
+    [
+      ...document.querySelectorAll(
+        "#optimization-patterns input[data-pattern]:checked",
+      ),
+    ].map((input) => input.value);
+  const initial = selected();
+  assert.ok(initial.length);
+  assert.equal(native.getAttribute("aria-pressed"), "true");
+  assert.equal(patterns.hidden, false);
+  script.click();
+  assert.equal(script.getAttribute("aria-pressed"), "true");
+  assert.equal(native.getAttribute("aria-pressed"), "false");
+  assert.equal(patterns.hidden, true);
+  assert.equal(
+    document.getElementById("onnxscript-optimization-note").hidden,
+    false,
+  );
+  assert.equal(run.disabled, false);
+  native.click();
+  assert.equal(patterns.hidden, false);
+  assert.deepEqual(selected(), initial);
+  document.getElementById("clear-optimization-patterns").click();
+  assert.equal(run.disabled, true);
+  script.click();
+  assert.equal(run.disabled, false);
+  run.click();
+  const request = messages.at(-1);
+  assert.equal(request.type, "apply-optimization");
+  assert.equal(request.backend, "onnxscript");
+  assert.deepEqual(Array.from(request.patterns), []);
+  assert.equal(native.disabled, true);
+  assert.equal(script.disabled, true);
+  send({
+    type: "fusion-error",
+    requestId: request.requestId,
+    error: "Install onnxscript in the configured Python environment.",
+  });
+  assert.equal(native.disabled, false);
+  assert.equal(run.disabled, false);
+  assert.match(
+    document.getElementById("optimization-status").textContent,
+    /Install onnxscript/,
+  );
+  run.click();
+  const completion = messages.at(-1);
+  load(source.graph(), completion.requestId);
+  send({
+    type: "optimization-info",
+    backend: "onnxscript",
+    operation: "Optimize",
+    requestId: completion.requestId,
+    changed: true,
+    matches: [],
+    notice:
+      "Python transformations cannot be exported as native rewriting scenarios.",
+    patterns: source.fusionPatterns(),
+    optimizationPatterns: source.optimizationPatterns(),
+  });
+  assert.equal(document.getElementById("optimization-panel").hidden, false);
+  assert.equal(patterns.hidden, true);
+  assert.equal(
+    document.getElementById("optimization-report-section").hidden,
+    true,
+  );
+  assert.match(
+    document.getElementById("optimization-status").textContent,
+    /ONNX Script: optimization and fusion completed/,
+  );
+  assert.match(
+    document.getElementById("optimization-status").textContent,
+    /Python transformations cannot be exported as native rewriting scenarios/,
+  );
+  native.click();
+  assert.equal(run.disabled, true);
+  assert.deepEqual(selected(), []);
+});
+
 test("explains the selected pattern/node and distinguishes rejection, missing diagnostics and matches", async (t) => {
   const { document, window, messages, load } = openViewer(t);
   const source = loadModel(

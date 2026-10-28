@@ -276,13 +276,20 @@ export function webviewHtml(
           </section>
           <section id="optimization-panel" class="inspector-panel" aria-labelledby="optimization-title" hidden>
             <h2 id="optimization-title" class="eyebrow panel-title">Global optimization</h2>
+            <div class="fusion-selection-controls optimizer-backends" role="group" aria-label="Optimizer backend">
+              <button id="optimizer-onnx-light" aria-pressed="true">onnx-light</button>
+              <button id="optimizer-onnxscript" aria-pressed="false">onnxscript</button>
+            </div>
+            <p id="onnxscript-optimization-note" hidden>Runs ONNX Script optimization and fusion using the Python executable in Settings. Requires onnx and onnxscript in that environment and a trusted workspace. Python transformations cannot be exported as native rewriting scenarios.</p>
             <details id="optimization-picker" class="fusion-picker" open>
-              <summary>Patterns and groups</summary>
+              <summary>Optimization</summary>
+              <div id="native-optimization-patterns">
               <fieldset id="optimization-pattern-group" disabled aria-label="Native pattern groups"><legend>Select pattern groups</legend></fieldset>
               <div class="fusion-selection-controls"><button id="select-optimization-patterns" disabled>Select all</button><button id="clear-optimization-patterns" disabled>Clear selection</button></div>
               <fieldset id="optimization-patterns" disabled aria-label="Optimization patterns"></fieldset>
-              <button id="run-optimization" disabled>Run global optimization</button>
               <p id="optimization-feedback" role="status"></p>
+              </div>
+              <button id="run-optimization" disabled>Run global optimization</button>
               <p id="optimization-status" role="status"></p>
               <ol id="optimization-results" aria-label="Applied optimization patterns"></ol>
             </details>

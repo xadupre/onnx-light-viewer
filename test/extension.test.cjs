@@ -14,6 +14,7 @@ const {
   link,
 } = require("node:fs/promises");
 const { createCipheriv, createHash, pbkdf2Sync } = require("node:crypto");
+const { spawnSync } = require("node:child_process");
 const { createServer } = require("node:http");
 const { homedir, tmpdir } = require("node:os");
 const { createRequire } = require("node:module");
@@ -2426,6 +2427,294 @@ test("lists saved scenarios and applies one or all remaining steps with host und
   );
   assert.deepEqual(latestGraph().graph, full.graph());
 });
+
+test("validates ONNX Script requests and requires workspace trust without editing", async (t) => {
+  const directory = await mkdtemp(path.join(__dirname, "onnxscript-host-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const extension = await openExtension(
+    "../../examples/optimization.onnx",
+    undefined,
+    true,
+    directory,
+    undefined,
+    new Map([
+      [
+        "applicationSettings",
+        {
+          downloadDirectory: directory,
+          pythonPath: path.join(directory, "missing-python"),
+        },
+      ],
+    ]),
+  );
+  t.after(() => extension.dispose());
+  const latest = () =>
+    extension.messages.findLast(({ type }) => type === "graph");
+  const original = latest();
+  const request = {
+    type: "apply-optimization",
+    backend: "onnxscript",
+    operation: "Optimize",
+    patterns: [],
+    requestId: 223,
+  };
+  extension.setTrusted(false);
+  await extension.receive(request);
+  assert.match(extension.messages.at(-1).error, /Trust this workspace/);
+  extension.setTrusted(true);
+  for (const invalid of [
+    { backend: "unknown" },
+    { operation: "Fuse" },
+    { patterns: ["IdentityRemoval"] },
+  ]) {
+    await extension.receive({ ...request, ...invalid });
+    assert.equal(extension.messages.at(-1).type, "fusion-error");
+    assert.equal(latest(), original);
+  }
+  await extension.receive(request);
+  assert.match(extension.messages.at(-1).error, /missing-python/);
+  assert.equal(extension.messages.at(-1).requestId, 223);
+  assert.equal(latest(), original);
+  assert.deepEqual(await readdir(directory), []);
+});
+
+const onnxScriptPython =
+  process.env.ONNX_SCRIPT_PYTHON ??
+  (process.platform === "win32" ? "python" : "python3");
+const hasOnnxScript =
+  spawnSync(onnxScriptPython, ["-P", "-c", "import onnx, onnxscript"])
+    .status === 0;
+
+test(
+  "ONNX Script checkpoints the current snapshot and keeps native undo segments separate",
+  {
+    skip:
+      !hasOnnxScript &&
+      "Install onnx and onnxscript or set ONNX_SCRIPT_PYTHON.",
+  },
+  async (t) => {
+    const directory = await mkdtemp(path.join(__dirname, "onnxscript-host-"));
+    t.after(() => rm(directory, { recursive: true, force: true }));
+    const extension = await openExtension(
+      undefined,
+      undefined,
+      true,
+      directory,
+      undefined,
+      new Map([
+        [
+          "applicationSettings",
+          {
+            downloadDirectory: directory,
+            pythonPath: onnxScriptPython,
+          },
+        ],
+      ]),
+    );
+    t.after(() => extension.dispose());
+    const source = path.join(directory, "original.onnx");
+    await copyFile(require.resolve("../examples/optimization.onnx"), source);
+    await extension.openFile(source);
+    const latest = () =>
+      extension.messages.findLast(({ type }) => type === "graph");
+    const original = latest().graph;
+    await extension.receive({
+      type: "apply-optimization",
+      operation: "Optimize",
+      patterns: ["MatMulAdd"],
+      requestId: 1,
+    });
+    assert.equal(
+      extension.messages.at(-1).type,
+      "optimization-info",
+      JSON.stringify(extension.messages.at(-1)),
+    );
+    assert.equal(latest().file.fusionCount, 1);
+    const nativeEdited = latest().graph;
+    // The host must optimize its current edited handle, not reload this source.
+    await writeFile(source, "source replaced after loading");
+    await extension.receive({
+      type: "apply-optimization",
+      backend: "onnxscript",
+      operation: "Optimize",
+      patterns: [],
+      requestId: 2,
+    });
+    const response = extension.messages.at(-1);
+    assert.equal(response.type, "optimization-info", JSON.stringify(response));
+    assert.equal(response.backend, "onnxscript");
+    assert.equal(response.requestId, 2);
+    assert.equal(typeof response.changed, "boolean");
+    assert.deepEqual(response.matches, []);
+    assert.ok(Array.isArray(response.patterns));
+    assert.ok(Array.isArray(response.optimizationPatterns));
+    assert.deepEqual(response.scenarios, []);
+    assert.equal(response.undoSupported, true);
+    assert.match(response.notice, /Unfuse.*checkpoint/);
+    assert.equal(latest().fusionRequestId, 2);
+    assert.equal(latest().file.fusionCount, 2);
+    assert.equal(latest().file.fusionHistory.length, 2);
+    assert.ok(
+      latest().file.fusionHistory.every((operation) =>
+        operation.matches.every((match) => !match.nodes.length),
+      ),
+    );
+    const optimized = latest().graph;
+    assert.equal(
+      optimized.nodes.some(({ name }) => name === "constant_sum"),
+      false,
+    );
+    const saved = path.join(directory, "saved.onnx");
+    await extension.receive({
+      type: "save",
+      location: saved,
+      overwrite: false,
+      storage: "embedded",
+      encrypted: false,
+      includeRewritings: true,
+    });
+    assert.equal(extension.messages.at(-1).type, "save-info");
+    const loaded = await require("../dist/graph").loadModelFile(
+      saved,
+      optimized.name,
+    );
+    assert.deepEqual(loaded.graph(), optimized);
+    assert.deepEqual(loaded.rewritingScenarios(), []);
+    assert.equal(
+      await readFile(source, "utf8"),
+      "source replaced after loading",
+    );
+    assert.equal(
+      (await readdir(directory)).some((name) => name.startsWith("onnxscript-")),
+      false,
+    );
+    const optimizeNative = (patterns) =>
+      extension.receive({
+        type: "apply-optimization",
+        operation: "Optimize",
+        patterns,
+      });
+    const optimizePython = () =>
+      extension.receive({
+        type: "apply-optimization",
+        backend: "onnxscript",
+        operation: "Optimize",
+        patterns: [],
+      });
+    await optimizeNative(["GemmTranspose"]);
+    assert.equal(extension.messages.at(-1).type, "optimization-info");
+    assert.equal(latest().file.fusionCount, 3);
+    await extension.receive({ type: "undo-fusion" });
+    assert.deepEqual(latest().graph, optimized);
+    assert.equal(latest().file.fusionCount, 2);
+    await extension.receive({ type: "undo-fusion" });
+    assert.deepEqual(latest().graph, nativeEdited);
+    assert.equal(latest().file.fusionCount, 1);
+    await extension.receive({ type: "undo-fusion" });
+    assert.deepEqual(latest().graph, original);
+    assert.equal(latest().file.fusionCount, 0);
+    await optimizeNative(["MatMulAdd"]);
+    await optimizePython();
+    assert.equal(latest().file.fusionCount, 2);
+    await optimizeNative(["GemmTranspose"]);
+    assert.equal(latest().file.fusionCount, 3);
+    await extension.receive({ type: "undo-fusion", all: true });
+    assert.deepEqual(latest().graph, original);
+    assert.equal(latest().file.fusionCount, 0);
+    await extension.openFile(require.resolve("./models/relu.onnx"));
+    const unchanged = latest().graph;
+    await optimizePython();
+    assert.equal(extension.messages.at(-1).changed, false);
+    assert.deepEqual(latest().graph, unchanged);
+    assert.equal(latest().file.fusionCount, 0);
+  },
+);
+
+test(
+  "discards late ONNX Script results and errors after replacing the model",
+  {
+    skip:
+      (!hasOnnxScript || process.platform === "win32") &&
+      "Requires ONNX Script and POSIX executable scripts.",
+  },
+  async (t) => {
+    const directory = await mkdtemp(path.join(__dirname, "onnxscript-host-"));
+    t.after(() => rm(directory, { recursive: true, force: true }));
+    for (const fail of [false, true]) {
+      const marker = path.join(directory, `started-${fail}`);
+      const release = path.join(directory, `release-${fail}`);
+      const executable = path.join(directory, `python-${fail}`);
+      await writeFile(
+        executable,
+        `#!${process.execPath}
+const fs = require("node:fs");
+fs.writeFileSync(${JSON.stringify(marker)}, "");
+while (!fs.existsSync(${JSON.stringify(release)}))
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+if (${fail}) process.exit(3);
+const result = require("node:child_process").spawnSync(
+  ${JSON.stringify(onnxScriptPython)}, process.argv.slice(2), { stdio: "inherit" });
+process.exit(result.status ?? 1);
+`,
+        { mode: 0o700 },
+      );
+      const extension = await openExtension(
+        "../../examples/optimization.onnx",
+        undefined,
+        true,
+        directory,
+        undefined,
+        new Map([
+          [
+            "applicationSettings",
+            {
+              downloadDirectory: directory,
+              pythonPath: executable,
+            },
+          ],
+        ]),
+      );
+      t.after(() => extension.dispose());
+      const pending = extension.receive({
+        type: "apply-optimization",
+        backend: "onnxscript",
+        operation: "Optimize",
+        patterns: [],
+        requestId: 223,
+      });
+      try {
+        for (let attempt = 0; ; attempt++) {
+          try {
+            await stat(marker);
+            break;
+          } catch {
+            assert.ok(attempt < 500, "Python optimization never started.");
+            await new Promise((resolve) => setTimeout(resolve, 10));
+          }
+        }
+        await extension.openFile(
+          require.resolve("../examples/optimization.onnx"),
+        );
+        const count = extension.messages.length;
+        const errors = extension.errors.length;
+        await writeFile(release, "");
+        await pending;
+        assert.equal(extension.messages.length, count);
+        assert.equal(extension.errors.length, errors);
+        assert.equal(
+          (await readdir(directory)).some((name) =>
+            name.startsWith("onnxscript-"),
+          ),
+          false,
+        );
+      } finally {
+        await writeFile(release, "");
+        await pending;
+        extension.dispose();
+      }
+    }
+  },
+);
 
 test("previews global passes without editing, rejects stale previews and optimizes with replayable saves", async (t) => {
   const directory = await mkdtemp(

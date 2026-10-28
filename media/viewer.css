@@ -1519,7 +1519,8 @@ button:disabled {
   padding: 6px 4px;
   font-size: 11px;
 }
-.source-picker button[aria-pressed="true"] {
+.source-picker button[aria-pressed="true"],
+.optimizer-backends button[aria-pressed="true"] {
   border-color: var(--mint);
   color: var(--mint);
 }
