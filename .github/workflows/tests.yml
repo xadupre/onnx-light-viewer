@@ -30,6 +30,7 @@ jobs:
           cache: pip
           cache-dependency-path: test/requirements.txt
       - run: python -m pip install -r test/requirements.txt
+      - run: python -c "import onnx_light_cpu; onnx_light_cpu.register_kernels()"
       - run: npm ci
       - run: npm run format:check
       - if: runner.os == 'Linux'

@@ -46,6 +46,7 @@ function memoryTestModel(
     outputType = 1,
     outputDimensions = dimensions,
     opset = 18,
+    extraOpsets = [],
   } = {},
 ) {
   const tensor = (type, shape) =>
@@ -76,6 +77,12 @@ function memoryTestModel(
     Buffer.concat([
       varintField(1, 9),
       bytesField(8, varintField(2, opset)),
+      ...extraOpsets.map(([domain, version]) =>
+        bytesField(
+          8,
+          Buffer.concat([bytesField(1, domain), varintField(2, version)]),
+        ),
+      ),
       bytesField(
         7,
         Buffer.concat([
@@ -98,6 +105,38 @@ function memoryTestModel(
     "memory.onnx",
   );
 }
+
+test("native CPU support supplies custom shapes and memory estimates", async () => {
+  const source = memoryTestModel([2, 3], {
+    outputDimensions: ["Rows", "Columns"],
+    extraOpsets: [["com.microsoft", 1]],
+    nodes: [
+      Buffer.concat([
+        bytesField(1, "x"),
+        bytesField(1, "x"),
+        bytesField(2, "y"),
+        bytesField(4, "CDist"),
+        bytesField(7, "com.microsoft"),
+        bytesField(
+          5,
+          Buffer.concat([
+            bytesField(1, "metric"),
+            bytesField(4, "sqeuclidean"),
+            varintField(20, 3),
+          ]),
+        ),
+      ]),
+    ],
+  });
+  assert.deepEqual(
+    source.graph(true).tensors.find(({ name }) => name === "y").shape,
+    ["2", "2"],
+  );
+  const profile = await source.memoryProfile({});
+  assert.equal(profile.events.length, 1);
+  assert.ok(Number.isFinite(profile.peakBytes));
+  assert.equal(profile.events[0].outputs[0].shape, "[2,2]");
+});
 
 test("memory estimates bind anonymous and repeated dimensions and retain zero-sized tensors", async () => {
   const model = memoryTestModel([null, "N", "N"]);
