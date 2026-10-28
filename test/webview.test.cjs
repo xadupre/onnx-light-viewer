@@ -5,16 +5,30 @@ const { JSDOM } = require("jsdom");
 const { huggingFaceTasks } = require("../dist/huggingFaceTasks");
 const { webviewHtml } = require("../dist/webview");
 
-test("optimization panel keeps its controls without introductory text", (t) => {
+test("optimization panel exposes backend buttons without native introductory text", (t) => {
   const dom = new JSDOM(
     webviewHtml((name) => name, "test-source", "test-nonce", "test"),
   );
   t.after(() => dom.window.close());
   const panel = dom.window.document.getElementById("optimization-panel");
-  assert.equal(panel.querySelector(":scope > p"), null);
+  assert.equal(panel.querySelector(":scope > p:not([hidden])"), null);
   assert.equal(
-    panel.querySelector("#optimization-title").nextElementSibling.id,
-    "optimization-picker",
+    panel
+      .querySelector("#optimization-title")
+      .nextElementSibling.getAttribute("aria-label"),
+    "Optimizer backend",
+  );
+  assert.equal(
+    panel.querySelector("#optimizer-onnx-light").getAttribute("aria-pressed"),
+    "true",
+  );
+  assert.equal(
+    panel.querySelector("#optimizer-onnxscript").getAttribute("aria-pressed"),
+    "false",
+  );
+  assert.equal(
+    panel.querySelector("#onnxscript-optimization-note").hidden,
+    true,
   );
   assert.ok(panel.querySelector("#optimization-patterns"));
   assert.equal(

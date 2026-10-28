@@ -47,6 +47,7 @@ import {
   HuggingFaceSource,
 } from "./huggingface";
 import { OliveRecipes } from "./oliveRecipes";
+import { optimizeWithOnnxScript } from "./optimization";
 
 const viewType = "onnxLightViewer.graph";
 const panelSessions = new WeakMap<vscode.WebviewPanel, () => void>();
@@ -111,8 +112,31 @@ interface LoadedModel {
   metadata?: GraphMetadata;
   fusionCount?: number;
   fusionHistory?: FusionOperation[];
+  /** Host checkpoint; Python edits are never represented as native rewritings. */
+  pythonPrevious?: LoadedModel;
   source?: { uri: vscode.Uri };
+  /** Original source ownership survives materializing or removing external data. */
+  sourceWeightLocations?: readonly string[];
   fileName?: string;
+}
+
+function undoHistory(model: LoadedModel): FusionOperation[] {
+  const previous = model.pythonPrevious;
+  return [
+    ...(previous
+      ? [
+          ...undoHistory(previous).map((operation) => ({
+            ...operation,
+            matches: operation.matches.map((match) => ({
+              ...match,
+              nodes: [],
+            })),
+          })),
+          { matches: [{ pattern: "ONNX Script checkpoint", nodes: [] }] },
+        ]
+      : []),
+    ...(model.fusionHistory ?? []),
+  ];
 }
 
 async function modelFiles(model: LoadedModel, native: NativeModel) {
@@ -341,7 +365,14 @@ async function readGraph(
       ? () => loadModel(retainedBytes, fileName, password)
       : () => loadModelFile(source.uri.fsPath, fileName, password);
     const native = await reload();
-    return { graph: native.graph(), native, reload, source, fileName };
+    return {
+      graph: native.graph(),
+      native,
+      reload,
+      source,
+      sourceWeightLocations: native.externalDataLocations(),
+      fileName,
+    };
   });
 }
 
@@ -682,8 +713,8 @@ async function configurePanel(
       ...(fusionRequestId === undefined ? {} : { fusionRequestId }),
       ...(selectedNodes ? { selectedNodes } : {}),
       file: {
-        fusionCount: current.fusionCount ?? 0,
-        fusionHistory: current.fusionHistory ?? [],
+        fusionCount: undoHistory(current).length,
+        fusionHistory: undoHistory(current),
         ...(current.graph.pipeline ? { pipeline: true } : {}),
         directory: locationText(directoryUri()),
         saveDirectory: locationText(saveDirectoryUri()),
@@ -752,6 +783,7 @@ async function configurePanel(
         anchors?: unknown;
         candidates?: unknown;
         operation?: unknown;
+        backend?: unknown;
         match?: unknown;
         all?: unknown;
         location?: unknown;
@@ -1941,15 +1973,36 @@ async function configurePanel(
                   typeof message.all !== "boolean"
                 )
                   throw new Error("Expected a boolean unfuse-all option.");
-                const native = await nativeModel(
-                  current,
+                let restored = current;
+                let edited = await nativeModel(
+                  restored,
                   log,
                   () => void sendStatus(),
                 );
                 if (!isCurrent()) return;
-                let edited = native.undoFusion();
-                while (message.all === true && edited.fusionCount())
+                if (message.all === true) {
+                  while (true) {
+                    while (edited.fusionCount()) edited = edited.undoFusion();
+                    if (!restored.pythonPrevious) break;
+                    restored = restored.pythonPrevious;
+                    edited = await nativeModel(
+                      restored,
+                      log,
+                      () => void sendStatus(),
+                    );
+                    if (!isCurrent()) return;
+                  }
+                } else if (edited.fusionCount() || !restored.pythonPrevious) {
                   edited = edited.undoFusion();
+                } else {
+                  restored = restored.pythonPrevious;
+                  edited = await nativeModel(
+                    restored,
+                    log,
+                    () => void sendStatus(),
+                  );
+                  if (!isCurrent()) return;
+                }
                 const currentPath =
                   current.graph.breadcrumbs.at(-1)?.path ?? [];
                 const path =
@@ -1959,7 +2012,7 @@ async function configurePanel(
                 const graph = edited.graph(false, path);
                 const retained = edited.clone();
                 model = {
-                  ...current,
+                  ...restored,
                   native: edited,
                   nativeReload: undefined,
                   graph,
@@ -1970,7 +2023,7 @@ async function configurePanel(
                 };
                 graphRevision++;
                 navigationRequest++;
-                panel.title = `ONNX: ${current.fileName ?? graph.name}${edited.fusionCount() ? " (modified)" : ""}`;
+                panel.title = `ONNX: ${current.fileName ?? graph.name}${undoHistory(model).length ? " (modified)" : ""}`;
                 await sendGraph();
                 return;
               }
@@ -1982,6 +2035,104 @@ async function configurePanel(
                 );
               const path = current.graph.breadcrumbs.at(-1)?.path ?? [];
               if (message.type === "apply-optimization") {
+                if (
+                  message.backend !== undefined &&
+                  message.backend !== "onnx-light" &&
+                  message.backend !== "onnxscript"
+                )
+                  throw new Error("Choose a supported optimization backend.");
+                if (message.backend === "onnxscript") {
+                  if (
+                    message.operation !== "Optimize" ||
+                    !Array.isArray(message.patterns) ||
+                    message.patterns.length
+                  )
+                    throw new Error(
+                      "ONNX Script uses its default optimizer and rewrite rules.",
+                    );
+                  if (!vscode.workspace.isTrusted)
+                    throw new Error(
+                      "Trust this workspace before running ONNX Script.",
+                    );
+                  if (current.graph.pipeline)
+                    throw new Error(
+                      "ONNX Script requires a single ONNX model.",
+                    );
+                  const native = await nativeModel(
+                    current,
+                    log,
+                    () => void sendStatus(),
+                  );
+                  if (!isCurrent()) return;
+                  const bytes = await native.serialize(
+                    undefined,
+                    current.source?.uri.scheme === "file"
+                      ? current.source.uri.fsPath
+                      : undefined,
+                    false,
+                  );
+                  if (!isCurrent()) return;
+                  const result = await optimizeWithOnnxScript(
+                    bytes,
+                    getApplicationSettings().pythonPath,
+                    context.globalStorageUri.fsPath,
+                  );
+                  if (!isCurrent()) return;
+                  const edited = result.changed
+                    ? loadModel(result.bytes, current.graph.name)
+                    : native;
+                  edited.verify();
+                  let replacement = current;
+                  if (result.changed) {
+                    const retained = edited.clone();
+                    const checkpoint = native.clone();
+                    replacement = {
+                      ...current,
+                      native: edited,
+                      nativeReload: undefined,
+                      graph: edited.graph(false),
+                      metadata: undefined,
+                      fusionCount: edited.fusionCount(),
+                      fusionHistory: edited.fusionHistory(),
+                      pythonPrevious: {
+                        ...current,
+                        native: checkpoint,
+                        nativeReload: undefined,
+                        reload: () => checkpoint.clone(),
+                      },
+                      reload: () => retained.clone(),
+                    };
+                  }
+                  fusionPreview = undefined;
+                  model = replacement;
+                  graphRevision++;
+                  navigationRequest++;
+                  panel.title = `ONNX: ${current.fileName ?? replacement.graph.name}${undoHistory(replacement).length ? " (modified)" : ""}`;
+                  await sendGraph(undefined, message.requestId);
+                  if (
+                    !active ||
+                    model !== replacement ||
+                    fusionRequest !== generation + 1
+                  )
+                    return;
+                  await postMessage({
+                    type: "optimization-info",
+                    requestId: message.requestId,
+                    backend: "onnxscript",
+                    operation: "Optimize",
+                    changed: result.changed,
+                    matches: [],
+                    optimizationReport: null,
+                    undoSupported: true,
+                    notice: result.changed
+                      ? "Use Unfuse to restore the previous checkpoint. ONNX Script changes are materialized and are not exported as native rewritings."
+                      : "No changes. Existing native undo history is retained.",
+                    patterns: edited.fusionPatterns(),
+                    optimizationPatterns: edited.optimizationPatterns(),
+                    scenarios: edited.rewritingScenarios(),
+                  });
+                  return;
+                }
                 const native = await nativeModel(
                   current,
                   log,
@@ -2031,7 +2182,7 @@ async function configurePanel(
                 model = replacement;
                 graphRevision++;
                 navigationRequest++;
-                panel.title = `ONNX: ${current.fileName ?? graph.name}${edited.fusionCount() ? " (modified)" : ""}`;
+                panel.title = `ONNX: ${current.fileName ?? graph.name}${undoHistory(replacement).length ? " (modified)" : ""}`;
                 await sendGraph(undefined, message.requestId);
                 if (
                   !active ||
@@ -2394,7 +2545,15 @@ async function configurePanel(
               if (!destination || !active || model !== current)
                 return cancelled();
               const source = current.source?.uri;
-              await assertSaveDestination(source ? [source] : [], destination);
+              const originalSources = source
+                ? [
+                    source,
+                    ...(current.sourceWeightLocations ?? []).map((location) =>
+                      vscode.Uri.joinPath(source, "..", location),
+                    ),
+                  ]
+                : [];
+              await assertSaveDestination(originalSources, destination);
               await prepareSaveDirectory(
                 vscode.Uri.joinPath(destination, ".."),
               );
@@ -2449,7 +2608,7 @@ async function configurePanel(
               if (!active || model !== current) return cancelled();
               const sources = source
                 ? [
-                    source,
+                    ...originalSources,
                     ...native
                       .externalDataLocations()
                       .map((location) =>
@@ -2542,7 +2701,7 @@ async function configurePanel(
                   typeof message.operation === "number" &&
                   Number.isSafeInteger(message.operation) &&
                   message.operation >= 0
-                    ? current.fusionHistory?.[message.operation]
+                    ? undoHistory(current)[message.operation]
                     : undefined;
                 const match =
                   typeof message.match === "number" &&

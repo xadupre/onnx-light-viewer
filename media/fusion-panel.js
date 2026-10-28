@@ -16,6 +16,7 @@ function createFusionPanel({
   let fusionBusy = false;
   let optimizationSelection;
   let optimizationReport;
+  let optimizationBackend = "onnx-light";
   let selectedOptimizationResult = false;
   let scenarios = [];
   let selectedStep;
@@ -296,6 +297,17 @@ function createFusionPanel({
     fusionBusy = busy;
     diagnosticControls();
     byId("show-optimization-report").disabled = busy || !optimizationReport;
+    for (const backend of ["onnx-light", "onnxscript"]) {
+      byId(`optimizer-${backend}`).disabled = busy;
+      byId(`optimizer-${backend}`).setAttribute(
+        "aria-pressed",
+        String(optimizationBackend === backend),
+      );
+    }
+    byId("native-optimization-patterns").hidden =
+      optimizationBackend !== "onnx-light";
+    byId("onnxscript-optimization-note").hidden =
+      optimizationBackend !== "onnxscript";
     for (const control of byId("fusion-matches").querySelectorAll(
       "input, button",
     ))
@@ -323,11 +335,15 @@ function createFusionPanel({
       optimization.disabled ||
       !byId("optimization-pattern-group").querySelector("input");
     byId("select-optimization-patterns").disabled = optimization.disabled;
-    for (const id of ["clear-optimization-patterns", "run-optimization"])
-      byId(id).disabled =
-        busy ||
-        !canFuse() ||
-        !optimization.querySelector("input[data-pattern]:checked");
+    byId("clear-optimization-patterns").disabled =
+      busy ||
+      !canFuse() ||
+      !optimization.querySelector("input[data-pattern]:checked");
+    byId("run-optimization").disabled =
+      busy ||
+      !canFuse() ||
+      (optimizationBackend === "onnx-light" &&
+        !optimization.querySelector("input[data-pattern]:checked"));
     for (const button of byId("optimization-results").querySelectorAll(
       "button",
     ))
@@ -697,6 +713,14 @@ function createFusionPanel({
     "change",
     updateOptimizationSelection,
   );
+  for (const backend of ["onnx-light", "onnxscript"])
+    byId(`optimizer-${backend}`).addEventListener("click", () => {
+      optimizationBackend = backend;
+      showOptimizationReport(null);
+      byId("optimization-status").textContent = "";
+      byId("optimization-results").replaceChildren();
+      fusionControls(fusionBusy);
+    });
   for (const [id, checked] of [
     ["select-optimization-patterns", true],
     ["clear-optimization-patterns", false],
@@ -710,13 +734,19 @@ function createFusionPanel({
     });
   byId("run-optimization").addEventListener("click", () => {
     clearFusionPreview();
-    fusionControls(true, "Running native iterative optimization…");
+    fusionControls(true);
     byId("optimization-status").textContent =
-      "Running the complete native optimizer…";
+      optimizationBackend === "onnxscript"
+        ? "Running ONNX Script optimization and fusion…"
+        : "Running the complete native optimizer…";
     requestAction("apply-optimization", "Optimize ONNX model", {
       requestId: ++fusionRequest,
       operation: "Optimize",
-      patterns: [...optimizationSelection],
+      ...(optimizationBackend === "onnxscript"
+        ? { backend: "onnxscript" }
+        : {}),
+      patterns:
+        optimizationBackend === "onnxscript" ? [] : [...optimizationSelection],
     });
   });
   byId("diagnostic-pattern").addEventListener("change", clearDiagnostic);
@@ -902,12 +932,15 @@ function createFusionPanel({
       if (data.type !== "fusion-patterns") {
         byId("fusion-status").textContent =
           data.type === "optimization-info"
-            ? data.changed
-              ? `${data.operation}: applied ${data.matches.length} rewriting steps. Use Unfuse to undo, or Save with or without rewritings.`
-              : `${data.operation}: no changes.`
+            ? data.backend === "onnxscript"
+              ? `ONNX Script: ${data.changed ? "optimization and fusion completed. Save a copy to keep changes." : "no changes."}`
+              : data.changed
+                ? `${data.operation}: applied ${data.matches.length} rewriting steps. Use Unfuse to undo, or Save with or without rewritings.`
+                : `${data.operation}: no changes.`
             : data.type === "rewriting-info"
               ? `Applied rewriting scenario ${data.name}. Use Unfuse to undo.`
               : `Applied ${data.count} fusion matches. Save a copy to keep changes.`;
+        if (data.notice) byId("fusion-status").textContent += ` ${data.notice}`;
         updateScenario();
         revealPanel(
           byId(

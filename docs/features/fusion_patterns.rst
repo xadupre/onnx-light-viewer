@@ -96,13 +96,33 @@ Iterative optimization and global passes
 ----------------------------------------
 
 **Optimize** has its own sidebar panel, separate from **Fuse**.
-It opens the full native catalog, including patterns whose operators
+Choose **onnx-light** (the default) or **onnxscript** with the two backend buttons.
+The native backend opens the full catalog, including patterns whose operators
 are not present yet. Select individual patterns, whole **Priority** groups,
 or **Select all**, then click **Run global optimization**.
 The group tiles combine named sets across priorities.
 Set membership and priorities come directly from onnx-light, not inferred categories.
 Initially, only SDK-default patterns are checked: ``RepeatedLayer`` is opt-in.
 Choose ``Layer``, **All**, **Select all** or its individual checkbox to enable it.
+
+**onnxscript** runs ONNX Script's optimization and default fusion rewrites on
+the current in-memory model, including unsaved edits. Install ``onnx`` and
+``onnxscript`` in the Python environment configured in **Settings**, trust the
+workspace, then click **Run global optimization**. This backend accepts a single
+standard ONNX model, not a ``PipelineProto``. Native pattern selections
+are preserved when switching backends, but do not configure ONNX Script.
+Python errors leave the displayed model unchanged. Save a copy to keep the result.
+Native matching diagnostics and timing reports apply only to **onnx-light**.
+Changed Python results have a session-local **Unfuse** checkpoint, including
+earlier native edits. Python transformations cannot be exported as native
+rewriting scenarios; saving with rewritings includes only native edits made
+after the Python result.
+
+.. figure:: ../_static/feature-optimizer-backends.png
+   :alt: Optimize panel with onnx-light and onnxscript backend buttons and the Python requirements.
+   :width: 100%
+
+   Select ONNX Script to run Python optimization and fusion instead of native patterns.
 
 .. figure:: ../_static/feature-pattern-groups.png
    :alt: Optimize panel showing Default, Layer and onnx-light-cpu tiles selected together.
@@ -152,7 +172,7 @@ Each global pass is a whole-scope candidate and must be applied individually;
 no-op passes produce no candidates.
 Closing Fuse, navigating or replacing the graph discards previews.
 
-Each optimization or applied pass is one **Unfuse** operation.
+Each native optimization or applied pass is one **Unfuse** operation.
 Applied patterns are listed in the optimization results and in **Unfuse**;
 click an entry to highlight its surviving result nodes. Folding a node entirely
 into an initializer leaves no operator to select.

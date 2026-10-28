@@ -33,6 +33,7 @@ export function applicationSettings(value: unknown): ApplicationSettings {
 
 export const pythonPackages = [
   "onnx",
+  "onnxscript",
   "onnxruntime",
   "onnxruntime-gpu",
   "onnxruntime-extensions",
