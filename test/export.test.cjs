@@ -1,5 +1,7 @@
 const assert = require("node:assert/strict");
 const { execFile } = require("node:child_process");
+const { EventEmitter } = require("node:events");
+const { readFileSync } = require("node:fs");
 const {
   mkdtemp,
   mkdir,
@@ -11,7 +13,9 @@ const {
 } = require("node:fs/promises");
 const { tmpdir } = require("node:os");
 const path = require("node:path");
+const { PassThrough } = require("node:stream");
 const { promisify } = require("node:util");
+const { runInNewContext } = require("node:vm");
 const { test } = require("node:test");
 const {
   defaultExportDirectory,
@@ -1208,6 +1212,86 @@ test("reports failed, missing and output-less exporter processes instead of load
     );
   }
 });
+
+for (const state of ["exited", "running", "inaccessible"]) {
+  test(`Windows cancellation handles taskkill failure when the process is ${state} before exit metadata arrives`, async () => {
+    const child = Object.assign(new EventEmitter(), {
+      pid: 12345,
+      exitCode: null,
+      signalCode: null,
+      stdout: new PassThrough(),
+      stderr: new PassThrough(),
+      kill: () => false,
+    });
+    const taskkillError = Object.assign(
+      new Error("There is no running instance of the task."),
+      { code: 128 },
+    );
+    let probes = 0;
+    const windows = {};
+    runInNewContext(
+      readFileSync(require.resolve("../dist/export"), "utf8"),
+      {
+        exports: windows,
+        require(name) {
+          if (name !== "node:child_process") return require(name);
+          return {
+            spawn: () => child,
+            execFile(command, args, callback) {
+              assert.equal(command, "taskkill");
+              assert.deepEqual(Array.from(args), [
+                "/PID",
+                String(child.pid),
+                "/T",
+                "/F",
+              ]);
+              queueMicrotask(() => {
+                callback(taskkillError);
+                child.stdout.end();
+                child.stderr.end();
+                child.emit("close", 1, null);
+              });
+            },
+          };
+        },
+        process: {
+          platform: "win32",
+          env: process.env,
+          kill(pid, signal) {
+            assert.equal(pid, child.pid);
+            assert.equal(signal, 0);
+            probes++;
+            if (state !== "running")
+              throw Object.assign(new Error(state), {
+                code: state === "exited" ? "ESRCH" : "EPERM",
+              });
+          },
+        },
+        Error,
+        DOMException,
+        setTimeout,
+        clearTimeout,
+      },
+      { filename: require.resolve("../dist/export") },
+    );
+    const controller = new AbortController();
+    const operation = windows.runProcess(
+      { executable: python, args: [] },
+      controller.signal,
+      () => {},
+      {},
+      "Exporter",
+    );
+    controller.abort();
+    await assert.rejects(
+      operation,
+      state === "exited"
+        ? { name: "AbortError" }
+        : (error) => error === taskkillError,
+    );
+    assert.equal(probes, 1);
+  });
+}
 
 test("cancelling terminates the actual exporter before returning and keeps its reproduction script", async (t) => {
   const root = await directory(t);
