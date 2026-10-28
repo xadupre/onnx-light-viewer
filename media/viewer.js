@@ -241,8 +241,13 @@ function displayLog(entry) {
         (pending) => pending === "open" || pending === "export",
       );
       setLoading(replacementPending);
-      if (type === "open") filePanels.finishOpening(entry.status);
-      else exportPanel.finish(entry.status);
+      if (type === "open") {
+        filePanels.finishOpening(entry.status);
+        if (entry.status === "FAILED")
+          showLoadError(
+            entry.details || "Opening the model failed. See Logs for details.",
+          );
+      } else exportPanel.finish(entry.status);
     } else if (type === "save") {
       filePanels.finishSaving(entry.status, replacementPending || !hasModel);
     }

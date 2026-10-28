@@ -731,7 +731,7 @@ void RestoreModelPayloads(ol::ModelProto &snapshot, const StoredModel &source,
 
 void RestoreStatisticsPayloads(ol::ModelProto &snapshot, const StoredModel &source,
                                const std::string &file_path,
-                               const std::vector<const ol::TensorProto *> &tensors) {
+                               const std::vector<SkippedTensorPayload> &payloads) {
   struct Target {
     SkippedTensorPayload payload;
     std::string name;
@@ -740,26 +740,23 @@ void RestoreStatisticsPayloads(ol::ModelProto &snapshot, const StoredModel &sour
     std::vector<int64_t> dims;
   };
   std::vector<Target> targets;
-  for (const auto *tensor : tensors) {
-    if (!tensor)
-      continue;
+  for (const auto &requested : payloads) {
     const auto found =
         std::find_if(source.skipped.begin(), source.skipped.end(),
-                     [&](const auto &payload) { return FindTensor(snapshot, payload) == tensor; });
+                     [&](const auto &payload) { return payload.path == requested.path; });
     if (found == source.skipped.end())
       continue;
-    if (std::none_of(targets.begin(), targets.end(), [&](const auto &target) {
-          return target.payload.path.size() == found->path.size() &&
-                 std::equal(target.payload.path.begin(), target.payload.path.end(),
-                            found->path.begin(), [](const auto &left, const auto &right) {
-                              return left.field == right.field && left.index == right.index;
-                            });
-        }))
+    if (std::none_of(targets.begin(), targets.end(),
+                     [&](const auto &target) { return target.payload.path == found->path; })) {
+      const auto *tensor = FindTensor(snapshot, *found);
+      if (!tensor)
+        throw std::runtime_error("Could not locate an omitted tensor payload.");
       targets.push_back({*found,
                          tensor->str_name(),
                          tensor->has_name(),
                          tensor->data_type(),
                          {tensor->dims().begin(), tensor->dims().end()}});
+    }
   }
   if (targets.empty())
     return;

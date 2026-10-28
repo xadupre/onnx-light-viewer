@@ -413,7 +413,7 @@ async function openExtension(
     webview,
     resolveCustomEditor: (name) =>
       editor.resolveCustomEditor(
-        { uri: uri(path.join(__dirname, "models", name)) },
+        { uri: uri(path.resolve(__dirname, "models", name)) },
         panel,
       ),
     deferRead: (name) => {
@@ -1833,9 +1833,7 @@ test("records models opened directly by the editor and restores their Open histo
     preferences,
   );
   t.after(() => extension.dispose());
-  await extension.resolveCustomEditor(
-    path.relative(path.join(__dirname, "models"), file),
-  );
+  await extension.resolveCustomEditor(file);
   await extension.receive({ type: "ready" });
   const expected = [
     { source: "local", kind: "file", path: file },
@@ -4691,6 +4689,85 @@ test("shows missing-graph loading errors in the canvas even before the webview i
   while (requests.length) await Promise.all(requests.splice(0));
   assert.equal(error.hidden, false);
   assert.equal(document.getElementById("nodes").innerHTML, graph);
+});
+
+test("reports a deleted history file as soon as opening fails and allows retry", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "onnx-viewer-missing-"));
+  t.after(() => rm(directory, { recursive: true }));
+  const source = require.resolve("./models/relu.onnx");
+  const deleted = path.join(directory, "deleted.onnx");
+  await copyFile(source, deleted);
+  const preferences = new Map();
+  const extension = await openExtension(
+    undefined,
+    undefined,
+    true,
+    undefined,
+    undefined,
+    preferences,
+  );
+  t.after(() => extension.dispose());
+  await extension.openFile(deleted);
+  const history = structuredClone(preferences.get("pathHistory"));
+  await rm(deleted);
+  const dom = new JSDOM(extension.webview.html, { runScripts: "outside-only" });
+  t.after(() => dom.window.close());
+  const { window } = dom;
+  const { document } = window;
+  const byId = (id) => document.getElementById(id);
+  window.structuredClone = structuredClone;
+  window.HTMLCanvasElement.prototype.getContext = () => ({
+    font: "",
+    measureText: (text) => ({ width: text.length * 8 }),
+  });
+  byId("canvas").getBoundingClientRect = () =>
+    new window.DOMRect(0, 0, 1060, 350);
+  const requests = [];
+  window.acquireVsCodeApi = () => ({
+    postMessage: (message) => requests.push(extension.receive(message)),
+  });
+  let failureFeedback;
+  extension.connect((data) => {
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+    if (
+      data.type === "log-entry" &&
+      data.entry.action === "Open ONNX model" &&
+      data.entry.status === "FAILED"
+    )
+      failureFeedback = {
+        visible: !byId("model-error").hidden,
+        message: byId("open-error").textContent,
+      };
+  });
+  for (const script of document.querySelectorAll("script[src]"))
+    window.eval(readFileSync(new URL(script.src), "utf8"));
+  while (requests.length) await Promise.all(requests.splice(0));
+  const graph = byId("nodes").innerHTML;
+  byId("open-model").click();
+  [...byId("open-history-entries").querySelectorAll("button")]
+    .find((button) => button.textContent === deleted)
+    .click();
+  byId("open-form").requestSubmit();
+  while (requests.length) await Promise.all(requests.splice(0));
+  assert.equal(failureFeedback.visible, true);
+  assert.match(failureFeedback.message, /ENOENT/);
+  assert.ok(failureFeedback.message.includes(deleted));
+  assert.equal(byId("nodes").innerHTML, graph);
+  assert.equal(byId("open-panel").hidden, false);
+  assert.equal(byId("load-progress").hidden, true);
+  assert.equal(byId("open-progress").hidden, true);
+  assert.equal(byId("model-view").getAttribute("aria-busy"), "false");
+  assert.equal(byId("open-submit").disabled, false);
+  assert.equal(byId("open-model").disabled, false);
+  assert.equal(byId("save-model").disabled, false);
+  assert.ok(extension.errors.some((error) => error.includes(deleted)));
+  assert.deepEqual(preferences.get("pathHistory"), history);
+  byId("open-file").value = source;
+  byId("open-form").requestSubmit();
+  while (requests.length) await Promise.all(requests.splice(0));
+  assert.equal(byId("model-error").hidden, true);
+  assert.equal(byId("open-panel").hidden, true);
+  assert.equal(byId("open-model").disabled, false);
 });
 
 test("keeps failed initial loading inspectable and can open Logs before any model", async () => {

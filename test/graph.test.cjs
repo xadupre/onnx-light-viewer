@@ -5598,6 +5598,123 @@ test("tensor statistics restore omitted and external payloads without changing t
   );
 });
 
+test("tensor statistics restore omitted function Constants and nested initializers by their original paths", async (t) => {
+  const directory = mkdtempSync(path.join(tmpdir(), "function-statistics-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const tensor = (value) => {
+    const raw = Buffer.alloc(256);
+    for (let index = 0; index < 64; index++) raw.writeFloatLE(value, index * 4);
+    return Buffer.concat([
+      varintField(1, 64),
+      varintField(2, 1),
+      bytesField(8, "weight"),
+      bytesField(9, raw),
+    ]);
+  };
+  const node = (op, inputs, output, domain = "", attributes = []) =>
+    Buffer.concat([
+      ...inputs.map((input) => bytesField(1, input)),
+      bytesField(2, output),
+      bytesField(4, op),
+      bytesField(7, domain),
+      ...attributes.map((attribute) => bytesField(5, attribute)),
+    ]);
+  const branch = (name, value) =>
+    Buffer.concat([
+      bytesField(2, name),
+      bytesField(1, node("Identity", ["weight"], "result")),
+      ...(value === undefined ? [] : [bytesField(5, tensor(value))]),
+      bytesField(12, bytesField(1, "result")),
+    ]);
+  const functions = [3, 7].map((value, index) =>
+    Buffer.concat([
+      bytesField(1, `Weights${index}`),
+      bytesField(4, "condition"),
+      bytesField(5, "output"),
+      bytesField(9, varintField(2, 18)),
+      bytesField(10, "example"),
+      bytesField(
+        7,
+        node("Constant", [], "weight", "", [
+          Buffer.concat([
+            bytesField(1, "value"),
+            varintField(20, 4),
+            bytesField(5, tensor(value)),
+          ]),
+        ]),
+      ),
+      bytesField(
+        7,
+        node("If", ["condition"], "output", "", [
+          Buffer.concat([
+            bytesField(1, "then_branch"),
+            varintField(20, 5),
+            bytesField(6, branch("local", value + 2)),
+          ]),
+          Buffer.concat([
+            bytesField(1, "else_branch"),
+            varintField(20, 5),
+            bytesField(6, branch("captured")),
+          ]),
+        ]),
+      ),
+    ]),
+  );
+  const bytes = Buffer.concat([
+    varintField(1, 9),
+    bytesField(8, varintField(2, 18)),
+    bytesField(8, Buffer.concat([bytesField(1, "example"), varintField(2, 1)])),
+    bytesField(
+      7,
+      Buffer.concat([
+        bytesField(2, "Function weights"),
+        bytesField(5, tensor(13)),
+        ...functions.map((_, index) =>
+          bytesField(
+            1,
+            node(`Weights${index}`, ["condition"], `output${index}`, "example"),
+          ),
+        ),
+        bytesField(11, bytesField(1, "condition")),
+      ]),
+    ),
+    ...functions.map((body) => bytesField(25, body)),
+  ]);
+  const file = path.join(directory, "functions.onnx");
+  writeFileSync(file, bytes);
+  for (const model of [
+    loadModel(bytes, "functions.onnx"),
+    await loadModelFile(file, "functions.onnx"),
+  ]) {
+    const original = model.graph();
+    for (const [index, definition] of original.localFunctions.entries()) {
+      for (const scope of [
+        definition.path,
+        original.nodes[index].function.path,
+      ]) {
+        const body = model.graph(false, scope);
+        const expected = index === 0 ? 3 : 7;
+        const direct = await model.tensorStatistics("weight", scope);
+        assert.equal(direct.count, "64");
+        assert.equal(direct.mean, expected);
+        for (const attribute of body.nodes[1].attributes) {
+          const nested = await model.tensorStatistics(
+            "weight",
+            attribute.graphs[0].path,
+          );
+          assert.equal(nested.count, "64");
+          assert.equal(
+            nested.mean,
+            expected + (attribute.name === "then_branch" ? 2 : 0),
+          );
+        }
+        assert.deepEqual(model.graph(false, scope), body);
+      }
+    }
+    assert.deepEqual(model.graph(), original);
+  }
+});
+
 test("tensor statistics inspect stored scalar and list Constant attributes", async () => {
   const cases = [
     ["value_int", varintField(3, 7), 2, [], "INT64", 7],

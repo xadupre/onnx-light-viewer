@@ -27,6 +27,6 @@ void RestoreModelPayloads(ol::ModelProto &snapshot, const StoredModel &source,
                           const std::string &file_path);
 void RestoreStatisticsPayloads(ol::ModelProto &snapshot, const StoredModel &source,
                                const std::string &file_path,
-                               const std::vector<const ol::TensorProto *> &tensors);
+                               const std::vector<SkippedTensorPayload> &payloads);
 
 } // namespace onnx_light_viewer

@@ -4426,6 +4426,14 @@ test("closes Open only after a successful opening and allows reopening the selec
     assert.equal(panel.hidden, false);
     assert.equal(open.getAttribute("aria-expanded"), "true");
     assert.equal(document.activeElement, document.getElementById("open-file"));
+    if (status === "FAILED") {
+      assert.equal(document.getElementById("model-error").hidden, false);
+      assert.match(
+        document.getElementById("open-error").textContent,
+        /Opening the model failed/,
+      );
+      assert.equal(document.getElementById("open-submit").disabled, false);
+    }
   }
   document.getElementById("open-file").focus();
   submitOpen(document, window);

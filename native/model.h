@@ -28,6 +28,7 @@ inline constexpr std::string_view skippedPayloadLocation = "onnx-light-viewer:pa
 struct ProtoPathStep {
   uint32_t field;
   size_t index;
+  bool operator==(const ProtoPathStep &) const = default;
 };
 
 struct SkippedTensorPayload {
