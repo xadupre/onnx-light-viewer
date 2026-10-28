@@ -297,6 +297,17 @@ export interface RewritingScenario {
 
 export type StatisticsNumber = number | "NaN" | "Infinity" | "-Infinity";
 
+export interface TensorValues {
+  name: string;
+  dtype: string;
+  shape: string[];
+  count: string;
+  sizeBytes: string;
+  values: string;
+}
+
+export type TensorInspection = TensorStatistics | TensorValues;
+
 /** SDK statistics; integer metadata and nonfinite numbers survive webview transport exactly. */
 export interface TensorStatistics {
   name: string;
@@ -322,8 +333,12 @@ export interface TensorStatistics {
  * Methods do not execute the model or write files.
  */
 export interface NativeModel {
-  /** Computes statistics on stored values only, without executing the graph. */
-  tensorStatistics(name: string, path?: GraphPath): Promise<TensorStatistics>;
+  /** Inspects stored data without execution; optionally returns values instead of statistics below 32 elements. */
+  tensorStatistics(
+    name: string,
+    path?: GraphPath,
+    valuesIfSmall?: boolean,
+  ): Promise<TensorInspection>;
   memoryProfileInputs(path?: GraphPath): MemoryDimension[];
   /** Estimates CPU memory on an independent snapshot, without executing kernels. */
   memoryProfile(

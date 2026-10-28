@@ -37,10 +37,10 @@ Napi::Array Integers(Napi::Env env, const std::vector<int64_t> &values) {
 class StatisticsWorker : public Napi::AsyncWorker {
 public:
   StatisticsWorker(Napi::Env env, std::shared_ptr<StoredModel> source, std::string name,
-                   GraphPath path)
+                   GraphPath path, bool values_if_small)
       : Napi::AsyncWorker(env), deferred_(Napi::Promise::Deferred::New(env)),
         source_(std::move(source)), snapshot_(source_->model->SharedCopy()), name_(std::move(name)),
-        path_(std::move(path)) {}
+        path_(std::move(path)), values_if_small_(values_if_small) {}
 
   Napi::Promise Promise() const { return deferred_.Promise(); }
 
@@ -143,6 +143,11 @@ public:
     result.Set("shape", Integers(Env(), statistics_.shape));
     result.Set("count", Text(Env(), std::to_string(statistics_.count)));
     result.Set("sizeBytes", Text(Env(), std::to_string(statistics_.size_bytes)));
+    if (values_) {
+      result.Set("values", Text(Env(), *values_));
+      deferred_.Resolve(result);
+      return;
+    }
     result.Set("min", NumericValue(Env(), statistics_.min));
     result.Set("max", NumericValue(Env(), statistics_.max));
     result.Set("mean", NumericValue(Env(), statistics_.mean));
@@ -174,10 +179,36 @@ private:
   void Compute(const ol::TensorProto &tensor) {
     auto copy = tensor.SharedCopy();
     Load(copy);
+    if (values_if_small_ && ShowValues(copy))
+      return;
     Compute(rt::TensorFromProto(copy));
   }
 
+  bool ShowValues(const ol::TensorProto &tensor) {
+    values_ = TinyTensorValues(tensor, 32, false);
+    if (!values_)
+      return false;
+    const auto data = rt::TensorFromProto(tensor);
+    statistics_.dtype = data.data_type;
+    statistics_.shape = data.shape;
+    statistics_.count = data.element_count();
+    statistics_.size_bytes = data.size_bytes();
+    return true;
+  }
+
   void Compute(const rt::Tensor &tensor) {
+    if (values_if_small_ && tensor.element_count() < 32) {
+      ol::TensorProto preview;
+      preview.set_data_type(tensor.data_type);
+      for (const auto dim : tensor.shape)
+        preview.add_dims(dim);
+      if (tensor.size_bytes())
+        preview.set_raw_data(
+            std::string(reinterpret_cast<const char *>(tensor.bytes()), tensor.size_bytes()));
+      if (!ShowValues(preview))
+        throw std::runtime_error("Stored tensor values are unavailable.");
+      return;
+    }
     statistics_ = rt::ComputeTensorStatistics(tensor, 0, {0.25, 0.5, 0.75}, true, {32, 32});
   }
 
@@ -233,6 +264,19 @@ private:
       parameters = LoadQuantizationParameters(copy.parameter_ref());
       copy = rt::MaterializeQuantizedValue(copy, parameters.get(), catalogue);
     }
+    if (values_if_small_ && copy.logical_type().has_tensor_type()) {
+      std::vector<int64_t> shape;
+      bool concrete = copy.logical_type().tensor_type().has_shape();
+      for (const auto &dim : copy.logical_type().tensor_type().shape().dim()) {
+        concrete = concrete && dim.has_dim_value();
+        shape.push_back(dim.dim_value());
+      }
+      if (concrete && TinyElementCount(shape, 32)) {
+        Compute(rt::DequantizeTensorProto(copy, catalogue));
+        statistics_.size_bytes = stored_bytes;
+        return;
+      }
+    }
     statistics_ =
         rt::ComputeTensorStatistics(copy, 0, {0.25, 0.5, 0.75}, true, {32, 32}, catalogue);
     statistics_.size_bytes = stored_bytes;
@@ -243,6 +287,8 @@ private:
   ol::ModelProto snapshot_;
   std::string name_;
   GraphPath path_;
+  bool values_if_small_;
+  std::optional<std::string> values_;
   rt::TensorStatistics statistics_;
 };
 } // namespace
@@ -252,14 +298,17 @@ void AddTensorStatisticsMethods(Napi::Env env, Napi::Object result,
   result.Set("tensorStatistics",
              Napi::Function::New(env, [model](const Napi::CallbackInfo &call) -> Napi::Value {
                try {
-                 if (call.Length() < 1 || call.Length() > 2 || !call[0].IsString() ||
-                     (call.Length() == 2 && !call[1].IsUndefined() && !call[1].IsArray()))
-                   throw std::runtime_error("Expected a tensor name and optional graph path.");
+                 if (call.Length() < 1 || call.Length() > 3 || !call[0].IsString() ||
+                     (call.Length() >= 2 && !call[1].IsUndefined() && !call[1].IsArray()) ||
+                     (call.Length() == 3 && !call[2].IsUndefined() && !call[2].IsBoolean()))
+                   throw std::runtime_error(
+                       "Expected a tensor name, optional graph path and small-values flag.");
                  auto name = call[0].As<Napi::String>().Utf8Value();
                  if (name.empty())
                    throw std::runtime_error("Expected a nonempty tensor name.");
-                 auto *worker =
-                     new StatisticsWorker(call.Env(), model, std::move(name), ReadPath(call[1]));
+                 auto *worker = new StatisticsWorker(
+                     call.Env(), model, std::move(name), ReadPath(call[1]),
+                     call[2].IsBoolean() && call[2].As<Napi::Boolean>().Value());
                  auto promise = worker->Promise();
                  worker->Queue();
                  return promise;

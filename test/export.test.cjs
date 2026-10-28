@@ -469,6 +469,45 @@ test("defaults to model/exporter folders and passes every listed precision/devic
       }
 });
 
+test("serializes conversion history removals and clears with queued additions", async () => {
+  const preferences = new Map();
+  const history = new ExportHistory({
+    get: (key) => preferences.get(key),
+    update: async (key, value) => {
+      await new Promise((resolve) => setImmediate(resolve));
+      preferences.set(key, value);
+    },
+  });
+  const plan = exportPlan(
+    options(path.join(tmpdir(), "history-cleanup")),
+    python,
+  );
+  const updates = [];
+  const unsubscribe = history.subscribe((value) => updates.push(value));
+  await Promise.all([
+    history.remember(plan),
+    history.remove("models", plan.model),
+  ]);
+  assert.deepEqual(history.snapshot().models, []);
+  assert.deepEqual(history.snapshot().directories, [plan.directory]);
+  await Promise.all([
+    history.clear(),
+    history.remember(plan),
+    history.remove("directories", plan.directory),
+  ]);
+  assert.deepEqual(history.snapshot(), {
+    exporter: plan.exporter,
+    models: [plan.model],
+    directories: [],
+  });
+  assert.deepEqual(updates.at(-1), history.snapshot());
+  unsubscribe();
+  const count = updates.length;
+  await history.clear();
+  assert.deepEqual(history.snapshot(), { models: [], directories: [] });
+  assert.equal(updates.length, count);
+});
+
 test("preserves the mbext layer limit through download, output retries and reproduction scripts", async (t) => {
   const root = await directory(t);
   const hub = await exportHub(t);

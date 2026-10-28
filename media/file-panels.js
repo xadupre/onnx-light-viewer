@@ -175,6 +175,8 @@ function createFilePanels({
     byId("open-file-list").hidden = hub;
     byId("open-browser").hidden = source === "backend";
     byId("open-browser").open = !hub;
+    if (source === "local") byId("open-browser").append(byId("open-file-list"));
+    else byId("open-browser").after(byId("open-file-list"));
     byId("open-browser-title").textContent = hub
       ? "Or enter a repository / URL"
       : "Browse folders";
@@ -475,7 +477,7 @@ function createFilePanels({
         byId("save-confirmation").value = "";
       }
       if (openSource === "local") byId("open-location").value = file.directory;
-      byId("save-location").value = file.directory;
+      byId("save-location").value = file.saveDirectory ?? file.directory;
       byId("save-file").value =
         file.savePath +
         (document.querySelector('input[name="save-format"]:checked').value ===

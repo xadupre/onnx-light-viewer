@@ -3,6 +3,7 @@
 #include <napi.h>
 #include <onnx_proto/onnx.h>
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -38,6 +39,21 @@ template <typename Values> Napi::Array Ports(Napi::Env env, const Values &values
 
 bool IsPayloadOmitted(const ol::TensorProto &tensor);
 std::string AttributePreview(const ol::AttributeProto &attribute);
-std::optional<std::string> TinyTensorValues(const ol::TensorProto &tensor);
+template <typename Dims>
+std::optional<size_t> TinyElementCount(const Dims &dims, size_t limit = 16) {
+  if (std::find(dims.begin(), dims.end(), 0) != dims.end())
+    return 0;
+  size_t count = 1;
+  for (const auto dim : dims) {
+    if (dim < 0 || static_cast<size_t>(dim) >= limit ||
+        count > (limit - 1) / static_cast<size_t>(dim))
+      return std::nullopt;
+    count *= static_cast<size_t>(dim);
+  }
+  return count;
+}
+
+std::optional<std::string> TinyTensorValues(const ol::TensorProto &tensor, size_t limit = 16,
+                                            bool truncate_strings = true);
 
 } // namespace onnx_light_viewer

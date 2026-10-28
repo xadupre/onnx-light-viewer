@@ -2,6 +2,7 @@ function createTensorStatisticsPanel({ byId, postMessage }) {
   const dialog = byId("tensor-statistics-dialog");
   const selector = byId("tensor-statistics-name");
   const status = byId("tensor-statistics-status");
+  const progress = byId("tensor-statistics-progress");
   const content = byId("tensor-statistics-content");
   const cache = new Map();
   let names = [];
@@ -14,6 +15,8 @@ function createTensorStatisticsPanel({ byId, postMessage }) {
 
   function invalidate() {
     pending = undefined;
+    progress.hidden = true;
+    dialog.setAttribute("aria-busy", "false");
   }
 
   function close() {
@@ -54,6 +57,8 @@ function createTensorStatisticsPanel({ byId, postMessage }) {
   }
 
   function render(statistics) {
+    byId("tensor-statistics-title").textContent =
+      statistics.values === undefined ? "Tensor statistics" : "Tensor values";
     const summary = document.createElement("dl");
     summary.className = "status-details";
     for (const [label, value] of [
@@ -62,10 +67,12 @@ function createTensorStatisticsPanel({ byId, postMessage }) {
       ["Shape", `[${statistics.shape.join(", ")}]`],
       ["Count", statistics.count],
       ["Size (bytes)", statistics.sizeBytes],
-      ["Average", statistics.mean],
-      ["Median", statistics.median],
-      ["Minimum", statistics.min],
-      ["Maximum", statistics.max],
+      ...(statistics.values === undefined
+        ? [
+            ["Average", statistics.mean],
+            ["Median", statistics.median],
+          ]
+        : []),
       ...(statistics.distinctCount === undefined
         ? []
         : [["Distinct count", statistics.distinctCount]]),
@@ -76,21 +83,38 @@ function createTensorStatisticsPanel({ byId, postMessage }) {
       description.textContent = String(value ?? "Unavailable");
       summary.append(term, description);
     }
+    if (statistics.values !== undefined) {
+      const values = document.createElement("pre");
+      values.className = "tensor-values";
+      values.textContent = statistics.values;
+      content.replaceChildren(summary, values);
+      return;
+    }
     const quartiles = document.createElement("section");
     const quartileTitle = document.createElement("h3");
-    quartileTitle.textContent = "Quartiles";
+    quartileTitle.textContent = "Range and quartiles";
     const quartileValues = document.createElement("dl");
     quartileValues.className = "tensor-statistics-quartiles";
-    for (const [i, value] of statistics.quantiles.entries()) {
+    for (const [name, value] of [
+      ["Minimum", statistics.min],
+      ...statistics.quantiles.map((value, i) => [
+        `Q${i + 1} (${(i + 1) * 25}%)`,
+        value,
+      ]),
+      ["Maximum", statistics.max],
+    ]) {
       const group = document.createElement("div");
       const term = document.createElement("dt");
-      term.textContent = `Q${i + 1} (${(i + 1) * 25}%)`;
+      term.textContent = name;
       const description = document.createElement("dd");
       description.textContent = String(value ?? "Unavailable");
       group.append(term, description);
       quartileValues.append(group);
     }
     quartiles.append(quartileTitle, quartileValues);
+    const details = document.createElement("div");
+    details.className = "tensor-statistics-details";
+    details.append(summary, quartiles);
     const charts = document.createElement("div");
     charts.className = "tensor-statistics-charts";
     function figure(title, chart) {
@@ -186,7 +210,7 @@ function createTensorStatisticsPanel({ byId, postMessage }) {
       figure("Histogram — values per bin", histogram),
       heatmapFigure,
     );
-    content.replaceChildren(summary, quartiles, charts);
+    content.replaceChildren(details, charts);
   }
 
   function show() {
@@ -206,13 +230,14 @@ function createTensorStatisticsPanel({ byId, postMessage }) {
       }),
     );
     content.replaceChildren();
+    byId("tensor-statistics-title").textContent = "Tensor data";
     if (cache.has(name)) {
       status.textContent = "";
-      dialog.setAttribute("aria-busy", "false");
       render(cache.get(name));
       return;
     }
-    status.textContent = `Loading tensor statistics for ${name}…`;
+    status.textContent = `Loading tensor data for ${name}…`;
+    progress.hidden = false;
     dialog.setAttribute("aria-busy", "true");
     pending = { requestId: ++requestId, name };
     postMessage({ type: "tensor-statistics", ...pending, path });
@@ -221,7 +246,6 @@ function createTensorStatisticsPanel({ byId, postMessage }) {
   selector.addEventListener("input", () => {
     invalidate();
     content.replaceChildren();
-    dialog.setAttribute("aria-busy", "false");
     status.textContent = "Choose a tensor name, then confirm the selection.";
   });
   selector.addEventListener("change", () => {
@@ -229,7 +253,6 @@ function createTensorStatisticsPanel({ byId, postMessage }) {
     if (next < 0) {
       invalidate();
       content.replaceChildren();
-      dialog.setAttribute("aria-busy", "false");
       status.textContent = "Choose a tensor name in this batch.";
       return;
     }
@@ -255,6 +278,7 @@ function createTensorStatisticsPanel({ byId, postMessage }) {
         ...new Set(batch.filter((name) => typeof name === "string" && name)),
       ];
       if (!names.length) return;
+      byId("tensor-statistics-picker").hidden = names.length === 1;
       path = graphPath;
       index = 0;
       opener = document.activeElement;
@@ -272,7 +296,6 @@ function createTensorStatisticsPanel({ byId, postMessage }) {
         return true;
       const name = pending.name;
       invalidate();
-      dialog.setAttribute("aria-busy", "false");
       if (message.type === "tensor-statistics-error") {
         status.textContent = `Tensor data unavailable: ${message.error}. The model is not executed; intermediate values may have no stored data. Choose another tensor to continue.`;
       } else {

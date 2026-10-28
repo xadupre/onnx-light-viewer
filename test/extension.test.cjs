@@ -156,6 +156,9 @@ async function openExtension(
     workspace: {
       isTrusted: true,
       fs: {
+        createDirectory: async (uri) => {
+          await mkdir(uri.path, { recursive: true });
+        },
         stat: async (uri) => {
           const details = await stat(uri.path);
           return {
@@ -373,6 +376,12 @@ async function openExtension(
     setTrusted: (trusted) => {
       vscode.workspace.isTrusted = trusted;
     },
+    setWorkspaceFolders: (paths) => {
+      vscode.workspace.workspaceFolders = paths.map((folder) => ({
+        uri: uri(folder),
+        name: path.basename(folder),
+      }));
+    },
     selectExportedFile: (name) => {
       exportedFileSelection = name;
     },
@@ -547,6 +556,70 @@ test("retains webview context while hidden for both editor creation paths", asyn
   extension.dispose();
 });
 
+test("defaults model saves to a workspace cache subdirectory without moving the open directory", async (t) => {
+  const extension = await openExtension(undefined, undefined, true);
+  t.after(() => extension.dispose());
+  const workspace = await mkdtemp(
+    path.join(tmpdir(), "viewer-save-workspace-"),
+  );
+  t.after(() => rm(workspace, { recursive: true, force: true }));
+  const saveDirectory = path.join(workspace, ".cache", ".onnx-light-viewer");
+  extension.setWorkspaceFolders([
+    workspace,
+    path.join(__dirname, "other-workspace"),
+  ]);
+  await extension.receive({ type: "ready" });
+  const latestFile = () =>
+    extension.messages.filter(({ type }) => type === "graph").at(-1).file;
+  assert.equal(latestFile().saveDirectory, saveDirectory);
+  assert.equal(path.dirname(latestFile().savePath), saveDirectory);
+  await assert.rejects(stat(saveDirectory), { code: "ENOENT" });
+  await extension.open("relu.onnx");
+  const sourceDirectory = path.join(__dirname, "models");
+  assert.equal(latestFile().directory, sourceDirectory);
+  assert.equal(latestFile().saveDirectory, saveDirectory);
+  assert.equal(
+    latestFile().savePath,
+    path.join(saveDirectory, "relu-copy.onnx"),
+  );
+  await extension.receive({
+    type: "browse-files",
+    target: "save",
+    source: "local",
+    requestId: 1,
+  });
+  assert.ok((await stat(saveDirectory)).isDirectory());
+  const listing = extension.messages
+    .filter(({ type }) => type === "file-list")
+    .at(-1);
+  assert.equal(listing.location, saveDirectory);
+  await rm(saveDirectory, { recursive: true });
+  await extension.save();
+  assert.ok((await stat(saveDirectory)).isDirectory());
+  assert.equal(
+    extension.saveDialogs.at(-1).defaultUri.fsPath,
+    latestFile().savePath,
+  );
+  await rm(saveDirectory, { recursive: true });
+  const destination = latestFile().savePath;
+  await extension.save(destination);
+  const { loadModel } = require("../dist/graph");
+  const saved = loadModel(await readFile(destination), "relu-copy.onnx");
+  assert.equal(saved.graph().nodes[0].opType, "Relu");
+  extension.setWorkspaceFolders([]);
+  await extension.open("relu.onnx");
+  assert.equal(latestFile().saveDirectory, sourceDirectory);
+  assert.equal(
+    latestFile().savePath,
+    path.join(sourceDirectory, "relu-copy.onnx"),
+  );
+  await extension.save();
+  assert.equal(
+    extension.saveDialogs.at(-1).defaultUri.fsPath,
+    latestFile().savePath,
+  );
+});
+
 test("persists only viewer preferences across closed extension panels", async () => {
   const preferences = new Map();
   const first = await openExtension(
@@ -584,6 +657,109 @@ test("persists only viewer preferences across closed extension panels", async ()
     },
   );
   second.dispose();
+});
+
+test("Settings removes stored histories and resets only viewer preferences without deleting files", async (t) => {
+  const directory = await mkdtemp(
+    path.join(tmpdir(), "viewer-settings-history-"),
+  );
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const saved = path.join(directory, "saved.onnx");
+  await writeFile(saved, "keep this file");
+  const entry = { source: "local", kind: "file", path: saved };
+  const application = { downloadDirectory: directory, pythonPath: "python3" };
+  const viewer = {
+    width: 420,
+    panels: { operator: false, find: false, metadata: true },
+  };
+  const preferences = new Map([
+    ["applicationSettings", application],
+    ["viewerSettings", viewer],
+    ["pathHistory", { open: [entry], save: [entry] }],
+    [
+      "exportHistory",
+      {
+        models: ["owner/model", "owner/other"],
+        directories: [directory],
+        exporter: "mobius",
+      },
+    ],
+  ]);
+  const extension = await openExtension(
+    undefined,
+    undefined,
+    true,
+    undefined,
+    undefined,
+    preferences,
+  );
+  t.after(() => extension.dispose());
+  await extension.receive({ type: "ready" });
+  await extension.receive({ type: "get-settings" });
+  const settings = () =>
+    extension.messages.filter(({ type }) => type === "settings-info").at(-1);
+  const conversionHistory = () =>
+    extension.messages.filter(({ type }) => type === "export-history").at(-1)
+      .history;
+  assert.deepEqual(settings().pathHistory, { open: [entry], save: [entry] });
+  assert.equal(settings().application.downloadDirectory, directory);
+  assert.equal(typeof settings().saveDirectory, "string");
+  await extension.receive({
+    type: "path-history-edit",
+    target: "open",
+    historyAction: "remove",
+    historyEntry: entry,
+  });
+  assert.deepEqual(preferences.get("pathHistory"), {
+    open: [],
+    save: [entry],
+  });
+  await extension.receive({
+    type: "path-history-edit",
+    target: "save",
+    historyAction: "clear",
+  });
+  assert.deepEqual(preferences.get("pathHistory"), { open: [], save: [] });
+  await extension.receive({
+    type: "export-history-edit",
+    target: "models",
+    historyAction: "remove",
+    historyEntry: "owner/model",
+  });
+  assert.deepEqual(conversionHistory(), {
+    models: ["owner/other"],
+    directories: [directory],
+    exporter: "mobius",
+  });
+  await extension.receive({
+    type: "export-history-edit",
+    target: "directories",
+    historyAction: "remove",
+    historyEntry: directory,
+  });
+  assert.deepEqual(conversionHistory().directories, []);
+  await extension.receive({
+    type: "export-history-edit",
+    historyAction: "clear",
+  });
+  assert.deepEqual(conversionHistory(), { models: [], directories: [] });
+  await extension.receive({
+    type: "export-history-edit",
+    target: "unexpected",
+    historyAction: "remove",
+    historyEntry: "owner/other",
+  });
+  assert.match(
+    extension.messages.at(-1).error,
+    /Invalid conversion history edit/,
+  );
+  await extension.receive({ type: "reset-viewer-settings" });
+  assert.deepEqual(settings().viewer, {
+    panels: { operator: true, find: true, metadata: false },
+  });
+  assert.equal(preferences.get("viewerSettings"), undefined);
+  assert.deepEqual(preferences.get("applicationSettings"), application);
+  assert.equal(await readFile(saved, "utf8"), "keep this file");
 });
 
 test("Olive host enforces workspace trust, quantizes without a checkpoint download and rejects unpinned recipe paths", async (t) => {
@@ -1033,6 +1209,28 @@ print("Saved model.onnx", flush=True)
   });
   assert.equal(extension.messages.at(-1).type, "export-info");
   assert.equal(extension.messages.at(-1).loaded, false);
+  const cancelledDirectory = path.join(root, "output-multiple-cancelled");
+  assert.deepEqual(
+    preferences
+      .get("pathHistory")
+      .open.filter(
+        (entry) =>
+          entry.kind === "file" &&
+          path.dirname(entry.path) === cancelledDirectory,
+      )
+      .map((entry) => path.basename(entry.path))
+      .sort(),
+    ["model.onnx", "second.onnx"],
+  );
+  assert.equal(
+    preferences
+      .get("pathHistory")
+      .open.filter(
+        (entry) =>
+          entry.kind === "directory" && entry.path === cancelledDirectory,
+      ).length,
+    1,
+  );
   assert.ok(
     Number.isFinite(extension.messages.at(-1).durationMs) &&
       extension.messages.at(-1).durationMs > 0,
@@ -1049,6 +1247,10 @@ print("Saved model.onnx", flush=True)
   assert.equal(
     extension.messages.at(-1).path,
     path.join(root, "output-multiple-selected", "second.onnx"),
+  );
+  assert.equal(
+    preferences.get("pathHistory").open[0].path,
+    extension.messages.at(-1).path,
   );
   const graphs = extension.messages.filter(
     (message) => message.type === "graph",
@@ -1137,7 +1339,7 @@ test("Settings reports defaults, versions and persisted paths without running Py
   assert.equal(info.type, "settings-info");
   assert.equal(
     info.application.downloadDirectory,
-    path.join(homedir(), ".cache", "onnx-light-viewer", "downloads"),
+    path.join(homedir(), ".cache", "onnx-light-viewer"),
   );
   assert.equal(info.appVersion, require("../package.json").version);
   assert.equal(info.nativeVersion, require("../dist/graph").onnxLightVersion);
@@ -1612,6 +1814,54 @@ test("publishes replacement graphs before delayed Open history persistence", asy
       source === "local" ? "local" : "backend",
     );
   }
+});
+
+test("records models opened directly by the editor and restores their Open history", async (t) => {
+  const directory = await mkdtemp(
+    path.join(tmpdir(), "viewer-editor-history-"),
+  );
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const file = path.join(directory, "model.onnx");
+  await copyFile(require.resolve("./models/relu.onnx"), file);
+  const preferences = new Map();
+  const extension = await openExtension(
+    undefined,
+    undefined,
+    true,
+    undefined,
+    undefined,
+    preferences,
+  );
+  t.after(() => extension.dispose());
+  await extension.resolveCustomEditor(
+    path.relative(path.join(__dirname, "models"), file),
+  );
+  await extension.receive({ type: "ready" });
+  const expected = [
+    { source: "local", kind: "file", path: file },
+    { source: "local", kind: "directory", path: directory },
+  ];
+  assert.deepEqual(preferences.get("pathHistory").open, expected);
+  assert.deepEqual(
+    extension.events.findLast(({ type }) => type === "path-history").history
+      .open,
+    expected,
+  );
+  const reopened = await openExtension(
+    undefined,
+    undefined,
+    true,
+    undefined,
+    undefined,
+    preferences,
+  );
+  t.after(() => reopened.dispose());
+  await reopened.receive({ type: "ready" });
+  assert.deepEqual(
+    reopened.events.findLast(({ type }) => type === "path-history").history
+      .open,
+    expected,
+  );
 });
 
 test("publishes initial editor graphs before delayed Open history persistence", async (t) => {
@@ -3163,7 +3413,8 @@ test("tensor statistics requests validate transport and keep native handles usab
   };
   await extension.receive(request);
   assert.equal(extension.messages.at(-1).type, "tensor-statistics-info");
-  assert.equal(extension.messages.at(-1).statistics.mean, 0.5);
+  assert.equal(extension.messages.at(-1).statistics.values, "[0.5, -2, 3]");
+  assert.equal(extension.messages.at(-1).statistics.mean, undefined);
   for (const invalid of [
     { requestId: "1" },
     { requestId: 0 },

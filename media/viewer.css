@@ -82,6 +82,11 @@ p {
   color: var(--text);
   border-bottom-color: var(--mint);
 }
+#tensors-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
 #model-view {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
@@ -90,6 +95,7 @@ p {
 #logs-view,
 #statistics-view,
 #memory-view,
+#tensors-view,
 #status-view,
 #controls-view,
 #settings-view,
@@ -101,11 +107,32 @@ p {
 #logs-view h2,
 #statistics-view h2,
 #memory-view h2,
+#tensors-view h2,
 #status-view h2,
 #controls-view h2,
 #settings-view h2,
 #repositories-view h2 {
   margin-top: 0;
+}
+#settings-stored-data ul {
+  max-height: 16rem;
+  overflow: auto;
+  padding-left: 0;
+  list-style: none;
+}
+#settings-stored-data li {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin: 6px 0;
+}
+#settings-stored-data li span {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+#settings-stored-data li button {
+  flex: none;
 }
 #application-settings-form {
   display: grid;
@@ -331,6 +358,55 @@ p {
 .memory-table {
   overflow: auto;
 }
+.tensor-list-table {
+  overflow: auto;
+  margin: 12px 0;
+}
+.tensor-list-table table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.tensor-list-table th,
+.tensor-list-table td {
+  border: 1px solid var(--border);
+  padding: 6px 8px;
+  text-align: left;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+  white-space: pre-line;
+}
+.tensor-list-table .tensor-highlighted {
+  background: #284a72;
+}
+.tensor-list-table th {
+  position: relative;
+  padding-right: 14px;
+}
+.tensor-column-resizer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 8px;
+  cursor: col-resize;
+  touch-action: none;
+}
+.tensor-column-resizer:hover,
+.tensor-column-resizer:focus-visible {
+  background: var(--mint);
+}
+body.resizing-tensor-column,
+body.resizing-tensor-column * {
+  cursor: col-resize;
+  user-select: none;
+}
+#tensor-list-search {
+  width: min(100%, 600px);
+}
+.tensor-values {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 .memory-table table {
   border-collapse: collapse;
   width: 100%;
@@ -375,7 +451,8 @@ p {
   gap: 6px 16px;
   border-bottom: 1px solid var(--border);
 }
-#load-progress {
+#load-progress,
+#tensor-statistics-progress {
   width: 100%;
   height: 4px;
   accent-color: var(--mint);
@@ -438,7 +515,8 @@ a:focus-visible {
 #zoom-area[aria-pressed="true"] .toggle-indicator {
   visibility: visible;
 }
-.icon-button svg {
+.icon-button svg,
+.tensor-statistics-icon {
   fill: none;
   stroke: currentColor;
   stroke-width: 1.8;
@@ -676,6 +754,29 @@ li > .tensor-info {
 .graph-node .subgraph-label {
   fill: var(--mint);
   font-size: 10px;
+}
+.graph-node .subgraph-icon {
+  fill: none;
+  stroke: var(--mint);
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+}
+.node-statistics-link {
+  cursor: pointer;
+  color: var(--mint);
+}
+.graph-node .node-statistics-link rect {
+  fill: transparent;
+  stroke: none;
+}
+.graph-node .node-statistics-link:hover rect,
+.graph-node .node-statistics-link:focus-visible rect {
+  fill: #244b46;
+}
+.node-statistics-icon {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
 }
 .port rect {
   fill: #17232f;
@@ -1576,16 +1677,35 @@ button:disabled {
   overflow-wrap: anywhere;
 }
 
+.tensor-statistics-details {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(180px, 0.8fr);
+  gap: 24px;
+  align-items: start;
+}
+
+.tensor-statistics-details h3 {
+  margin-top: 0;
+}
+
 .tensor-statistics-quartiles {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
   margin: 8px 0 24px;
 }
 
 .tensor-statistics-quartiles > div {
   display: grid;
-  gap: 6px;
+  grid-template-columns: minmax(90px, max-content) minmax(0, 1fr);
+  align-items: baseline;
+  gap: 12px;
+}
+
+@media (max-width: 600px) {
+  .tensor-statistics-details {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .tensor-statistics-charts {

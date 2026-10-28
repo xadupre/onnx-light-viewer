@@ -15,7 +15,7 @@ import type {
   OptimizationReport,
   PipelineRole,
   RewritingScenario,
-  TensorStatistics,
+  TensorInspection,
 } from "./graph";
 
 export interface PipelineData {
@@ -34,9 +34,10 @@ export class PipelineModel implements NativeModel {
   tensorStatistics = (
     name: string,
     path: GraphPath = [],
-  ): Promise<TensorStatistics> => {
+    valuesIfSmall = false,
+  ): Promise<TensorInspection> => {
     const stage = this.select(path);
-    return stage.model.tensorStatistics(name, stage.path);
+    return stage.model.tensorStatistics(name, stage.path, valuesIfSmall);
   };
 
   memoryProfileInputs = (path: GraphPath = []): MemoryDimension[] => {

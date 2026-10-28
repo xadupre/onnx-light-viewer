@@ -5,6 +5,78 @@ function createSettingsPanel({ byId, postMessage, onViewerSettings }) {
   let trusted = false;
   let pythonPath;
   let sidebarWidth;
+  let pathHistory = { open: [], save: [] };
+  let exportHistory = { models: [], directories: [] };
+
+  function editStoredData(message) {
+    byId("settings-history-feedback").textContent = "Updating stored data…";
+    postMessage(message);
+  }
+
+  function renderHistory(target, entries) {
+    byId(`settings-${target}-count`).textContent = String(entries.length);
+    byId(`settings-clear-${target}`).disabled =
+      !entries.length && !(target === "export" && exportHistory.exporter);
+    byId(`settings-${target}-history`).replaceChildren(
+      ...entries.map(({ label, message }) => {
+        const row = document.createElement("li");
+        const text = document.createElement("span");
+        text.textContent = label;
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.textContent = "Remove";
+        remove.setAttribute("aria-label", `Remove ${label} from history`);
+        remove.addEventListener("click", () => editStoredData(message));
+        row.append(text, remove);
+        return row;
+      }),
+    );
+  }
+
+  function renderHistories() {
+    for (const target of ["open", "save"])
+      renderHistory(
+        target,
+        pathHistory[target].map((entry) => ({
+          label: `${entry.source} / ${entry.kind}: ${entry.path}`,
+          message: {
+            type: "path-history-edit",
+            target,
+            historyAction: "remove",
+            historyEntry: entry,
+          },
+        })),
+      );
+    renderHistory(
+      "export",
+      ["models", "directories"].flatMap((target) =>
+        exportHistory[target].map((value) => ({
+          label: `${target === "models" ? "Model" : "Directory"}: ${value}`,
+          message: {
+            type: "export-history-edit",
+            target,
+            historyAction: "remove",
+            historyEntry: value,
+          },
+        })),
+      ),
+    );
+    byId("settings-exporter").textContent = exportHistory.exporter ?? "None";
+  }
+
+  for (const target of ["open", "save", "export"])
+    byId(`settings-clear-${target}`).addEventListener("click", () =>
+      editStoredData({
+        type: target === "export" ? "export-history-edit" : "path-history-edit",
+        ...(target === "export" ? {} : { target }),
+        historyAction: "clear",
+      }),
+    );
+  byId("settings-reset-viewer").addEventListener("click", () => {
+    byId("settings-reset-viewer").disabled = true;
+    byId("settings-feedback").textContent = "Resetting viewer preferences…";
+    postMessage({ type: "reset-viewer-settings" });
+  });
 
   function restoreViewer(settings) {
     sidebarWidth = settings.width;
@@ -47,9 +119,19 @@ function createSettingsPanel({ byId, postMessage, onViewerSettings }) {
   });
 
   function receive(message) {
+    if (!message || typeof message !== "object") return;
     if (message.type === "settings-info") {
       byId("settings-download").value = message.application.downloadDirectory;
       byId("settings-python").value = message.application.pythonPath;
+      byId("settings-cache-download").textContent =
+        message.application.downloadDirectory;
+      byId("settings-cache-saves").textContent =
+        message.saveDirectory ?? "Unavailable";
+      if (message.pathHistory) pathHistory = message.pathHistory;
+      if (message.exportHistory) exportHistory = message.exportHistory;
+      renderHistories();
+      byId("settings-reset-viewer").disabled = false;
+      byId("settings-history-feedback").textContent = "";
       if (pythonPath !== message.application.pythonPath) {
         byId("settings-packages").replaceChildren();
         byId("settings-python-status").textContent = "Not checked";
@@ -65,6 +147,15 @@ function createSettingsPanel({ byId, postMessage, onViewerSettings }) {
         ? "Settings loaded."
         : "Trust this workspace to inspect Python packages.";
       restoreViewer(message.viewer);
+    } else if (
+      message.type === "path-history" ||
+      message.type === "export-history"
+    ) {
+      if (message.type === "path-history") pathHistory = message.history;
+      else exportHistory = message.history;
+      renderHistories();
+      byId("settings-history-feedback").textContent =
+        "Stored history updated. No files were deleted.";
     } else if (
       message.type === "python-info" ||
       (message.type === "settings-error" && message.requestId !== undefined)
@@ -101,6 +192,8 @@ function createSettingsPanel({ byId, postMessage, onViewerSettings }) {
       }
     } else if (message.type === "settings-error") {
       byId("settings-feedback").textContent = message.error;
+      byId("settings-history-feedback").textContent = message.error;
+      byId("settings-reset-viewer").disabled = false;
     }
   }
 

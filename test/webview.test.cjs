@@ -17,12 +17,11 @@ test("tensor statistics shell exposes a labelled dialog and loads its controller
     document.getElementById(dialog.getAttribute("aria-labelledby")).textContent,
     "Tensor statistics",
   );
-  assert.equal(
-    document
-      .getElementById("show-tensor-statistics")
-      .getAttribute("aria-label"),
-    "Tensor statistics for the current selection",
-  );
+  const tab = document.getElementById("tensors-tab");
+  assert.ok(tab.firstElementChild.matches('svg[aria-hidden="true"]'));
+  assert.equal(tab.textContent, "Tensors");
+  assert.equal(document.getElementById("show-tensor-statistics"), null);
+  assert.equal(document.getElementById("all-tensor-statistics"), null);
   assert.equal(
     document.querySelector('label[for="tensor-statistics-name"]').textContent,
     "Tensor name",

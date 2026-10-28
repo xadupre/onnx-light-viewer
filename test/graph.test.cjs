@@ -5347,6 +5347,65 @@ test("exposes connected initializer metadata and tiny values without external re
   );
 });
 
+test("tensor inspection returns values below 32 elements and retains statistics at the boundary", async (t) => {
+  const tiny = loadModel(modelBytes("tiny-initializers.onnx"), "tiny.onnx");
+  for (const [name, values] of [
+    ["typed_floats", "[0.5, -2, 3]"],
+    ["raw_int64", "[1152921504606846977, -1152921504606846979]"],
+    ["uint64_max", "[18446744073709551615]"],
+    ["strings", '["<img src=x onerror=alert(1)>", "hello"]'],
+    ["empty", "[]"],
+    ["scalar", "[0.125]"],
+    ["uint4", "[1, 15, 2]"],
+  ]) {
+    const inspection = await tiny.tensorStatistics(name, [], true);
+    assert.equal(inspection.values, values, name);
+    assert.equal(inspection.mean, undefined, name);
+    assert.equal(inspection.rectangleMap, undefined, name);
+  }
+  for (const count of [31, 32]) {
+    const raw = Buffer.alloc(count * 4);
+    for (let i = 0; i < count; ++i) raw.writeFloatLE(i, i * 4);
+    const model = memoryTestModel([count], {
+      initializers: [
+        Buffer.concat([
+          varintField(1, count),
+          varintField(2, 1),
+          bytesField(8, "weight"),
+          bytesField(9, raw),
+        ]),
+      ],
+    });
+    const inspection = await model.tensorStatistics("weight", [], true);
+    assert.equal(inspection.count, String(count));
+    if (count < 32) {
+      assert.equal(
+        inspection.values,
+        `[${Array.from({ length: count }, (_, i) => i).join(", ")}]`,
+      );
+      assert.equal(inspection.mean, undefined);
+      const directory = mkdtempSync(path.join(tmpdir(), "tensor-values-"));
+      t.after(() => rmSync(directory, { recursive: true, force: true }));
+      const files = await model.serializeFiles(1024, "weights");
+      for (const file of files.weights)
+        writeFileSync(path.join(directory, file.name), file.bytes);
+      const file = path.join(directory, "small.onnx");
+      writeFileSync(file, files.model);
+      const external = await loadModelFile(file, "small.onnx");
+      const graph = external.graph();
+      assert.deepEqual(
+        await external.tensorStatistics("weight", [], true),
+        inspection,
+      );
+      assert.deepEqual(external.graph(), graph);
+    } else {
+      assert.equal(inspection.values, undefined);
+      assert.equal(inspection.mean, 15.5);
+      assert.equal(inspection.rectangleMap.length, 1024);
+    }
+  }
+});
+
 test("tensor statistics report dense values, quartiles, histogram and a square map", async () => {
   const model = loadModel(
     modelBytes("tiny-initializers.onnx"),
@@ -5589,6 +5648,20 @@ test("tensor statistics inspect stored scalar and list Constant attributes", asy
     assert.deepEqual(stats.shape, shape, name);
     assert.equal(stats.dtype, dtype, name);
     assert.equal(stats.mean, mean, name);
+    const inspection = await model.tensorStatistics("constant", [], true);
+    assert.deepEqual(inspection.shape, shape, name);
+    assert.equal(inspection.dtype, dtype, name);
+    assert.equal(inspection.mean, undefined, name);
+    assert.equal(
+      inspection.values,
+      {
+        value_int: "[7]",
+        value_ints: "[2, 8]",
+        value_float: "[1.5]",
+        value_floats: "[1, 3]",
+      }[name],
+      name,
+    );
   }
   const unresolved = memoryTestModel([1], {
     nodes: [
@@ -5628,6 +5701,11 @@ test("tensor statistics resolve captures and prefer subgraph-local initializers"
   assert.equal(localStatistics.count, "2");
   assert.equal((await model.tensorStatistics("bias")).count, "3");
   assert.equal(localStatistics.min, localStatistics.max);
+  assert.equal(
+    (await model.tensorStatistics("bias", captured, true)).values,
+    (await model.tensorStatistics("bias", [], true)).values,
+  );
+  assert.equal((await model.tensorStatistics("bias", local, true)).count, "2");
   const functions = loadModel(modelBytes("functions.onnx"), "functions.onnx");
   const definition = functions.graph().localFunctions[0].path;
   await assert.rejects(
@@ -5644,6 +5722,13 @@ test("tensor statistics delegate pipeline stage paths", async () => {
       const stats = await pipeline.tensorStatistics(tensor.name, stagePath);
       assert.equal(stats.name, tensor.name);
       assert.equal(stats.dtype, tensor.type);
+      const inspection = await pipeline.tensorStatistics(
+        tensor.name,
+        stagePath,
+        true,
+      );
+      if (Number(stats.count) < 32)
+        assert.equal(typeof inspection.values, "string");
     }
   }
   assert.throws(

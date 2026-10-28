@@ -5,17 +5,18 @@ function createInspector({
   subgraphLabel,
   navigate,
   openTensorStatistics,
+  hasStoredTensor,
+  nodeInitializers,
 }) {
   function statisticsButton(name) {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "icon-button tensor-statistics-button";
-    button.append(
-      byId("show-tensor-statistics").querySelector("svg").cloneNode(true),
-    );
-    button.title = `Tensor statistics for ${name}`;
+    button.append(byId("tensors-tab").querySelector("svg").cloneNode(true));
+    button.title = `Inspect values or statistics for ${name}`;
     button.setAttribute("aria-label", button.title);
     button.setAttribute("aria-haspopup", "dialog");
+    button.setAttribute("aria-controls", "tensor-statistics-dialog");
     button.addEventListener("click", () => openTensorStatistics(name));
     button.disabled = !name;
     return button;
@@ -23,7 +24,8 @@ function createInspector({
   function statisticsHeading(name, label) {
     const heading = document.createElement("div");
     heading.className = "tensor-statistics-heading";
-    heading.append(label, statisticsButton(name));
+    heading.append(label);
+    if (hasStoredTensor(name)) heading.append(statisticsButton(name));
     return heading;
   }
   const documentationMarkdown = markdownit({ html: false });
@@ -31,6 +33,7 @@ function createInspector({
   documentationMarkdown.renderer.rules.image = (tokens, index) =>
     documentationMarkdown.utils.escapeHtml(tokens[index].content);
   let inspectedNode;
+  let initializerGraph;
   function resetDocumentation() {
     if (byId("operator-doc").open) byId("operator-doc").close();
     byId("doc-title").textContent = "";
@@ -108,7 +111,7 @@ function createInspector({
       [...attributes, ...defaults],
       "attribute-count",
     );
-    initializerList(node?.parameters ?? []);
+    initializerList(node ? nodeInitializers(node) : []);
     byId("node-parameters").hidden = !node;
     const inspectFunctions = !node && !port && scope?.kind === "Model";
     const functions = inspectFunctions ? (scope.localFunctions ?? []) : [];
@@ -126,19 +129,21 @@ function createInspector({
         return item;
       }),
     );
-    const inspectInitializers =
-      !node && !port && scope && scope.kind !== "Pipeline";
+    const inspectInitializers = scope && scope.kind !== "Pipeline";
     byId("scope-initializers").hidden = !inspectInitializers;
-    for (const [field, id] of [
-      ["initializers", "dense"],
-      ["sparseInitializers", "sparse"],
-      ["encodedInitializers", "encoded"],
-    ]) {
-      initializerList(
-        inspectInitializers ? (scope[field] ?? []) : [],
-        `scope-${id}-initializers`,
-        `${id}-initializer-count`,
-      );
+    if (initializerGraph !== scope?.graph) {
+      initializerGraph = scope?.graph;
+      for (const [field, id] of [
+        ["initializers", "dense"],
+        ["sparseInitializers", "sparse"],
+        ["encodedInitializers", "encoded"],
+      ]) {
+        initializerList(
+          inspectInitializers ? (scope[field] ?? []) : [],
+          `scope-${id}-initializers`,
+          `${id}-initializer-count`,
+        );
+      }
     }
     const constants = scope?.constants ?? [];
     byId("node-constants").hidden = constants.length === 0;
@@ -182,7 +187,7 @@ function createInspector({
           const information = document.createElement("span");
           information.className = "tensor-info";
           information.textContent = tensorDescription(name);
-          item.append(statisticsHeading(name, tensorName), information);
+          item.append(tensorName, information);
           return item;
         }),
       );

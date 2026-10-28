@@ -513,6 +513,9 @@ async function configurePanel(
   const stopHistory = pathHistory.subscribe((history) => {
     void postMessage({ type: "path-history", history });
   });
+  const stopExportHistory = exportHistory.subscribe((history) => {
+    void postMessage({ type: "export-history", history });
+  });
   const updateHistory = async (
     target: HistoryTarget,
     change: Parameters<PathHistory["update"]>[1],
@@ -522,6 +525,7 @@ async function configurePanel(
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       log.record("FAILED", `Update path history: ${detail}`);
+      await postMessage({ type: "settings-error", error: detail });
       await vscode.window.showErrorMessage(
         `Could not update path history: ${detail}`,
       );
@@ -547,17 +551,25 @@ async function configurePanel(
       ? vscode.Uri.joinPath(model.source.uri, "..")
       : (vscode.workspace.workspaceFolders?.[0]?.uri ??
         vscode.Uri.file(homedir()));
+  const saveDirectoryUri = () => {
+    const root = vscode.workspace.workspaceFolders?.[0]?.uri;
+    return root
+      ? vscode.Uri.joinPath(root, ".cache", ".onnx-light-viewer")
+      : directoryUri();
+  };
+  const prepareSaveDirectory = async (directory: vscode.Uri) => {
+    if (
+      vscode.workspace.workspaceFolders?.length &&
+      directory.toString() === saveDirectoryUri().toString()
+    )
+      await vscode.workspace.fs.createDirectory(directory);
+  };
   const locationText = (uri: vscode.Uri) =>
     uri.scheme === "file" ? uri.fsPath : uri.toString();
   const getApplicationSettings = () =>
     applicationSettings(
       context.globalState.get<unknown>("applicationSettings") ?? {
-        downloadDirectory: join(
-          homedir(),
-          ".cache",
-          "onnx-light-viewer",
-          "downloads",
-        ),
+        downloadDirectory: join(homedir(), ".cache", "onnx-light-viewer"),
         pythonPath: process.platform === "win32" ? "python" : "python3",
       },
     );
@@ -568,6 +580,8 @@ async function configurePanel(
       type: "settings-info",
       application,
       exportHistory: exportHistory.snapshot(),
+      pathHistory: pathHistory.snapshot(),
+      saveDirectory: locationText(saveDirectoryUri()),
       exportDirectory: defaultExportDirectory(application.downloadDirectory),
       viewer: viewerSettings(
         context.globalState.get<unknown>("viewerSettings") ?? {
@@ -657,8 +671,9 @@ async function configurePanel(
         fusionHistory: current.fusionHistory ?? [],
         ...(current.graph.pipeline ? { pipeline: true } : {}),
         directory: locationText(directoryUri()),
+        saveDirectory: locationText(saveDirectoryUri()),
         savePath: locationText(
-          vscode.Uri.joinPath(directoryUri(), copyFileName(current)),
+          vscode.Uri.joinPath(saveDirectoryUri(), copyFileName(current)),
         ),
       },
       ...(current.metadata ? { metadata: current.metadata } : {}),
@@ -745,9 +760,26 @@ async function configurePanel(
       } else if (
         message?.type === "get-settings" ||
         message?.type === "application-settings" ||
+        message?.type === "export-history-edit" ||
+        message?.type === "reset-viewer-settings" ||
         message?.type === "inspect-python"
       ) {
         try {
+          if (message.type === "reset-viewer-settings") {
+            await context.globalState.update("viewerSettings", undefined);
+          } else if (message.type === "export-history-edit") {
+            if (message.historyAction === "clear") await exportHistory.clear();
+            else if (
+              message.historyAction === "remove" &&
+              (message.target === "models" ||
+                message.target === "directories") &&
+              typeof message.historyEntry === "string" &&
+              message.historyEntry.trim() &&
+              !/[\0\r\n]/.test(message.historyEntry)
+            ) {
+              await exportHistory.remove(message.target, message.historyEntry);
+            } else throw new Error("Invalid conversion history edit.");
+          }
           if (message.type === "application-settings") {
             const settings = applicationSettings(message.settings);
             await mkdir(settings.downloadDirectory, { recursive: true });
@@ -782,7 +814,8 @@ async function configurePanel(
             } finally {
               inspectingPackages = false;
             }
-          } else await sendSettings();
+          } else if (message.type !== "export-history-edit")
+            await sendSettings();
         } catch (error) {
           const detail = error instanceof Error ? error.message : String(error);
           log.record("FAILED", `Settings: ${detail}`);
@@ -884,26 +917,23 @@ async function configurePanel(
           graphRevision === revision &&
           tensorStatisticsRequest === generation;
         try {
-          const statistics = await log.run(
-            "Inspect tensor statistics",
-            async () => {
-              if (
-                typeof message.requestId !== "number" ||
-                !Number.isSafeInteger(message.requestId) ||
-                message.requestId <= 0 ||
-                typeof message.name !== "string" ||
-                !message.name.length ||
-                !isGraphPath(message.path)
-              )
-                throw new Error("Invalid tensor statistics request.");
-              const current = requireModel();
-              const native = await nativeModel(current, log, () => {
-                void sendStatus();
-              });
-              if (!isCurrent()) return;
-              return native.tensorStatistics(message.name, message.path);
-            },
-          );
+          const statistics = await log.run("Inspect tensor data", async () => {
+            if (
+              typeof message.requestId !== "number" ||
+              !Number.isSafeInteger(message.requestId) ||
+              message.requestId <= 0 ||
+              typeof message.name !== "string" ||
+              !message.name.length ||
+              !isGraphPath(message.path)
+            )
+              throw new Error("Invalid tensor statistics request.");
+            const current = requireModel();
+            const native = await nativeModel(current, log, () => {
+              void sendStatus();
+            });
+            if (!isCurrent()) return;
+            return native.tensorStatistics(message.name, message.path, true);
+          });
           if (isCurrent() && statistics)
             await postMessage({
               type: "tensor-statistics-info",
@@ -1025,6 +1055,8 @@ async function configurePanel(
               const originalModel = model;
               const revision = graphRevision;
               let cancellation: string | undefined;
+              let exportedFiles: string[] = [];
+              let selectedFile: string | undefined;
               const needsDownload = exportNeedsDownload(plan);
               const conversionStage = plan.recipe
                 ? "Running pinned Olive recipe (network may be required)"
@@ -1058,10 +1090,6 @@ async function configurePanel(
                   output: "",
                 });
                 await exportHistory.remember(plan);
-                await postMessage({
-                  type: "export-history",
-                  history: exportHistory.snapshot(),
-                });
                 if (needsDownload) {
                   const cacheDirectory = join(
                     getApplicationSettings().downloadDirectory,
@@ -1126,6 +1154,7 @@ async function configurePanel(
                     });
                   },
                 );
+                exportedFiles = files;
                 finishPhase();
                 if (!active) return;
                 await postMessage({
@@ -1158,6 +1187,7 @@ async function configurePanel(
                           },
                         )
                       )?.path;
+                selectedFile = selected;
                 if (!selected) {
                   cancellation =
                     "Files saved; opening the exported model was cancelled.";
@@ -1188,10 +1218,6 @@ async function configurePanel(
                 model = loaded;
                 panel.title = `ONNX: ${posix.basename(selected.replaceAll("\\", "/"))}`;
                 await sendGraph();
-                await updateHistory("open", {
-                  action: "remember",
-                  entries: historyEntries("local", selected, dirname(selected)),
-                });
                 await postMessage({
                   type: "export-info",
                   actionId: message.actionId,
@@ -1223,6 +1249,31 @@ async function configurePanel(
               } finally {
                 // Release before ActionLog publishes a terminal status.
                 if (exporting === controller) exporting = undefined;
+                if (exportedFiles.length) {
+                  const files = selectedFile
+                    ? [
+                        selectedFile,
+                        ...exportedFiles.filter(
+                          (file) => file !== selectedFile,
+                        ),
+                      ]
+                    : exportedFiles;
+                  const entries = new Map(
+                    files.flatMap((file) =>
+                      historyEntries("local", file, dirname(file)).map(
+                        (entry) =>
+                          [
+                            JSON.stringify([entry.kind, entry.path]),
+                            entry,
+                          ] as const,
+                      ),
+                    ),
+                  );
+                  await updateHistory("open", {
+                    action: "remember",
+                    entries: [...entries.values()],
+                  });
+                }
                 if (cancellation !== undefined)
                   log.record(
                     "CANCELLED",
@@ -1429,7 +1480,10 @@ async function configurePanel(
           } else if (source === "local") {
             const uri = message.location
               ? locationUri(message.location)
-              : directoryUri();
+              : target === "save"
+                ? saveDirectoryUri()
+                : directoryUri();
+            if (target === "save") await prepareSaveDirectory(uri);
             location = locationText(uri);
             parent = locationText(vscode.Uri.joinPath(uri, ".."));
             entries = (await vscode.workspace.fs.readDirectory(uri))
@@ -2290,6 +2344,7 @@ async function configurePanel(
               const fileName = copyFileName(current, format.encrypted);
               if (inline && typeof message.overwrite !== "boolean")
                 throw new Error("Invalid overwrite choice.");
+              if (!inline) await prepareSaveDirectory(saveDirectoryUri());
               const destination = inline
                 ? locationUri(message.location)
                 : await vscode.window.showSaveDialog({
@@ -2300,20 +2355,18 @@ async function configurePanel(
                       : current.graph.pipeline
                         ? { "ONNX pipelines": ["pipe-onnx"] }
                         : { "ONNX models": ["onnx"] },
-                    ...(current.source
-                      ? {
-                          defaultUri: vscode.Uri.joinPath(
-                            current.source.uri,
-                            "..",
-                            fileName,
-                          ),
-                        }
-                      : {}),
+                    defaultUri: vscode.Uri.joinPath(
+                      saveDirectoryUri(),
+                      fileName,
+                    ),
                   });
               if (!destination || !active || model !== current)
                 return cancelled();
               const source = current.source?.uri;
               await assertSaveDestination(source ? [source] : [], destination);
+              await prepareSaveDirectory(
+                vscode.Uri.joinPath(destination, ".."),
+              );
               if (format.reuse) {
                 if (
                   !source ||
@@ -2649,6 +2702,7 @@ async function configurePanel(
     recipeController.abort();
     model = undefined;
     stopHistory();
+    stopExportHistory();
     messages.dispose();
     viewState.dispose();
     disposal.dispose();

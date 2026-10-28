@@ -40,6 +40,7 @@ export function webviewHtml(
       <button id="logs-tab" role="tab" aria-controls="logs-view" aria-selected="${initialTab === "logs"}" tabindex="${initialTab === "logs" ? 0 : -1}">Logs</button>
       <button id="statistics-tab" role="tab" aria-controls="statistics-view" aria-selected="false" tabindex="-1">Statistics</button>
       <button id="memory-tab" role="tab" aria-controls="memory-view" aria-selected="false" tabindex="-1">Memory</button>
+      <button id="tensors-tab" role="tab" aria-controls="tensors-view" aria-selected="false" tabindex="-1"><svg class="tensor-statistics-icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M4 3v17h17M8 16v-5m5 5V6m5 10V9"/></svg>Tensors</button>
       <button id="status-tab" role="tab" aria-controls="status-view" aria-selected="false" tabindex="-1">Status</button>
       <button id="controls-tab" role="tab" aria-controls="controls-view" aria-selected="false" tabindex="-1">Controls</button>
       <button id="repositories-tab" role="tab" aria-controls="repositories-view" aria-selected="false" tabindex="-1">ONNX</button>
@@ -47,7 +48,6 @@ export function webviewHtml(
     </nav>
     <section id="model-view" role="tabpanel" aria-labelledby="model-tab"${initialTab === "logs" ? " hidden" : ""}>
       <header class="graph-toolbar">
-        <div><button id="show-tensor-statistics" class="icon-button" disabled aria-haspopup="dialog" aria-label="Tensor statistics for the current selection" title="Browse tensor statistics for the current selection"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M4 3v17h17M8 16v-5m5 5V6m5 10V9"/></svg></button><button id="all-tensor-statistics" class="icon-button" disabled aria-haspopup="dialog" aria-label="Statistics for all tensors" title="Browse all tensors in the current graph scope"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M2 6V2h17M5 5v17h17M9 18v-5m5 5V8m5 10v-7"/></svg></button></div>
         <div><a id="repository-link" href="https://github.com/xadupre/onnx-light-viewer" title="ONNX Light Viewer on GitHub" aria-label="Open the ONNX Light Viewer GitHub repository"><img src="${resource("logo.svg")}" alt="" width="24" height="24"></a><button id="refresh-shapes" class="icon-button" disabled title="Refresh shape and type information with onnx-light" aria-label="Refresh shape and type information" aria-describedby="shape-status"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2 6M20 4v7h-7"/></svg>Refresh shapes</button><button id="refresh-metadata" class="icon-button" disabled title="Recompute constants, tags and lifetimes for the displayed graph with onnx-light" aria-label="Refresh metadata for the displayed graph" aria-describedby="metadata-status"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2 6M20 4v7h-7"/></svg>Refresh metadata</button><button id="refresh-positions" class="icon-button" disabled title="Restore the hierarchical layout and reset manually moved positions" aria-label="Refresh node positions"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2 6M20 4v7h-7"/></svg>Refresh positions</button><button id="verify-model" class="icon-button" disabled title="Verify the entire model or all pipeline stages with onnx-light, without changing them" aria-label="Verify model" aria-describedby="verify-status"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg>Verify</button></div>
         <div class="graph-stats" aria-live="polite"><span id="graph-summary">No model loaded</span><span id="initializer-count">0 initializers</span><span id="onnx-light-version" data-version="${onnxLightVersion}" title="onnx-light C++ release used by this viewer">onnx-light ${onnxLightVersion}</span><span id="shape-status" role="status"></span><span id="metadata-status" role="status"></span><span id="verify-status" role="status"></span><span id="navigation-status" role="status"></span><span id="load-status" role="status"></span></div>
         <span id="save-status" role="status"></span>
@@ -252,6 +252,7 @@ export function webviewHtml(
             </section>
             <details id="node-constants" class="inspector-section" open hidden><summary>Constants <span id="constant-count">0</span></summary><ul id="constant-nodes"></ul></details>
             <section id="scope-initializers" hidden>
+              <h3 class="eyebrow">Graph initializers</h3>
               <details class="inspector-section" open><summary>Initializers <span id="dense-initializer-count">0</span></summary><ul id="scope-dense-initializers"></ul></details>
               <details class="inspector-section" open><summary>Sparse initializers <span id="sparse-initializer-count">0</span></summary><ul id="scope-sparse-initializers"></ul></details>
               <details class="inspector-section" open><summary>Encoded initializers <span id="encoded-initializer-count">0</span></summary><ul id="scope-encoded-initializers"></ul></details>
@@ -351,7 +352,6 @@ export function webviewHtml(
               <input id="open-location" type="text" autocomplete="off" list="open-location-history"><datalist id="open-location-history"></datalist>
               <div><button type="submit">Browse</button><button id="open-parent" type="button" disabled>Parent folder</button></div>
             </form>
-            </details>
             <div id="open-file-list">
             <h3 id="hf-files-title" tabindex="-1" hidden>2. Choose an ONNX file</h3>
             <p id="hf-files-help" hidden>Double-click an ONNX file to download and open it. Sizes exclude external weights.</p>
@@ -359,6 +359,7 @@ export function webviewHtml(
             <input id="open-filter" type="search" aria-controls="open-files">
             <ul id="open-files" class="file-list" aria-label="Models and folders"></ul>
             </div>
+            </details>
             <form id="open-form">
               <label for="open-file">Model path, URL or backend test ID</label>
               <input id="open-file" type="text" required autocomplete="off" list="open-file-history"><datalist id="open-file-history"></datalist>
@@ -471,6 +472,17 @@ export function webviewHtml(
         <nav aria-label="Memory events"><button id="memory-previous" type="button" disabled>Previous</button><span id="memory-range" role="status"></span><button id="memory-next" type="button" disabled>Next</button></nav>
       </div>
     </section>
+    <section id="tensors-view" role="tabpanel" aria-labelledby="tensors-tab" tabindex="0" hidden>
+      <h2>Tensors</h2>
+      <p>Dense, sparse and encoded initializers and constants in the displayed graph. Inputs and intermediate tensors without stored data are not listed. Highlighted rows belong to the selected operator or tensor. The model is not executed.</p>
+      <label for="tensor-list-search">Filter by name, category or consumer</label>
+      <input id="tensor-list-search" type="search" autocomplete="off">
+      <label for="tensor-list-type">Filter by tensor type</label>
+      <select id="tensor-list-type"><option value="">All types</option></select>
+      <p id="tensor-list-status" role="status">Open a model to browse tensors.</p>
+      <div class="tensor-list-table"><table aria-label="Graph tensors"><thead><tr><th scope="col">Name</th><th scope="col">Category</th><th scope="col">Type</th><th scope="col">Shape</th><th scope="col">Consumers (operator and name)</th><th scope="col">Values / statistics</th></tr></thead><tbody id="tensor-list-rows"></tbody></table></div>
+      <nav aria-label="Tensor pages"><button id="tensor-list-previous" type="button" disabled>Previous</button><button id="tensor-list-next" type="button" disabled>Next</button></nav>
+    </section>
     <section id="status-view" role="tabpanel" aria-labelledby="status-tab" tabindex="0" hidden>
       <h2>Application status</h2>
       <dl class="status-details" aria-live="polite">
@@ -501,7 +513,28 @@ export function webviewHtml(
         <button type="submit">Save paths</button>
       </form>
       <p id="settings-feedback" role="status"></p>
+      <section id="settings-stored-data" aria-labelledby="settings-stored-title">
+        <h3 id="settings-stored-title">Stored data and histories</h3>
+        <p>Histories and preferences use VS Code globalState, shared across workspaces for this VS Code user. Removing entries only forgets suggestions: downloaded files and saved models are never deleted.</p>
+        <dl class="status-details">
+          <dt>Download cache</dt><dd id="settings-cache-download">Waiting for extension host</dd>
+          <dt>Default model saves</dt><dd id="settings-cache-saves">Waiting for extension host</dd>
+        </dl>
+        <h4>Open history (<span id="settings-open-count">0</span>)</h4>
+        <button id="settings-clear-open" type="button" disabled>Clear Open history</button>
+        <ul id="settings-open-history" aria-label="Open history"></ul>
+        <h4>Save history (<span id="settings-save-count">0</span>)</h4>
+        <button id="settings-clear-save" type="button" disabled>Clear Save history</button>
+        <ul id="settings-save-history" aria-label="Save history"></ul>
+        <h4>Conversion history (<span id="settings-export-count">0</span>)</h4>
+        <p>Last conversion tool: <span id="settings-exporter">None</span></p>
+        <button id="settings-clear-export" type="button" disabled>Clear conversion history</button>
+        <ul id="settings-export-history" aria-label="Conversion history"></ul>
+        <p id="settings-history-feedback" role="status"></p>
+      </section>
       <h3>Viewer preferences</h3>
+      <button id="settings-reset-viewer" type="button">Reset viewer preferences</button>
+      <p>Restores the default sidebar width and panels. Download and Python paths are unchanged.</p>
       <label for="settings-width">Sidebar width (pixels; blank uses the default)</label>
       <input id="settings-width" type="number" min="200" step="1">
       <div id="settings-panels">
@@ -750,10 +783,13 @@ export function webviewHtml(
   <dialog id="tensor-statistics-dialog" aria-labelledby="tensor-statistics-title">
     <header class="inspector-heading"><h2 id="tensor-statistics-title">Tensor statistics</h2><button id="close-tensor-statistics" autofocus>Close</button></header>
     <p>Stored tensor data only. The model is not executed; intermediate values may be unavailable.</p>
-    <label for="tensor-statistics-name">Tensor name</label>
-    <input id="tensor-statistics-name" list="tensor-statistics-names" autocomplete="off"><datalist id="tensor-statistics-names"></datalist>
-    <div><button id="tensor-statistics-previous">Previous tensor</button><span id="tensor-statistics-position"></span><button id="tensor-statistics-next">Next tensor</button></div>
+    <div id="tensor-statistics-picker">
+      <label for="tensor-statistics-name">Tensor name</label>
+      <input id="tensor-statistics-name" list="tensor-statistics-names" autocomplete="off"><datalist id="tensor-statistics-names"></datalist>
+      <div><button id="tensor-statistics-previous">Previous tensor</button><span id="tensor-statistics-position"></span><button id="tensor-statistics-next">Next tensor</button></div>
+    </div>
     <p id="tensor-statistics-status" role="status"></p>
+    <progress id="tensor-statistics-progress" aria-label="Loading tensor data" aria-describedby="tensor-statistics-status" hidden></progress>
     <div id="tensor-statistics-content"></div>
   </dialog>
   <dialog id="optimization-report" aria-labelledby="optimization-report-title">
@@ -772,6 +808,7 @@ export function webviewHtml(
   <script nonce="${nonce}" src="${resource("fusion-panel.js")}"></script>
   <script nonce="${nonce}" src="${resource("settings-panel.js")}"></script>
   <script nonce="${nonce}" src="${resource("memory-panel.js")}"></script>
+  <script nonce="${nonce}" src="${resource("tensor-list-panel.js")}"></script>
   <script nonce="${nonce}" src="${resource("tensor-statistics-panel.js")}"></script>
   <script nonce="${nonce}" src="${resource("vendor/dagre.min.js")}"></script>
   <script nonce="${nonce}" src="${resource("graph-layout.js")}"></script>

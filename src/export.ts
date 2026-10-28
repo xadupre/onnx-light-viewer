@@ -89,6 +89,7 @@ interface ExportHistorySnapshot {
 /** Keeps recent export inputs across sessions and serializes edits across panels. */
 export class ExportHistory {
   private pending: Promise<void> = Promise.resolve();
+  private listeners = new Set<(history: ExportHistorySnapshot) => void>();
 
   constructor(private readonly storage: Pick<Memento, "get" | "update">) {}
 
@@ -119,18 +120,45 @@ export class ExportHistory {
   }
 
   remember(plan: ExportPlan): Promise<void> {
-    const operation = this.pending.then(async () => {
+    return this.update(() => {
       const history = this.snapshot();
       const recent = (value: string, entries: string[]) =>
         [value, ...entries.filter((entry) => entry !== value)].slice(0, 50);
       const directories = recent(plan.directory, history.directories);
-      await this.storage.update("exportHistory", {
+      return {
         exporter: plan.exporter,
         models: recent(plan.model, history.models),
         directories: plan.directoryTemplate
           ? recent(plan.directoryTemplate, directories)
           : directories,
-      });
+      };
+    });
+  }
+
+  subscribe(listener: (history: ExportHistorySnapshot) => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  remove(target: "models" | "directories", value: string): Promise<void> {
+    return this.update(() => {
+      const history = this.snapshot();
+      return {
+        ...history,
+        [target]: history[target].filter((entry) => entry !== value),
+      };
+    });
+  }
+
+  clear(): Promise<void> {
+    return this.update(() => ({ models: [], directories: [] }));
+  }
+
+  private update(change: () => ExportHistorySnapshot): Promise<void> {
+    const operation = this.pending.then(async () => {
+      const history = change();
+      await this.storage.update("exportHistory", history);
+      for (const listener of this.listeners) listener(history);
     });
     this.pending = operation.then(
       () => undefined,
