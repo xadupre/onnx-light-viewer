@@ -96,6 +96,72 @@ test("ONNX Script removes its private working directory after process failure", 
 });
 
 test(
+  "ONNX Script fuses Conv and BatchNormalization with equivalent outputs",
+  {
+    skip:
+      !available && "Install onnx and onnxscript or set ONNX_SCRIPT_PYTHON.",
+  },
+  async (t) => {
+    const directory = await mkdtemp(path.join(__dirname, "onnxscript-"));
+    t.after(() => rm(directory, { recursive: true, force: true }));
+    const source = path.join(directory, "source.onnx");
+    execFileSync(python, [
+      "-P",
+      "-c",
+      `
+import sys
+import onnx
+import onnx.helper as oh
+from onnx import TensorProto
+from onnxscript import rewriter
+
+weights = [oh.make_tensor("w", TensorProto.FLOAT, [1, 1, 1, 1], [2.0])]
+weights.extend(oh.make_tensor(name, TensorProto.FLOAT, [1], [value])
+               for name, value in (("scale", 3.0), ("bias", 4.0),
+                                   ("mean", 1.0), ("variance", 2.0)))
+graph = oh.make_graph([
+    oh.make_node("Conv", ["x", "w"], ["conv"]),
+    oh.make_node("BatchNormalization",
+                 ["conv", "scale", "bias", "mean", "variance"], ["y"]),
+], "fusion", [oh.make_tensor_value_info("x", TensorProto.FLOAT, [1, 1, 3, 3])],
+   [oh.make_tensor_value_info("y", TensorProto.FLOAT, [1, 1, 3, 3])], weights)
+model = oh.make_model(graph, opset_imports=[oh.make_opsetid("", 18)])
+assert [node.op_type for node in rewriter.rewrite(model).graph.node] == ["Conv"]
+onnx.save(model, sys.argv[1])
+`,
+      source,
+    ]);
+    const original = await readFile(source);
+    const result = await optimizeWithOnnxScript(original, python, directory);
+    assert.equal(result.changed, true);
+    const output = path.join(directory, "result.onnx");
+    await writeFile(output, result.bytes);
+    execFileSync(python, [
+      "-P",
+      "-c",
+      `
+import sys
+import numpy as np
+import onnx
+from onnx.reference import ReferenceEvaluator
+
+source, output = (onnx.load(name) for name in sys.argv[1:])
+onnx.checker.check_model(output)
+assert [node.op_type for node in source.graph.node] == ["Conv", "BatchNormalization"]
+assert [node.op_type for node in output.graph.node] == ["Conv"]
+feeds = {"x": np.arange(9, dtype=np.float32).reshape(1, 1, 3, 3)}
+expected = ReferenceEvaluator(source).run(None, feeds)[0]
+actual = ReferenceEvaluator(output).run(None, feeds)[0]
+np.testing.assert_allclose(actual, expected, rtol=1e-5, atol=1e-5)
+`,
+      source,
+      output,
+    ]);
+    assert.deepEqual(await readFile(source), original);
+  },
+);
+
+test(
   "ONNX Script rejects unsupported extended ONNX data at the Python boundary",
   {
     skip:
