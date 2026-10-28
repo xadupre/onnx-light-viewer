@@ -71,6 +71,12 @@ refreshed against the new operators. Select patterns and run matching again to
 find further fusions; obsolete candidates are discarded.
 Graph replacement or navigation invalidates the preview.
 
+.. figure:: ../_static/feature-fusion-patterns.png
+   :alt: Fuse panel showing two checked TransposeTranspose candidates, before and after operators, and Fuse selected.
+   :width: 100%
+
+   Run matching, inspect candidates, then fuse the selected matches.
+
 Why does a pattern not match?
 -----------------------------
 
@@ -112,6 +118,10 @@ workspace, then click **Run global optimization**. This backend accepts a single
 standard ONNX model, not a ``PipelineProto``. Native pattern selections
 are preserved when switching backends, but do not configure ONNX Script.
 Python errors leave the displayed model unchanged. Save a copy to keep the result.
+After completion, Python output appears directly below **Run global optimization**
+and in **Logs**. It includes main-graph node and ``Identity`` counts at input,
+after optimization and after fusion. A new run or model replacement clears the
+inline output; switching backends hides it without discarding it.
 Native matching diagnostics and timing reports apply only to **onnx-light**.
 Changed Python results clear earlier native undo history and cannot be undone
 with **Unfuse**. Later native edits can still be undone, back to the Python result.
@@ -120,10 +130,15 @@ rewriting scenarios; saving with rewritings includes only native edits made
 after the Python result.
 
 .. figure:: ../_static/feature-optimizer-backends.png
-   :alt: Optimize panel with onnx-light and onnxscript backend buttons and the Python requirements.
+   :alt: Optimize panel with Python output reporting three nodes and two Identity nodes below Run, and Unfuse disabled.
    :width: 100%
 
-   Select ONNX Script to run Python optimization and fusion instead of native patterns.
+   Read ONNX Script output below Run; no undo checkpoint is created.
+
+On :download:`fusion.onnx <../../test/models/fusion.onnx>`, ONNX Script replaces
+four ``Transpose`` nodes with two ``Identity`` nodes: five operators become three.
+These identities preserve the distinct graph outputs ``a`` and ``b``; their
+presence does not mean optimization failed.
 
 .. figure:: ../_static/feature-pattern-groups.png
    :alt: Optimize panel showing Default, Layer and onnx-light-cpu tiles selected together.
@@ -176,8 +191,10 @@ Closing Fuse, navigating or replacing the graph discards previews.
 Each native optimization or applied pass is one **Unfuse** operation.
 With **onnx-light** selected, Optimize also offers **Unfuse last** and
 **Back to original model**. Undo one complete operation at a time, or restore
-the original model by undoing all session operations, including other pipeline
-stages. Optimize stays open so you can select patterns and optimize again.
+the native baseline by undoing all available native operations, including other
+pipeline stages. After ONNX Script changes the model, this baseline is the Python
+result, not the model before Python optimization.
+Optimize stays open so you can select patterns and optimize again.
 Applied patterns are listed in the optimization results and in **Unfuse**;
 click an entry to highlight its surviving result nodes. Folding a node entirely
 into an initializer leaves no operator to select.

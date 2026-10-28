@@ -215,13 +215,16 @@ In **Optimize**, choose **onnx-light** for native pattern selection or
 **onnxscript** for Python optimization and fusion. ONNX Script requires a
 trusted workspace and ``onnx`` and ``onnxscript`` in the configured Python
 environment. Both operate on the current in-memory model, not the source file.
+ONNX Script output appears below **Run global optimization** after completion,
+including node and ``Identity`` counts before and after each stage.
+Changed Python results cannot be unfused and clear earlier native undo history.
 See :doc:`features/fusion_patterns`.
 
 .. figure:: _static/feature-optimizer-backends.png
-   :alt: Optimize panel with onnx-light and onnxscript buttons and Python requirements.
+   :alt: Optimize panel with Python output reporting three nodes and two Identity nodes below Run, and Unfuse disabled.
    :width: 100%
 
-   Choose the optimizer before running it.
+   Read Python output without leaving Optimize.
 
 With **onnx-light**, inspect **Matched patterns**, undo the last operation or
 choose **Back to original model** without leaving Optimize.
@@ -247,6 +250,19 @@ Choosing groups alone does not transform or save the model.
    :width: 100%
 
    Named pattern sets are separate from optimization priorities.
+
+Native fusion matching
+^^^^^^^^^^^^^^^^^^^^^^
+
+In **Fuse**, select patterns and click **Run Matching**. Inspect the **Before**
+and **After** candidates, check compatible matches, then click **Fuse selected**.
+Previewing does not modify the graph. See :doc:`features/fusion_patterns`.
+
+.. figure:: _static/feature-fusion-patterns.png
+   :alt: Fuse panel with two selected TransposeTranspose candidates, before and after operators, and Fuse selected.
+   :width: 100%
+
+   Inspect and select native matches before applying them.
 
 Diagnostics and help
 ^^^^^^^^^^^^^^^^^^^^
