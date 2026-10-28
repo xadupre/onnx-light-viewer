@@ -33,11 +33,31 @@
         "icon": "media/logo.svg"
       },
       {
+        "command": "onnxLightViewer.openFile",
+        "title": "Open with ONNX Light Viewer",
+        "icon": "media/logo.svg"
+      },
+      {
         "command": "onnxLightViewer.openSymbolicExample",
         "title": "ONNX Light Viewer: Open Symbolic Transformer Example",
         "icon": "media/logo.svg"
       }
     ],
+    "menus": {
+      "explorer/context": [
+        {
+          "command": "onnxLightViewer.openFile",
+          "when": "!explorerResourceIsFolder && resourceFilename =~ /\\.(onnx|onnx\\.enc|pipe-onnx)$/i",
+          "group": "navigation"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "onnxLightViewer.openFile",
+          "when": "false"
+        }
+      ]
+    },
     "customEditors": [
       {
         "viewType": "onnxLightViewer.graph",
