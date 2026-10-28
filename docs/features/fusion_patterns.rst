@@ -182,6 +182,13 @@ click an entry to highlight its surviving result nodes. Folding a node entirely
 into an initializer leaves no operator to select.
 Optimize's **Matched patterns** list follows the active history for the current
 model or pipeline stage, including after reopening Optimize or a no-change run.
+
+.. figure:: ../_static/feature-optimizer-history.png
+   :alt: Optimize showing native matched patterns, highlighted result nodes and controls to undo the last operation or restore the original model.
+   :width: 100%
+
+   Inspect matches and unfuse without leaving Optimize.
+
 **Save → Include fusion rewritings** works for these operations too:
 unchecked saves the optimized graph; checked saves the original and its
 replayable plan, including any initializer-preparation functions.

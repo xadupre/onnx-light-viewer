@@ -544,7 +544,7 @@ function createFusionPanel({
 
   function showOptimizationResults() {
     byId("optimization-results").replaceChildren();
-    const path = fusionGraph?.breadcrumbs.at(-1)?.path ?? [];
+    const path = fusionGraph?.breadcrumbs?.at(-1)?.path ?? [];
     const stage = path.length === 1 ? path[0].pipeline : undefined;
     const matches = optimizationHistory
       .filter((operation) => operation.stage === stage)
