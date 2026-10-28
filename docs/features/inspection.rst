@@ -10,7 +10,8 @@ The sidebar includes **Open**, **Save** and **Convert** alongside the inspection
 and optimization controls. **Convert** runs a separate installed Python exporter;
 see :doc:`exporting_models`.
 **Open** and **Save** toggle their own sidebar panels for file selection and
-save options; opening either hides the other. Neither opens a popup file picker.
+save options; opening either hides the other. **Open** offers optional path
+pickers directly below **Model path**; **Save** keeps its inline folder browser.
 All sidebar panels have an inverted-color title bar using the compact uppercase
 **INSPECTOR** typography.
 

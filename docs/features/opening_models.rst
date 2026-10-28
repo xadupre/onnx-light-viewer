@@ -6,10 +6,9 @@ Opening models
    :width: 200px
 
 * **Open** toggles an embedded file selector in the right sidebar, offering
-  **Local file**, **Hugging Face** or **Backend test**. Browse folders, enter a
-  directory or repository, select a model, then click **Open model**.
-  **Parent folder** navigates up a local directory. You can also enter a model
-  path or file URL directly. The panel closes after a successful opening;
+  **Local file**, **Hugging Face** or **Backend test**. Enter a model path or use
+  the buttons below it to choose a local file, then click **Open model**.
+  The panel closes after a successful opening;
   **Open** can show it again. Errors and cancellations keep the panel open.
   Opening an ``.onnx`` or ``.pipe-onnx`` file in VS Code
   also uses the viewer; use **Reopen Editor With...** if another editor handles it.
@@ -21,6 +20,27 @@ Opening models
   Loading failures also display an error panel directly over the graph canvas,
   including when the first model cannot be opened. The previous graph, if any,
   is preserved; use **Open** to try another file.
+
+Choosing a local path
+---------------------
+
+Buttons directly below **Model path** offer both the existing **VS Code file picker**
+and **Browse folders**, an in-app dialog. The latter accepts any accessible directory,
+including outside the VS Code workspace; enter a directory, click **Browse**,
+or use **Parent folder**. Filter the list, select a model and click **Choose path**
+(or double-click it) to fill **Model path** without loading the model.
+**Cancel** or Escape leaves the previous model path unchanged.
+
+Opening the Open panel does not list local directories until browsing is requested.
+Selecting a recent local directory opens the dialog with that path but does not
+browse automatically. Hugging Face discovery and the backend catalogue remain
+in the sidebar.
+
+.. figure:: ../_static/feature-open-path-dialog.png
+   :alt: In-app path dialog browsing a directory outside the VS Code workspace, with a selected ONNX file and Choose path button.
+   :width: 100%
+
+   Choose a path outside the workspace without changing VS Code's file picker.
 
 PipelineProto containers
 ------------------------

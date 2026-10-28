@@ -51,6 +51,16 @@ import { OliveRecipes } from "./oliveRecipes";
 const viewType = "onnxLightViewer.graph";
 const panelSessions = new WeakMap<vscode.WebviewPanel, () => void>();
 
+function pickLocalModel() {
+  return vscode.window.showOpenDialog({
+    canSelectMany: false,
+    filters: {
+      "ONNX models and pipelines": ["onnx", "enc", "pipe-onnx"],
+    },
+    openLabel: "Open ONNX graph",
+  });
+}
+
 interface ViewerSettings {
   width?: number;
   panels: { operator: boolean; find: boolean; metadata: boolean };
@@ -1448,6 +1458,21 @@ async function configurePanel(
         } finally {
           if (hubSearch === controller) hubSearch = undefined;
         }
+      } else if (message?.type === "select-model-path") {
+        try {
+          const selection = await pickLocalModel();
+          await postMessage({
+            type: "model-path-selected",
+            requestId: message.requestId,
+            location: selection?.[0] ? locationText(selection[0]) : null,
+          });
+        } catch (error) {
+          await postMessage({
+            type: "model-path-selected",
+            requestId: message.requestId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
       } else if (message?.type === "browse-files") {
         const target = message.target;
         try {
@@ -1571,17 +1596,7 @@ async function configurePanel(
               if (location.id === "local") {
                 const selection = inline
                   ? [locationUri(message.location)]
-                  : await vscode.window.showOpenDialog({
-                      canSelectMany: false,
-                      filters: {
-                        "ONNX models and pipelines": [
-                          "onnx",
-                          "enc",
-                          "pipe-onnx",
-                        ],
-                      },
-                      openLabel: "Open ONNX graph",
-                    });
+                  : await pickLocalModel();
                 if (!selection?.[0]) {
                   log.record("CANCELLED", "Open ONNX model", id);
                   return;

@@ -47,6 +47,7 @@ async function openExtension(
   const events = [];
   const passwordPrompts = [];
   const saveDialogs = [];
+  const openDialogs = [];
   const writes = [];
   const nativeModels = [];
   const commands = new Map();
@@ -58,6 +59,7 @@ async function openExtension(
   const receive = (message) =>
     Promise.all([...receivers].map((callback) => callback(message)));
   let selection;
+  let openDialogFailure;
   let editor;
   let backendSelection;
   let client;
@@ -232,7 +234,15 @@ async function openExtension(
         customEditorOptions = options;
         return disposable();
       },
-      showOpenDialog: async () => selection,
+      showOpenDialog: async (options) => {
+        openDialogs.push(options);
+        if (openDialogFailure) {
+          const error = openDialogFailure;
+          openDialogFailure = undefined;
+          throw error;
+        }
+        return selection;
+      },
       showInputBox: async (options) => {
         if (!options.password) return huggingFaceInput;
         passwordPrompts.push(options);
@@ -414,6 +424,13 @@ async function openExtension(
     },
     passwordPrompts,
     saveDialogs,
+    openDialogs,
+    setOpenSelection: (filePath) => {
+      selection = filePath ? [vscode.Uri.file(filePath)] : undefined;
+    },
+    failNextOpenDialog: (message) => {
+      openDialogFailure = new Error(message);
+    },
     writes,
     webview,
     openFromExplorer: (name) =>
@@ -1975,7 +1992,40 @@ test("publishes initial editor graphs before delayed Open history persistence", 
   assert.match(history[0].path, /\/relu\.onnx$/);
 });
 
-test("opens, browses and saves encrypted copies through embedded selectors without popup pickers", async (t) => {
+test("native path selection preserves the picker and returns a path without loading or replacing the model", async () => {
+  const extension = await openExtension("relu.onnx");
+  const reads = extension.reads.length;
+  const graphs = extension.messages.filter(
+    ({ type }) => type === "graph",
+  ).length;
+  const selected = path.join(tmpdir(), "outside-workspace.onnx");
+  extension.setOpenSelection(selected);
+  await extension.receive({ type: "select-model-path", requestId: 1 });
+  assert.deepEqual(extension.messages.at(-1), {
+    type: "model-path-selected",
+    requestId: 1,
+    location: selected,
+  });
+  assert.deepEqual(extension.openDialogs.at(-1), {
+    canSelectMany: false,
+    filters: { "ONNX models and pipelines": ["onnx", "enc", "pipe-onnx"] },
+    openLabel: "Open ONNX graph",
+  });
+  extension.setOpenSelection(undefined);
+  await extension.receive({ type: "select-model-path", requestId: 2 });
+  assert.equal(extension.messages.at(-1).location, null);
+  extension.failNextOpenDialog("Dialog unavailable");
+  await extension.receive({ type: "select-model-path", requestId: 3 });
+  assert.equal(extension.messages.at(-1).error, "Dialog unavailable");
+  assert.equal(extension.reads.length, reads);
+  assert.equal(
+    extension.messages.filter(({ type }) => type === "graph").length,
+    graphs,
+  );
+  assert.deepEqual(extension.errors, []);
+});
+
+test("opens outside-workspace models through the path dialog and saves encrypted copies without popup pickers", async (t) => {
   const directory = await mkdtemp(
     path.join(tmpdir(), "onnx-light-inline-files-"),
   );
@@ -1995,6 +2045,13 @@ test("opens, browses and saves encrypted copies through embedded selectors witho
   const { window } = dom;
   window.structuredClone = structuredClone;
   const { document } = window;
+  const pathDialog = document.getElementById("open-path-dialog");
+  pathDialog.showModal = () => {
+    pathDialog.open = true;
+  };
+  pathDialog.close = () => {
+    pathDialog.open = false;
+  };
   const requests = [];
   window.HTMLCanvasElement.prototype.getContext = () => ({
     font: "",
@@ -2021,6 +2078,8 @@ test("opens, browses and saves encrypted copies through embedded selectors witho
   await flush();
   document.getElementById("open-model").click();
   await flush();
+  document.getElementById("open-path-browse").click();
+  await flush();
   document.getElementById("open-location").value = directory;
   submit("open-browse");
   await flush();
@@ -2039,6 +2098,10 @@ test("opens, browses and saves encrypted copies through embedded selectors witho
   await flush();
   files = document.querySelectorAll("#open-files button");
   files[1].click();
+  document.getElementById("choose-open-path").click();
+  assert.equal(pathDialog.open, false);
+  assert.equal(document.getElementById("open-file").value, source);
+  assert.equal(extension.openDialogs.length, 0);
   submit("open-form");
   await flush();
   assert.equal(document.querySelectorAll(".graph-node").length, 5);
