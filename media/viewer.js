@@ -193,8 +193,22 @@ function showTab(name, focus = false) {
   if (name === "model") fit();
   else if (name === "statistics") requestStatistics();
   else if (name === "memory") memoryPanel.open();
-  else if (name === "tensors") tensorListPanel.open();
-  else if (name === "settings") vscode.postMessage({ type: "get-settings" });
+  else if (name === "tensors") {
+    const names = [...selected].flatMap((id) => {
+      const view = nodeViews.get(id);
+      return view?.node
+        ? [
+            ...view.node.inputs,
+            ...(view.node.captures ?? []),
+            ...view.node.outputs,
+          ]
+        : view?.port
+          ? [view.port.name]
+          : [];
+    });
+    if (selectedConnection) names.push(selectedConnection.name);
+    tensorListPanel.open(names);
+  } else if (name === "settings") vscode.postMessage({ type: "get-settings" });
   else if (name === "logs")
     byId("logs-view").scrollTop = byId("logs-view").scrollHeight;
 }

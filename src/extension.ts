@@ -2344,7 +2344,18 @@ async function configurePanel(
               const fileName = copyFileName(current, format.encrypted);
               if (inline && typeof message.overwrite !== "boolean")
                 throw new Error("Invalid overwrite choice.");
-              if (!inline) await prepareSaveDirectory(saveDirectoryUri());
+              if (!inline) {
+                try {
+                  await prepareSaveDirectory(saveDirectoryUri());
+                } catch (error) {
+                  log.record(
+                    "FAILED",
+                    "Prepare suggested save directory",
+                    undefined,
+                    error instanceof Error ? error.message : String(error),
+                  );
+                }
+              }
               const destination = inline
                 ? locationUri(message.location)
                 : await vscode.window.showSaveDialog({

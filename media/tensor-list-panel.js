@@ -180,7 +180,7 @@ function createTensorListPanel({ byId, openStatistics }) {
     updateTypeFilter();
   }
 
-  function render() {
+  function render(focusHighlighted = false) {
     body.replaceChildren();
     if (!graph) {
       byId("tensor-list-status").textContent =
@@ -198,6 +198,10 @@ function createTensorListPanel({ byId, openStatistics }) {
           (value) => value.toLowerCase().includes(query),
         ),
     );
+    if (focusHighlighted) {
+      const first = matching.findIndex((entry) => highlighted.has(entry.name));
+      if (first >= 0) page = Math.floor(first / pageSize);
+    }
     page = Math.min(
       page,
       Math.max(0, Math.ceil(matching.length / pageSize) - 1),
@@ -311,18 +315,9 @@ function createTensorListPanel({ byId, openStatistics }) {
       for (const button of body.querySelectorAll("button"))
         button.disabled = busy;
     },
-    open(names) {
-      if (names) {
-        highlighted = new Set(names);
-        search.value = "";
-        typeFilter.value = "";
-        page = 0;
-        if (graph && !records) build();
-        const first =
-          records?.findIndex((entry) => highlighted.has(entry.name)) ?? -1;
-        if (first >= 0) page = Math.floor(first / pageSize);
-      }
-      render();
+    open(names = []) {
+      highlighted = new Set(names);
+      render(true);
     },
   };
 }

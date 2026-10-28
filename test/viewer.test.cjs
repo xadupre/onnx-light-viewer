@@ -318,8 +318,8 @@ test("tensor icons open data directly while the tensor browser lists metadata an
     ],
   );
   assert.equal(row(weight).querySelector("matmul"), null);
-  assert.equal(row(weight).classList.contains("tensor-highlighted"), false);
-  assert.equal(row("constant").classList.contains("tensor-highlighted"), false);
+  assert.equal(row(weight).classList.contains("tensor-highlighted"), true);
+  assert.equal(row("constant").classList.contains("tensor-highlighted"), true);
   assert.equal(row("unused").classList.contains("tensor-highlighted"), false);
   assert.equal(row("unused").cells[3].textContent, "[]");
   assert.equal(row("constant").cells[1].textContent, "Constant");
@@ -378,6 +378,76 @@ test("tensor icons open data directly while the tensor browser lists metadata an
   assert.equal(search.value, "");
   assert.equal(document.querySelectorAll(".tensor-highlighted").length, 0);
   assert.equal(document.querySelectorAll("#tensor-list-rows tr").length, 0);
+});
+
+test("tensor browser highlights the current selection across pages without clearing filters", (t) => {
+  const { document, window, load, messages } = openViewer(t);
+  const byId = (id) => document.getElementById(id);
+  const graph = weightsGraph();
+  graph.initializers.unshift(
+    ...Array.from({ length: 105 }, (_, index) => ({
+      name: `integer-${index}`,
+      type: "INT64",
+      shape: [],
+    })),
+  );
+  graph.nodes.push({
+    ...demoGraph.nodes[0],
+    id: "node-2",
+    opType: "Constant",
+    inputs: [],
+    outputs: ["constant"],
+    parameters: [],
+  });
+  graph.outputs.push("constant");
+  load(graph);
+  const select = (selector, ctrlKey = false) => {
+    byId("model-tab").click();
+    document
+      .querySelector(selector)
+      .dispatchEvent(
+        new window.MouseEvent("click", { bubbles: true, ctrlKey }),
+      );
+    byId("tensors-tab").click();
+  };
+  const highlighted = () =>
+    [...document.querySelectorAll(".tensor-highlighted")].map(
+      (row) => row.dataset.name,
+    );
+  select('[data-id="node-0"]');
+  assert.deepEqual(highlighted(), ["weight"]);
+  assert.equal(byId("tensor-list-previous").disabled, false);
+  assert.match(byId("tensor-list-status").textContent, /1 highlighted/);
+  const filter = byId("tensor-list-type");
+  filter.value = "FLOAT";
+  filter.dispatchEvent(new window.Event("change"));
+  const search = byId("tensor-list-search");
+  search.value = "weight";
+  search.dispatchEvent(new window.Event("input"));
+  select('[data-id="node-1"]');
+  assert.deepEqual(highlighted(), ["other-weight"]);
+  assert.equal(filter.value, "FLOAT");
+  assert.equal(search.value, "weight");
+  select('[data-id="node-0"]', true);
+  assert.deepEqual(highlighted(), ["weight", "other-weight"]);
+  assert.equal(filter.value, "FLOAT");
+  assert.equal(search.value, "weight");
+  byId("model-tab").click();
+  byId("graph").dispatchEvent(
+    new window.KeyboardEvent("keydown", { key: "Escape" }),
+  );
+  byId("tensors-tab").click();
+  assert.deepEqual(highlighted(), []);
+  filter.value = "";
+  filter.dispatchEvent(new window.Event("change"));
+  search.value = "";
+  search.dispatchEvent(new window.Event("input"));
+  select('[data-id="output-1"]');
+  assert.deepEqual(highlighted(), ["constant"]);
+  assert.equal(
+    messages.some((message) => message.type === "tensor-statistics"),
+    false,
+  );
 });
 
 test("operator tensor icons preserve area zoom and support keyboard activation", (t) => {

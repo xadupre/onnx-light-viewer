@@ -620,6 +620,40 @@ test("defaults model saves to a workspace cache subdirectory without moving the 
   );
 });
 
+test("opens the save dialog when the suggested directory cannot be created but rejects an unwritable selected destination", async (t) => {
+  const directory = await mkdtemp(
+    path.join(tmpdir(), "viewer-save-directory-error-"),
+  );
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const workspace = path.join(directory, "workspace");
+  await mkdir(workspace);
+  await writeFile(path.join(workspace, ".cache"), "Not a directory");
+  const extension = await openExtension("relu.onnx", undefined, true);
+  t.after(() => extension.dispose());
+  extension.setWorkspaceFolders([workspace]);
+  const destination = path.join(directory, "saved.onnx");
+  await extension.save(destination);
+  assert.equal(extension.saveDialogs.length, 1);
+  assert.equal(extension.messages.at(-1).type, "save-info");
+  assert.deepEqual(extension.errors, []);
+  const saved = await readFile(destination);
+  const { loadModel } = require("../dist/graph");
+  assert.equal(loadModel(saved, "saved").graph().nodes[0].opType, "Relu");
+  assert.match(
+    extension.logs.join("\n"),
+    /\[FAILED\] Prepare suggested save directory/,
+  );
+  const writes = extension.writes.length;
+  await extension.save(
+    path.join(workspace, ".cache", ".onnx-light-viewer", "saved.onnx"),
+  );
+  assert.equal(extension.saveDialogs.length, 2);
+  assert.equal(extension.messages.at(-1).type, "save-error");
+  assert.equal(extension.errors.length, 1);
+  assert.equal(extension.writes.length, writes);
+  assert.deepEqual(await readFile(destination), saved);
+});
+
 test("persists only viewer preferences across closed extension panels", async () => {
   const preferences = new Map();
   const first = await openExtension(
