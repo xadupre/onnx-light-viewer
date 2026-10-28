@@ -51,8 +51,39 @@ export async function optimizeWithOnnxScript(
         `ONNX Script optimization failed. Install onnx and onnxscript in the configured Python environment. ${error instanceof Error ? error.message : String(error)}`,
       );
     }
-    const result = await readFile(destination);
-    const changed: unknown = JSON.parse(await readFile(status, "utf8"));
+    let result: Uint8Array;
+    try {
+      result = await readFile(destination);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException | null | undefined)?.code;
+      if (code === "ENOENT") {
+        throw new Error(
+          `ONNX Script optimization succeeded but did not produce the expected artifact: ${destination}. ` +
+            `Check the Python environment, filesystem permissions, and Python output/logs.`,
+        );
+      }
+      throw new Error(
+        `ONNX Script optimization produced an unreadable output model at ${destination}. ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+
+    let changedText: string;
+    try {
+      changedText = await readFile(status, "utf8");
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException | null | undefined)?.code;
+      if (code === "ENOENT") {
+        throw new Error(
+          `ONNX Script optimization succeeded but did not produce the expected artifact: ${status}. ` +
+            `Check the Python environment, filesystem permissions, and Python output/logs.`,
+        );
+      }
+      throw new Error(
+        `ONNX Script optimization produced an unreadable change status file at ${status}. ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+
+    const changed: unknown = JSON.parse(changedText);
     if (typeof changed !== "boolean")
       throw new Error("ONNX Script returned an invalid change status.");
     return { bytes: result, changed };
