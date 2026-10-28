@@ -721,18 +721,29 @@ async function terminateExport(child: ChildProcess): Promise<void> {
     if (child.exitCode !== null || child.signalCode !== null) return;
     await new Promise<void>((resolve, reject) => {
       execFile("taskkill", ["/PID", String(pid), "/T", "/F"], (error) => {
-        // taskkill returns 128 if the target exited before termination.
         if (
-          error &&
-          !(
-            error.code === 128 &&
-            (child.exitCode !== null || child.signalCode !== null)
-          )
+          !error ||
+          child.exitCode !== null ||
+          child.signalCode !== null ||
+          child.kill()
         ) {
-          if (child.exitCode !== null || child.signalCode !== null) resolve();
-          else if (child.kill()) resolve();
-          else reject(error);
-        } else resolve();
+          resolve();
+          return;
+        }
+        // Windows process exit can precede the ChildProcess exit notification.
+        try {
+          process.kill(pid, 0);
+        } catch (probeError) {
+          if (
+            probeError instanceof Error &&
+            "code" in probeError &&
+            probeError.code === "ESRCH"
+          ) {
+            resolve();
+            return;
+          }
+        }
+        reject(error);
       });
     });
     return;
