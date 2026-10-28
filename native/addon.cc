@@ -1,9 +1,27 @@
 /** @file Node-API entry points for the onnx-light viewer. */
 #include "addon.h"
+#include "graph.h"
+#include <onnx_extensions/kernels/kernel_dispatch_table.h>
+#include <onnx_extensions/shapes/dispatch_table.h>
+#include <onnx_light_cpu/kernels/register_kernels.h>
+#include <onnx_light_cpu/patterns/com_microsoft/patterns.h>
+#include <onnx_light_cpu/shapes/ai_onnx/shape_inference.h>
+#include <onnx_light_cpu/shapes/com_microsoft/shape_inference.h>
 
 namespace {
 
 Napi::Object Initialize(Napi::Env env, Napi::Object exports) {
+  static const bool registered = [] {
+    ONNX_LIGHT_NAMESPACE::onnx_shapes::RegisterShapeFunctions();
+    ONNX_LIGHT_NAMESPACE::onnx_shapes::RegisterPeakMemoryFunctions();
+    ONNX_LIGHT_NAMESPACE::onnx_kernels::RegisterKernelFunctions();
+    onnx_light_cpu::RegisterMicrosoftShapeAndMemoryFunctions();
+    onnx_light_cpu::RegisterExperimentalShapeAndMemoryFunctions();
+    onnx_light_cpu::RegisterCustomOperatorPatterns();
+    onnx_light_cpu::RegisterAllKernels();
+    return true;
+  }();
+  (void)registered;
   exports.Set("onnxLightVersion", ONNX_LIGHT_VERSION);
   exports.Set("decodeGraph", Napi::Function::New(env, onnx_light_viewer::DecodeGraph));
   exports.Set("getSchema", Napi::Function::New(env, onnx_light_viewer::GetSchema));

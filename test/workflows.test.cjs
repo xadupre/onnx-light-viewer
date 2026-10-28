@@ -26,6 +26,25 @@ test("native builds and coverage use onnx-light 0.2.1 with pinned checksums", ()
       `https://github.com/xadupre/onnx-light/releases/download/${version}/onnx_light-${version}-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl#sha256=3aa2fe0d0eb39a5fe380b5241997169edad466f99dc688eec97ef4091cefc2ae`,
     ),
   );
+  assert.match(cmake, /set\(ONNX_LIGHT_CPU_VERSION "0\.2\.1\.1"\)/);
+  assert.match(
+    cmake,
+    /https:\/\/github\.com\/xadupre\/onnx-light-cpu\/archive\/refs\/tags\/\$\{ONNX_LIGHT_CPU_VERSION\}\.tar\.gz/,
+  );
+  assert.match(
+    cmake,
+    /URL_HASH "SHA256=ec9ad7a8d58fd24716f4c61d9cf3fdb8bf5d791e7fbea7cbbdb78b8f1e78ac0c"/,
+  );
+  assert.match(
+    cmake,
+    /target_link_libraries\(onnx_light_viewer PRIVATE[\s\S]*?\n  lib_onnx_light_cpu_kernels/,
+  );
+  const requirements = readFileSync(
+    path.resolve(__dirname, "requirements.txt"),
+    "utf8",
+  );
+  assert.match(requirements, /^onnx-light==0\.2\.1$/m);
+  assert.match(requirements, /^onnx-light-cpu==0\.2\.1\.1$/m);
 });
 
 test("CI runs unit tests on Linux and Windows without building documentation", () => {

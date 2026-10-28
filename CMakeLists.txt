@@ -35,6 +35,21 @@ find_package(onnx_light CONFIG REQUIRED
   NO_DEFAULT_PATH
 )
 
+set(ONNX_LIGHT_CPU_VERSION "0.2.1.1")
+set(ONNX_LIGHT_CPU_BUILD_PYTHON OFF CACHE BOOL "" FORCE)
+set(ONNX_LIGHT_CPU_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(ONNX_LIGHT_CPU_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+set(ONNX_LIGHT_CPU_INSTALL OFF CACHE BOOL "" FORCE)
+set(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT ON CACHE BOOL "" FORCE)
+FetchContent_Declare(
+  onnx_light_cpu
+  URL "https://github.com/xadupre/onnx-light-cpu/archive/refs/tags/${ONNX_LIGHT_CPU_VERSION}.tar.gz"
+  URL_HASH "SHA256=ec9ad7a8d58fd24716f4c61d9cf3fdb8bf5d791e7fbea7cbbdb78b8f1e78ac0c"
+  DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+)
+FetchContent_MakeAvailable(onnx_light_cpu)
+set_target_properties(lib_onnx_light_cpu_backend_test PROPERTIES EXCLUDE_FROM_ALL TRUE)
+
 add_library(onnx_light_viewer SHARED
   native/addon.cc
   native/model.cc
@@ -60,6 +75,7 @@ target_link_libraries(onnx_light_viewer PRIVATE
   onnx_light::lib_onnx_op onnx_light::lib_onnx_shape
   onnx_light::lib_onnx_patterns
   onnx_light::lib_onnx_kernels
+  lib_onnx_light_cpu_kernels
   onnx_light::lib_onnx_backend_test ${CMAKE_JS_LIB}
 )
 set(_output "${CMAKE_CURRENT_SOURCE_DIR}/dist/native")
@@ -113,4 +129,6 @@ file(DOWNLOAD
   EXPECTED_HASH "SHA256=d495ab111fc496d1cd0291b4451da584d15c64b8af0895655e9fa52f801ea2c4"
 )
 configure_file(node_modules/node-addon-api/LICENSE.md "${_output}/node-addon-api.LICENSE" COPYONLY)
+configure_file("${onnx_light_cpu_SOURCE_DIR}/LICENSE" "${_output}/onnx-light-cpu.LICENSE" COPYONLY)
+configure_file("${onnx_light_cpu_SOURCE_DIR}/ml_cpu_compute/LICENSE" "${_output}/ml-cpu-compute.LICENSE" COPYONLY)
 file(COPY "${onnx_light_cpp_SOURCE_DIR}/share/licenses/" DESTINATION "${_output}/licenses")
