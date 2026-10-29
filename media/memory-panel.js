@@ -7,11 +7,16 @@ function createMemoryPanel({ byId, postMessage, formatFileSize, selectNode }) {
   let peaks = [];
   let peakIndices = new Set();
   let page = 0;
+  let zoom = 1;
+  let inspectedIndex = 0;
   const pageSize = 100;
   const view = byId("memory-view");
   const fields = byId("memory-dimensions");
   const status = byId("memory-status");
   const results = byId("memory-results");
+  const svg = byId("memory-chart");
+  const scroll = byId("memory-chart-scroll");
+  const inspection = byId("memory-inspection");
 
   function busy(pending) {
     view.setAttribute("aria-busy", String(pending));
@@ -23,6 +28,7 @@ function createMemoryPanel({ byId, postMessage, formatFileSize, selectNode }) {
 
   function open() {
     results.hidden = true;
+    inspection.hidden = true;
     configured = false;
     status.textContent = hasModel
       ? "Reading model dimensions…"
@@ -110,11 +116,22 @@ function createMemoryPanel({ byId, postMessage, formatFileSize, selectNode }) {
   function chart() {
     const events = profile.events;
     const peak = profile.peakBytes ?? 0;
+    const width = Math.max(1000, scroll.clientWidth) * zoom;
+    const plotWidth = width - 80;
+    svg.setAttribute("viewBox", `0 0 ${width} 330`);
+    svg.style.width = `${width}px`;
+    svg
+      .querySelector(".memory-axis")
+      .setAttribute("d", `M60,20V240H${width - 20}`);
+    byId("memory-zoom-level").textContent = `${Math.round(zoom * 100)}%`;
+    byId("memory-zoom-out").disabled = zoom === 1;
     const x = (step) =>
-      (60 + (920 * step) / (events.length * 3 + 1)).toFixed(5);
+      (60 + (plotWidth * step) / (events.length * 3 + 1)).toFixed(5);
     const y = (bytes) => (240 - (210 * bytes) / Math.max(1, peak)).toFixed(5);
     const points = events.length
-      ? [`M${x(0)},${y(events[0].existingBytes)}`]
+      ? [
+          `M${x(0)},${y(events[0].memory?.before_bytes ?? events[0].existingBytes)}`,
+        ]
       : [];
     const interval = (index) =>
       `M${x(index * 3 + 1)},242 H${x(index * 3 + 3)} V252 H${x(index * 3 + 1)}Z`;
@@ -150,7 +167,7 @@ function createMemoryPanel({ byId, postMessage, formatFileSize, selectNode }) {
     const indices = [];
     if (events.length) {
       indices.push(0);
-      const target = Math.max(1, (events.length - 1) / 9);
+      const target = Math.max(1, (events.length - 1) / (plotWidth / 100));
       const power = 10 ** Math.floor(Math.log10(target));
       const step =
         [1, 2, 5, 10].find((multiple) => multiple * power >= target) * power;
@@ -177,23 +194,60 @@ function createMemoryPanel({ byId, postMessage, formatFileSize, selectNode }) {
       );
     }
     const markers = [];
-    const rowEnds = [-Infinity, -Infinity];
+    const rows = [[], []];
+    const priority = (type) =>
+      /Attention/i.test(type)
+        ? 0
+        : /MatMul/i.test(type)
+          ? 1
+          : /Normalization/i.test(type)
+            ? 2
+            : 3;
+    const candidates = events.map((event, index) => ({ event, index }));
+    candidates.sort(
+      (a, b) =>
+        priority(a.event.opType) - priority(b.event.opType) ||
+        a.index - b.index,
+    );
     for (const [index, event] of events.entries()) {
       if (
-        !/Attention|MatMul|^(?:Gemm|Conv|ConvInteger|QLinearConv|ConvTranspose|Einsum|LSTM|GRU|RNN)$/i.test(
+        priority(event.opType) < 3 ||
+        /^(?:Gemm|Conv|ConvInteger|QLinearConv|ConvTranspose|Einsum|LSTM|GRU|RNN)$/i.test(
           event.opType,
         )
       )
+        markers.push(interval(index));
+    }
+    const dense = plotWidth / events.length < 72;
+    const stride = plotWidth / events.length < 14 ? 10 : 5;
+    const placed = [];
+    for (const { event, index } of candidates) {
+      if (
+        dense &&
+        priority(event.opType) === 3 &&
+        index !== 0 &&
+        (index + 1) % stride !== 0
+      )
         continue;
       const position = center(index);
-      markers.push(interval(index));
       const text = `#${event.index + 1} ${event.opType}`;
       const width = text.length * 8 + 12;
-      if (width > 920) continue;
-      const left = Math.max(60, Math.min(position - width / 2, 980 - width));
-      const row = rowEnds.findIndex((end) => left >= end + 12);
+      if (width > plotWidth) continue;
+      const left = Math.max(
+        60,
+        Math.min(position - width / 2, plotWidth + 60 - width),
+      );
+      const row = rows.findIndex((ranges) =>
+        ranges.every(
+          ([start, end]) => left >= end + 12 || left + width + 12 <= start,
+        ),
+      );
       if (row < 0) continue;
-      rowEnds[row] = left + width;
+      rows[row].push([left, left + width]);
+      placed.push({ event, index, left, width, row, text });
+    }
+    placed.sort((a, b) => a.index - b.index);
+    for (const { event, left, width, row, text } of placed) {
       const group = append(labels, "g", { "data-node-index": event.index });
       append(
         group,
@@ -213,6 +267,144 @@ function createMemoryPanel({ byId, postMessage, formatFileSize, selectNode }) {
       !events.length || events.at(-1).afterBytes != null;
   }
 
+  function inspect(index, phase = "during") {
+    const event = profile?.events[index];
+    if (!event) return;
+    inspectedIndex = index;
+    const bytes =
+      phase === "before"
+        ? (event.memory?.before_bytes ?? event.existingBytes)
+        : phase === "after"
+          ? event.afterBytes
+          : event.deviceBytes;
+    const amount = (value) =>
+      value == null
+        ? "Unavailable"
+        : `${formatFileSize(value)} (${value} bytes)`;
+    const lines = [
+      `#${event.index + 1} ${event.opType}${event.node ? `: ${event.node}` : ""} — ${phase} execution`,
+      `Memory: ${amount(bytes)}`,
+      `Before allocation: ${amount(event.existingBytes)}`,
+      `New outputs: ${amount(event.outputBytes)}`,
+      `Scratch: ${amount(event.scratchBytes)}`,
+      `After release: ${amount(event.afterBytes)}`,
+      "Allocation breakdown during execution (SDK categories):",
+    ];
+    for (const [key, label] of [
+      ["initializers", "Weights (initializers)"],
+      ["inputs", "Inputs"],
+      ["intermediates", "Intermediates"],
+      ["outputs", "New output tensors"],
+    ]) {
+      const numeric = event.memory?.[key];
+      const symbolic = event.symbolicMemory?.[key];
+      const tags = new Set([
+        ...Object.keys(numeric ?? {}),
+        ...Object.keys(symbolic ?? {}),
+      ]);
+      lines.push(`${label}:`);
+      if (!tags.size) lines.push("  —");
+      for (const tag of tags)
+        lines.push(
+          `  ${tag || "tensor"}: ${amount(numeric?.[tag])}; symbolic: ${symbolic?.[tag] ?? "Unavailable"} bytes`,
+        );
+    }
+    const key =
+      phase === "before"
+        ? "before_bytes"
+        : phase === "after"
+          ? "after_bytes"
+          : "during_bytes";
+    lines.push(
+      `Symbolic tensor memory (${phase}, scratch excluded): ${event.symbolicMemory?.[key] ?? "Unavailable"} bytes`,
+    );
+    for (const direction of ["inputs", "outputs"])
+      for (const tensor of event[direction] ?? [])
+        lines.push(
+          `${direction === "inputs" ? "in" : "out"}: ${tensor.name}: ${tensor.type ?? "Unknown"} ${tensor.shape ?? "Unknown shape"}${tensor.tag ? ` (${tensor.tag})` : ""}`,
+        );
+    inspection.textContent = lines.join("\n");
+    inspection.hidden = false;
+  }
+
+  function changeZoom(next, anchor = 0.5) {
+    if (!profile?.events.length) return;
+    const previous = zoom;
+    zoom = Math.max(1, Math.min(Math.max(32, profile.events.length / 4), next));
+    const position = scroll.scrollLeft + scroll.clientWidth * anchor;
+    chart();
+    scroll.scrollLeft =
+      zoom === 1
+        ? 0
+        : position * (zoom / previous) - scroll.clientWidth * anchor;
+    inspection.hidden = true;
+  }
+  byId("memory-zoom-in").addEventListener("click", () => changeZoom(zoom * 2));
+  byId("memory-zoom-out").addEventListener("click", () => changeZoom(zoom / 2));
+  byId("memory-zoom-reset").addEventListener("click", () => changeZoom(1));
+  svg.addEventListener(
+    "wheel",
+    (event) => {
+      if (!event.ctrlKey || !profile?.events.length) return;
+      event.preventDefault();
+      const rect = scroll.getBoundingClientRect();
+      changeZoom(
+        zoom * (event.deltaY < 0 ? 2 : 0.5),
+        rect.width ? (event.clientX - rect.left) / rect.width : 0.5,
+      );
+    },
+    { passive: false },
+  );
+  svg.addEventListener("pointermove", (event) => {
+    if (!profile?.events.length) return;
+    const rect = svg.getBoundingClientRect();
+    if (!rect.width) return;
+    const width = Number(svg.getAttribute("viewBox").split(" ")[2]);
+    const matrix = svg.getScreenCTM?.()?.inverse();
+    const position = matrix
+      ? matrix.a * event.clientX + matrix.c * event.clientY + matrix.e
+      : ((event.clientX - rect.left) * width) / rect.width;
+    if (position < 60 || position > width - 20) {
+      inspection.hidden = true;
+      return;
+    }
+    const step =
+      ((position - 60) * (profile.events.length * 3 + 1)) / (width - 80);
+    const index = Math.min(
+      profile.events.length - 1,
+      Math.max(0, Math.floor((step - 1) / 3)),
+    );
+    inspect(
+      index,
+      step < 1 ? "before" : step >= index * 3 + 3 ? "after" : "during",
+    );
+  });
+  svg.addEventListener("pointerleave", () => {
+    inspection.hidden = true;
+  });
+  window.addEventListener("resize", () => {
+    if (profile && !results.hidden) chart();
+  });
+  svg.addEventListener("keydown", (event) => {
+    if (
+      !["ArrowLeft", "ArrowRight"].includes(event.key) ||
+      !profile?.events.length
+    )
+      return;
+    event.preventDefault();
+    inspect(
+      Math.max(
+        0,
+        Math.min(
+          profile.events.length - 1,
+          inspection.hidden
+            ? inspectedIndex
+            : inspectedIndex + (event.key === "ArrowRight" ? 1 : -1),
+        ),
+      ),
+    );
+  });
+
   byId("memory-form").addEventListener("submit", (event) => {
     event.preventDefault();
     if (!configured || byId("memory-run").disabled) return;
@@ -227,6 +419,7 @@ function createMemoryPanel({ byId, postMessage, formatFileSize, selectNode }) {
       dimensions[input.name] = value;
     }
     results.hidden = true;
+    inspection.hidden = true;
     status.textContent = "Estimating memory without executing the model…";
     busy(true);
     postMessage({
@@ -313,6 +506,10 @@ function createMemoryPanel({ byId, postMessage, formatFileSize, selectNode }) {
         "Set dynamic dimensions, then choose Estimate memory.";
     } else {
       profile = message.profile;
+      zoom = 1;
+      inspectedIndex = 0;
+      scroll.scrollLeft = 0;
+      inspection.hidden = true;
       peaks = [];
       for (let start = 0; start < profile.events.length;) {
         let end = start;

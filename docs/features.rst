@@ -210,11 +210,12 @@ Memory profiling
 ^^^^^^^^^^^^^^^^
 
 Set dynamic dimensions and view the estimated CPU memory curve with paginated
-per-node allocation/scratch events. See :doc:`features/memory_profiling`.
+per-node allocation/scratch events. Zoom for more operator labels and hover for
+numerical and symbolic allocation details. See :doc:`features/memory_profiling`.
 Native estimation, not model execution or measured RAM/GPU usage.
 
 .. figure:: _static/feature-memory.png
-   :alt: Memory tab with a dynamic dimension set to two, CPU peak estimate, curve and node events.
+   :alt: Memory tab with zoom controls, CPU peak curve, and numerical and symbolic tensor allocation inspection.
    :width: 100%
 
    Estimate memory for concrete input dimensions without executing the model.

@@ -275,8 +275,11 @@ export interface MemoryProfile {
     outputBytes: number;
     scratchBytes: number;
     deviceBytes: number;
-    /** Next pre-node snapshot; null for the final node until the SDK exposes it. */
+    /** SDK post-release snapshot, including the final node. */
     afterBytes: number | null;
+    memory: Record<string, number | Record<string, number>>;
+    /** SDK expressions on the original symbolic shapes; scratch is not symbolic. */
+    symbolicMemory: Record<string, string | Record<string, string>>;
     decisions: {
       action: "inplace" | "release" | "release_shape_tag";
       name: string;

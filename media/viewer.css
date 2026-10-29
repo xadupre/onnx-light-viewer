@@ -347,10 +347,20 @@ p {
   grid-template-columns: minmax(120px, 1fr) minmax(100px, 1fr);
   gap: 8px;
 }
+#memory-chart-scroll {
+  overflow-x: auto;
+}
 #memory-chart {
+  display: block;
   width: 100%;
-  max-height: 360px;
+  height: 330px;
   margin: 12px 0;
+}
+#memory-inspection {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  padding: 12px;
+  border: 1px solid var(--muted);
 }
 #memory-chart text {
   fill: var(--text);
