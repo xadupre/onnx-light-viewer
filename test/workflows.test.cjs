@@ -71,6 +71,24 @@ test("documentation runs weekly or manually in a Linux-only workflow", () => {
   assert.doesNotMatch(documentation, /matrix:|macos-|windows-/);
 });
 
+test("documentation landing page displays the package version", () => {
+  const config = readFileSync(
+    path.resolve(__dirname, "..", "docs", "conf.py"),
+    "utf8",
+  );
+  const index = readFileSync(
+    path.resolve(__dirname, "..", "docs", "index.rst"),
+    "utf8",
+  );
+  assert.match(config, /release = json\.loads\(/);
+  assert.match(
+    config,
+    /Path\(__file__\)\.resolve\(\)\.parents\[1\] \/ "package\.json"/,
+  );
+  assert.match(config, /\)\["version"\]/);
+  assert.match(index, /^Version: \|release\|$/m);
+});
+
 test("releases retain Linux and Windows packages while macOS builds are paused", () => {
   const source = workflow("release.yml");
   assert.match(source, /runs-on: \$\{\{ matrix\.os \}\}/);

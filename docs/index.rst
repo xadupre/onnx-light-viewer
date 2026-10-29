@@ -1,6 +1,8 @@
 ONNX Light Viewer
 =================
 
+Version: |release|
+
 .. image:: ../media/onnx-badge.svg
    :target: https://onnx.ai/
    :alt: Uses ONNX
