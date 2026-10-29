@@ -621,7 +621,7 @@ export function webviewHtml(
           <tr><th scope="row">Click the background</th><td>Clear selection.</td></tr>
           <tr><th scope="row"><kbd>Ctrl/Cmd</kbd> or <kbd>Shift</kbd> + click</th><td>Toggle a node in the selection.</td></tr>
           <tr><th scope="row">Drag a node</th><td>Move it. Drag a selected node to move the whole selection.</td></tr>
-          <tr><th scope="row">Drag the background</th><td>Select nodes in a rectangle. Hold <kbd>Ctrl/Cmd</kbd> or <kbd>Shift</kbd> to add to the selection.</td></tr>
+          <tr><th scope="row">Drag the background</th><td>Move the model view without rearranging nodes. Hold <kbd>Ctrl/Cmd</kbd> or <kbd>Shift</kbd> to select nodes in a rectangle and add to the selection.</td></tr>
           <tr><th scope="row">Scroll</th><td>Pan vertically.</td></tr>
           <tr><th scope="row"><kbd>Shift</kbd> + scroll</th><td>Pan horizontally. Horizontal trackpad scrolling also pans horizontally.</td></tr>
           <tr><th scope="row"><kbd>Ctrl</kbd> + scroll</th><td>Zoom in or out around the pointer.</td></tr>
