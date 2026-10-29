@@ -240,12 +240,6 @@ See :doc:`features/fusion_patterns`.
 With **onnx-light**, inspect **Matched patterns**, undo the last operation or
 choose **Back to original model** without leaving Optimize.
 
-.. figure:: _static/feature-optimizer-history.png
-   :alt: Native Optimize panel with matched patterns, highlighted result nodes, Unfuse last and Back to original model.
-   :width: 100%
-
-   Inspect native matches and return to the original model.
-
 Pattern groups
 ^^^^^^^^^^^^^^
 
@@ -274,6 +268,30 @@ Previewing does not modify the graph. See :doc:`features/fusion_patterns`.
    :width: 100%
 
    Inspect and select native matches before applying them.
+
+Unfuse (undo native edits)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Open **Unfuse**, beside **Fuse** in the **Optimization** sidebar group, to undo
+native edits without changing the source file. **Unfuse last** reverses one
+complete operation: a batch of selected matches, a global optimization, a
+global pass or an applied rewriting-scenario step/batch. Repeat to go back
+further, or choose **Unfuse all** to undo all available operations, including
+those on other pipeline stages.
+The history lists operations newest first; click a match to highlight its
+surviving result nodes. These controls are disabled when no undo history remains.
+See :ref:`unfuse` for history and saved rewriting-plan details.
+
+The native **Optimize** panel also offers **Unfuse last** and
+**Back to original model** (undo all). Changed ONNX Script results cannot be
+undone and clear earlier native history; later native edits undo back to that
+Python result. Saving does not persist the session's undo stack.
+
+.. figure:: _static/feature-optimizer-history.png
+   :alt: Native Optimize panel with matched patterns, highlighted result nodes, Unfuse last and Back to original model.
+   :width: 100%
+
+   Undo one native operation or all available native edits from Optimize.
 
 Diagnostics and help
 ^^^^^^^^^^^^^^^^^^^^

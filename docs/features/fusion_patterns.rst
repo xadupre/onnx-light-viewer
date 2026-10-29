@@ -256,8 +256,10 @@ Structural edits, such as ``Finalize fusion node order``, appear as steps too.
 Subgraph edits display their stored scope path; their history entries do not
 select nodes in the main graph.
 
-Undo and rewriting plans
--------------------------
+.. _unfuse:
+
+Unfuse and rewriting plans
+----------------------------
 
 **Unfuse**, beside **Fuse**, offers **Unfuse last** and **Unfuse all**.
 Unfuse last restores the model before the last fusion or scenario operation:
