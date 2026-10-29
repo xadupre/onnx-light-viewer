@@ -273,14 +273,14 @@ function createTensorStatisticsPanel({ byId, postMessage }) {
 
   return {
     reset,
-    open(batch, graphPath) {
+    open(batch, graphPath, selectedName = batch[0]) {
       names = [
         ...new Set(batch.filter((name) => typeof name === "string" && name)),
       ];
       if (!names.length) return;
       byId("tensor-statistics-picker").hidden = names.length === 1;
       path = graphPath;
-      index = 0;
+      index = Math.max(0, names.indexOf(selectedName));
       opener = document.activeElement;
       if (!dialog.open) dialog.showModal();
       show();
