@@ -95,6 +95,7 @@ export class PromptSession {
           fail(
             new Error(`Native prompt exited (${signal ?? code}).\n${output}`),
           );
+          this.pending = undefined;
           this.child = undefined;
         }
         resolve();
@@ -111,6 +112,7 @@ export class PromptSession {
     event: (value: unknown) => void,
   ): Promise<void> {
     if (this.closing) await this.closing;
+    signal.throwIfAborted();
     if (this.child && this.key !== key) await this.close();
     signal.throwIfAborted();
     if (this.pending) throw new Error("A native prompt is already running.");

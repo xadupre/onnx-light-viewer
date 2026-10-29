@@ -29,15 +29,21 @@ function panel(t) {
 }
 
 test("prompt defaults, engine applicability and aligned validation results", (t) => {
-  const { dom, byId, api, messages } = panel(t);
+  const { byId, api, messages } = panel(t);
+  assert.equal(byId("prompt-tab").textContent, "Prompt");
+  assert.ok(byId("prompt-tab").querySelector("svg"));
+  assert.equal(byId("prompt-view").querySelector("h1").textContent, "Prompt");
   assert.equal(byId("prompt-fields").disabled, false);
   assert.equal(byId("prompt-max-tokens").value, "32");
   assert.equal(byId("prompt-engine").options[1].disabled, true);
   byId("prompt-text").value = "<script>not executable</script>";
-  byId("prompt-form").dispatchEvent(
-    new dom.window.Event("submit", { cancelable: true }),
-  );
+  const runButton = byId("prompt-form").querySelector('button[type="submit"]');
+  assert.ok(runButton.querySelector("svg"));
+  assert.equal(runButton.textContent, "");
+  assert.equal(runButton.getAttribute("aria-label"), "Run prompt");
+  runButton.click();
   const run = messages.at(-1);
+  assert.equal(run.options.engine, "onnx-light");
   assert.equal(run.options.maxTokens, 32);
   assert.equal(run.options.prompt, byId("prompt-text").value);
   assert.equal(byId("prompt-fields").disabled, true);
@@ -61,6 +67,7 @@ test("prompt defaults, engine applicability and aligned validation results", (t)
   byId("prompt-validate").click();
   const validation = messages.at(-1);
   assert.equal(validation.options.validate, true);
+  assert.equal(validation.reuseResult, true);
   assert.equal(validation.options.prompt, run.options.prompt);
   api.handleMessage({
     type: "prompt-result",
@@ -87,6 +94,162 @@ test("prompt defaults, engine applicability and aligned validation results", (t)
     byId("prompt-results").textContent,
     /prefill 120.000 ms; decode mean 4.000 ms/,
   );
+});
+
+test("validation accepts an explicit HF source after native generation without changing the generated prompt", (t) => {
+  const { dom, byId, api, messages } = panel(t);
+  api.handleMessage({
+    type: "prompt-info",
+    requestId: messages.at(-1).requestId,
+    info: {
+      available: true,
+      engines: ["onnx-light"],
+      validationRequiresReference: true,
+    },
+  });
+  assert.match(
+    byId("prompt-validation-status").textContent,
+    /validation is unavailable/,
+  );
+  byId("prompt-form").querySelector('button[type="submit"]').click();
+  const run = messages.at(-1);
+  assert.equal(run.options.validate, false);
+  api.handleMessage({
+    type: "prompt-result",
+    requestId: run.requestId,
+    result: { prompt: run.options.prompt, tokens: [] },
+  });
+  assert.equal(byId("prompt-validate").disabled, true);
+  byId("prompt-reference-source").value = " Qwen/Qwen3-0.6B ";
+  byId("prompt-reference-source").dispatchEvent(new dom.window.Event("input"));
+  assert.equal(byId("prompt-validate").disabled, false);
+  byId("prompt-text").value = "Edited after generation";
+  byId("prompt-validate").click();
+  assert.equal(messages.at(-1).options.referenceSource, "Qwen/Qwen3-0.6B");
+  assert.equal(messages.at(-1).options.prompt, run.options.prompt);
+  assert.equal(byId("prompt-reference-source").disabled, true);
+  api.reset();
+  assert.equal(byId("prompt-reference-source").value, "");
+});
+
+test("warns before generation and requires a reference for validation on the first run", (t) => {
+  const { dom, byId, api, messages } = panel(t);
+  byId("prompt-view").hidden = false;
+  api.handleMessage({
+    type: "prompt-info",
+    requestId: messages.at(-1).requestId,
+    info: {
+      available: true,
+      engines: ["onnxruntime-genai"],
+      validationRequiresReference: true,
+    },
+  });
+  assert.match(
+    byId("prompt-validation-status").textContent,
+    /Enter a model ID/,
+  );
+  byId("prompt-validate-run").checked = true;
+  byId("prompt-validate-run").dispatchEvent(new dom.window.Event("change"));
+  byId("prompt-form").dispatchEvent(new dom.window.Event("submit"));
+  assert.equal(
+    messages.some(({ type }) => type === "run-prompt"),
+    false,
+  );
+  assert.equal(byId("prompt-results").childElementCount, 0);
+  assert.equal(byId("prompt-reference-source").required, true);
+  assert.equal(dom.window.document.activeElement.id, "prompt-reference-source");
+  byId("prompt-reference-source").value = "Qwen/Qwen3-0.6B";
+  byId("prompt-reference-source").dispatchEvent(new dom.window.Event("input"));
+  byId("prompt-form").querySelector('button[type="submit"]').click();
+  const run = messages.at(-1);
+  assert.equal(run.type, "run-prompt");
+  assert.equal(run.options.engine, "onnxruntime-genai");
+  assert.equal(run.options.validate, true);
+  assert.equal(run.reuseResult, false);
+  assert.equal(run.options.referenceSource, "Qwen/Qwen3-0.6B");
+  api.handleMessage({
+    type: "prompt-token",
+    requestId: run.requestId,
+    index: 0,
+    token: { text: " Paris", id: 1, score: 4, timeMs: 1 },
+  });
+  assert.match(byId("prompt-results").textContent, /Paris/);
+});
+
+test("keeps stdout and validation tracebacks after the ONNX results with a concise status", (t) => {
+  const { dom, byId, api, messages } = panel(t);
+  byId("prompt-form").querySelector('button[type="submit"]').click();
+  api.handleMessage({
+    type: "prompt-result",
+    requestId: messages.at(-1).requestId,
+    result: {
+      prompt: "Hello",
+      tokens: [{ text: " Paris", id: 1, score: 4, timeMs: 1 }],
+    },
+  });
+  const table = byId("prompt-results").querySelector("table");
+  byId("prompt-validate").click();
+  const requestId = messages.at(-1).requestId;
+  api.handleMessage({
+    type: "prompt-progress",
+    requestId,
+    output: "Validating generated prefixes with the local HF reference",
+  });
+  assert.equal(byId("prompt-output").hidden, false);
+  const error =
+    "Hugging Face validation exited with code 1.\nTraceback:\nNo local Hugging Face source is available.";
+  api.handleMessage({ type: "prompt-error", requestId, error });
+  assert.equal(byId("prompt-status").textContent, error.split("\n")[0]);
+  assert.equal(byId("prompt-progress").textContent, error);
+  assert.equal(byId("prompt-results").querySelector("table"), table);
+  assert.ok(
+    byId("prompt-results").compareDocumentPosition(byId("prompt-output")) &
+      dom.window.Node.DOCUMENT_POSITION_FOLLOWING,
+  );
+  api.reset();
+  assert.equal(byId("prompt-output").hidden, true);
+  assert.equal(byId("prompt-progress").textContent, "");
+});
+
+test("unavailable prompt explains the missing package instead of enabling unsupported execution", (t) => {
+  const { byId, api, messages } = panel(t);
+  const reason =
+    "Prompt is disabled because generation metadata is missing. For Mobius, export with --runtime ort-genai.";
+  api.handleMessage({
+    type: "prompt-info",
+    requestId: messages[0].requestId,
+    info: { available: false, engines: [], reason },
+  });
+  assert.equal(byId("prompt-fields").disabled, true);
+  assert.equal(byId("prompt-status").textContent, reason);
+  assert.ok(
+    [...byId("prompt-engine").options].every((option) => option.disabled),
+  );
+  const count = messages.length;
+  byId("prompt-form").querySelector('button[type="submit"]').click();
+  assert.equal(messages.length, count);
+});
+
+test("defaults to ONNX Runtime GenAI when available, regardless of engine list order", (t) => {
+  const { dom, byId, api, messages } = panel(t);
+  for (const engines of [
+    ["onnx-light", "onnxruntime-genai"],
+    ["onnxruntime-genai", "onnx-light"],
+    ["onnxruntime-genai"],
+  ]) {
+    api.handleMessage({
+      type: "prompt-info",
+      requestId: messages[0].requestId,
+      info: { available: true, engines },
+    });
+    assert.equal(byId("prompt-engine").value, "onnxruntime-genai");
+    byId("prompt-settings-open").click();
+    assert.equal(byId("prompt-settings-genai").hidden, false);
+    assert.equal(byId("prompt-settings-light").hidden, true);
+    byId("prompt-settings-back").click();
+  }
+  byId("prompt-form").dispatchEvent(new dom.window.Event("submit"));
+  assert.equal(messages.at(-1).options.engine, "onnxruntime-genai");
 });
 
 test("appends tokens and updates decode mean before completion without replacing the table", (t) => {

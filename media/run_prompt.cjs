@@ -1,4 +1,5 @@
 const { readFileSync, writeFileSync, writeSync } = require("node:fs");
+const { execFileSync } = require("node:child_process");
 const { dirname, isAbsolute, join, resolve } = require("node:path");
 const { createInterface } = require("node:readline");
 const native = require("../dist/native/onnx_light_viewer.node");
@@ -54,20 +55,88 @@ function run(input, output, sessionKey) {
       request.profileDirectory,
       `genai-${process.pid}`,
     );
-  const capture = native.runNativePrompt(
-    {
-      ...request,
-      sessionSettings: settings,
-      sessionKey: sessionKey ?? input,
-      genaiOverlay: JSON.stringify({
-        model: { decoder: { session_options: options } },
-      }),
-      libraryPath,
-      runtimePath,
-    },
-    (token, index) => emit({ type: "token", token, index }),
-    (lifecycle) => emit({ type: "lifecycle", lifecycle }),
-  );
+  const nativeRequest = {
+    ...request,
+    sessionSettings: settings,
+    sessionKey: sessionKey ?? input,
+    genaiOverlay: JSON.stringify({
+      model: { decoder: { session_options: options } },
+    }),
+    libraryPath,
+    runtimePath,
+  };
+  const generate = () =>
+    native.runNativePrompt(
+      nativeRequest,
+      (token, index) => emit({ type: "token", token, index }),
+      (lifecycle) => emit({ type: "lifecycle", lifecycle }),
+    );
+  let capture;
+  try {
+    capture = generate();
+  } catch (error) {
+    if (
+      request.engine !== "onnxruntime-genai" ||
+      process.env.ONNX_LIGHT_VIEWER_GENAI_LIBRARY ||
+      !error.message?.startsWith(
+        "Could not load the native ONNX Runtime GenAI library:",
+      )
+    )
+      throw error;
+    process.stderr.write(
+      "Locating native GenAI SDK libraries in the Python environment selected in Settings.\n",
+    );
+    const libraries = JSON.parse(
+      execFileSync(
+        request.pythonPath,
+        [
+          "-I",
+          "-c",
+          `
+import importlib.util
+import json
+import os
+from pathlib import Path
+import sys
+
+def package_directory(name):
+    spec = importlib.util.find_spec(name)
+    if spec is None or spec.origin is None:
+        raise SystemExit(
+            f"Missing {name} in the Python environment selected in Settings. "
+            "Install the runtime there, or set ONNX_LIGHT_VIEWER_GENAI_LIBRARY "
+            "to the native C++ SDK library's absolute path."
+        )
+    return Path(spec.origin).parent
+
+name = "onnxruntime-genai.dll" if sys.platform == "win32" else "libonnxruntime-genai.dylib" if sys.platform == "darwin" else "libonnxruntime-genai.so"
+library = package_directory("onnxruntime_genai") / name
+if not library.is_file():
+    raise SystemExit(f"Native GenAI SDK library not found: {library}")
+runtime = os.environ.get("ORT_LIB_PATH", "")
+if not runtime:
+    pattern = "onnxruntime.dll" if sys.platform == "win32" else "libonnxruntime*.dylib" if sys.platform == "darwin" else "libonnxruntime.so*"
+    candidates = sorted((package_directory("onnxruntime") / "capi").glob(pattern))
+    if not candidates:
+        raise SystemExit("Native ONNX Runtime library not found in the selected Python environment.")
+    runtime = str(candidates[0])
+print(json.dumps({"libraryPath": str(library), "runtimePath": runtime}))
+`,
+        ],
+        { encoding: "utf8", timeout: 10000, maxBuffer: 65536 },
+      ),
+    );
+    if (
+      typeof libraries.libraryPath !== "string" ||
+      !isAbsolute(libraries.libraryPath) ||
+      typeof libraries.runtimePath !== "string" ||
+      !isAbsolute(libraries.runtimePath)
+    )
+      throw new Error("Native SDK discovery returned invalid library paths.");
+    nativeRequest.libraryPath = libraries.libraryPath;
+    nativeRequest.runtimePath = libraries.runtimePath;
+    capture = generate();
+  }
   const result = {
     prompt: request.prompt,
     engine: request.engine,

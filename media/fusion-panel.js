@@ -19,8 +19,10 @@ function createFusionPanel({
   let optimizationBackend = "onnx-light";
   let selectedOptimizationResult = false;
   let optimizationHistory = [];
+  let pendingRewritings = [];
   let undoCount = 0;
   let restoreRequest;
+  let restoreNotice = "";
   let scenarios = [];
   let selectedStep;
   let diagnosticRequest = 0;
@@ -320,6 +322,8 @@ function createFusionPanel({
       "optimization-restore-original",
     ])
       byId(id).disabled = busy || !canFuse() || !undoCount;
+    byId("replay-rewritings").disabled =
+      busy || !canFuse() || !pendingRewritings.length;
     for (const control of byId("fusion-matches").querySelectorAll(
       "input, button",
     ))
@@ -545,6 +549,22 @@ function createFusionPanel({
   }
 
   function showOptimizationResults() {
+    const queued = pendingRewritings.flatMap((operation) =>
+      operation.matches.map((match) => ({
+        pattern: match.pattern,
+        stage: operation.stage,
+      })),
+    );
+    byId("rewriting-count").textContent =
+      `${queued.length} pending rewriting${queued.length === 1 ? "" : "s"}`;
+    byId("pending-rewritings").hidden = !queued.length;
+    byId("pending-rewriting-steps").replaceChildren(
+      ...queued.map((match) => {
+        const item = document.createElement("li");
+        item.textContent = `${match.stage ? `[${match.stage}] ` : ""}${match.pattern}`;
+        return item;
+      }),
+    );
     byId("optimization-results").replaceChildren();
     const path = fusionGraph?.breadcrumbs?.at(-1)?.path ?? [];
     const stage = path.length === 1 ? path[0].pipeline : undefined;
@@ -756,6 +776,13 @@ function createFusionPanel({
         ? "Restoring the original model…"
         : "Unfusing the last operation…";
     });
+  byId("replay-rewritings").addEventListener("click", () => {
+    fusionControls(true);
+    byId("optimization-status").textContent = "Applying pending rewritings…";
+    requestAction("replay-rewritings", "Replay pending rewritings", {
+      requestId: ++fusionRequest,
+    });
+  });
   for (const [id, checked] of [
     ["select-optimization-patterns", true],
     ["clear-optimization-patterns", false],
@@ -870,6 +897,33 @@ function createFusionPanel({
       });
     });
 
+  function showFusionCatalog(data) {
+    showScenarios(data.scenarios, data.name);
+    showOptimizationPatterns(data.optimizationPatterns);
+    byId("fusion-pattern").replaceChildren();
+    for (const pattern of [...data.patterns].sort()) {
+      const label = document.createElement("label");
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.value = pattern;
+      label.append(checkbox, document.createTextNode(pattern));
+      byId("fusion-pattern").append(label);
+    }
+    showPatternGroups(
+      "fusion-pattern-group",
+      "fusion-pattern",
+      data.optimizationPatterns,
+      changeFusionPatterns,
+    );
+    showPatternGroups(
+      "optimization-pattern-group",
+      "optimization-patterns",
+      data.optimizationPatterns,
+      updateOptimizationSelection,
+    );
+    updateDiagnosticPatterns();
+  }
+
   function handleMessage(data) {
     if (
       data?.type === "fusion-diagnostic" ||
@@ -932,36 +986,14 @@ function createFusionPanel({
           "true",
         );
       }
-      showScenarios(data.scenarios, data.name);
-      showOptimizationPatterns(data.optimizationPatterns);
+      showFusionCatalog(data);
       showOptimizationReport(data.optimizationReport);
       if (data.type === "optimization-info")
         byId("onnxscript-optimization-output").textContent =
           data.backend === "onnxscript" ? (data.logs ?? "") : "";
       if (data.type === "fusion-patterns")
-        byId("optimization-status").textContent = "";
-      byId("fusion-pattern").replaceChildren();
-      for (const pattern of [...data.patterns].sort()) {
-        const label = document.createElement("label");
-        const checkbox = document.createElement("input");
-        checkbox.type = "checkbox";
-        checkbox.value = pattern;
-        label.append(checkbox, document.createTextNode(pattern));
-        byId("fusion-pattern").append(label);
-      }
-      showPatternGroups(
-        "fusion-pattern-group",
-        "fusion-pattern",
-        data.optimizationPatterns,
-        changeFusionPatterns,
-      );
-      showPatternGroups(
-        "optimization-pattern-group",
-        "optimization-patterns",
-        data.optimizationPatterns,
-        updateOptimizationSelection,
-      );
-      updateDiagnosticPatterns();
+        byId("optimization-status").textContent = restoreNotice;
+      restoreNotice = "";
       fusionControls(
         false,
         data.patterns.length
@@ -1000,7 +1032,23 @@ function createFusionPanel({
         }
       }
     } else if (data?.type === "fusion-preview") {
-      if (data.requestId === fusionRequest) showFusionMatches(data);
+      if (data.replayed) {
+        if (
+          fusionCompletion === undefined ||
+          data.requestId !== fusionCompletion ||
+          fusionRequest !== fusionCompletion + 1
+        )
+          return true;
+        fusionCompletion = undefined;
+        showFusionCatalog(data);
+        byId("fusion-panel").hidden = false;
+        byId("fuse-pattern").setAttribute("aria-expanded", "true");
+        byId("fusion-status").textContent =
+          "Pending rewritings reapplied. New matches use the optimized graph.";
+        showFusionMatches(data);
+        revealPanel(byId("fusion-panel"));
+        fit();
+      } else if (data.requestId === fusionRequest) showFusionMatches(data);
     } else if (data?.type === "fusion-error") {
       if (data.requestId !== fusionRequest) return true;
       if (
@@ -1022,8 +1070,10 @@ function createFusionPanel({
     const restoring =
       restoreRequest !== undefined && restoreRequest === operationRequestId;
     restoreRequest = undefined;
+    restoreNotice = "";
     fusionGraph = graph;
     optimizationHistory = file?.fusionHistory ?? [];
+    pendingRewritings = file?.pendingRewritings ?? [];
     undoCount = file?.fusionCount ?? 0;
     selectedStep = undefined;
     fusionCompletion =
@@ -1049,6 +1099,11 @@ function createFusionPanel({
     byId("optimization-feedback").textContent = "";
     byId("optimization-status").textContent = "";
     if (restoring) {
+      const count = pendingRewritings.reduce(
+        (total, operation) => total + operation.matches.length,
+        0,
+      );
+      restoreNotice = `Model restored. ${count} rewriting${count === 1 ? "" : "s"} kept pending; the next matching or optimization reapplies them.`;
       byId("optimization-panel").hidden = false;
       byId("optimize-model").setAttribute("aria-expanded", "true");
       fusionControls(true);
@@ -1065,6 +1120,8 @@ function createFusionPanel({
       "optimization-restore-original",
     ])
       byId(id).disabled = !enabled || fusionBusy || !undoCount;
+    byId("replay-rewritings").disabled =
+      !enabled || fusionBusy || !pendingRewritings.length;
     diagnosticControls();
   }
 

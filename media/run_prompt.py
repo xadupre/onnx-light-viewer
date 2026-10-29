@@ -5,6 +5,8 @@ import math
 import pathlib
 import sys
 import time
+from copy import copy
+from os.path import commonprefix
 
 
 def compare_logits(actual, reference):
@@ -31,16 +33,32 @@ def compare_logits(actual, reference):
 
 def source_for(request):
     provenance = request.get("provenance") or {}
-    source = provenance.get("source")
+    reference = request.get("referenceSource")
+    if reference and pathlib.Path(reference).is_absolute():
+        if not pathlib.Path(reference).is_dir():
+            raise ValueError(
+                f"Hugging Face reference directory does not exist: {reference}"
+            )
+        return reference
+    source = provenance.get("source") if not reference else None
     if source and pathlib.Path(source).is_dir():
         return source
-    identity = provenance.get("model")
+    identity = reference or provenance.get("model")
     if identity and not pathlib.Path(identity).is_absolute():
-        from huggingface_hub import snapshot_download
+        from huggingface_hub import try_to_load_from_cache
 
-        return snapshot_download(
-            identity, revision=provenance.get("revision"), local_files_only=True
+        config = try_to_load_from_cache(
+            identity,
+            "config.json",
+            revision=provenance.get("revision") if not reference else None,
         )
+        if isinstance(config, str):
+            return str(pathlib.Path(config).parent)
+        if reference:
+            raise ValueError(
+                f"No cached Hugging Face config.json is available for {identity}. "
+                "Choose a local checkpoint directory or download the checkpoint first."
+            )
     directory = pathlib.Path(request["modelPath"]).parent
     if (
         (directory / "config.json").is_file()
@@ -60,16 +78,87 @@ def source_for(request):
     ):
         return str(directory)
     raise ValueError(
-        "No local Hugging Face source is available. Export with source provenance "
-        "and keep the downloaded checkpoint/tokenizer cache for reference validation."
+        "No local Hugging Face source is available. Enter the original model ID "
+        "or checkpoint directory in the Prompt panel's Hugging Face reference field. "
+        "The checkpoint must already be cached locally; validation does not download weights."
     )
 
 
+def check_reference(request):
+    source = pathlib.Path(source_for(request))
+    if not (source / "config.json").is_file():
+        raise ValueError(f"Hugging Face reference config.json is missing: {source}")
+    if not any(
+        path.is_file()
+        for path in source.iterdir()
+        if path.name in ("tokenizer.json", "vocab.json", "vocab.txt")
+        or path.suffix in (".model", ".tiktoken")
+        or path.name.startswith("tokenizer.model.")
+    ):
+        raise ValueError(f"Hugging Face reference tokenizer files are missing: {source}")
+    if not any(
+        (source / name).is_file() for name in ("model.safetensors", "pytorch_model.bin")
+    ):
+        index = next(
+            (
+                source / name
+                for name in ("model.safetensors.index.json", "pytorch_model.bin.index.json")
+                if (source / name).is_file()
+            ),
+            None,
+        )
+        if index is None:
+            raise ValueError(
+                f"Hugging Face reference checkpoint weights are missing: {source}"
+            )
+        with index.open(encoding="utf-8") as stream:
+            weights = json.load(stream).get("weight_map")
+        if not isinstance(weights, dict) or not weights:
+            raise ValueError(f"Invalid Hugging Face checkpoint weight index: {index}")
+        if not all(isinstance(shard, str) for shard in weights.values()):
+            raise ValueError(f"Invalid Hugging Face checkpoint weight index: {index}")
+        for shard in sorted(set(weights.values())):
+            if not (source / shard).is_file():
+                raise ValueError(f"Hugging Face reference weight shard is missing: {shard}")
+    return str(source)
+
+
+class ReferenceDecoder:
+    def __init__(self, tokenizer, prompt_ids):
+        self.tokenizer = tokenizer
+        self.backend = getattr(tokenizer, "backend_tokenizer", None)
+        self.stream = None
+        self.text = None
+        if self.backend is not None:
+            from tokenizers import decoders
+
+            stream_type = getattr(decoders, "DecodeStream", None)
+            if stream_type is not None and hasattr(stream_type, "__copy__"):
+                self.stream = stream_type(skip_special_tokens=False)
+                self.stream.step(self.backend, prompt_ids)
+
+    def decode(self, prefix, predicted_id, exported_id):
+        if self.stream is not None:
+            text = copy(self.stream).step(self.backend, predicted_id) or ""
+            self.stream.step(self.backend, exported_id)
+            return text
+        options = {"skip_special_tokens": False, "clean_up_tokenization_spaces": False}
+        if self.text is None:
+            self.text = self.tokenizer.decode(prefix, **options).rstrip("\ufffd")
+        candidate = self.tokenizer.decode([*prefix, predicted_id], **options).rstrip("\ufffd")
+        text = candidate[len(commonprefix((self.text, candidate))):]
+        self.text = (
+            candidate
+            if predicted_id == exported_id
+            else self.tokenizer.decode([*prefix, exported_id], **options).rstrip("\ufffd")
+        )
+        return text
+
+
 def reference_logits(request, prompt_ids, tokens, logits):
+    source = check_reference(request)
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
-
-    source = source_for(request)
     load_start = time.perf_counter()
     tokenizer = AutoTokenizer.from_pretrained(
         source, local_files_only=True, trust_remote_code=False
@@ -91,6 +180,7 @@ def reference_logits(request, prompt_ids, tokens, logits):
     reference = []
     discrepancies = [] if logits is not None else None
     prefix = list(prompt_ids)
+    decoder = ReferenceDecoder(tokenizer, prompt_ids)
     past = None
     # Each step consumes the exact generated prefix, never an independently
     # generated reference sequence whose divergence would invalidate comparison.
@@ -130,7 +220,7 @@ def reference_logits(request, prompt_ids, tokens, logits):
             predicted_id = max(range(len(expected)), key=expected.__getitem__)
             reference.append(
                 {
-                    "text": tokenizer.decode([predicted_id], skip_special_tokens=False),
+                    "text": decoder.decode(prefix, predicted_id, token["id"]),
                     "id": predicted_id,
                     "score": float(expected[predicted_id]),
                     "timeMs": elapsed,
@@ -145,6 +235,16 @@ def reference_logits(request, prompt_ids, tokens, logits):
 
 
 def main():
+    if sys.argv[1] == "--check-reference":
+        path = pathlib.Path(sys.argv[2])
+        with path.open(encoding="utf-8") as stream:
+            request = json.load(stream)
+        print("Checking local Hugging Face reference before generation", flush=True)
+        request["referenceSource"] = check_reference(request)
+        with path.open("w", encoding="utf-8") as stream:
+            json.dump(request, stream)
+        print("Hugging Face reference files are ready.", flush=True)
+        return
     with open(sys.argv[1], encoding="utf-8") as stream:
         request = json.load(stream)
     with open(request["capturePath"], encoding="utf-8") as stream:

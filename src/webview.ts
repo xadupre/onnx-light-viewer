@@ -43,7 +43,7 @@ export function webviewHtml(
           <button id="statistics-tab" role="tab" aria-controls="statistics-view" aria-selected="false" tabindex="-1">Statistics</button>
           <button id="memory-tab" role="tab" aria-controls="memory-view" aria-selected="false" tabindex="-1">Memory</button>
           <button id="tensors-tab" role="tab" aria-controls="tensors-view" aria-selected="false" tabindex="-1"><svg class="tensor-statistics-icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M4 3v17h17M8 16v-5m5 5V6m5 10V9"/></svg>Tensors</button>
-          <button id="prompt-tab" role="tab" aria-controls="prompt-view" aria-selected="false" tabindex="-1"><svg class="tensor-statistics-icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="m8 5 11 7-11 7Z"/></svg>Run Prompt</button>
+          <button id="prompt-tab" role="tab" aria-controls="prompt-view" aria-selected="false" tabindex="-1"><svg class="tensor-statistics-icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="m8 5 11 7-11 7Z"/></svg>Prompt</button>
         </div>
       </div>
       <div class="feature-group" role="presentation">
@@ -61,6 +61,7 @@ export function webviewHtml(
       <header class="graph-toolbar">
         <div><a id="repository-link" href="https://github.com/xadupre/onnx-light-viewer" title="ONNX Light Viewer on GitHub" aria-label="Open the ONNX Light Viewer GitHub repository"><img src="${resource("logo.svg")}" alt="" width="24" height="24"></a><button id="refresh-shapes" class="icon-button" disabled title="Refresh shape and type information with onnx-light" aria-label="Refresh shape and type information" aria-describedby="shape-status"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2 6M20 4v7h-7"/></svg>Refresh shapes</button><button id="refresh-metadata" class="icon-button" disabled title="Recompute constants, tags and lifetimes for the displayed graph with onnx-light" aria-label="Refresh metadata for the displayed graph" aria-describedby="metadata-status"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2 6M20 4v7h-7"/></svg>Refresh metadata</button><button id="refresh-positions" class="icon-button" disabled title="Restore the hierarchical layout and reset manually moved positions" aria-label="Refresh node positions"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2 6M20 4v7h-7"/></svg>Refresh positions</button><button id="verify-model" class="icon-button" disabled title="Verify the entire model or all pipeline stages with onnx-light, without changing them" aria-label="Verify model" aria-describedby="verify-status"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg>Verify</button></div>
         <div class="graph-stats" aria-live="polite"><span id="graph-summary">No model loaded</span><span id="initializer-count">0 initializers</span><span id="onnx-light-version" data-version="${onnxLightVersion}" title="onnx-light C++ release used by this viewer">onnx-light ${onnxLightVersion}</span><span id="shape-status" role="status"></span><span id="metadata-status" role="status"></span><span id="verify-status" role="status"></span><span id="navigation-status" role="status"></span><span id="load-status" role="status"></span></div>
+        <span id="rewriting-count" role="status" title="Rewritings waiting to be reapplied before the next native matching or optimization">0 pending rewritings</span>
         <span id="save-status" role="status"></span>
         <span id="fusion-status" role="status"></span>
         <nav id="graph-navigation" aria-label="Graph breadcrumbs" hidden></nav>
@@ -75,30 +76,15 @@ export function webviewHtml(
         <div id="sidebar-resizer" role="separator" tabindex="0" aria-label="Resize side panel" aria-orientation="vertical" aria-controls="graph-panels" title="Drag to resize the side panel, or use Left and Right arrow keys"></div>
         <aside id="graph-panels" aria-label="Graph panels">
           <nav id="sidebar-controls" aria-label="Sidebar panels and model actions">
-            <div class="feature-group" role="group" aria-labelledby="model-navigation-theme">
-              <span class="feature-group-title" id="model-navigation-theme">Navigation</span>
-              <div class="feature-group-controls">
-                <button id="open-model" class="icon-button" title="Show or hide the model file selector" aria-expanded="false" aria-controls="open-panel">Open</button>
-                <button id="save-model" class="icon-button" disabled title="Show or hide model save options" aria-expanded="false" aria-controls="save-options" aria-describedby="save-status">Save</button>
-                <button id="show-find" class="icon-button" aria-expanded="true" aria-controls="find-panel" title="Show or hide node search">Find</button>
-                <button id="show-operator" class="icon-button" aria-expanded="true" aria-controls="operator-panel" title="Show or hide operator and tensor details">Op</button>
-                <button id="show-metadata" class="icon-button" aria-expanded="false" aria-controls="metadata-panel" title="Show or hide native constants, tags, lifetimes and stored metadata">Data</button>
-              </div>
-            </div>
-            <div class="feature-group" role="group" aria-labelledby="convert-theme">
-              <span class="feature-group-title" id="convert-theme">Convert</span>
-              <div class="feature-group-controls">
-                <button id="export-model" class="icon-button" title="Convert a model to ONNX with Python" aria-expanded="false" aria-controls="export-panel">Convert</button>
-              </div>
-            </div>
-            <div class="feature-group" role="group" aria-labelledby="optimization-theme">
-              <span class="feature-group-title" id="optimization-theme">Optimization</span>
-              <div class="feature-group-controls">
-                <button id="optimize-model" class="icon-button" disabled title="Show or hide full native model optimization" aria-expanded="false" aria-controls="optimization-panel">Optimize</button>
-                <button id="fuse-pattern" class="icon-button" disabled title="Show or hide fusion patterns and select candidates to fuse on the main graph" aria-expanded="false" aria-controls="fusion-panel">Fuse</button>
-                <button id="undo-fusion" class="icon-button" disabled title="Choose whether to unfuse the last operation or all operations" aria-expanded="false" aria-controls="unfuse-panel" aria-describedby="fusion-status">Unfuse</button>
-              </div>
-            </div>
+            <button id="open-model" class="icon-button" title="Show or hide the model file selector" aria-expanded="false" aria-controls="open-panel">Open</button>
+            <button id="save-model" class="icon-button" disabled title="Show or hide model save options" aria-expanded="false" aria-controls="save-options" aria-describedby="save-status">Save</button>
+            <button id="show-find" class="icon-button" aria-expanded="true" aria-controls="find-panel" title="Show or hide node search">Find</button>
+            <button id="show-operator" class="icon-button" aria-expanded="true" aria-controls="operator-panel" title="Show or hide operator and tensor details">Op</button>
+            <button id="show-metadata" class="icon-button" aria-expanded="false" aria-controls="metadata-panel" title="Show or hide native constants, tags, lifetimes and stored metadata">Data</button>
+            <button id="export-model" class="icon-button" title="Convert a model to ONNX with Python" aria-expanded="false" aria-controls="export-panel">Convert</button>
+            <button id="optimize-model" class="icon-button" disabled title="Show or hide full native model optimization" aria-expanded="false" aria-controls="optimization-panel">Optimize</button>
+            <button id="fuse-pattern" class="icon-button" disabled title="Show or hide fusion patterns and select candidates to fuse on the main graph" aria-expanded="false" aria-controls="fusion-panel">Fuse</button>
+            <button id="undo-fusion" class="icon-button" disabled title="Choose whether to unfuse the last operation or all operations" aria-expanded="false" aria-controls="unfuse-panel" aria-describedby="fusion-status">Unfuse</button>
           </nav>
           <section id="export-panel" class="inspector-panel file-panel" aria-labelledby="export-title" hidden>
             <h2 id="export-title" class="eyebrow panel-title">Convert to ONNX</h2>
@@ -319,9 +305,15 @@ export function webviewHtml(
               <p id="optimization-status" role="status"></p>
               <section id="native-optimization-history">
                 <div class="fusion-selection-controls"><button id="optimization-unfuse-last" disabled>Unfuse last</button><button id="optimization-restore-original" disabled>Back to original model</button></div>
-                <p>Unfuse last reverses one complete native operation. Back to original model undoes all available native operations, including other pipeline stages. ONNX Script changes cannot be undone.</p>
+                <p>Unfuse last reverses one complete native operation. Back to original model restores all stages and keeps their rewritings pending. Native matching or optimization reapplies them before adding new fusions. ONNX Script changes cannot be undone.</p>
                 <h3>Matched patterns</h3>
                 <ol id="optimization-results" aria-label="Applied optimization patterns"></ol>
+                <section id="pending-rewritings" hidden>
+                  <h3>Pending rewritings</h3>
+                  <ol id="pending-rewriting-steps" aria-label="Pending rewriting patterns"></ol>
+                  <p>The original patterns are retained. The next matching or optimization reapplies them before adding new rewritings.</p>
+                  <button id="replay-rewritings" disabled>Apply pending rewritings</button>
+                </section>
               </section>
             </div>
             <div id="optimization-report-section" hidden>
@@ -386,7 +378,8 @@ export function webviewHtml(
             <details id="open-browser" hidden><summary id="open-browser-title">Or enter a repository / URL</summary></details>
             <form id="open-form">
               <label for="open-file">Model path, URL or backend test ID</label>
-              <input id="open-file" type="text" required autocomplete="off" list="open-file-history"><datalist id="open-file-history"></datalist>
+              <input id="open-file" type="text" required autocomplete="off">
+              <select id="open-file-history" aria-label="Recent model paths" disabled><option value="">Choose a recent path...</option></select>
               <div id="open-path-options" class="path-picker-actions" role="group" aria-label="Model path selection">
                 <button id="open-path-browse" type="button" aria-haspopup="dialog" aria-controls="open-path-dialog">Browse folders...</button>
                 <button id="open-native-picker" type="button">VS Code file picker...</button>
@@ -429,7 +422,8 @@ export function webviewHtml(
             </form>
             <ul id="save-files" class="file-list" aria-label="Destination folders and models"></ul>
             <form id="save-form">
-              <label for="save-file">Destination path</label><input id="save-file" type="text" value="model-copy.onnx" required autocomplete="off" list="save-file-history"><datalist id="save-file-history"></datalist>
+              <label for="save-file">Destination path</label><input id="save-file" type="text" value="model-copy.onnx" required autocomplete="off">
+              <select id="save-file-history" aria-label="Recent destination paths" disabled><option value="">Choose a recent path...</option></select>
               <fieldset class="save-grid">
                 <legend>Weight storage and encryption</legend>
                 <label><input type="radio" name="save-format" value="embedded-plain" checked>Single model or pipeline file</label>
@@ -450,7 +444,7 @@ export function webviewHtml(
                 <label for="save-confirmation">Confirm password</label><input id="save-confirmation" type="password" autocomplete="new-password">
               </div>
               <label><input id="save-rewritings" type="checkbox" aria-describedby="save-rewritings-note">Include fusion rewritings</label>
-              <p id="save-rewritings-note">Unchecked: save the fused graph without rewriting plans. Checked: save the original graph and one concatenated RewritingProto plan per modified model. Undo history is session-local.</p>
+              <p id="save-rewritings-note">Unchecked: save the current graph without rewriting plans. Checked: save the original graph and one concatenated RewritingProto plan per modified model, including pending rewritings. Undo history is session-local.</p>
               <label><input id="save-overwrite" type="checkbox">Replace an existing destination copy</label>
               <progress id="save-progress" aria-label="Saving ONNX model" aria-describedby="save-progress-status" hidden></progress><p id="save-progress-status" role="status" hidden></p>
               <p id="save-options-error" role="alert"></p>
@@ -522,36 +516,46 @@ export function webviewHtml(
       </div>
     </section>
     <section id="prompt-view" role="tabpanel" aria-labelledby="prompt-tab" tabindex="0" hidden>
-      <h1>Run Prompt</h1>
-      <p>Run a converted causal language model with native C++ engines. Both engines display tokens as they arrive, with prefill and decode timings and raw scores. Python in Settings is used only for Hugging Face validation. The saved model on disk is used, not unsaved graph edits.</p>
+      <h1>Prompt</h1>
+      <p>Run a converted causal language model with native C++ engines. Both engines display tokens as they arrive, with prefill and decode timings and raw scores. Python in Settings can locate native SDK libraries and is used for Hugging Face validation; inference runs in C++. The saved model on disk is used, not unsaved graph edits.</p>
       <div id="prompt-run-page">
       <button id="prompt-settings-open" type="button">Session settings</button>
       <form id="prompt-form">
-        <fieldset id="prompt-fields" disabled>
+        <fieldset id="prompt-fields" class="form-grid" disabled>
           <label for="prompt-engine">Engine</label>
-          <select id="prompt-engine"><option value="onnx-light">onnx-light</option><option value="onnxruntime-genai" disabled>onnxruntime-genai</option></select>
+          <select id="prompt-engine"><option value="onnx-light">onnx-light</option><option value="onnxruntime-genai" selected disabled>onnxruntime-genai</option></select>
           <label for="prompt-text">Prompt</label>
           <textarea id="prompt-text" rows="3" required>The capital of France is</textarea>
           <label for="prompt-max-tokens">Maximum new tokens</label>
           <input id="prompt-max-tokens" type="number" min="1" max="4096" value="32" required>
-          <label><input id="prompt-keep-loaded" type="checkbox"> Keep the current model loaded between prompts</label>
+          <label for="prompt-keep-loaded">Keep the current model loaded between prompts</label>
+          <input id="prompt-keep-loaded" type="checkbox">
           <p>Off by default to limit memory use and swapping. Changing engines, models or settings releases the previous session. Keeping a native model loaded during HF validation can hold two models in memory.</p>
-          <button type="submit">Run</button>
+          <label for="prompt-reference-source">Hugging Face reference (model ID or local checkpoint)</label>
+          <input id="prompt-reference-source" type="text" autocomplete="off" placeholder="e.g. Qwen/Qwen3-0.6B" aria-describedby="prompt-validation-status">
+          <p id="prompt-validation-status" role="status">Open a model to check whether its Hugging Face reference is identified.</p>
+          <label for="prompt-validate-run">Validate with Hugging Face after generation</label>
+          <input id="prompt-validate-run" type="checkbox">
+          <p>When checked, reference files are checked before native loading, warmup or generation. The Hugging Face reference runs on CPU and uses local files only.</p>
+          <button type="submit" aria-label="Run prompt" title="Run prompt"><svg class="tensor-statistics-icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="m8 5 11 7-11 7Z"/></svg></button>
         </fieldset>
       </form>
       <button id="prompt-cancel" type="button" hidden>Cancel</button>
       <button id="prompt-unload" type="button">Unload model now</button>
       <p id="prompt-status" role="status">Open a converted language model to run a prompt.</p>
       <p id="prompt-lifecycle" role="status"></p>
-      <pre id="prompt-progress" hidden></pre>
       <div id="prompt-results" aria-live="polite"></div>
       <button id="prompt-validate" type="button" hidden>Validate with Hugging Face</button>
       <p>Validation compares full vocabulary logits using the same generated token prefixes. Counts are absolute differences below each threshold; smaller distances are better.</p>
+      <section id="prompt-output" aria-labelledby="prompt-output-title" hidden>
+        <h2 id="prompt-output-title">stdout / stderr</h2>
+        <pre id="prompt-progress" hidden></pre>
+      </section>
       </div>
       <div id="prompt-session-page" hidden>
         <h2 id="prompt-settings-title">Engine session settings</h2>
-        <button id="prompt-settings-back" type="button">Back to Run Prompt</button>
-        <p>Applied on the next Run, without modifying the model or its exported configuration. A change unloads the retained session. Blank values preserve SDK/model defaults. Profiling adds overhead and writes to .prompt-profiles beside the model; GenAI finalizes its profile when unloaded.</p>
+        <button id="prompt-settings-back" type="button">Back to Prompt</button>
+        <p>Applied on the next prompt run, without modifying the model or its exported configuration. A change unloads the retained session. Blank values preserve SDK/model defaults. Profiling adds overhead and writes to .prompt-profiles beside the model; GenAI finalizes its profile when unloaded.</p>
         <fieldset id="prompt-session-fields">
           <div id="prompt-settings-light" class="prompt-settings-grid">
             <h3>onnx-light (CPU)</h3>
@@ -569,7 +573,7 @@ export function webviewHtml(
             <label>Release intermediates<select data-setting="releaseIntermediates" data-boolean><option value="">SDK default</option><option value="true">Enabled</option><option value="false">Disabled</option></select></label>
             <label>Check shapes<select data-setting="checkShapes" data-boolean><option value="">SDK default</option><option value="true">Enabled</option><option value="false">Disabled</option></select></label>
             <label>Log verbosity<input data-setting="verbose" type="number" min="0" max="10" placeholder="SDK default (0)"></label>
-            <label class="prompt-checkbox"><input data-setting="profile" type="checkbox"> Record native kernel timings (additional memory/CPU cost)</label>
+            <label class="prompt-checkbox"><span>Record native kernel timings (additional memory/CPU cost)</span><input data-setting="profile" type="checkbox"></label>
           </div>
           <div id="prompt-settings-genai" class="prompt-settings-grid" hidden>
             <h3>ONNX Runtime GenAI</h3>
@@ -588,7 +592,7 @@ export function webviewHtml(
             <label>CPU memory arena<select data-setting="cpuArena" data-boolean><option value="">From genai_config.json</option><option value="true">Enabled</option><option value="false">Disabled</option></select></label>
             <label>Memory pattern<select data-setting="memoryPattern" data-boolean><option value="">From genai_config.json</option><option value="true">Enabled</option><option value="false">Disabled</option></select></label>
             <label>Log severity (0 verbose, 1 info, 2 warning, 3 error, 4 fatal)<input data-setting="logSeverity" type="number" min="0" max="4" placeholder="From genai_config.json"></label>
-            <label class="prompt-checkbox"><input data-setting="profile" type="checkbox"> Enable ONNX Runtime profiling</label>
+            <label class="prompt-checkbox"><span>Enable ONNX Runtime profiling</span><input data-setting="profile" type="checkbox"></label>
           </div>
         </fieldset>
       </div>
@@ -630,7 +634,7 @@ export function webviewHtml(
     <section id="settings-view" role="tabpanel" aria-labelledby="settings-tab" tabindex="0" hidden>
       <h2>Settings</h2>
       <p>Settings are saved for this VS Code user. Existing downloads are not moved when the directory changes.</p>
-      <form id="application-settings-form">
+      <form id="application-settings-form" class="form-grid">
         <label for="settings-download">Default download directory (Hugging Face cache)</label>
         <input id="settings-download" type="text" required autocomplete="off">
         <label for="settings-python">Python executable</label>
@@ -661,12 +665,14 @@ export function webviewHtml(
       <h3>Viewer preferences</h3>
       <button id="settings-reset-viewer" type="button">Reset viewer preferences</button>
       <p>Restores the default sidebar width and panels. Download and Python paths are unchanged.</p>
-      <label for="settings-width">Sidebar width (pixels; blank uses the default)</label>
-      <input id="settings-width" type="number" min="200" step="1">
+      <div class="form-grid">
+        <label for="settings-width">Sidebar width (pixels; blank uses the default)</label>
+        <input id="settings-width" type="number" min="200" step="1">
+      </div>
       <div id="settings-panels">
-        <label><input id="settings-operator" type="checkbox" checked> Operator inspector</label>
-        <label><input id="settings-find" type="checkbox" checked> Find panel</label>
-        <label><input id="settings-metadata" type="checkbox"> Data panel</label>
+        <label><span>Operator inspector</span><input id="settings-operator" type="checkbox" checked></label>
+        <label><span>Find panel</span><input id="settings-find" type="checkbox" checked></label>
+        <label><span>Data panel</span><input id="settings-metadata" type="checkbox"></label>
       </div>
       <h3>Application and native build</h3>
       <dl class="status-details">

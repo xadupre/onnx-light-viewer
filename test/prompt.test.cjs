@@ -17,6 +17,7 @@ const { promisify } = require("node:util");
 const { test } = require("node:test");
 const { promptInfo, runPrompt } = require("../dist/prompt");
 const { PromptSession } = require("../dist/promptSession");
+const { provenancePath } = require("../dist/export");
 const {
   promptModel,
   nativeEnvironment,
@@ -93,7 +94,11 @@ test("prompt availability follows local causal metadata and supports native pipe
   assert.deepEqual(await promptInfo(model), {
     engines: ["onnx-light", "onnxruntime-genai"],
     available: true,
+    validationRequiresReference: true,
   });
+  await writeFile(path.join(root, "model.safetensors"), "checkpoint fixture");
+  assert.equal((await promptInfo(model)).validationRequiresReference, false);
+  await rm(path.join(root, "model.safetensors"));
   await rm(path.join(root, "genai_config.json"));
   assert.deepEqual((await promptInfo(model)).engines, ["onnx-light"]);
   const pipeline = path.join(root, "model.pipe-onnx");
@@ -105,6 +110,20 @@ test("prompt availability follows local causal metadata and supports native pipe
   );
   assert.equal((await promptInfo(model)).available, false);
   assert.equal((await promptInfo("relative.onnx")).available, false);
+});
+
+test("graph-only Mobius exports explain how to supply missing generation assets", async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), "onnx-viewer-graph-only-"));
+  t.after(() => rm(root, { force: true, recursive: true }));
+  const model = path.join(root, "model.onnx");
+  await writeFile(model, "");
+  const info = await promptInfo(model);
+  assert.equal(info.available, false);
+  assert.deepEqual(info.engines, []);
+  assert.match(info.reason, /genai_config\.json/);
+  assert.match(info.reason, /tokenizer/);
+  assert.match(info.reason, /--runtime ort-genai/);
+  assert.match(info.reason, /Integrated embeddings are supported/);
 });
 
 test("snapshot-style metadata symlinks remain available", async (t) => {
@@ -181,6 +200,60 @@ for (const engine of ["onnx-light", "onnxruntime-genai"]) {
     );
   });
 }
+
+test("GenAI discovers installed native SDK libraries without library environment variables", async (t) => {
+  const { model } = await fixture(t);
+  delete process.env.ONNX_LIGHT_VIEWER_GENAI_LIBRARY;
+  delete process.env.ORT_LIB_PATH;
+  const session = new PromptSession();
+  const run = (executable) =>
+    runPrompt(
+      model,
+      { ...options, keepLoaded: true },
+      executable,
+      signal(),
+      () => {},
+      undefined,
+      undefined,
+      session,
+    );
+  try {
+    const first = await run(python);
+    assert.deepEqual(
+      first.tokens.map((token) => token.id),
+      [1, 1, 1],
+    );
+    assert.equal(first.lifecycle.reused, false);
+    const second = await run("/no/python-needed-for-retained-native-session");
+    assert.deepEqual(
+      second.tokens.map((token) => token.id),
+      [1, 1, 1],
+    );
+    assert.equal(second.lifecycle.reused, true);
+  } finally {
+    await session.close();
+  }
+});
+
+test("GenAI discovery reports missing SDK packages in the selected Python environment", async (t) => {
+  const { root, model } = await fixture(t);
+  delete process.env.ONNX_LIGHT_VIEWER_GENAI_LIBRARY;
+  delete process.env.ORT_LIB_PATH;
+  const environment = path.join(root, "empty-python");
+  await execute(python, ["-m", "venv", "--without-pip", environment]);
+  const executable = path.join(
+    environment,
+    process.platform === "win32" ? "Scripts/python.exe" : "bin/python",
+  );
+  await assert.rejects(
+    runPrompt(model, options, executable, signal(), () => {}),
+    /Missing onnxruntime_genai in the Python environment selected in Settings/,
+  );
+  assert.equal(
+    (await readdir(root)).some((name) => name.startsWith(".prompt-")),
+    false,
+  );
+});
 
 test("native sessions optionally retain, reuse, reconfigure and unload their model", async (t) => {
   for (const engine of ["onnx-light", "onnxruntime-genai"]) {
@@ -395,6 +468,85 @@ test("cancelling during initialization releases its model without closing the re
     );
     assert.ok(replacement);
     const result = await replacement;
+    assert.equal(result.lifecycle.reused, false);
+  } finally {
+    await session.close();
+  }
+});
+
+test("an obsolete cancelled request cannot release a retained replacement worker", async (t) => {
+  const { root, model } = await fixture(t);
+  const session = new PromptSession();
+  const run = () =>
+    runPrompt(
+      model,
+      { ...options, keepLoaded: true },
+      "/no/python",
+      signal(),
+      () => {},
+      undefined,
+      undefined,
+      session,
+    );
+  try {
+    await run();
+    const obsolete = new AbortController();
+    obsolete.abort();
+    await assert.rejects(
+      session.run(
+        path.join(root, "unused-input.json"),
+        path.join(root, "unused-output.json"),
+        "obsolete-session-key",
+        obsolete.signal,
+        () => {},
+        () => {},
+      ),
+      { name: "AbortError" },
+    );
+    assert.equal((await run()).lifecycle.reused, true);
+  } finally {
+    await session.close();
+  }
+});
+
+test("a native worker killed during generation rejects its request and permits another run", async (t) => {
+  const { model } = await fixture(t);
+  const session = new PromptSession();
+  let killed = false;
+  try {
+    await assert.rejects(
+      runPrompt(
+        model,
+        { ...options, maxTokens: 4096, keepLoaded: true },
+        "/no/python",
+        signal(),
+        () => {},
+        undefined,
+        () => {
+          if (!killed) {
+            killed = true;
+            assert.ok(session.child.kill("SIGKILL"));
+          }
+        },
+        session,
+      ),
+      /Native prompt exited/,
+    );
+    assert.equal(killed, true);
+    const result = await runPrompt(
+      model,
+      { ...options, keepLoaded: true },
+      "/no/python",
+      signal(),
+      () => {},
+      undefined,
+      undefined,
+      session,
+    );
+    assert.deepEqual(
+      result.tokens.map((token) => token.id),
+      [1, 1, 1],
+    );
     assert.equal(result.lifecycle.reused, false);
   } finally {
     await session.close();
@@ -638,6 +790,9 @@ test("rejects malformed options, tampering, changed assets and cancellation", as
     { ...options, validate: "yes" },
     { ...options, prompt: "" },
     { ...options, trust_remote_code: true },
+    { ...options, referenceSource: 42 },
+    { ...options, referenceSource: "" },
+    { ...options, referenceSource: "relative/checkpoint/directory" },
     { ...options, sessionSettings: { intraOpThreads: -1 } },
     { ...options, sessionSettings: { threads: 2 } },
     { ...options, sessionSettings: { provider: "unknown" } },
@@ -723,31 +878,207 @@ test("validation invalidates captured logits when nested external weights change
   );
 });
 
-test("HF resolves a pinned cached checkpoint before an export-only tokenizer directory", async (t) => {
+test("source tokenizer changes invalidate captures and replace the retained native session", async (t) => {
+  const { root, model } = await fixture(t);
+  const source = path.join(root, "checkpoint");
+  await mkdir(source);
+  for (const name of [
+    "config.json",
+    "genai_config.json",
+    "tokenizer.json",
+    "tokenizer_config.json",
+  ])
+    await rename(path.join(root, name), path.join(source, name));
+  await writeFile(
+    provenancePath(model),
+    JSON.stringify({
+      version: 1,
+      exporter: "mobius",
+      source,
+      model: "owner/model",
+    }),
+  );
+  const session = new PromptSession();
+  const settings = { ...options, engine: "onnx-light", keepLoaded: true };
+  const run = () =>
+    runPrompt(
+      model,
+      settings,
+      "/no/python",
+      signal(),
+      () => {},
+      undefined,
+      undefined,
+      session,
+    );
+  try {
+    const previous = await run();
+    assert.equal((await run()).lifecycle.reused, true);
+    const file = path.join(source, "tokenizer.json");
+    const tokenizer = JSON.parse(await readFile(file, "utf8"));
+    tokenizer.model.vocab.a = tokenizer.model.vocab.o;
+    delete tokenizer.model.vocab.o;
+    await writeFile(file, JSON.stringify(tokenizer));
+    await assert.rejects(
+      runPrompt(
+        model,
+        { ...settings, validate: true },
+        "/no/python",
+        signal(),
+        () => {},
+        previous,
+        undefined,
+        session,
+      ),
+      /previous prompt result/,
+    );
+    const next = await run();
+    assert.equal(next.lifecycle.reused, false);
+    assert.equal(next.tokens[0].text, "a");
+  } finally {
+    await session.close();
+  }
+});
+
+test("HF preflight rejects missing references and weights before any native loading or tokens", async (t) => {
+  const { root, model } = await fixture(t);
+  const phases = [];
+  const tokens = [];
+  for (const [reference, error] of [
+    [{}, /No local Hugging Face source is available/],
+    [
+      { referenceSource: path.join(root, "missing-checkpoint") },
+      /reference directory does not exist/,
+    ],
+    [{ referenceSource: root }, /checkpoint weights are missing/],
+  ]) {
+    await assert.rejects(
+      runPrompt(
+        model,
+        { ...options, validate: true, ...reference },
+        python,
+        signal(),
+        () => {},
+        undefined,
+        (token) => tokens.push(token),
+        undefined,
+        (phase) => phases.push(phase),
+      ),
+      error,
+    );
+    assert.deepEqual(phases, []);
+    assert.deepEqual(tokens, []);
+  }
+  assert.equal(
+    (await readdir(root)).some((name) => name.startsWith(".prompt-")),
+    false,
+  );
+});
+
+test("HF reference file checks need no model imports and catch missing checkpoint shards", async (t) => {
+  const { root, model } = await fixture(t, false);
+  const input = path.join(root, "check-reference.json");
+  await writeFile(
+    input,
+    JSON.stringify({ modelPath: model, referenceSource: root }),
+  );
+  await writeFile(
+    path.join(root, "model.safetensors.index.json"),
+    JSON.stringify({ weight_map: { weight: "model-00001.safetensors" } }),
+  );
+  const check = () =>
+    execute(python, [
+      "-I",
+      "-S",
+      "media/run_prompt.py",
+      "--check-reference",
+      input,
+    ]);
+  await assert.rejects(check(), /weight shard is missing/);
+  await writeFile(
+    path.join(root, "model-00001.safetensors"),
+    "checkpoint fixture",
+  );
+  await check();
+  assert.equal(JSON.parse(await readFile(input, "utf8")).referenceSource, root);
+});
+
+test("HF prefers a pinned cached checkpoint and falls back to a complete export on cache miss", async (t) => {
   const { model } = await fixture(t, false);
   await execute(python, [
     "-B",
     "-c",
     `
 import importlib.util
+from pathlib import Path
 import sys
 import types
 spec = importlib.util.spec_from_file_location("prompt", "media/run_prompt.py")
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
-def snapshot(identity, **kwargs):
+expected = str(Path(sys.argv[1]).parent / "pinned-checkpoint")
+cached_result = str(Path(expected) / "config.json")
+lookups = []
+def cached_file(identity, filename, **kwargs):
     assert identity == "owner/checkpoint"
-    assert kwargs == {"revision":"pinned-revision", "local_files_only":True}
-    return "/local/pinned-checkpoint"
-sys.modules["huggingface_hub"] = types.SimpleNamespace(snapshot_download=snapshot)
+    assert filename == "config.json"
+    lookups.append(kwargs)
+    return cached_result
+sys.modules["huggingface_hub"] = types.SimpleNamespace(try_to_load_from_cache=cached_file)
 request = {"modelPath":sys.argv[1], "provenance":{
     "source":"/missing/original/source", "model":"owner/checkpoint", "revision":"pinned-revision"}}
-assert module.source_for(request) == "/local/pinned-checkpoint"
+assert module.source_for(request) == expected
+assert lookups[-1] == {"revision":"pinned-revision"}
 try: module.source_for({"modelPath":sys.argv[1]})
 except ValueError: pass
 else: raise AssertionError("Export-only directory accepted as a checkpoint")
+directory = Path(sys.argv[1]).parent
+for cached_result in (None, object()):
+    (directory / "model.safetensors").write_text("checkpoint fixture")
+    assert module.source_for(request) == str(directory)
+    try:
+        module.source_for({**request, "referenceSource": "owner/checkpoint"})
+    except ValueError as error:
+        assert "No cached Hugging Face config.json" in str(error)
+    else:
+        raise AssertionError("Explicit uncached reference ignored")
+    assert lookups[-1] == {"revision":None}
+    (directory / "model.safetensors").unlink()
 `,
     model,
+  ]);
+});
+
+test("HF candidate decoding preserves split UTF-8 against exported prefixes, not earlier predictions", async () => {
+  await execute(python, [
+    "-B",
+    "-c",
+    `
+import importlib.util
+from tokenizers import Tokenizer, decoders, models
+spec = importlib.util.spec_from_file_location("prompt", "media/run_prompt.py")
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+backend = Tokenizer(models.BPE(vocab={"\\u00c3":0, "\\u00a9":1, "X":2, "H":3}, merges=[]))
+backend.decoder = decoders.ByteLevel()
+class Slow:
+    def decode(self, ids, **kwargs):
+        assert kwargs == {"skip_special_tokens":False, "clean_up_tokenization_spaces":False}
+        return backend.decode(ids, skip_special_tokens=False)
+class Fast(Slow):
+    backend_tokenizer = backend
+for tokenizer in (Fast(), Slow()):
+    decoder = module.ReferenceDecoder(tokenizer, [3])
+    prefix = [3]
+    previews = []
+    for candidate, exported in ((2, 0), (1, 1), (0, 3)):
+        previews.append(decoder.decode(prefix, candidate, exported))
+        prefix.append(exported)
+    assert previews == ["X", "\\u00e9", ""], previews
+    decoder = module.ReferenceDecoder(tokenizer, [3])
+    assert decoder.decode([3], 0, 0) == ""
+    assert decoder.decode([3, 0], 1, 1) == "\\u00e9"
+`,
   ]);
 });
 
@@ -815,7 +1146,7 @@ class AutoModelForCausalLM:
     );
     const validated = await runPrompt(
       model,
-      { ...options, engine, validate: true },
+      { ...options, engine, validate: true, referenceSource: root },
       python,
       signal(),
       () => {},
@@ -836,6 +1167,61 @@ class AutoModelForCausalLM:
       ),
     );
   }
+});
+
+test("an explicit HF model ID resolves the local cache without export provenance or guessing a checkpoint", async (t) => {
+  const { root, model } = await fixture(t, false);
+  await execute(python, [
+    "-B",
+    "-c",
+    `
+import importlib.util
+import os
+from pathlib import Path
+import sys
+
+cache = Path(sys.argv[2]) / "hub"
+repository = cache / "models--owner--checkpoint"
+revision = "a" * 40
+snapshot = repository / "snapshots" / revision
+snapshot.mkdir(parents=True)
+(snapshot / "config.json").write_text("{}")
+(repository / "refs").mkdir()
+(repository / "refs" / "main").write_text(revision)
+os.environ["HF_HUB_CACHE"] = str(cache)
+spec = importlib.util.spec_from_file_location("prompt", "media/run_prompt.py")
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+request = {"modelPath":sys.argv[1], "referenceSource":"owner/checkpoint"}
+assert module.source_for(request) == str(snapshot)
+request["provenance"] = {"source":sys.argv[2], "model":"wrong/checkpoint", "revision":"wrong-revision"}
+assert module.source_for(request) == str(snapshot)
+request["referenceSource"] = str(snapshot)
+assert module.source_for(request) == str(snapshot)
+request["referenceSource"] = "owner/uncached-checkpoint"
+try:
+    module.source_for(request)
+except ValueError as error:
+    assert "No cached Hugging Face config.json" in str(error)
+else:
+    raise AssertionError("Uncached explicit model silently ignored")
+request["referenceSource"] = str(snapshot / "missing")
+try:
+    module.source_for(request)
+except ValueError as error:
+    assert "reference directory does not exist" in str(error)
+else:
+    raise AssertionError("Missing explicit checkpoint silently ignored")
+try:
+    module.source_for({"modelPath":sys.argv[1]})
+except ValueError as error:
+    assert "Hugging Face reference field" in str(error)
+else:
+    raise AssertionError("Export-only directory accepted without an explicit checkpoint")
+`,
+    model,
+    root,
+  ]);
 });
 
 test("numerical comparison covers all vocabulary entries and strict threshold boundaries", async () => {

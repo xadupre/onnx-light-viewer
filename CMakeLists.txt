@@ -93,7 +93,7 @@ target_link_libraries(onnx_light_viewer PRIVATE
   onnx_light::lib_onnx_patterns
   onnx_light::lib_onnx_kernels
   lib_onnx_light_cpu_kernels
-  onnx_light::lib_onnx_backend_test ${CMAKE_JS_LIB}
+  onnx_light::lib_onnx_backend_test ${CMAKE_JS_LIB} ${CMAKE_DL_LIBS}
 )
 set(_output "${CMAKE_CURRENT_SOURCE_DIR}/dist/native")
 set_target_properties(onnx_light_viewer PROPERTIES

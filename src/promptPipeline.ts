@@ -97,7 +97,7 @@ export async function promptPipelineInfo(
     return { path, available: false, label: "No Mobius pipeline identified" };
   if (!(await file(candidate.prefill)))
     return { path, available: false, label: "Mobius: decoder file is missing" };
-  const info = await promptInfo(candidate.prefill);
+  const info = await promptInfo(candidate.prefill, candidate.root);
   if (!info.engines.includes("onnx-light"))
     return {
       path,

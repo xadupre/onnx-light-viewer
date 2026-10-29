@@ -59,6 +59,7 @@ interface PromptOptions {
   maxTokens: number;
   validate: boolean;
   keepLoaded: boolean;
+  referenceSource?: string;
   sessionSettings: Record<string, string | number | boolean>;
 }
 
@@ -105,6 +106,7 @@ function optionsFrom(value: unknown): PromptOptions {
           "maxTokens",
           "validate",
           "keepLoaded",
+          "referenceSource",
           "sessionSettings",
         ].includes(key),
     )
@@ -112,12 +114,26 @@ function optionsFrom(value: unknown): PromptOptions {
     throw new Error(
       "Choose a supported engine, prompt and 1–4096 output tokens.",
     );
+  if (
+    options.referenceSource !== undefined &&
+    (typeof options.referenceSource !== "string" ||
+      !options.referenceSource.trim() ||
+      options.referenceSource.includes("\0") ||
+      (!isAbsolute(options.referenceSource) &&
+        !/^[\w.-]+(?:\/[\w.-]+)?$/.test(options.referenceSource)))
+  )
+    throw new Error(
+      "Enter a Hugging Face model ID or an absolute local checkpoint directory.",
+    );
   return {
     engine: options.engine as PromptOptions["engine"],
     prompt: options.prompt,
     maxTokens: options.maxTokens as number,
     validate: options.validate === true,
     keepLoaded: options.keepLoaded === true,
+    ...(typeof options.referenceSource === "string"
+      ? { referenceSource: options.referenceSource }
+      : {}),
     sessionSettings: sessionSettingsFrom(
       String(options.engine),
       options.sessionSettings,
@@ -244,11 +260,15 @@ async function exists(file: string): Promise<boolean> {
 }
 
 /** Availability describes model assets; missing native runtime errors surface at run time. */
-export async function promptInfo(modelPath: string): Promise<{
+export async function promptInfo(
+  modelPath: string,
+  packageDirectory?: string,
+): Promise<{
   engines: string[];
   available: boolean;
   reason?: string;
   pipeline?: boolean;
+  validationRequiresReference?: boolean;
 }> {
   if (!isAbsolute(modelPath) || !(await exists(modelPath)))
     return {
@@ -265,6 +285,7 @@ export async function promptInfo(modelPath: string): Promise<{
   const directories = [
     dirname(modelPath),
     ...(provenance?.source ? [provenance.source] : []),
+    ...(packageDirectory ? [packageDirectory] : []),
   ];
   for (const directory of directories) {
     const configPath = join(directory, "config.json");
@@ -297,15 +318,35 @@ export async function promptInfo(modelPath: string): Promise<{
       break;
     }
   }
+  const recordedReference = !!(
+    provenance?.source ||
+    (provenance?.model && !isAbsolute(provenance.model))
+  );
+  const localReference =
+    !recordedReference &&
+    (await exists(join(dirname(modelPath), "config.json"))) &&
+    ((await exists(join(dirname(modelPath), "tokenizer.json"))) ||
+      (await exists(join(dirname(modelPath), "tokenizer_config.json")))) &&
+    (
+      await Promise.all(
+        [
+          "model.safetensors",
+          "model.safetensors.index.json",
+          "pytorch_model.bin",
+          "pytorch_model.bin.index.json",
+        ].map((name) => exists(join(dirname(modelPath), name))),
+      )
+    ).some(Boolean);
   return {
     engines,
+    validationRequiresReference: !recordedReference && !localReference,
     ...(/\.pipe-onnx$/i.test(modelPath) ? { pipeline: true } : {}),
     available: engines.length > 0,
     ...(engines.length
       ? {}
       : {
           reason:
-            "Prompt execution requires local causal-model/tokenizer metadata for onnx-light, or an ONNX Runtime GenAI package (genai_config.json).",
+            "Prompt is disabled because no compatible local generation package was found. ONNX Runtime GenAI requires genai_config.json beside the model and tokenizer assets; onnx-light requires causal-model config.json and tokenizer assets. Integrated embeddings are supported. For Mobius, export with --runtime ort-genai to include the GenAI configuration and tokenizer.",
         }),
   };
 }
@@ -411,6 +452,15 @@ export async function runPrompt(
       .externalDataLocations()
       .map((location) => resolve(dirname(modelPath), location)),
   ]);
+  if (source !== dirname(modelPath))
+    for (const entry of await readdir(source, { withFileTypes: true }))
+      if (
+        (entry.isFile() || entry.isSymbolicLink()) &&
+        !entry.name.startsWith(".") &&
+        (/\.(?:json|txt|model|tiktoken)$/.test(entry.name) ||
+          entry.name.startsWith("tokenizer.model."))
+      )
+        paths.add(join(source, entry.name));
   const assets = await Promise.all(
     [...paths].sort().map(async (path) => {
       const details = await stat(path);
@@ -464,6 +514,12 @@ export async function runPrompt(
     const output = join(request, "output.json");
     const capture = join(request, "logits.json");
     const profileDirectory = join(dirname(modelPath), ".prompt-profiles");
+    const referenceEnvironment = {
+      PYTHONUNBUFFERED: "1",
+      CUDA_VISIBLE_DEVICES: "",
+      HF_HUB_OFFLINE: "1",
+      TRANSFORMERS_OFFLINE: "1",
+    };
     if (options.sessionSettings.profile)
       await mkdir(profileDirectory, { recursive: true });
     if (previousCapture)
@@ -488,6 +544,7 @@ export async function runPrompt(
       input,
       JSON.stringify({
         modelPath,
+        pythonPath,
         ...options,
         provenance,
         source,
@@ -504,6 +561,22 @@ export async function runPrompt(
       }),
       { mode: 0o600, flag: "wx" },
     );
+    if (options.validate)
+      await runProcess(
+        {
+          executable: pythonPath,
+          args: [
+            "-u",
+            resolve(__dirname, "..", "media", "run_prompt.py"),
+            "--check-reference",
+            input,
+          ],
+        },
+        signal,
+        progress,
+        referenceEnvironment,
+        "Hugging Face reference preflight",
+      );
     if (!previousCapture) {
       let next = 0;
       const worker = session ?? new PromptSession();
@@ -557,11 +630,7 @@ export async function runPrompt(
         },
         signal,
         progress,
-        {
-          PYTHONUNBUFFERED: "1",
-          HF_HUB_OFFLINE: "1",
-          TRANSFORMERS_OFFLINE: "1",
-        },
+        referenceEnvironment,
         "Hugging Face validation",
       );
     }

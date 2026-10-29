@@ -10,6 +10,7 @@ function createFilePanels({
   const pathDialog = byId("open-path-dialog");
   let selectedPath;
   let nativePathRequest = 0;
+  let clipboardSelection;
   let openSource = "local";
   let pipelineFile = false;
   function fileSize(bytes) {
@@ -84,15 +85,25 @@ function createFilePanels({
         ["file", "file"],
         ["location", "directory"],
       ]) {
-        byId(`${target}-${field}-history`).replaceChildren(
+        const suggestions = byId(`${target}-${field}-history`);
+        suggestions.replaceChildren(
           ...entries
             .filter((entry) => entry.kind === kind)
             .map((entry) => {
               const option = document.createElement("option");
               option.value = entry.path;
+              option.textContent = entry.path;
               return option;
             }),
         );
+        if (field === "file") {
+          suggestions.disabled = suggestions.options.length === 0;
+          const placeholder = document.createElement("option");
+          placeholder.value = "";
+          placeholder.textContent = "Choose a recent path...";
+          suggestions.prepend(placeholder);
+          suggestions.value = "";
+        }
       }
       byId(`${target}-history`).hidden = entries.length === 0;
       byId(`${target}-history-entries`).replaceChildren(
@@ -188,6 +199,7 @@ function createFilePanels({
   }
   function invalidateNativePicker() {
     nativePathRequest++;
+    clipboardSelection = undefined;
     byId("open-native-picker").disabled = isReplacing();
   }
   function choosePath() {
@@ -217,9 +229,31 @@ function createFilePanels({
   byId("choose-open-path").addEventListener("click", choosePath);
   byId("open-native-picker").addEventListener("click", () => {
     if (isReplacing()) return;
+    clipboardSelection = undefined;
     byId("open-error").textContent = "";
     byId("open-native-picker").disabled = true;
     postMessage({ type: "select-model-path", requestId: ++nativePathRequest });
+  });
+  byId("open-file").addEventListener("keydown", (event) => {
+    if (
+      openSource !== "local" ||
+      isReplacing() ||
+      !(event.ctrlKey || event.metaKey) ||
+      event.altKey ||
+      event.key.toLowerCase() !== "v"
+    )
+      return;
+    event.preventDefault();
+    event.stopPropagation();
+    const field = byId("open-file");
+    clipboardSelection = {
+      value: field.value,
+      start: field.selectionStart,
+      end: field.selectionEnd,
+    };
+    byId("open-error").textContent = "";
+    byId("open-native-picker").disabled = true;
+    postMessage({ type: "paste-model-path", requestId: ++nativePathRequest });
   });
   function browseFiles(target) {
     if (target === "open") byId("open-file-list").hidden = false;
@@ -263,6 +297,12 @@ function createFilePanels({
     }
   }
   for (const target of ["open", "save"]) {
+    byId(`${target}-file-history`).addEventListener("change", (event) => {
+      if (!event.target.value) return;
+      byId(`${target}-file`).value = event.target.value;
+      event.target.value = "";
+      byId(`${target}-file`).focus();
+    });
     byId(`${target}-clear-history`).addEventListener("click", () =>
       postMessage({
         type: "path-history-edit",
@@ -441,8 +481,22 @@ function createFilePanels({
       )
         return true;
       byId("open-native-picker").disabled = false;
+      const selection = clipboardSelection;
+      clipboardSelection = undefined;
       if (data.error) byId("open-error").textContent = data.error;
-      else if (data.location) byId("open-file").value = data.location;
+      else if (data.location) {
+        const field = byId("open-file");
+        if (selection) {
+          if (field.value !== selection.value) return true;
+          field.setRangeText(
+            data.location,
+            selection.start,
+            selection.end,
+            "end",
+          );
+          field.dispatchEvent(new Event("input", { bubbles: true }));
+        } else field.value = data.location;
+      }
       byId("open-file").focus();
     } else if (data?.type === "huggingface-model-files") {
       if (data.requestId !== hubRequest || openSource !== "huggingface")

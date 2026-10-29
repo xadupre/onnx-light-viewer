@@ -13,12 +13,36 @@ function createPromptPanel({ byId, postMessage }) {
   let decodeCount = 0;
   let missingDecode = false;
   let pipeline = false;
+  let validationRequiresReference = false;
   const fields = byId("prompt-fields");
   const status = byId("prompt-status");
   const content = byId("prompt-results");
   const validate = byId("prompt-validate");
+  const referenceSource = byId("prompt-reference-source");
+  const validateRun = byId("prompt-validate-run");
+  const updateReference = () => {
+    const missing =
+      validationRequiresReference && !referenceSource.value.trim();
+    referenceSource.required =
+      validateRun.checked && validationRequiresReference;
+    validate.disabled = busy || missing;
+    byId("prompt-validation-status").textContent = !available
+      ? "Open a model to check whether its Hugging Face reference is identified."
+      : missing
+        ? "HF validation is unavailable: this export does not identify its original checkpoint. Enter a model ID or local checkpoint above before requesting validation. Generation alone is still available."
+        : referenceSource.value.trim()
+          ? "HF validation will use the model ID or checkpoint above. Local reference files are checked before a validated generation starts; no weights are downloaded."
+          : "HF validation will use the recorded export source or local checkpoint. Reference files are checked before a validated generation starts.";
+  };
+  referenceSource.addEventListener("input", updateReference);
+  validateRun.addEventListener("change", updateReference);
   const cancel = byId("prompt-cancel");
   const progress = byId("prompt-progress");
+  const showProgress = (output) => {
+    progress.textContent = output;
+    progress.hidden = !output;
+    byId("prompt-output").hidden = !output;
+  };
   const lifecycleStatus = byId("prompt-lifecycle");
   const sessionFields = byId("prompt-session-fields");
   const showSettingsEngine = () => {
@@ -98,7 +122,8 @@ function createPromptPanel({ byId, postMessage }) {
     busy = value;
     fields.disabled = value || !available;
     cancel.hidden = !value;
-    validate.disabled = value;
+    updateReference();
+    byId("prompt-reference-source").disabled = value;
     sessionFields.disabled = value;
     byId("prompt-settings-open").disabled = value;
     byId("prompt-unload").disabled = value;
@@ -109,14 +134,16 @@ function createPromptPanel({ byId, postMessage }) {
       postMessage({ type: "prompt-release" });
     ++requestId;
     available = false;
+    validationRequiresReference = false;
     requested = false;
     result = undefined;
     options = undefined;
+    byId("prompt-reference-source").value = "";
     showLifecycle();
     streaming = false;
     liveRows = [];
     content.replaceChildren();
-    progress.hidden = true;
+    showProgress("");
     validate.hidden = true;
     setBusy(false);
     status.textContent = "Open a converted language model to run a prompt.";
@@ -250,6 +277,18 @@ function createPromptPanel({ byId, postMessage }) {
   };
   const run = (validation) => {
     if (busy || !available) return;
+    const validateRequest = validation || validateRun.checked;
+    if (
+      validateRequest &&
+      validationRequiresReference &&
+      !referenceSource.value.trim()
+    ) {
+      status.textContent =
+        "Enter the original Hugging Face model ID or local checkpoint before validation. No generation has started.";
+      referenceSource.focus();
+      referenceSource.reportValidity();
+      return;
+    }
     if (!validation) {
       const sessionSettings = readSettings();
       if (!sessionSettings) return;
@@ -267,15 +306,23 @@ function createPromptPanel({ byId, postMessage }) {
     }
     streaming = !validation;
     setBusy(true);
-    progress.textContent = "";
-    progress.hidden = true;
+    showProgress("");
     status.textContent = validation
       ? "Validating with Hugging Face…"
-      : "Running prompt…";
+      : validateRequest
+        ? "Checking the Hugging Face reference before generation…"
+        : "Running prompt…";
     postMessage({
       type: "run-prompt",
       requestId: ++requestId,
-      options: { ...options, validate: validation },
+      reuseResult: validation,
+      options: {
+        ...options,
+        validate: validateRequest,
+        ...(validateRequest && referenceSource.value.trim()
+          ? { referenceSource: referenceSource.value.trim() }
+          : {}),
+      },
     });
   };
   byId("prompt-form").addEventListener("submit", (event) => {
@@ -318,10 +365,14 @@ function createPromptPanel({ byId, postMessage }) {
       if (message.requestId !== requestId) return true;
       if (message.type === "prompt-info") {
         available = message.info.available;
+        validationRequiresReference =
+          !!message.info.validationRequiresReference;
         const engine = byId("prompt-engine");
         for (const option of engine.options)
           option.disabled = !message.info.engines.includes(option.value);
-        engine.value = message.info.engines[0] ?? "onnx-light";
+        engine.value = message.info.engines.includes("onnxruntime-genai")
+          ? "onnxruntime-genai"
+          : (message.info.engines[0] ?? "onnx-light");
         showSettingsEngine();
         pipeline = !!message.info.pipeline;
         const light = byId("prompt-settings-light");
@@ -333,7 +384,7 @@ function createPromptPanel({ byId, postMessage }) {
         byId("prompt-pipeline-loading").hidden = !pipeline;
         setBusy(false);
         status.textContent = available
-          ? "Ready. ONNX engines and tokenization use native C++ libraries; Python is only needed for Hugging Face validation."
+          ? "Ready. ONNX engines and tokenization use native C++ libraries; Python can locate SDK libraries and run Hugging Face validation."
           : message.info.reason;
       } else if (message.type === "prompt-lifecycle") {
         if (busy && streaming) {
@@ -359,14 +410,14 @@ function createPromptPanel({ byId, postMessage }) {
         updateTiming();
         status.textContent = `Generated ${result.tokens.length}/${options.maxTokens} tokens…`;
       } else if (message.type === "prompt-progress") {
-        progress.textContent = message.output;
-        progress.hidden = !message.output;
+        showProgress(message.output);
       } else if (message.type === "prompt-error") {
         streaming = false;
         setBusy(false);
         if (result?.lifecycle) result.lifecycle.retained = false;
         showLifecycle(result?.lifecycle);
-        status.textContent = message.error;
+        status.textContent = message.error.split("\n")[0];
+        showProgress(message.error);
       } else {
         streaming = false;
         result = message.result;

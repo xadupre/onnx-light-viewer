@@ -105,18 +105,18 @@ export class PathHistory {
     const operation = this.pending.then(async () => {
       const history = this.snapshot();
       const previous = history[target];
-      history[target] =
-        change.action === "clear"
-          ? []
-          : change.action === "remove"
-            ? previous.filter((entry) => !sameEntry(entry, change.entry))
-            : [
-                ...change.entries,
-                ...previous.filter(
-                  (entry) =>
-                    !change.entries.some((recent) => sameEntry(entry, recent)),
-                ),
-              ].slice(0, 50);
+      if (change.action === "remember") {
+        const added = change.entries.filter(
+          (entry) => !previous.some((existing) => sameEntry(entry, existing)),
+        );
+        if (!added.length) return;
+        history[target] = [...added, ...previous].slice(0, 50);
+      } else {
+        history[target] =
+          change.action === "clear"
+            ? []
+            : previous.filter((entry) => !sameEntry(entry, change.entry));
+      }
       await this.storage.update("pathHistory", history);
       for (const listener of this.listeners) listener(history);
     });

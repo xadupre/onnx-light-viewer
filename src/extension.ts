@@ -119,6 +119,8 @@ interface LoadedModel {
   metadata?: GraphMetadata;
   fusionCount?: number;
   fusionHistory?: FusionOperation[];
+  /** Retains the optimized snapshot for replay without recomputing its rewritings. */
+  rewritingQueue?: { model: NativeModel; operations: FusionOperation[] };
   /** Materialized Python edits remain modified after undoing later native edits. */
   pythonOptimized?: boolean;
   source?: { uri: vscode.Uri };
@@ -708,6 +710,7 @@ async function configurePanel(
       file: {
         fusionCount: current.fusionCount ?? 0,
         fusionHistory: current.fusionHistory ?? [],
+        pendingRewritings: current.rewritingQueue?.operations ?? [],
         ...(current.graph.pipeline ? { pipeline: true } : {}),
         directory: locationText(directoryUri()),
         saveDirectory: locationText(saveDirectoryUri()),
@@ -768,6 +771,7 @@ async function configurePanel(
         maxExternalFileSize?: unknown;
         includeRewritings?: unknown;
         requestId?: unknown;
+        reuseResult?: unknown;
         options?: unknown;
         name?: unknown;
         dimensions?: unknown;
@@ -980,7 +984,9 @@ async function configurePanel(
           if (
             typeof message.requestId !== "number" ||
             !Number.isSafeInteger(message.requestId) ||
-            message.requestId < 0
+            message.requestId < 0 ||
+            (message.reuseResult !== undefined &&
+              typeof message.reuseResult !== "boolean")
           )
             throw new Error("Invalid prompt request.");
           if (!vscode.workspace.isTrusted)
@@ -1018,6 +1024,7 @@ async function configurePanel(
                   typeof message.options === "object" &&
                   "validate" in message.options &&
                   message.options.validate === true &&
+                  message.reuseResult === true &&
                   promptResult?.owner === owner
                   ? promptResult.result
                   : undefined,
@@ -1656,13 +1663,23 @@ async function configurePanel(
         } finally {
           if (hubSearch === controller) hubSearch = undefined;
         }
-      } else if (message?.type === "select-model-path") {
+      } else if (
+        message?.type === "select-model-path" ||
+        message?.type === "paste-model-path"
+      ) {
         try {
-          const selection = await pickLocalModel();
+          let location: string | null;
+          if (message.type === "paste-model-path") {
+            location = await vscode.env.clipboard.readText();
+            if (!location) throw new Error("The clipboard is empty.");
+          } else {
+            const selection = await pickLocalModel();
+            location = selection?.[0] ? locationText(selection[0]) : null;
+          }
           await postMessage({
             type: "model-path-selected",
             requestId: message.requestId,
-            location: selection?.[0] ? locationText(selection[0]) : null,
+            location,
           });
         } catch (error) {
           await postMessage({
@@ -2114,6 +2131,7 @@ async function configurePanel(
         fusionRequest++;
       } else if (
         message?.type === "undo-fusion" ||
+        message?.type === "replay-rewritings" ||
         message?.type === "apply-rewriting" ||
         message?.type === "fusion-patterns" ||
         message?.type === "preview-fusion" ||
@@ -2136,15 +2154,17 @@ async function configurePanel(
           await log.run(
             message.type === "undo-fusion"
               ? "Undo fusion"
-              : message.type === "apply-optimization"
-                ? "Optimize ONNX model"
-                : message.type === "apply-rewriting"
-                  ? "Apply rewriting scenario"
-                  : message.type === "apply-fusion"
-                    ? "Apply fusion pattern"
-                    : message.type === "preview-fusion"
-                      ? "Preview fusion pattern"
-                      : "List fusion patterns",
+              : message.type === "replay-rewritings"
+                ? "Replay pending rewritings"
+                : message.type === "apply-optimization"
+                  ? "Optimize ONNX model"
+                  : message.type === "apply-rewriting"
+                    ? "Apply rewriting scenario"
+                    : message.type === "apply-fusion"
+                      ? "Apply fusion pattern"
+                      : message.type === "preview-fusion"
+                        ? "Preview fusion pattern"
+                        : "List fusion patterns",
             async (id) => {
               const current = requireModel();
               if (message.type === "undo-fusion") {
@@ -2159,6 +2179,9 @@ async function configurePanel(
                   () => void sendStatus(),
                 );
                 if (!isCurrent()) return;
+                const replay =
+                  current.rewritingQueue?.model ??
+                  (edited.fusionCount() ? edited.clone() : undefined);
                 if (message.all === true) {
                   while (edited.fusionCount()) edited = edited.undoFusion();
                 } else {
@@ -2172,6 +2195,8 @@ async function configurePanel(
                     : [];
                 const graph = edited.graph(false, path);
                 const retained = edited.clone();
+                const pending =
+                  replay?.fusionHistory().slice(edited.fusionCount()) ?? [];
                 model = {
                   ...current,
                   native: edited,
@@ -2180,6 +2205,13 @@ async function configurePanel(
                   metadata: undefined,
                   fusionCount: edited.fusionCount(),
                   fusionHistory: edited.fusionHistory(),
+                  rewritingQueue:
+                    replay && pending.length
+                      ? {
+                          model: replay,
+                          operations: pending,
+                        }
+                      : undefined,
                   reload: () => retained.clone(),
                 };
                 graphRevision++;
@@ -2195,6 +2227,48 @@ async function configurePanel(
                   "Return to a model's main graph to apply fusion patterns.",
                 );
               const path = current.graph.breadcrumbs.at(-1)?.path ?? [];
+              if (message.type === "replay-rewritings") {
+                if (!current.rewritingQueue)
+                  throw new Error("No pending rewritings to apply.");
+                const edited = current.rewritingQueue.model.clone();
+                const retained = edited.clone();
+                const replacement: LoadedModel = {
+                  ...current,
+                  native: edited,
+                  nativeReload: undefined,
+                  graph: edited.graph(false, path),
+                  metadata: undefined,
+                  fusionCount: edited.fusionCount(),
+                  fusionHistory: edited.fusionHistory(),
+                  rewritingQueue: undefined,
+                  reload: () => retained.clone(),
+                };
+                model = replacement;
+                graphRevision++;
+                navigationRequest++;
+                panel.title = `ONNX: ${current.fileName ?? replacement.graph.name} (modified)`;
+                await sendGraph(undefined, message.requestId);
+                if (
+                  !active ||
+                  model !== replacement ||
+                  fusionRequest !== generation + 1
+                )
+                  return;
+                await postMessage({
+                  type: "optimization-info",
+                  requestId: message.requestId,
+                  operation: "Replay pending rewritings",
+                  changed: true,
+                  matches: current.rewritingQueue.operations.flatMap(
+                    (operation) => operation.matches,
+                  ),
+                  optimizationReport: null,
+                  patterns: edited.fusionPatterns(path),
+                  optimizationPatterns: edited.optimizationPatterns(path),
+                  scenarios: edited.rewritingScenarios(path),
+                });
+                return;
+              }
               if (message.type === "apply-optimization") {
                 if (
                   message.backend !== undefined &&
@@ -2219,11 +2293,9 @@ async function configurePanel(
                     throw new Error(
                       "ONNX Script requires a single ONNX model.",
                     );
-                  const native = await nativeModel(
-                    current,
-                    log,
-                    () => void sendStatus(),
-                  );
+                  const native =
+                    current.rewritingQueue?.model.clone() ??
+                    (await nativeModel(current, log, () => void sendStatus()));
                   if (!isCurrent()) return;
                   const bytes = await native.serialize(
                     undefined,
@@ -2244,7 +2316,7 @@ async function configurePanel(
                     : native;
                   edited.verify();
                   let replacement = current;
-                  if (result.changed) {
+                  if (result.changed || current.rewritingQueue) {
                     const retained = edited.clone();
                     replacement = {
                       ...current,
@@ -2254,7 +2326,9 @@ async function configurePanel(
                       metadata: undefined,
                       fusionCount: edited.fusionCount(),
                       fusionHistory: edited.fusionHistory(),
-                      pythonOptimized: true,
+                      rewritingQueue: undefined,
+                      pythonOptimized:
+                        current.pythonOptimized || result.changed,
                       reload: () => retained.clone(),
                     };
                   }
@@ -2281,25 +2355,26 @@ async function configurePanel(
                     requestId: message.requestId,
                     backend: "onnxscript",
                     operation: "Optimize",
-                    changed: result.changed,
+                    changed:
+                      result.changed || current.rewritingQueue !== undefined,
                     logs: result.logs,
                     matches: [],
                     optimizationReport: null,
                     undoSupported: false,
-                    notice: result.changed
-                      ? undefined
-                      : "No changes. Existing native undo history is retained.",
+                    notice: current.rewritingQueue
+                      ? "Pending rewritings reapplied before ONNX Script."
+                      : result.changed
+                        ? undefined
+                        : "No changes. Existing native undo history is retained.",
                     patterns: edited.fusionPatterns(),
                     optimizationPatterns: edited.optimizationPatterns(),
                     scenarios: edited.rewritingScenarios(),
                   });
                   return;
                 }
-                const native = await nativeModel(
-                  current,
-                  log,
-                  () => void sendStatus(),
-                );
+                const native =
+                  current.rewritingQueue?.model.clone() ??
+                  (await nativeModel(current, log, () => void sendStatus()));
                 if (!isCurrent()) return;
                 const chosen: unknown = message.patterns;
                 const catalog = native.optimizationPatterns(path);
@@ -2325,10 +2400,14 @@ async function configurePanel(
                   path,
                 );
                 if (!isCurrent()) return;
-                const changed = edited.fusionCount() > native.fusionCount();
+                const changed =
+                  edited.fusionCount() > (current.fusionCount ?? 0);
                 const graph = edited.graph(false, path);
                 const matches = changed
-                  ? (edited.fusionHistory().at(-1)?.matches ?? [])
+                  ? edited
+                      .fusionHistory()
+                      .slice(current.fusionCount ?? 0)
+                      .flatMap((operation) => operation.matches)
                   : [];
                 const retained = edited.clone();
                 const replacement: LoadedModel = {
@@ -2339,6 +2418,7 @@ async function configurePanel(
                   metadata: undefined,
                   fusionCount: edited.fusionCount(),
                   fusionHistory: edited.fusionHistory(),
+                  rewritingQueue: undefined,
                   reload: () => retained.clone(),
                 };
                 model = replacement;
@@ -2398,6 +2478,7 @@ async function configurePanel(
                   metadata: undefined,
                   fusionCount: edited.fusionCount(),
                   fusionHistory: edited.fusionHistory(),
+                  rewritingQueue: undefined,
                   reload: () => retained.clone(),
                 };
                 model = replacement;
@@ -2508,12 +2589,18 @@ async function configurePanel(
                 return;
               }
               fusionPreview = undefined;
-              const native = await nativeModel(
+              const displayed = await nativeModel(
                 current,
                 log,
                 () => void sendStatus(),
               );
               if (!isCurrent()) return;
+              const queued =
+                message.type === "preview-fusion"
+                  ? current.rewritingQueue
+                  : undefined;
+              const replaying = queued !== undefined;
+              const native = queued?.model.clone() ?? displayed;
               const patterns = native.fusionPatterns(path);
               if (message.type === "fusion-patterns") {
                 await postMessage({
@@ -2527,12 +2614,17 @@ async function configurePanel(
                 return;
               }
               const chosen: unknown = message.patterns ?? [message.pattern];
+              const availablePatterns = new Set([
+                ...patterns,
+                ...(replaying ? displayed.fusionPatterns(path) : []),
+              ]);
               if (
                 !Array.isArray(chosen) ||
                 !chosen.length ||
                 !chosen.every(
                   (pattern: unknown) =>
-                    typeof pattern === "string" && patterns.includes(pattern),
+                    typeof pattern === "string" &&
+                    availablePatterns.has(pattern),
                 ) ||
                 new Set(chosen).size !== chosen.length
               )
@@ -2554,12 +2646,46 @@ async function configurePanel(
                 );
               }
               if (!snapshot) throw new Error("No fusion snapshot was created.");
+              const replayInfo = replaying
+                ? {
+                    replayed: true,
+                    patterns,
+                    optimizationPatterns: native.optimizationPatterns(path),
+                    scenarios: native.rewritingScenarios(path),
+                  }
+                : {};
+              let previewOwner = current;
+              if (replaying) {
+                const retained = native.clone();
+                previewOwner = {
+                  ...current,
+                  native,
+                  nativeReload: undefined,
+                  graph: native.graph(false, path),
+                  metadata: undefined,
+                  fusionCount: native.fusionCount(),
+                  fusionHistory: native.fusionHistory(),
+                  rewritingQueue: undefined,
+                  reload: () => retained.clone(),
+                };
+                model = previewOwner;
+                graphRevision++;
+                navigationRequest++;
+                panel.title = `ONNX: ${current.fileName ?? previewOwner.graph.name} (modified)`;
+                await sendGraph(undefined, message.requestId);
+                if (
+                  !active ||
+                  model !== previewOwner ||
+                  fusionRequest !== generation + 1
+                )
+                  return;
+              }
               fusionPreview = {
                 id: generation,
-                owner: current,
+                owner: previewOwner,
                 native,
                 snapshot,
-                revision,
+                revision: graphRevision,
                 pattern: chosen[0],
                 anchors: new Set(matches.map((match) => match.anchor)),
                 matches,
@@ -2569,6 +2695,7 @@ async function configurePanel(
                 requestId: message.requestId,
                 previewId: generation,
                 matches,
+                ...replayInfo,
               });
             },
             message.actionId,
@@ -2738,9 +2865,12 @@ async function configurePanel(
                   );
               }
               const isCurrent = () => active && model === current;
-              const native = await nativeModel(current, log, () => {
-                void sendStatus();
-              });
+              const native =
+                message.includeRewritings && current.rewritingQueue
+                  ? current.rewritingQueue.model
+                  : await nativeModel(current, log, () => {
+                      void sendStatus();
+                    });
               const sourcePath =
                 current.source?.uri.scheme === "file"
                   ? current.source.uri.fsPath

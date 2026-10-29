@@ -3319,6 +3319,83 @@ test("opens backend tests on double click while local file clicks only choose a 
   assert.equal(messages.filter(({ type }) => type === "open").length, 1);
 });
 
+test("keeps the complete history selector after selecting and loading a remembered file", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  load(demoGraph);
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  const files = ["/models/first.onnx", "/exports/second.onnx"];
+  const history = {
+    open: files.map((path) => ({ source: "local", kind: "file", path })),
+    save: [],
+  };
+  send({ type: "path-history", history });
+  document.getElementById("open-model").click();
+  const selector = document.getElementById("open-file-history");
+  assert.equal(selector.tagName, "SELECT");
+  const choices = () =>
+    Array.from(selector.options)
+      .filter((option) => option.value)
+      .map((option) => option.value);
+  assert.deepEqual(choices(), files);
+  selector.value = files[1];
+  selector.dispatchEvent(new window.Event("change", { bubbles: true }));
+  assert.equal(document.getElementById("open-file").value, files[1]);
+  assert.deepEqual(choices(), files);
+  assert.equal(
+    messages.some(({ type }) => type === "open"),
+    false,
+  );
+  document
+    .getElementById("open-form")
+    .dispatchEvent(new window.Event("submit", { cancelable: true }));
+  const opening = messages.findLast(({ type }) => type === "open");
+  assert.equal(opening.location, files[1]);
+  load(demoGraph);
+  send({
+    type: "log-entry",
+    entry: {
+      id: opening.actionId,
+      timestamp: new Date().toISOString(),
+      action: "Open ONNX model",
+      status: "SUCCEEDED",
+    },
+  });
+  document.getElementById("open-model").click();
+  assert.deepEqual(choices(), files);
+  selector.value = files[0];
+  selector.dispatchEvent(new window.Event("change", { bubbles: true }));
+  assert.equal(document.getElementById("open-file").value, files[0]);
+  assert.deepEqual(choices(), files);
+  const saved = ["/copies/first.onnx", "/copies/second.onnx"];
+  send({
+    type: "path-history",
+    history: {
+      ...history,
+      save: saved.map((path) => ({ source: "local", kind: "file", path })),
+    },
+  });
+  document.getElementById("save-model").click();
+  const destinations = document.getElementById("save-file-history");
+  destinations.value = saved[1];
+  destinations.dispatchEvent(new window.Event("change", { bubbles: true }));
+  assert.equal(document.getElementById("save-file").value, saved[1]);
+  assert.deepEqual(
+    Array.from(destinations.options)
+      .filter((option) => option.value)
+      .map((option) => option.value),
+    saved,
+  );
+  assert.equal(
+    messages.some(({ type }) => type === "save"),
+    false,
+  );
+  assert.equal(
+    messages.some(({ type }) => type === "path-history-edit"),
+    false,
+  );
+});
+
 test("suggests remembered paths without submitting forms and supports per-entry removal and clearing", (t) => {
   const { document, window, messages, load } = openViewer(t);
   load(demoGraph);
@@ -3346,23 +3423,24 @@ test("suggests remembered paths without submitting forms and supports per-entry 
       }),
     );
   send();
-  for (const target of ["open", "save"])
-    for (const field of ["file", "location"])
-      assert.equal(
-        document.getElementById(`${target}-${field}`).list.id,
-        `${target}-${field}-history`,
-      );
+  for (const target of ["open", "save"]) {
+    assert.equal(document.getElementById(`${target}-file`).list, null);
+    assert.equal(
+      document.getElementById(`${target}-location`).list.id,
+      `${target}-location-history`,
+    );
+  }
   assert.deepEqual(
     [...document.querySelectorAll("#open-file-history option")].map(
       (option) => option.value,
     ),
-    [local.path],
+    ["", local.path],
   );
   assert.deepEqual(
     [...document.querySelectorAll("#save-file-history option")].map(
       (option) => option.value,
     ),
-    [saved.path],
+    ["", saved.path],
   );
   assert.equal(document.querySelector("#open-history b"), null);
   document.getElementById("open-model").click();
@@ -3406,17 +3484,14 @@ test("suggests remembered paths without submitting forms and supports per-entry 
   assert.equal(messages.at(-1).historyEntry.path, local.path);
   history.open.shift();
   send();
-  assert.equal(
-    document.querySelectorAll("#open-file-history option").length,
-    0,
-  );
+  assert.equal(document.getElementById("open-file-history").disabled, true);
   for (const [value, path] of [
     ["huggingface", remote.path],
     ["backend", backend.path],
   ]) {
     document.getElementById(`open-source-${value}`).click();
     assert.equal(
-      document.querySelector("#open-file-history option").value,
+      document.querySelectorAll("#open-file-history option")[1].value,
       path,
     );
   }
@@ -3437,10 +3512,7 @@ test("suggests remembered paths without submitting forms and supports per-entry 
   history.save = [];
   send();
   assert.equal(document.getElementById("save-history").hidden, true);
-  assert.equal(
-    document.querySelectorAll("#save-file-history option").length,
-    0,
-  );
+  assert.equal(document.getElementById("save-file-history").disabled, true);
 });
 
 test("history checks generation assets without reopening or reordering and offers a distinct pipeline action", (t) => {
@@ -5234,6 +5306,58 @@ test("choosing a path fills Model path while Cancel and Escape preserve it witho
   );
   assert.equal(messages.at(-1).type, "open");
   assert.equal(messages.at(-1).location, "/outside/workspace/model.onnx");
+});
+
+test("local path keyboard paste uses the VS Code clipboard and preserves text selection", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const forwarded = [];
+  window.addEventListener("keydown", (event) => {
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "v")
+      forwarded.push(event);
+  });
+  load(demoGraph);
+  document.getElementById("open-model").click();
+  const field = document.getElementById("open-file");
+  const paste = (modifiers) => {
+    field.focus();
+    const event = new window.KeyboardEvent("keydown", {
+      key: "v",
+      bubbles: true,
+      cancelable: true,
+      ...modifiers,
+    });
+    field.dispatchEvent(event);
+    assert.equal(event.defaultPrevented, true);
+    assert.equal(forwarded.length, 0);
+    assert.equal(messages.at(-1).type, "paste-model-path");
+    return messages.at(-1).requestId;
+  };
+  const reply = (requestId, location) =>
+    window.dispatchEvent(
+      new window.MessageEvent("message", {
+        data: { type: "model-path-selected", requestId, location },
+      }),
+    );
+  field.value = "/old/model.onnx";
+  field.select();
+  reply(paste({ ctrlKey: true }), "/models/qwen3/model.onnx");
+  assert.equal(field.value, "/models/qwen3/model.onnx");
+  field.setSelectionRange(8, 13);
+  reply(paste({ metaKey: true }), "qwen3-0.6b");
+  assert.equal(field.value, "/models/qwen3-0.6b/model.onnx");
+  assert.equal(document.activeElement, field);
+  const edited = paste({ ctrlKey: true });
+  field.value = "/typed/while-waiting.onnx";
+  reply(edited, "/stale.onnx");
+  assert.equal(field.value, "/typed/while-waiting.onnx");
+  const closed = paste({ ctrlKey: true });
+  document.getElementById("cancel-open").click();
+  reply(closed, "/closed.onnx");
+  assert.equal(field.value, "/typed/while-waiting.onnx");
+  assert.equal(
+    messages.some(({ type }) => type === "open"),
+    false,
+  );
 });
 
 test("VS Code path picking fills the field without opening and discards late results", (t) => {

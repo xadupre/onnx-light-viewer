@@ -137,7 +137,13 @@ onnx.save(decoder, root / "decoder" / "model.onnx")
     { stdio: "pipe" },
   );
   const decoder = path.join(root, "decoder", "model.onnx");
-  await writeFile(provenancePath(decoder), JSON.stringify(provenance));
+  await writeFile(
+    provenancePath(decoder),
+    JSON.stringify({
+      ...provenance,
+      source: path.join(root, "missing-checkpoint"),
+    }),
+  );
   const configPath = path.join(root, "genai_config.json");
   const config = JSON.parse(await readFile(configPath, "utf8"));
   config.model.decoder.filename = "decoder/model.onnx";

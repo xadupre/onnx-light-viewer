@@ -41,6 +41,62 @@ test("prompt host requires workspace trust and a locally saved converted model",
   assert.match(extension.messages.at(-1).error, /Invalid prompt request/);
 });
 
+test("a fresh validated prompt does not reuse a previous generation's captured prefixes", async (t) => {
+  const {
+    promptModel,
+    nativeEnvironment,
+  } = require("./helpers/prompt-model.cjs");
+  const root = await mkdtemp(
+    path.join(tmpdir(), "onnx-viewer-fresh-validation-"),
+  );
+  t.after(() => rm(root, { force: true, recursive: true }));
+  const model = await promptModel(root);
+  for (const [name, value] of Object.entries(nativeEnvironment())) {
+    const previous = process.env[name];
+    process.env[name] = value;
+    t.after(() => {
+      if (previous === undefined) delete process.env[name];
+      else process.env[name] = previous;
+    });
+  }
+  const extension = await openExtension(undefined, undefined, true);
+  t.after(() => extension.dispose());
+  await extension.resolveCustomEditor(model);
+  const options = { engine: "onnxruntime-genai", prompt: "H", maxTokens: 1 };
+  await extension.receive({
+    type: "run-prompt",
+    requestId: 1,
+    reuseResult: false,
+    options,
+  });
+  assert.equal(extension.messages.at(-1).type, "prompt-result");
+  const nativeEvents = extension.messages.filter(({ type }) =>
+    ["prompt-lifecycle", "prompt-token"].includes(type),
+  ).length;
+  await extension.receive({
+    type: "run-prompt",
+    requestId: 2,
+    reuseResult: false,
+    options: {
+      ...options,
+      prompt: "HH",
+      validate: true,
+      referenceSource: root,
+    },
+  });
+  assert.equal(extension.messages.at(-1).type, "prompt-error");
+  assert.match(
+    extension.messages.at(-1).error,
+    /checkpoint weights are missing/,
+  );
+  assert.equal(
+    extension.messages.filter(({ type }) =>
+      ["prompt-lifecycle", "prompt-token"].includes(type),
+    ).length,
+    nativeEvents,
+  );
+});
+
 class FileSystemError extends Error {
   constructor(code) {
     super(code);
@@ -78,6 +134,8 @@ async function openExtension(
     Promise.all([...receivers].map((callback) => callback(message)));
   let selection;
   let openDialogFailure;
+  let clipboardText = "";
+  let clipboardFailure;
   let editor;
   let backendSelection;
   let client;
@@ -154,6 +212,14 @@ async function openExtension(
     reveal() {},
   };
   const vscode = {
+    env: {
+      clipboard: {
+        readText: async () => {
+          if (clipboardFailure) throw clipboardFailure;
+          return clipboardText;
+        },
+      },
+    },
     FileSystemError,
     FileType: { File: 1, Directory: 2, SymbolicLink: 64 },
     Uri: {
@@ -448,6 +514,10 @@ async function openExtension(
     },
     failNextOpenDialog: (message) => {
       openDialogFailure = new Error(message);
+    },
+    setClipboard: (text, error) => {
+      clipboardText = text;
+      clipboardFailure = error ? new Error(error) : undefined;
     },
     writes,
     webview,
@@ -1975,6 +2045,45 @@ test("remembers only successful Open and Save paths and supports persistent remo
   reopened.dispose();
 });
 
+test("loading an existing history file preserves the complete stored history and its order", async (t) => {
+  const source = require.resolve("./models/relu.onnx");
+  const history = {
+    open: [
+      { source: "local", kind: "file", path: "/exports/other.onnx" },
+      { source: "backend", kind: "file", path: "test_cc_relu" },
+      { source: "local", kind: "file", path: source },
+      { source: "local", kind: "directory", path: path.dirname(source) },
+    ],
+    save: [{ source: "local", kind: "file", path: "/copies/other.onnx" }],
+  };
+  const expected = structuredClone(history);
+  const preferences = new Map([["pathHistory", history]]);
+  const extension = await openExtension(
+    undefined,
+    undefined,
+    true,
+    undefined,
+    undefined,
+    preferences,
+  );
+  t.after(() => extension.dispose());
+  await extension.receive({ type: "ready" });
+  await extension.openFile(source);
+  assert.equal(
+    extension.messages.findLast(({ type }) => type === "graph").graph.nodes[0]
+      .opType,
+    "Relu",
+  );
+  assert.deepEqual(preferences.get("pathHistory"), expected);
+  await extension.resolveCustomEditor(source);
+  assert.deepEqual(preferences.get("pathHistory"), expected);
+  assert.deepEqual(
+    extension.events.findLast(({ type }) => type === "path-history").history,
+    expected,
+  );
+  assert.equal(extension.errors.length, 0);
+});
+
 test("publishes replacement graphs before delayed Open history persistence", async (t) => {
   for (const source of ["local", "backend"]) {
     const extension = await openExtension();
@@ -2075,6 +2184,27 @@ test("publishes initial editor graphs before delayed Open history persistence", 
   assert.equal(history[0].source, "local");
   assert.equal(history[0].kind, "file");
   assert.match(history[0].path, /\/relu\.onnx$/);
+});
+
+test("path paste reads the VS Code clipboard without loading a model and reports clipboard errors", async () => {
+  const extension = await openExtension("relu.onnx");
+  const reads = extension.reads.length;
+  const location = "/home/models/qwen3-0.6b-mobius/model.onnx";
+  extension.setClipboard(location);
+  await extension.receive({ type: "paste-model-path", requestId: 1 });
+  assert.deepEqual(extension.messages.at(-1), {
+    type: "model-path-selected",
+    requestId: 1,
+    location,
+  });
+  extension.setClipboard("");
+  await extension.receive({ type: "paste-model-path", requestId: 2 });
+  assert.equal(extension.messages.at(-1).error, "The clipboard is empty.");
+  extension.setClipboard("", "Clipboard unavailable");
+  await extension.receive({ type: "paste-model-path", requestId: 3 });
+  assert.equal(extension.messages.at(-1).error, "Clipboard unavailable");
+  assert.equal(extension.reads.length, reads);
+  assert.equal(extension.openDialogs.length, 0);
 });
 
 test("native path selection preserves the picker and returns a path without loading or replacing the model", async () => {
@@ -2428,6 +2558,31 @@ test("opens pipeline files, navigates stages, applies stage fusions and saves th
   await extension.save(encrypted, true, ["secret", "secret"]);
   assert.match(extension.errors.at(-1), /PipelineProto encryption/);
   await assert.rejects(readFile(encrypted), { code: "ENOENT" });
+  await extension.receive({ type: "undo-fusion", all: true });
+  assert.equal(latestGraph().file.fusionCount, 0);
+  assert.equal(latestGraph().file.pendingRewritings[0].stage, "prefill");
+  assert.equal(latestGraph().file.pendingRewritings[0].matches.length, 2);
+  assert.deepEqual(latestGraph().graph.breadcrumbs.at(-1).path, stagePath);
+  const queuedPath = path.join(directory, "queued.pipe-onnx");
+  await extension.receive({
+    type: "save",
+    location: queuedPath,
+    overwrite: false,
+    includeRewritings: true,
+  });
+  const queued = await loadModelFile(queuedPath, "queued.pipe-onnx");
+  const scenario = queued.rewritingScenarios(stagePath)[0];
+  const reapplied = await queued.applyRewritingScenario(
+    scenario.name,
+    true,
+    undefined,
+    stagePath,
+  );
+  assert.deepEqual(reapplied.graph(false, stagePath), stage);
+  await extension.receive({ type: "replay-rewritings", requestId: 5 });
+  assert.deepEqual(latestGraph().graph, stage);
+  assert.deepEqual(latestGraph().file.pendingRewritings, []);
+  assert.equal(latestGraph().file.fusionCount, 1);
 });
 
 test("lists saved scenarios and applies one or all remaining steps with host undo", async (t) => {
@@ -3200,8 +3355,30 @@ test("unfuses the last operation or all successive native fusions atomically", a
     { matches: [{ pattern: "TransposeTranspose", nodes: [0] }] },
   ]);
   assert.equal(latestGraph().graph.nodes.length, original.length - 1);
-  await fuseNext();
+  const pendingGraph = latestGraph();
+  for (const request of [
+    { type: "preview-fusion", pattern: "UnknownPattern" },
+    {
+      type: "apply-optimization",
+      operation: "Optimize",
+      patterns: ["UnknownPattern"],
+    },
+  ]) {
+    await extension.receive({ ...request, requestId: ++requestId });
+    assert.equal(extension.messages.at(-1).type, "fusion-error");
+    assert.equal(latestGraph(), pendingGraph);
+    assert.equal(latestGraph().file.pendingRewritings.length, 1);
+  }
+  await extension.receive({
+    type: "preview-fusion",
+    pattern: "TransposeTranspose",
+    requestId: ++requestId,
+  });
+  assert.equal(extension.messages.at(-1).type, "fusion-preview");
+  assert.equal(extension.messages.at(-1).replayed, true);
+  assert.deepEqual(extension.messages.at(-1).matches, []);
   assert.equal(latestGraph().file.fusionCount, 2);
+  assert.deepEqual(latestGraph().file.pendingRewritings, []);
   const beforeUnfuse = extension.messages.filter(
     (message) => message.type === "graph",
   ).length;
@@ -3209,6 +3386,7 @@ test("unfuses the last operation or all successive native fusions atomically", a
   assert.equal(extension.messages.at(-1).type, "graph");
   assert.equal(latestGraph().file.fusionCount, 0);
   assert.deepEqual(latestGraph().file.fusionHistory, []);
+  assert.equal(latestGraph().file.pendingRewritings.length, 2);
   assert.deepEqual(latestGraph().graph.nodes, original);
   assert.equal(
     extension.messages.filter((message) => message.type === "graph").length,
@@ -3243,6 +3421,29 @@ test("does not reopen fusion controls after cancellation during the updated grap
   assert.equal(
     extension.messages.some((message) => message.type === "fusion-info"),
     false,
+  );
+  await extension.receive({ type: "undo-fusion", all: true });
+  const previews = extension.messages.filter(
+    ({ type }) => type === "fusion-preview",
+  ).length;
+  await extension.receive({
+    type: "preview-fusion",
+    pattern: "TransposeTranspose",
+    requestId: 3,
+  });
+  assert.equal(
+    extension.messages.filter(({ type }) => type === "fusion-preview").length,
+    previews,
+  );
+  assert.equal(
+    extension.messages.findLast(({ type }) => type === "graph").file
+      .fusionCount,
+    1,
+  );
+  assert.deepEqual(
+    extension.messages.findLast(({ type }) => type === "graph").file
+      .pendingRewritings,
+    [],
   );
 });
 
@@ -4985,6 +5186,14 @@ test("selects optimization groups and previews global passes through the real we
   const unfuseOptimization = document.getElementById(
     "optimization-unfuse-last",
   );
+  const pendingCount = () =>
+    extension.messages
+      .findLast(({ type }) => type === "graph")
+      .file.pendingRewritings.flatMap((operation) => operation.matches).length;
+  assert.equal(
+    document.getElementById("rewriting-count").textContent,
+    "0 pending rewritings",
+  );
   assert.equal(restoreOriginal.disabled, false);
   assert.equal(unfuseOptimization.disabled, false);
   document.getElementById("optimize-model").click();
@@ -5034,15 +5243,20 @@ test("selects optimization groups and previews global passes through the real we
     .click();
   assert.ok(document.querySelectorAll(".graph-node.selected").length);
   document.getElementById("undo-fusion").click();
-  assert.equal(document.querySelectorAll("#unfuse-history > li").length, 1);
+  assert.equal(document.querySelectorAll("#unfuse-history > li").length, 2);
   unfuseOptimization.click();
   assert.equal(restoreOriginal.disabled, true);
   await flush();
-  assert.equal(count(), original);
+  assert.equal(count(), original - 1);
   assert.equal(document.getElementById("optimization-panel").hidden, false);
-  assert.equal(restoreOriginal.disabled, true);
-  assert.equal(unfuseOptimization.disabled, true);
-  assert.equal(results.querySelectorAll("button").length, 0);
+  assert.equal(restoreOriginal.disabled, false);
+  assert.equal(unfuseOptimization.disabled, false);
+  assert.equal(results.querySelectorAll("button").length, 1);
+  assert.ok(pendingCount() > 0);
+  assert.equal(
+    document.querySelectorAll("#pending-rewriting-steps li").length,
+    pendingCount(),
+  );
   document.getElementById("run-optimization").click();
   await flush();
   assert.ok(count() < original);
@@ -5052,6 +5266,166 @@ test("selects optimization groups and previews global passes through the real we
   assert.equal(document.getElementById("optimization-panel").hidden, false);
   assert.equal(restoreOriginal.disabled, true);
   assert.equal(results.querySelectorAll("button").length, 0);
+  assert.ok(pendingCount() > 0);
+  assert.equal(document.getElementById("pending-rewritings").hidden, false);
+  assert.match(
+    document.getElementById("pending-rewriting-steps").textContent,
+    /ConstantFolding/,
+  );
+  assert.match(
+    document.getElementById("optimization-status").textContent,
+    /kept pending/,
+  );
+  assert.equal(
+    document.getElementById("rewriting-count").textContent,
+    `${pendingCount()} pending rewritings`,
+  );
+  document.getElementById("replay-rewritings").click();
+  await flush();
+  assert.deepEqual(
+    extension.messages.findLast(({ type }) => type === "graph").graph,
+    optimized,
+  );
+  assert.equal(
+    document.getElementById("rewriting-count").textContent,
+    "0 pending rewritings",
+  );
+  assert.equal(document.getElementById("pending-rewritings").hidden, true);
+  assert.deepEqual(extension.errors, []);
+});
+
+test("keeps an unfused rewriting queue visible, replays it before matching and appends new fusions", async (t) => {
+  const { loadModel } = require("../dist/graph");
+  const extension = await openExtension("fusion.onnx", undefined, true);
+  t.after(() => extension.dispose());
+  const dom = new JSDOM(extension.webview.html, { runScripts: "outside-only" });
+  t.after(() => dom.window.close());
+  const { window } = dom;
+  const { document } = window;
+  window.structuredClone = structuredClone;
+  window.HTMLCanvasElement.prototype.getContext = () => ({
+    font: "",
+    measureText: (text) => ({ width: text.length * 8 }),
+  });
+  document.getElementById("canvas").getBoundingClientRect = () =>
+    new window.DOMRect(0, 0, 1060, 350);
+  const requests = [];
+  window.acquireVsCodeApi = () => ({
+    postMessage: (message) => requests.push(extension.receive(message)),
+  });
+  extension.connect((data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data })),
+  );
+  for (const script of document.querySelectorAll("script[src]"))
+    window.eval(readFileSync(new URL(script.src), "utf8"));
+  const flush = async () => {
+    while (requests.length) await Promise.all(requests.splice(0));
+  };
+  const latest = () =>
+    extension.messages.findLast(({ type }) => type === "graph");
+  const counter = () => document.getElementById("rewriting-count").textContent;
+  const match = async () => {
+    document
+      .querySelector('#fusion-pattern input[value="TransposeTranspose"]')
+      .click();
+    await flush();
+    document.getElementById("preview-fusion").click();
+    await flush();
+  };
+  const applyFirst = async () => {
+    document.querySelector("#fusion-matches input").click();
+    document.getElementById("apply-fusion").click();
+    await flush();
+  };
+  const restore = async () => {
+    document.getElementById("optimize-model").click();
+    await flush();
+    document.getElementById("optimization-restore-original").click();
+    await flush();
+  };
+  await flush();
+  const original = latest().graph;
+  document.getElementById("fuse-pattern").click();
+  await flush();
+  await match();
+  assert.equal(document.querySelectorAll("#fusion-matches input").length, 2);
+  await applyFirst();
+  const first = latest().graph;
+  assert.equal(latest().file.fusionCount, 1);
+  assert.equal(counter(), "0 pending rewritings");
+  await restore();
+  assert.deepEqual(latest().graph, original);
+  assert.equal(counter(), "1 pending rewriting");
+  assert.match(
+    document.getElementById("pending-rewriting-steps").textContent,
+    /TransposeTranspose/,
+  );
+  assert.match(
+    document.getElementById("optimization-status").textContent,
+    /1 rewriting kept pending/,
+  );
+  document.getElementById("fuse-pattern").click();
+  await flush();
+  assert.deepEqual(latest().graph, original);
+  assert.equal(counter(), "1 pending rewriting");
+  await match();
+  assert.deepEqual(latest().graph, first);
+  assert.equal(counter(), "0 pending rewritings");
+  assert.equal(document.getElementById("fusion-panel").hidden, false);
+  assert.equal(document.querySelectorAll("#fusion-matches input").length, 1);
+  assert.match(
+    document.getElementById("fusion-status").textContent,
+    /Pending rewritings reapplied/,
+  );
+  await applyFirst();
+  const second = latest().graph;
+  assert.equal(latest().file.fusionCount, 2);
+  assert.equal(
+    latest().file.fusionHistory.flatMap((operation) => operation.matches)
+      .length,
+    2,
+  );
+  await restore();
+  assert.deepEqual(latest().graph, original);
+  assert.equal(counter(), "2 pending rewritings");
+  assert.equal(
+    document.querySelectorAll("#pending-rewriting-steps li").length,
+    2,
+  );
+  const directory = await mkdtemp(
+    path.join(tmpdir(), "viewer-queued-rewritings-"),
+  );
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const destination = path.join(directory, "queued.onnx");
+  await extension.receive({
+    type: "save",
+    location: destination,
+    overwrite: false,
+    includeRewritings: true,
+  });
+  const saved = loadModel(await readFile(destination), "queued");
+  const [scenario] = saved.rewritingScenarios();
+  assert.equal(scenario.steps.length, 2);
+  assert.deepEqual(saved.graph(), original);
+  assert.deepEqual(
+    (await saved.applyRewritingScenario(scenario.name, true)).graph(),
+    second,
+  );
+  assert.equal(counter(), "2 pending rewritings");
+  const plainPath = path.join(directory, "plain.onnx");
+  await extension.receive({
+    type: "save",
+    location: plainPath,
+    overwrite: false,
+    includeRewritings: false,
+  });
+  const plain = loadModel(await readFile(plainPath), "plain");
+  assert.deepEqual(plain.graph(), original);
+  assert.deepEqual(plain.rewritingScenarios(), []);
+  assert.equal(counter(), "2 pending rewritings");
+  await extension.open("relu.onnx");
+  assert.equal(counter(), "0 pending rewritings");
+  assert.equal(document.getElementById("pending-rewritings").hidden, true);
   assert.deepEqual(extension.errors, []);
 });
 

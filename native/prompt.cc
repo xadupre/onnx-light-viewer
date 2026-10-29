@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <filesystem>
 #include <limits>
 #include <memory>
 #include <onnx_core/runtime/generation.h>
@@ -15,85 +16,130 @@
 #include <set>
 #include <stdexcept>
 #include <type_traits>
-#include <uv.h>
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#else
+#include <dlfcn.h>
+#endif
 
 namespace onnx_light_viewer {
 namespace {
 namespace rt = ol::core::runtime;
 using Clock = std::chrono::steady_clock;
 
+class Library {
+public:
+  Library(const std::string &path, const char *description, const char *setting) {
+    if (path.empty())
+      return;
+#ifdef _WIN32
+    const auto file = std::filesystem::u8path(path);
+    handle_ = LoadLibraryExW(file.c_str(), nullptr,
+                             file.is_absolute() ? LOAD_WITH_ALTERED_SEARCH_PATH : 0);
+#else
+    handle_ = dlopen(path.c_str(), RTLD_LAZY);
+#endif
+    if (!handle_) {
+      const auto error = Error();
+      throw std::runtime_error("Could not load " + std::string(description) + ": " + error +
+                               ". Set " + setting +
+                               " to the C++ SDK shared library's absolute path.");
+    }
+  }
+  ~Library() {
+    if (!handle_)
+      return;
+#ifdef _WIN32
+    FreeLibrary(handle_);
+#else
+    dlclose(handle_);
+#endif
+  }
+  Library(const Library &) = delete;
+  Library &operator=(const Library &) = delete;
+
+  template <typename T> void Load(const char *name, T &function) const {
+#ifdef _WIN32
+    const auto symbol = GetProcAddress(handle_, name);
+#else
+    const auto symbol = dlsym(handle_, name);
+#endif
+    if (!symbol) {
+      const auto error = Error();
+      throw std::runtime_error("Native GenAI SDK does not expose " + std::string(name) + ": " +
+                               error);
+    }
+    static_assert(sizeof(function) == sizeof(symbol));
+    std::memcpy(&function, &symbol, sizeof(function));
+  }
+
+private:
+  static std::string Error() {
+#ifdef _WIN32
+    return "Windows error " + std::to_string(GetLastError());
+#else
+    const auto *error = dlerror();
+    return error ? error : "Unknown dynamic library error";
+#endif
+  }
+#ifdef _WIN32
+  HMODULE handle_ = nullptr;
+#else
+  void *handle_ = nullptr;
+#endif
+};
+
 // Each runner process owns one SDK instance; no GenAI objects cross threads.
 class Genai {
 public:
-  Genai(const std::string &path, const std::string &runtime_path) {
-    if (!runtime_path.empty() && uv_dlopen(runtime_path.c_str(), &runtime_) != 0) {
-      const std::string error = uv_dlerror(&runtime_);
-      uv_dlclose(&runtime_);
-      throw std::runtime_error("Could not load ORT_LIB_PATH: " + error);
-    }
-    if (uv_dlopen(path.c_str(), &library_) != 0) {
-      const std::string error = uv_dlerror(&library_);
-      uv_dlclose(&library_);
-      if (runtime_.handle)
-        uv_dlclose(&runtime_);
-      throw std::runtime_error(
-          "Could not load the native ONNX Runtime GenAI library: " + error +
-          ". Set ONNX_LIGHT_VIEWER_GENAI_LIBRARY to the C++ SDK shared library's absolute path.");
-    }
-    try {
+  Genai(const std::string &path, const std::string &runtime_path)
+      : runtime_(runtime_path, "ORT_LIB_PATH", "ORT_LIB_PATH"),
+        library_(path, "the native ONNX Runtime GenAI library", "ONNX_LIGHT_VIEWER_GENAI_LIBRARY") {
 #define LOAD(name) Load(#name, name)
-      LOAD(OgaResultGetError);
-      LOAD(OgaDestroyResult);
-      LOAD(OgaCreateModel);
-      LOAD(OgaCreateConfig);
-      LOAD(OgaDestroyConfig);
-      LOAD(OgaConfigOverlay);
-      LOAD(OgaConfigClearProviders);
-      LOAD(OgaConfigAppendProvider);
-      LOAD(OgaConfigSetProviderOption);
-      LOAD(OgaCreateModelFromConfig);
-      LOAD(OgaDestroyModel);
-      LOAD(OgaCreateTokenizerFromPath);
-      LOAD(OgaDestroyTokenizer);
-      LOAD(OgaCreateSequences);
-      LOAD(OgaDestroySequences);
-      LOAD(OgaTokenizerEncode);
-      LOAD(OgaSequencesGetSequenceCount);
-      LOAD(OgaSequencesGetSequenceData);
-      LOAD(OgaCreateTokenizerStream);
-      LOAD(OgaDestroyTokenizerStream);
-      LOAD(OgaTokenizerStreamDecode);
-      LOAD(OgaCreateGeneratorParams);
-      LOAD(OgaDestroyGeneratorParams);
-      LOAD(OgaGeneratorParamsSetSearchNumber);
-      LOAD(OgaGeneratorParamsSetSearchBool);
-      LOAD(OgaCreateGenerator);
-      LOAD(OgaDestroyGenerator);
-      LOAD(OgaGenerator_AppendTokens);
-      LOAD(OgaGenerator_IsDone);
-      LOAD(OgaGenerator_GetLogits);
-      LOAD(OgaGenerator_GenerateNextToken);
-      LOAD(OgaGenerator_GetNextTokens);
-      LOAD(OgaDestroyTensor);
-      LOAD(OgaTensorGetType);
-      LOAD(OgaTensorGetShapeRank);
-      LOAD(OgaTensorGetShape);
-      LOAD(OgaTensorGetData);
-      LOAD(OgaShutdown);
+    LOAD(OgaResultGetError);
+    LOAD(OgaDestroyResult);
+    LOAD(OgaCreateModel);
+    LOAD(OgaCreateConfig);
+    LOAD(OgaDestroyConfig);
+    LOAD(OgaConfigOverlay);
+    LOAD(OgaConfigClearProviders);
+    LOAD(OgaConfigAppendProvider);
+    LOAD(OgaConfigSetProviderOption);
+    LOAD(OgaCreateModelFromConfig);
+    LOAD(OgaDestroyModel);
+    LOAD(OgaCreateTokenizerFromPath);
+    LOAD(OgaDestroyTokenizer);
+    LOAD(OgaCreateSequences);
+    LOAD(OgaDestroySequences);
+    LOAD(OgaTokenizerEncode);
+    LOAD(OgaSequencesGetSequenceCount);
+    LOAD(OgaSequencesGetSequenceData);
+    LOAD(OgaCreateTokenizerStream);
+    LOAD(OgaDestroyTokenizerStream);
+    LOAD(OgaTokenizerStreamDecode);
+    LOAD(OgaCreateGeneratorParams);
+    LOAD(OgaDestroyGeneratorParams);
+    LOAD(OgaGeneratorParamsSetSearchNumber);
+    LOAD(OgaGeneratorParamsSetSearchBool);
+    LOAD(OgaCreateGenerator);
+    LOAD(OgaDestroyGenerator);
+    LOAD(OgaGenerator_AppendTokens);
+    LOAD(OgaGenerator_IsDone);
+    LOAD(OgaGenerator_GetLogits);
+    LOAD(OgaGenerator_GenerateNextToken);
+    LOAD(OgaGenerator_GetNextTokens);
+    LOAD(OgaDestroyTensor);
+    LOAD(OgaTensorGetType);
+    LOAD(OgaTensorGetShapeRank);
+    LOAD(OgaTensorGetShape);
+    LOAD(OgaTensorGetData);
+    LOAD(OgaShutdown);
 #undef LOAD
-    } catch (...) {
-      uv_dlclose(&library_);
-      if (runtime_.handle)
-        uv_dlclose(&runtime_);
-      throw;
-    }
   }
-  ~Genai() {
-    OgaShutdown();
-    uv_dlclose(&library_);
-    if (runtime_.handle)
-      uv_dlclose(&runtime_);
-  }
+  ~Genai() { OgaShutdown(); }
 
   void Check(OgaResult *result) {
     if (!result)
@@ -103,14 +149,7 @@ public:
     throw std::runtime_error("ONNX Runtime GenAI: " + error);
   }
 
-  template <typename T> void Load(const char *name, T &function) {
-    void *symbol = nullptr;
-    if (uv_dlsym(&library_, name, &symbol) != 0)
-      throw std::runtime_error("Native GenAI SDK does not expose " + std::string(name) + ": " +
-                               uv_dlerror(&library_));
-    static_assert(sizeof(function) == sizeof(symbol));
-    std::memcpy(&function, &symbol, sizeof(function));
-  }
+  template <typename T> void Load(const char *name, T &function) { library_.Load(name, function); }
 
 #define API(name) decltype(&::name) name = nullptr
   API(OgaResultGetError);
@@ -154,8 +193,8 @@ public:
 #undef API
 
 private:
-  uv_lib_t library_{};
-  uv_lib_t runtime_{};
+  Library runtime_;
+  Library library_;
 };
 
 template <typename T, typename D> auto Own(T *value, D destroy) {
