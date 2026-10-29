@@ -43,7 +43,11 @@ const port = (name, dtype, dimensions) =>
     ),
   ]);
 
-async function promptModel(directory, external = false) {
+async function promptModel(
+  directory,
+  external = false,
+  externalLength = false,
+) {
   const weights = Buffer.alloc(4 * 4 * 4);
   for (let index = 0; index < 4; ++index)
     weights.writeFloatLE(4, (index * 4 + 1) * 4);
@@ -80,6 +84,17 @@ async function promptModel(directory, external = false) {
                       bytes(2, "weights/decoder.bin"),
                     ]),
                   ),
+                  ...(externalLength
+                    ? [
+                        bytes(
+                          13,
+                          Buffer.concat([
+                            bytes(1, "length"),
+                            bytes(2, String(weights.length)),
+                          ]),
+                        ),
+                      ]
+                    : []),
                 ]
               : [bytes(9, weights)]),
           ]),

@@ -70,9 +70,11 @@ def reference_logits(request, prompt_ids, tokens, logits):
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
     source = source_for(request)
+    load_start = time.perf_counter()
     tokenizer = AutoTokenizer.from_pretrained(
         source, local_files_only=True, trust_remote_code=False
     )
+    load_ms = (time.perf_counter() - load_start) * 1000
     encoded = tokenizer.encode(request["prompt"], add_special_tokens=False)
     if encoded != list(prompt_ids):
         encoded = tokenizer.encode(request["prompt"], add_special_tokens=True)
@@ -80,10 +82,12 @@ def reference_logits(request, prompt_ids, tokens, logits):
             raise ValueError(
                 "Engine and reference tokenizers encoded the prompt differently."
             )
+    load_start = time.perf_counter()
     model = AutoModelForCausalLM.from_pretrained(
         source, local_files_only=True, trust_remote_code=False
     )
     model.eval()
+    load_ms += (time.perf_counter() - load_start) * 1000
     reference = []
     discrepancies = [] if logits is not None else None
     prefix = list(prompt_ids)
@@ -91,6 +95,15 @@ def reference_logits(request, prompt_ids, tokens, logits):
     # Each step consumes the exact generated prefix, never an independently
     # generated reference sequence whose divergence would invalidate comparison.
     with torch.inference_mode():
+        warmup_start = time.perf_counter()
+        warmup = model(
+            input_ids=torch.tensor([[prompt_ids[0]]], dtype=torch.long),
+            attention_mask=torch.ones((1, 1), dtype=torch.long),
+            use_cache=True,
+        )
+        warmup.logits[0, -1].float().cpu()
+        del warmup
+        warmup_ms = (time.perf_counter() - warmup_start) * 1000
         for index, token in enumerate(tokens):
             ids = prefix if index == 0 else [prefix[-1]]
             feeds = {
@@ -124,7 +137,11 @@ def reference_logits(request, prompt_ids, tokens, logits):
                 }
             )
             prefix.append(token["id"])
-    return {"tokens": reference}, discrepancies
+    return {
+        "tokens": reference,
+        "loadMs": load_ms,
+        "warmupMs": warmup_ms,
+    }, discrepancies
 
 
 def main():

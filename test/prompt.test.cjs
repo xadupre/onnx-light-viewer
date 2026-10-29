@@ -16,6 +16,7 @@ const { tmpdir } = require("node:os");
 const { promisify } = require("node:util");
 const { test } = require("node:test");
 const { promptInfo, runPrompt } = require("../dist/prompt");
+const { PromptSession } = require("../dist/promptSession");
 const {
   promptModel,
   nativeEnvironment,
@@ -26,10 +27,15 @@ const python = process.platform === "win32" ? "python" : "python3";
 const options = { engine: "onnxruntime-genai", prompt: "H", maxTokens: 3 };
 const signal = () => new AbortController().signal;
 
-async function fixture(t, environment = true, external = false) {
+async function fixture(
+  t,
+  environment = true,
+  external = false,
+  externalLength = false,
+) {
   const root = await mkdtemp(path.join(tmpdir(), "onnx-viewer-prompt-test-"));
   t.after(() => rm(root, { force: true, recursive: true }));
-  const model = await promptModel(root, external);
+  const model = await promptModel(root, external, externalLength);
   if (environment) {
     for (const [name, value] of Object.entries(nativeEnvironment())) {
       const previous = process.env[name];
@@ -44,7 +50,7 @@ async function fixture(t, environment = true, external = false) {
 }
 
 test("native onnx-light Generate owns autoregression, EOS and error propagation", async (t) => {
-  const { root, model } = await fixture(t);
+  const { root, model } = await fixture(t, true, true);
   const run = () =>
     runPrompt(
       model,
@@ -164,10 +170,215 @@ test("native GenAI streams real tokens and measures prefill and each decode step
     [0, 1, 2],
   );
   assert.match(result.signature, /^[0-9a-f]{64}$/);
+  assert.ok(result.lifecycle.loadMs >= 0);
+  assert.ok(result.lifecycle.warmupMs >= 0);
+  assert.equal(result.lifecycle.reused, false);
+  assert.equal(result.lifecycle.retained, false);
   assert.equal(
     (await readdir(root)).some((name) => name.startsWith(".prompt-")),
     false,
   );
+});
+
+test("native sessions optionally retain, reuse, reconfigure and unload their model", async (t) => {
+  for (const engine of ["onnx-light", "onnxruntime-genai"]) {
+    await t.test(engine, async (t) => {
+      const { model } = await fixture(t);
+      const session = new PromptSession();
+      const phases = [];
+      const run = (changes = {}) =>
+        runPrompt(
+          model,
+          { ...options, engine, keepLoaded: true, ...changes },
+          "/no/python",
+          signal(),
+          () => {},
+          undefined,
+          undefined,
+          session,
+          (phase) => phases.push(phase),
+        );
+      try {
+        const first = await run();
+        assert.equal(first.lifecycle.reused, false);
+        assert.equal(first.lifecycle.retained, true);
+        assert.equal(phases[0].warmupMs, undefined);
+        assert.ok(phases[1].warmupMs >= 0);
+        const second = await run({ prompt: "HH", maxTokens: 2 });
+        assert.deepEqual(
+          second.tokens.map((token) => token.id),
+          [1, 1],
+        );
+        assert.deepEqual(second.lifecycle, {
+          ...first.lifecycle,
+          reused: true,
+        });
+        const settings =
+          engine === "onnx-light"
+            ? {
+                threads: 1,
+                sdkLoader: true,
+                loadOverlap: false,
+                loadMemoryMiB: 1,
+                checkShapes: true,
+              }
+            : {
+                intraOpThreads: 1,
+                cpuArena: false,
+                memoryPattern: false,
+                graphOptimization: "ORT_DISABLE_ALL",
+                prepacking: false,
+                provider: "cpu",
+              };
+        assert.equal(
+          (await run({ sessionSettings: settings })).lifecycle.reused,
+          false,
+        );
+        const unloaded = await run({
+          sessionSettings: settings,
+          keepLoaded: false,
+        });
+        assert.equal(unloaded.lifecycle.reused, true);
+        assert.equal(unloaded.lifecycle.retained, false);
+        assert.equal(
+          (await run({ sessionSettings: settings })).lifecycle.reused,
+          false,
+        );
+        await session.close();
+        assert.equal(
+          (await run({ sessionSettings: settings })).lifecycle.reused,
+          false,
+        );
+      } finally {
+        await session.close();
+      }
+    });
+  }
+});
+
+test("changing engines releases the previous model before loading another", async (t) => {
+  const { model } = await fixture(t);
+  const session = new PromptSession();
+  try {
+    for (const engine of [
+      "onnxruntime-genai",
+      "onnx-light",
+      "onnxruntime-genai",
+    ]) {
+      const result = await runPrompt(
+        model,
+        { ...options, engine, keepLoaded: true },
+        "/no/python",
+        signal(),
+        () => {},
+        undefined,
+        undefined,
+        session,
+      );
+      assert.equal(result.lifecycle.reused, false);
+    }
+  } finally {
+    await session.close();
+  }
+});
+
+test("parallel loading/session settings use native SDK APIs and profiles exclude warmup", async (t) => {
+  const { model } = await fixture(t, true, true, true);
+  const result = await runPrompt(
+    model,
+    {
+      ...options,
+      engine: "onnx-light",
+      sessionSettings: {
+        threads: 2,
+        sdkLoader: true,
+        loadOverlap: true,
+        loadMemoryMiB: 1,
+        profile: true,
+      },
+    },
+    "/no/python",
+    signal(),
+    () => {},
+  );
+  const files = await readdir(result.profileDirectory);
+  const events = JSON.parse(
+    await readFile(path.join(result.profileDirectory, files[0]), "utf8"),
+  );
+  assert.equal(events.length, options.maxTokens);
+  assert.ok(
+    events.every(
+      (event) =>
+        event.operator === "Gather" &&
+        event.timeMs >= 0 &&
+        event.effectiveThreads === 2,
+    ),
+  );
+  const genai = await runPrompt(
+    model,
+    {
+      ...options,
+      sessionSettings: {
+        profile: true,
+        provider: "cpu",
+        intraOpThreads: 1,
+        interOpThreads: 2,
+        parallelExecution: true,
+      },
+    },
+    "/no/python",
+    signal(),
+    () => {},
+  );
+  const profiles = (await readdir(genai.profileDirectory)).filter((name) =>
+    name.startsWith("genai-"),
+  );
+  assert.ok(profiles.length > 0);
+  assert.ok(
+    JSON.parse(
+      await readFile(path.join(genai.profileDirectory, profiles[0]), "utf8"),
+    ).some((event) => event.cat === "Node"),
+  );
+});
+
+test("cancelling during initialization releases its model without closing the replacement", async (t) => {
+  const { model } = await fixture(t);
+  const session = new PromptSession();
+  const controller = new AbortController();
+  let replacement;
+  try {
+    await assert.rejects(
+      runPrompt(
+        model,
+        { ...options, keepLoaded: false },
+        "/no/python",
+        controller.signal,
+        () => {},
+        undefined,
+        undefined,
+        session,
+        () => {
+          controller.abort();
+          replacement = runPrompt(
+            model,
+            { ...options, keepLoaded: true },
+            "/no/python",
+            signal(),
+            () => {},
+            undefined,
+            undefined,
+            session,
+          );
+        },
+      ),
+      { name: "AbortError" },
+    );
+    assert.ok(replacement);
+    const result = await replacement;
+    assert.equal(result.lifecycle.reused, false);
+  } finally {
+    await session.close();
+  }
 });
 
 test("the first native token arrives before completion and cancellation stops the child", async (t) => {
@@ -313,6 +524,11 @@ test("rejects malformed options, tampering, changed assets and cancellation", as
     { ...options, validate: "yes" },
     { ...options, prompt: "" },
     { ...options, trust_remote_code: true },
+    { ...options, sessionSettings: { intraOpThreads: -1 } },
+    { ...options, sessionSettings: { threads: 2 } },
+    { ...options, sessionSettings: { provider: "unknown" } },
+    { ...options, sessionSettings: { gpuMemoryMiB: 128 } },
+    { ...options, sessionSettings: JSON.parse('{"__proto__":1}') },
   ])
     await assert.rejects(
       runPrompt(model, invalid, "/no/python", signal(), () => {}),
@@ -491,6 +707,9 @@ class AutoModelForCausalLM:
     previous,
   );
   assert.deepEqual(validated.tokens, previous.tokens);
+  assert.ok(validated.reference.loadMs >= 0);
+  assert.ok(validated.reference.warmupMs >= 0);
+  assert.deepEqual(validated.lifecycle, previous.lifecycle);
   assert.deepEqual(
     validated.reference.tokens.map((token) => token.id),
     [2, 2, 2],

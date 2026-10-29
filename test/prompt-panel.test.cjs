@@ -127,6 +127,117 @@ test("appends tokens and updates decode mean before completion without replacing
   assert.doesNotMatch(table.textContent, /stale/);
 });
 
+test("engine settings pages retain independent controls, including parallel loading", (t) => {
+  const { dom, byId, api, messages } = panel(t);
+  const field = (page, name) =>
+    byId(page).querySelector(`[data-setting="${name}"]`);
+  byId("prompt-settings-open").click();
+  assert.equal(byId("prompt-session-page").hidden, false);
+  assert.equal(byId("prompt-settings-light").hidden, false);
+  field("prompt-settings-light", "threads").value = "2";
+  field("prompt-settings-light", "sdkLoader").value = "true";
+  field("prompt-settings-light", "sdkLoader").dispatchEvent(
+    new dom.window.Event("change", { bubbles: true }),
+  );
+  field("prompt-settings-light", "loadOverlap").value = "false";
+  field("prompt-settings-light", "loadMemoryMiB").value = "512";
+  byId("prompt-keep-loaded").checked = true;
+  byId("prompt-settings-back").click();
+  byId("prompt-form").dispatchEvent(new dom.window.Event("submit"));
+  const first = messages.at(-1);
+  assert.equal(first.options.keepLoaded, true);
+  assert.deepEqual(JSON.parse(JSON.stringify(first.options.sessionSettings)), {
+    threads: 2,
+    sdkLoader: true,
+    loadOverlap: false,
+    loadMemoryMiB: 512,
+    profile: false,
+  });
+  assert.equal(byId("prompt-session-fields").disabled, true);
+  byId("prompt-cancel").click();
+  api.handleMessage({
+    type: "prompt-info",
+    requestId: first.requestId + 1,
+    info: { available: true, engines: ["onnx-light", "onnxruntime-genai"] },
+  });
+  byId("prompt-engine").value = "onnxruntime-genai";
+  byId("prompt-settings-open").click();
+  assert.equal(byId("prompt-settings-genai").hidden, false);
+  const provider = field("prompt-settings-genai", "provider");
+  provider.value = "cuda";
+  provider.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+  assert.equal(field("prompt-settings-genai", "deviceId").disabled, false);
+  field("prompt-settings-genai", "deviceId").value = "1";
+  field("prompt-settings-genai", "gpuMemoryMiB").value = "256";
+  field("prompt-settings-genai", "prepacking").value = "false";
+  byId("prompt-settings-back").click();
+  byId("prompt-form").dispatchEvent(new dom.window.Event("submit"));
+  const second = messages.at(-1);
+  assert.equal(second.options.engine, "onnxruntime-genai");
+  assert.equal(second.options.sessionSettings.provider, "cuda");
+  assert.equal(second.options.sessionSettings.deviceId, 1);
+  assert.equal(second.options.sessionSettings.prepacking, false);
+  assert.equal(second.options.sessionSettings.threads, undefined);
+  assert.equal(field("prompt-settings-light", "threads").value, "2");
+});
+
+test("loading and warmup appear before tokens, and unloading updates retained state", (t) => {
+  const { dom, byId, api, messages } = panel(t);
+  byId("prompt-form").dispatchEvent(new dom.window.Event("submit"));
+  const requestId = messages.at(-1).requestId;
+  api.handleMessage({
+    type: "prompt-lifecycle",
+    requestId,
+    lifecycle: { loadMs: 12, reused: false, retained: true },
+  });
+  assert.match(byId("prompt-lifecycle").textContent, /loading: 12.000 ms/);
+  assert.match(byId("prompt-lifecycle").textContent, /warmup.*running/);
+  api.handleMessage({
+    type: "prompt-lifecycle",
+    requestId,
+    lifecycle: { loadMs: 12, warmupMs: 3, reused: true, retained: true },
+  });
+  assert.match(byId("prompt-lifecycle").textContent, /Reused model; initial/);
+  assert.match(byId("prompt-lifecycle").textContent, /warmup.*3.000 ms/);
+  byId("prompt-cancel").click();
+  assert.match(byId("prompt-lifecycle").textContent, /Unloaded/);
+  api.handleMessage({
+    type: "prompt-lifecycle",
+    requestId,
+    lifecycle: { loadMs: 999, reused: false, retained: true },
+  });
+  assert.doesNotMatch(byId("prompt-lifecycle").textContent, /999/);
+});
+
+test("invalid settings stop generation and pipeline-only loading limitations are explicit", (t) => {
+  const { dom, byId, api, messages } = panel(t);
+  const threads = byId("prompt-settings-light").querySelector(
+    '[data-setting="threads"]',
+  );
+  threads.value = "-1";
+  byId("prompt-form").dispatchEvent(new dom.window.Event("submit"));
+  assert.equal(
+    messages.some((message) => message.type === "run-prompt"),
+    false,
+  );
+  assert.equal(byId("prompt-session-page").hidden, false);
+  threads.value = "1";
+  api.handleMessage({
+    type: "prompt-info",
+    requestId: messages[0].requestId,
+    info: { available: true, engines: ["onnx-light"], pipeline: true },
+  });
+  const overlap = byId("prompt-settings-light").querySelector(
+    '[data-setting="loadOverlap"]',
+  );
+  assert.equal(overlap.disabled, true);
+  assert.equal(byId("prompt-pipeline-loading").hidden, false);
+  overlap.value = "false";
+  byId("prompt-settings-back").click();
+  byId("prompt-form").dispatchEvent(new dom.window.Event("submit"));
+  assert.equal(messages.at(-1).options.sessionSettings.loadOverlap, undefined);
+});
+
 test("a single prefill token has no decode mean and missing SDK timings are not fabricated", (t) => {
   const { dom, byId, api, messages } = panel(t);
   byId("prompt-form").dispatchEvent(new dom.window.Event("submit"));

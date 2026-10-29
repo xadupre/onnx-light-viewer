@@ -758,7 +758,7 @@ export async function prepareExportPlan(
   };
 }
 
-async function terminateExport(child: ChildProcess): Promise<void> {
+export async function terminateExport(child: ChildProcess): Promise<void> {
   const pid = child.pid;
   if (pid === undefined) return;
   if (process.platform === "win32") {

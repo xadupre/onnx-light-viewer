@@ -49,6 +49,7 @@ import {
 import { OliveRecipes } from "./oliveRecipes";
 import { optimizeWithOnnxScript } from "./optimization";
 import { promptInfo, runPrompt, type PromptResult } from "./prompt";
+import { PromptSession } from "./promptSession";
 
 const viewType = "onnxLightViewer.graph";
 const panelSessions = new WeakMap<vscode.WebviewPanel, () => void>();
@@ -540,6 +541,9 @@ async function configurePanel(
     void postMessage({ type: "log-entry", entry });
     void sendStatus();
   });
+  const promptSession = new PromptSession((error) =>
+    log.record("FAILED", "Prompt session", undefined, error.message),
+  );
   const stopHistory = pathHistory.subscribe((history) => {
     void postMessage({ type: "path-history", history });
   });
@@ -941,6 +945,17 @@ async function configurePanel(
         }
       } else if (message?.type === "prompt-cancel") {
         promptController?.abort();
+        await log.run("Release prompt session", () => promptSession.close());
+      } else if (message?.type === "prompt-release") {
+        promptController?.abort();
+        await log.run("Release prompt session", () => promptSession.close());
+        if (promptResult?.result.lifecycle)
+          promptResult.result.lifecycle.retained = false;
+        if (active)
+          await postMessage({
+            type: "prompt-released",
+            requestId: message.requestId,
+          });
       } else if (
         message?.type === "prompt-info" ||
         message?.type === "run-prompt"
@@ -1008,6 +1023,15 @@ async function configurePanel(
                       index,
                     });
                 },
+                promptSession,
+                (lifecycle) => {
+                  if (isCurrent())
+                    void postMessage({
+                      type: "prompt-lifecycle",
+                      requestId: message.requestId,
+                      lifecycle,
+                    });
+                },
               ),
             );
             if (isCurrent()) {
@@ -1020,12 +1044,17 @@ async function configurePanel(
             }
           }
         } catch (error) {
-          if (isCurrent())
-            await postMessage({
-              type: "prompt-error",
-              requestId: message.requestId,
-              error: error instanceof Error ? error.message : String(error),
-            });
+          if (isCurrent()) {
+            await log.run("Release prompt session", () =>
+              promptSession.close(),
+            );
+            if (isCurrent())
+              await postMessage({
+                type: "prompt-error",
+                requestId: message.requestId,
+                error: error instanceof Error ? error.message : String(error),
+              });
+          }
         }
       } else if (message?.type === "tensor-statistics") {
         const requestedModel = model;
@@ -2943,6 +2972,16 @@ async function configurePanel(
   const dispose = () => {
     active = false;
     promptController?.abort();
+    void promptSession
+      .close()
+      .catch((error: unknown) =>
+        log.record(
+          "FAILED",
+          "Release prompt session",
+          undefined,
+          error instanceof Error ? error.message : String(error),
+        ),
+      );
     promptResult = undefined;
     hubSearch?.abort();
     exporting?.abort();

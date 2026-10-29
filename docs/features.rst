@@ -137,6 +137,41 @@ the prompt once and the exported token prefixes with its decode cache thereafter
 Timings include inference and CPU logit transfer, but exclude loading,
 tokenization, detokenization, retained-logit serialization and UI rendering.
 
+**Model loading** and **warmup** have separate timings. On each new native
+session, warmup uses the first prompt token alone and generates one token;
+the real run starts with a fresh generation/cache state. HF validation also
+measures loading and a one-token warmup forward separately.
+Native loading covers runtime, tokenizer and model/session initialization,
+not viewer preflight discovery or prompt encoding.
+
+**Keep the current model loaded** is optional and off by default to avoid
+unnecessary memory use and swapping. A retained session reports its original
+loading/warmup times as **initial** timings, not costs paid again. **Unload model
+now**, cancellation, changing models/engines/settings and closing the panel
+release it. One panel retains at most one native model; keeping it during HF
+validation can hold two models in memory.
+
+Open **Session settings** for a separate page per engine. Controls preserve
+SDK/model defaults unless changed and never edit the exported configuration.
+onnx-light exposes CPU threads, shape checks, allocation capacity, intermediate
+release, logging and native kernel profiles. GenAI exposes CPU threads,
+CPU/CUDA/DirectML providers and GPU limits, graph optimization, memory options,
+prepacking, graph execution mode, logging and ORT profiling. Unsupported
+providers/options raise runtime errors, without switching engines.
+
+For **parallel loading**, select onnx-light's **SDK owning loader**, then
+configure read/preparation overlap and its admission memory limit. One SDK I/O
+worker overlaps preparation on the CPU executor; CPU threads also apply to
+preparation. Standard ONNX loading remains the default. The owning loader
+currently requires explicit external-data lengths
+(`xadupre/onnx-light#5697 <https://github.com/xadupre/onnx-light/issues/5697>`_)
+and does not accept pipelines
+(`xadupre/onnx-light#5698 <https://github.com/xadupre/onnx-light/issues/5698>`_).
+GenAI exposes initialization/prepacking and session-thread controls, not a
+separate parallel weight-reader thread count. Parallel graph execution is not
+parallel loading. Profiles add overhead and are written under
+``.prompt-profiles`` beside the model; unload GenAI to finalize its profile.
+
 The onnx-light C++ ``Generate`` API currently returns completed token IDs only.
 Streaming, individual token timings, scores and discrepancy metrics are explicitly
 unavailable, not estimated by dividing the total runtime. These capabilities are
@@ -150,6 +185,18 @@ stages or inputs fail explicitly, without a viewer-side generation loop.
    :width: 100%
 
    Real native GenAI timings on a tiny deterministic test model, not an LLM benchmark.
+
+.. figure:: _static/feature-prompt-settings-light.png
+   :alt: onnx-light session settings page with CPU threads, owning-loader overlap and memory admission controls.
+   :width: 100%
+
+   onnx-light session and parallel-loading controls, backed by supported SDK APIs.
+
+.. figure:: _static/feature-prompt-settings-genai.png
+   :alt: GenAI session settings page with thread counts, providers, initialization, graph optimization, memory and profiling controls.
+   :width: 100%
+
+   GenAI session options are overlaid in memory; the exported configuration is unchanged.
 
 Inspection
 ^^^^^^^^^^

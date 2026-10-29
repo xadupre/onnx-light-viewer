@@ -12,25 +12,109 @@ function createPromptPanel({ byId, postMessage }) {
   let decodeSum = 0;
   let decodeCount = 0;
   let missingDecode = false;
+  let pipeline = false;
   const fields = byId("prompt-fields");
   const status = byId("prompt-status");
   const content = byId("prompt-results");
   const validate = byId("prompt-validate");
   const cancel = byId("prompt-cancel");
   const progress = byId("prompt-progress");
+  const lifecycleStatus = byId("prompt-lifecycle");
+  const sessionFields = byId("prompt-session-fields");
+  const settingsEngine = byId("prompt-settings-engine");
+  const showSettingsEngine = () => {
+    byId("prompt-settings-light").hidden =
+      settingsEngine.value !== "onnx-light";
+    byId("prompt-settings-genai").hidden =
+      settingsEngine.value !== "onnxruntime-genai";
+  };
+  settingsEngine.addEventListener("change", showSettingsEngine);
+  byId("prompt-settings-open").addEventListener("click", () => {
+    settingsEngine.value = byId("prompt-engine").value;
+    showSettingsEngine();
+    byId("prompt-run-page").hidden = true;
+    byId("prompt-session-page").hidden = false;
+  });
+  byId("prompt-settings-back").addEventListener("click", () => {
+    byId("prompt-run-page").hidden = false;
+    byId("prompt-session-page").hidden = true;
+  });
+  const release = () => {
+    postMessage({ type: "prompt-release", requestId });
+    if (result?.lifecycle) result.lifecycle.retained = false;
+  };
+  byId("prompt-unload").addEventListener("click", release);
+  byId("prompt-engine").addEventListener("change", release);
+  byId("prompt-keep-loaded").addEventListener("change", () => {
+    if (!byId("prompt-keep-loaded").checked) release();
+  });
+  sessionFields.addEventListener("change", () => {
+    const light = byId("prompt-settings-light");
+    const sdkLoader =
+      light.querySelector('[data-setting="sdkLoader"]').value === "true";
+    for (const field of light.querySelectorAll("[data-sdk-loader]"))
+      field.disabled = pipeline || !sdkLoader;
+    const pane = byId("prompt-settings-genai");
+    const provider = pane.querySelector('[data-setting="provider"]').value;
+    for (const field of pane.querySelectorAll("[data-gpu]"))
+      field.disabled = !["cuda", "dml"].includes(provider);
+    for (const field of pane.querySelectorAll("[data-cuda]"))
+      field.disabled = provider !== "cuda";
+    release();
+  });
+  const readSettings = () => {
+    const pane = byId(
+      byId("prompt-engine").value === "onnx-light"
+        ? "prompt-settings-light"
+        : "prompt-settings-genai",
+    );
+    const settings = {};
+    for (const field of pane.querySelectorAll("[data-setting]")) {
+      if (field.disabled || (field.value === "" && field.type !== "checkbox"))
+        continue;
+      if (!field.checkValidity()) {
+        settingsEngine.value = byId("prompt-engine").value;
+        showSettingsEngine();
+        byId("prompt-run-page").hidden = true;
+        byId("prompt-session-page").hidden = false;
+        field.reportValidity();
+        return;
+      }
+      settings[field.dataset.setting] =
+        field.type === "checkbox"
+          ? field.checked
+          : field.type === "number"
+            ? Number(field.value)
+            : field.hasAttribute("data-boolean")
+              ? field.value === "true"
+              : field.value;
+    }
+    return settings;
+  };
+  const showLifecycle = (value) => {
+    lifecycleStatus.textContent = value
+      ? `${value.reused ? "Reused model; initial" : "Model"} loading: ${milliseconds(value.loadMs)} ms; warmup (1 input token, 1 generation step): ${value.warmupMs == null ? "running…" : milliseconds(value.warmupMs) + " ms"}. ${value.retained ? "Kept loaded." : busy ? "Unload after run." : "Unloaded."}`
+      : "";
+  };
   const setBusy = (value) => {
     busy = value;
     fields.disabled = value || !available;
     cancel.hidden = !value;
     validate.disabled = value;
+    sessionFields.disabled = value;
+    byId("prompt-settings-open").disabled = value;
+    byId("prompt-unload").disabled = value;
   };
   const reset = () => {
     if (busy) postMessage({ type: "prompt-cancel" });
+    else if (result?.lifecycle?.retained)
+      postMessage({ type: "prompt-release" });
     ++requestId;
     available = false;
     requested = false;
     result = undefined;
     options = undefined;
+    showLifecycle();
     streaming = false;
     liveRows = [];
     content.replaceChildren();
@@ -149,23 +233,36 @@ function createPromptPanel({ byId, postMessage }) {
         decode.length,
         decode.some((token) => token.timeMs == null),
       );
+      if (result.reference.loadMs != null)
+        referenceTiming.textContent += ` Loading: ${milliseconds(result.reference.loadMs)} ms; warmup (1 input token): ${milliseconds(result.reference.warmupMs)} ms.`;
     }
+    const profile = document.createElement("p");
+    profile.hidden = !result.profileDirectory;
+    profile.textContent = result.profileDirectory
+      ? `Profiles: ${result.profileDirectory}. Unload GenAI to finalize its profile.`
+      : "";
     content.replaceChildren(
       prompt,
       limitations,
       timingSummary,
       referenceTiming,
+      profile,
       table,
     );
   };
   const run = (validation) => {
     if (busy || !available) return;
     if (!validation) {
+      const sessionSettings = readSettings();
+      if (!sessionSettings) return;
       options = {
         engine: byId("prompt-engine").value,
         prompt: byId("prompt-text").value,
         maxTokens: Number(byId("prompt-max-tokens").value),
+        keepLoaded: byId("prompt-keep-loaded").checked,
+        sessionSettings,
       };
+      showLifecycle();
       result = { ...options, tokens: [] };
       render();
       validate.hidden = true;
@@ -193,6 +290,8 @@ function createPromptPanel({ byId, postMessage }) {
     ++requestId;
     streaming = false;
     setBusy(false);
+    if (result?.lifecycle) result.lifecycle.retained = false;
+    showLifecycle(result?.lifecycle);
     status.textContent = "Cancelled.";
   });
   return {
@@ -213,6 +312,8 @@ function createPromptPanel({ byId, postMessage }) {
           "prompt-error",
           "prompt-progress",
           "prompt-token",
+          "prompt-lifecycle",
+          "prompt-released",
         ].includes(message?.type)
       )
         return false;
@@ -223,10 +324,29 @@ function createPromptPanel({ byId, postMessage }) {
         for (const option of engine.options)
           option.disabled = !message.info.engines.includes(option.value);
         engine.value = message.info.engines[0] ?? "onnx-light";
+        pipeline = !!message.info.pipeline;
+        const light = byId("prompt-settings-light");
+        const sdkLoader =
+          light.querySelector('[data-setting="sdkLoader"]').value === "true";
+        for (const field of light.querySelectorAll("[data-loading]"))
+          field.disabled =
+            pipeline || (field.hasAttribute("data-sdk-loader") && !sdkLoader);
+        byId("prompt-pipeline-loading").hidden = !pipeline;
         setBusy(false);
         status.textContent = available
           ? "Ready. ONNX engines and tokenization use native C++ libraries; Python is only needed for Hugging Face validation."
           : message.info.reason;
+      } else if (message.type === "prompt-lifecycle") {
+        if (busy && streaming) {
+          result.lifecycle = message.lifecycle;
+          showLifecycle(message.lifecycle);
+        }
+      } else if (message.type === "prompt-released") {
+        if (result?.lifecycle) {
+          result.lifecycle.retained = false;
+          showLifecycle(result.lifecycle);
+        }
+        status.textContent = "Model unloaded.";
       } else if (message.type === "prompt-token") {
         if (!busy || !streaming || message.index !== result.tokens.length)
           return true;
@@ -245,11 +365,14 @@ function createPromptPanel({ byId, postMessage }) {
       } else if (message.type === "prompt-error") {
         streaming = false;
         setBusy(false);
+        if (result?.lifecycle) result.lifecycle.retained = false;
+        showLifecycle(result?.lifecycle);
         status.textContent = message.error;
       } else {
         streaming = false;
         result = message.result;
         setBusy(false);
+        showLifecycle(result.lifecycle);
         render();
         validate.hidden = false;
         status.textContent = result.reference

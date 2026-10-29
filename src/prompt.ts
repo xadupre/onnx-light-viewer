@@ -1,6 +1,7 @@
 import { createHmac, randomBytes } from "node:crypto";
 import {
   lstat,
+  mkdir,
   mkdtemp,
   readFile,
   readdir,
@@ -11,6 +12,7 @@ import {
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { readProvenance, runProcess } from "./export";
 import { loadModelFile } from "./graph";
+import { PromptSession } from "./promptSession";
 
 export interface PromptToken {
   text: string;
@@ -36,10 +38,19 @@ export interface PromptResult {
   engine: string;
   tokens: PromptToken[];
   /** HF argmax predictions at each exported-token prefix, not a free-running sequence. */
-  reference?: { tokens: PromptToken[] };
+  reference?: { tokens: PromptToken[]; loadMs?: number; warmupMs?: number };
+  lifecycle?: PromptLifecycle;
+  profileDirectory?: string;
   discrepancies?: PromptDiscrepancy[];
   limitations?: string[];
   signature: string;
+}
+
+export interface PromptLifecycle {
+  loadMs: number;
+  warmupMs?: number;
+  reused: boolean;
+  retained: boolean;
 }
 
 interface PromptOptions {
@@ -47,6 +58,8 @@ interface PromptOptions {
   prompt: string;
   maxTokens: number;
   validate: boolean;
+  keepLoaded: boolean;
+  sessionSettings: Record<string, string | number | boolean>;
 }
 
 const signingKey = randomBytes(32);
@@ -82,8 +95,18 @@ function optionsFrom(value: unknown): PromptOptions {
     (options.maxTokens as number) < 1 ||
     (options.maxTokens as number) > 4096 ||
     (options.validate !== undefined && typeof options.validate !== "boolean") ||
+    (options.keepLoaded !== undefined &&
+      typeof options.keepLoaded !== "boolean") ||
     Object.keys(options).some(
-      (key) => !["engine", "prompt", "maxTokens", "validate"].includes(key),
+      (key) =>
+        ![
+          "engine",
+          "prompt",
+          "maxTokens",
+          "validate",
+          "keepLoaded",
+          "sessionSettings",
+        ].includes(key),
     )
   )
     throw new Error(
@@ -94,7 +117,116 @@ function optionsFrom(value: unknown): PromptOptions {
     prompt: options.prompt,
     maxTokens: options.maxTokens as number,
     validate: options.validate === true,
+    keepLoaded: options.keepLoaded === true,
+    sessionSettings: sessionSettingsFrom(
+      String(options.engine),
+      options.sessionSettings,
+    ),
   };
+}
+
+function sessionSettingsFrom(
+  engine: string,
+  value: unknown,
+): PromptOptions["sessionSettings"] {
+  if (value === undefined) return {};
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    throw new Error("Invalid session settings.");
+  const numeric: Record<string, number> =
+    engine === "onnx-light"
+      ? {
+          threads: 4096,
+          verbose: 10,
+          initialCapacity: 1048576,
+          loadMemoryMiB: 1048576,
+        }
+      : {
+          intraOpThreads: 4096,
+          interOpThreads: 4096,
+          deviceId: 65535,
+          gpuMemoryMiB: 1048576,
+          logSeverity: 4,
+        };
+  const boolean =
+    engine === "onnx-light"
+      ? [
+          "checkShapes",
+          "releaseIntermediates",
+          "profile",
+          "loadOverlap",
+          "sdkLoader",
+        ]
+      : [
+          "cpuArena",
+          "memoryPattern",
+          "profile",
+          "parallelExecution",
+          "prepacking",
+        ];
+  const enums: Record<string, string[]> =
+    engine === "onnx-light"
+      ? {}
+      : {
+          provider: ["cpu", "cuda", "dml"],
+          graphOptimization: [
+            "ORT_DISABLE_ALL",
+            "ORT_ENABLE_BASIC",
+            "ORT_ENABLE_EXTENDED",
+            "ORT_ENABLE_ALL",
+          ],
+        };
+  const result: PromptOptions["sessionSettings"] = {};
+  for (const [key, setting] of Object.entries(value)) {
+    if (Object.hasOwn(numeric, key)) {
+      if (
+        typeof setting !== "number" ||
+        !Number.isSafeInteger(setting) ||
+        setting < (key === "gpuMemoryMiB" ? 1 : 0) ||
+        setting > numeric[key]
+      )
+        throw new Error(`Invalid session setting: ${key}.`);
+    } else if (boolean.includes(key)) {
+      if (typeof setting !== "boolean")
+        throw new Error(`Invalid session setting: ${key}.`);
+    } else if (Object.hasOwn(enums, key)) {
+      if (typeof setting !== "string" || !enums[key].includes(setting))
+        throw new Error(`Invalid session setting: ${key}.`);
+    } else throw new Error(`Unsupported ${engine} session setting: ${key}.`);
+    result[key] = setting;
+  }
+  if (
+    "deviceId" in result &&
+    !["cuda", "dml"].includes(String(result.provider))
+  )
+    throw new Error("A GPU device requires an explicit GPU provider.");
+  if ("gpuMemoryMiB" in result && result.provider !== "cuda")
+    throw new Error("The GPU memory limit requires the CUDA provider.");
+  if (
+    ("loadOverlap" in result || "loadMemoryMiB" in result) &&
+    result.sdkLoader !== true
+  )
+    throw new Error("Select the SDK loader to configure parallel loading.");
+  return result;
+}
+
+function checkLifecycle(value: unknown): asserts value is PromptLifecycle {
+  if (
+    !value ||
+    typeof value !== "object" ||
+    !("loadMs" in value) ||
+    typeof value.loadMs !== "number" ||
+    !Number.isFinite(value.loadMs) ||
+    value.loadMs < 0 ||
+    ("warmupMs" in value &&
+      (typeof value.warmupMs !== "number" ||
+        !Number.isFinite(value.warmupMs) ||
+        value.warmupMs < 0)) ||
+    !("reused" in value) ||
+    typeof value.reused !== "boolean" ||
+    !("retained" in value) ||
+    typeof value.retained !== "boolean"
+  )
+    throw new Error("The native runner returned invalid lifecycle timings.");
 }
 
 async function exists(file: string): Promise<boolean> {
@@ -116,6 +248,7 @@ export async function promptInfo(modelPath: string): Promise<{
   engines: string[];
   available: boolean;
   reason?: string;
+  pipeline?: boolean;
 }> {
   if (!isAbsolute(modelPath) || !(await exists(modelPath)))
     return {
@@ -166,6 +299,7 @@ export async function promptInfo(modelPath: string): Promise<{
   }
   return {
     engines,
+    ...(/\.pipe-onnx$/i.test(modelPath) ? { pipeline: true } : {}),
     available: engines.length > 0,
     ...(engines.length
       ? {}
@@ -202,11 +336,24 @@ export async function runPrompt(
   progress: (output: string) => void,
   previous?: PromptResult,
   token?: (token: PromptToken, index: number) => void,
+  session?: PromptSession,
+  lifecycle?: (value: PromptLifecycle) => void,
 ): Promise<PromptResult> {
   signal.throwIfAborted();
   const options = optionsFrom(value);
+  if (options.keepLoaded && !session)
+    throw new Error("Keeping a model loaded requires a panel session owner.");
   if (!options.validate) previous = undefined;
   const info = await promptInfo(modelPath);
+  if (
+    info.pipeline &&
+    (options.sessionSettings.sdkLoader === true ||
+      "loadOverlap" in options.sessionSettings ||
+      "loadMemoryMiB" in options.sessionSettings)
+  )
+    throw new Error(
+      "The SDK parallel loader accepts ModelProto, not pipelines.",
+    );
   if (!info.engines.includes(options.engine))
     throw new Error(info.reason ?? "This model does not support that engine.");
   const provenance = await readProvenance(modelPath);
@@ -270,7 +417,7 @@ export async function runPrompt(
       return [path, details.size, details.mtimeMs, details.ctimeMs];
     }),
   );
-  const context = JSON.stringify({
+  const sessionContext = {
     modelPath,
     size: identity.size,
     modified: identity.mtimeMs,
@@ -280,6 +427,10 @@ export async function runPrompt(
     source,
     eosTokenId,
     engine: options.engine,
+    sessionSettings: options.sessionSettings,
+  };
+  const context = JSON.stringify({
+    ...sessionContext,
     prompt: options.prompt,
     maxTokens: options.maxTokens,
   });
@@ -312,11 +463,27 @@ export async function runPrompt(
     const input = join(request, "input.json");
     const output = join(request, "output.json");
     const capture = join(request, "logits.json");
+    const profileDirectory = join(dirname(modelPath), ".prompt-profiles");
+    if (options.sessionSettings.profile)
+      await mkdir(profileDirectory, { recursive: true });
     if (previousCapture)
       await writeFile(capture, previousCapture, {
         mode: 0o600,
         flag: "wx",
       });
+    if (previous)
+      await writeFile(
+        output,
+        JSON.stringify({
+          prompt: previous.prompt,
+          engine: previous.engine,
+          tokens: previous.tokens,
+          lifecycle: previous.lifecycle,
+          limitations: previous.limitations,
+          profileDirectory: previous.profileDirectory,
+        }),
+        { mode: 0o600, flag: "wx" },
+      );
     await writeFile(
       input,
       JSON.stringify({
@@ -327,6 +494,7 @@ export async function runPrompt(
         eosTokenId,
         capturePath: capture,
         captureBudget: retentionBudget,
+        profileDirectory,
         ...(previous
           ? {
               tokenIds: previous.tokens.map((token) => token.id),
@@ -337,57 +505,44 @@ export async function runPrompt(
       { mode: 0o600, flag: "wx" },
     );
     if (!previousCapture) {
-      let pending = "";
       let next = 0;
-      await runProcess(
-        {
-          executable: process.execPath,
-          args: [
-            resolve(__dirname, "..", "media", "run_prompt.cjs"),
-            input,
-            output,
-          ],
-        },
+      const worker = session ?? new PromptSession();
+      await worker.run(
+        input,
+        output,
+        createHmac("sha256", signingKey)
+          .update(JSON.stringify(sessionContext))
+          .digest("hex"),
         signal,
-        (output) => progress(output.replace(/^\x1e.*(?:\n|$)/gm, "")),
-        { ELECTRON_RUN_AS_NODE: "1" },
-        "Native prompt",
-        (chunk) => {
-          pending += chunk;
-          let newline: number;
-          while ((newline = pending.indexOf("\n")) !== -1) {
-            signal.throwIfAborted();
-            const line = pending.slice(0, newline);
-            pending = pending.slice(newline + 1);
-            const marker = line.indexOf("\x1e");
-            if (marker === -1) continue;
-            const event = JSON.parse(line.slice(marker + 1)) as {
-              type: string;
-              index: number;
-              token: PromptToken;
-            };
-            checkTokens([event.token]);
-            if (
-              event.type !== "token" ||
-              event.index !== next ||
-              next >= options.maxTokens
-            )
-              throw new Error(
-                "The native runner returned an invalid token stream.",
-              );
-            token?.(event.token, next);
-            next++;
+        progress,
+        (value) => {
+          signal.throwIfAborted();
+          if (!value || typeof value !== "object" || !("type" in value))
+            throw new Error("The native runner returned an invalid event.");
+          if (value.type === "lifecycle" && "lifecycle" in value) {
+            checkLifecycle(value.lifecycle);
+            lifecycle?.(value.lifecycle);
+            return;
           }
-          if (pending.length > 1_000_000)
+          const event = value as {
+            type: string;
+            token: PromptToken;
+            index: number;
+          };
+          checkTokens([event.token]);
+          if (
+            event.type !== "token" ||
+            event.index !== next ||
+            next >= options.maxTokens
+          )
             throw new Error(
-              "The native runner returned an oversized token event.",
+              "The native runner returned an invalid token stream.",
             );
+          token?.(event.token, next);
+          next++;
         },
       );
-      if (pending.startsWith("\x1e"))
-        throw new Error(
-          "The native runner returned an incomplete token event.",
-        );
+      if (!session || !options.keepLoaded) await worker.close();
     }
     if (options.validate) {
       await runProcess(
@@ -415,6 +570,11 @@ export async function runPrompt(
     if (result.prompt !== options.prompt || result.engine !== options.engine)
       throw new Error("The prompt runner returned a mismatched result.");
     checkTokens(result.tokens);
+    if (!previousCapture) {
+      checkLifecycle(result.lifecycle);
+      if (result.lifecycle.warmupMs === undefined)
+        throw new Error("The native runner did not complete warmup.");
+    }
     if (
       result.limitations !== undefined &&
       (!Array.isArray(result.limitations) ||
