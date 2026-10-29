@@ -263,6 +263,20 @@ export interface MemoryDimension {
   defaultValue: number;
 }
 
+export interface MemoryBreakdown<T extends number | string> {
+  total_bytes: T;
+  already_allocated_bytes: T;
+  output_allocation_bytes: T;
+  before_bytes: T;
+  during_bytes: T;
+  after_bytes: T;
+  released_bytes: T;
+  initializers: Record<string, T>;
+  inputs: Record<string, T>;
+  intermediates: Record<string, T>;
+  outputs: Record<string, T>;
+}
+
 export interface MemoryProfile {
   name: string;
   device: string;
@@ -275,8 +289,11 @@ export interface MemoryProfile {
     outputBytes: number;
     scratchBytes: number;
     deviceBytes: number;
-    /** Next pre-node snapshot; null for the final node until the SDK exposes it. */
+    /** SDK post-release snapshot, including the final node. */
     afterBytes: number | null;
+    memory: MemoryBreakdown<number>;
+    /** SDK expressions on the original symbolic shapes; scratch is not symbolic. */
+    symbolicMemory: MemoryBreakdown<string>;
     decisions: {
       action: "inplace" | "release" | "release_shape_tag";
       name: string;

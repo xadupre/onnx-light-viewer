@@ -2060,6 +2060,337 @@ test("memory chart batches 20,000 events and paginates every row", (t) => {
   assert.equal(document.querySelector("#memory-events th").textContent, "1");
 });
 
+test("memory hover inspects numerical and symbolic allocations at each phase, safely", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  load(demoGraph);
+  document.getElementById("memory-tab").click();
+  send({
+    type: "memory-inputs",
+    requestId: messages.at(-1).requestId,
+    dimensions: [],
+    stages: [],
+    path: [],
+  });
+  document
+    .getElementById("memory-form")
+    .dispatchEvent(new window.Event("submit", { cancelable: true }));
+  send({
+    type: "memory-profile",
+    requestId: messages.at(-1).requestId,
+    profile: {
+      name: "Hover",
+      device: "CPU",
+      peakBytes: 100,
+      events: [
+        {
+          index: 0,
+          node: "<img src=x>",
+          opType: "MatMul",
+          existingBytes: 20,
+          outputBytes: 60,
+          scratchBytes: 20,
+          deviceBytes: 100,
+          afterBytes: null,
+          memory: {
+            before_bytes: 10,
+            initializers: { weight: 8 },
+            inputs: { "": 12 },
+            intermediates: { shape: 0 },
+            outputs: { "": 60 },
+          },
+          symbolicMemory: {
+            before_bytes: "8+6*N",
+            during_bytes: "8+36*N",
+            after_bytes: "30*N",
+            initializers: { weight: "8" },
+            inputs: { "": "6*N" },
+            intermediates: { shape: "0" },
+            outputs: { "": "30*N" },
+          },
+          inputs: [{ name: "x", type: "FLOAT", shape: "[2,3]", tag: null }],
+          outputs: [],
+          decisions: [],
+        },
+      ],
+    },
+  });
+  const chart = document.getElementById("memory-chart");
+  chart.getBoundingClientRect = () => new window.DOMRect(0, 0, 1000, 330);
+  const inspection = document.getElementById("memory-inspection");
+  const hover = (step) =>
+    chart.dispatchEvent(
+      new window.MouseEvent("pointermove", {
+        clientX: 60 + (920 * step) / 4,
+        clientY: 100,
+      }),
+    );
+  hover(0.5);
+  assert.match(inspection.textContent, /before execution\nMemory: .*10 bytes/);
+  assert.match(inspection.textContent, /Already allocated: .*20 bytes/);
+  assert.equal(
+    document.querySelectorAll("#memory-results thead th")[3].textContent,
+    "Already allocated",
+  );
+  hover(2);
+  assert.equal(inspection.hidden, false);
+  assert.match(inspection.textContent, /during execution\nMemory: .*100 bytes/);
+  assert.match(
+    inspection.textContent,
+    /Weights \(initializers\):\n  weight: .*8 bytes.*symbolic: 8 bytes/,
+  );
+  assert.match(
+    inspection.textContent,
+    /Inputs:\n  tensor: .*12 bytes.*symbolic: 6\*N bytes/,
+  );
+  assert.match(inspection.textContent, /Intermediates:\n  shape: .*0 bytes/);
+  assert.match(
+    inspection.textContent,
+    /New output tensors:\n  tensor: .*60 bytes/,
+  );
+  assert.match(inspection.textContent, /scratch excluded\): 8\+36\*N bytes/);
+  assert.match(inspection.textContent, /in: x: FLOAT \[2,3\]/);
+  assert.equal(inspection.querySelector("img"), null);
+  hover(3.5);
+  assert.match(inspection.textContent, /after execution\nMemory: Unavailable/);
+  chart.getScreenCTM = () => ({
+    inverse: () => ({ a: 1, c: 0, e: -300 }),
+  });
+  chart.dispatchEvent(
+    new window.MouseEvent("pointermove", {
+      clientX: 60 + (920 * 0.5) / 4 + 300,
+      clientY: 100,
+    }),
+  );
+  assert.match(inspection.textContent, /before execution\nMemory: .*10 bytes/);
+  chart.dispatchEvent(new window.Event("pointerleave"));
+  assert.equal(inspection.hidden, true);
+  chart.dispatchEvent(
+    new window.KeyboardEvent("keydown", { key: "ArrowRight" }),
+  );
+  assert.equal(inspection.hidden, false);
+  document.getElementById("memory-zoom-in").click();
+  assert.equal(inspection.hidden, true);
+  load(demoGraph);
+  assert.equal(document.getElementById("memory-results").hidden, true);
+});
+
+test("memory inspection ignores scalar and array allocation buckets", (t) => {
+  const viewer = openViewer(t);
+  const { document, window, messages, load } = viewer;
+  load(demoGraph);
+  showMemoryProfile(viewer, [16]);
+  for (const [numeric, symbolic, expected] of [
+    [12, "6*N", /Inputs:\n  —\nIntermediates:/],
+    [[12], ["6*N"], /Inputs:\n  —\nIntermediates:/],
+    [
+      12,
+      { "": "6*N" },
+      /Inputs:\n  tensor: Unavailable; symbolic: 6\*N bytes\n/,
+    ],
+    [
+      { "": 12 },
+      "6*N",
+      /Inputs:\n  tensor: .*12 bytes.*symbolic: Unavailable bytes\n/,
+    ],
+  ]) {
+    window.dispatchEvent(
+      new window.MessageEvent("message", {
+        data: {
+          type: "memory-profile",
+          requestId: messages.at(-1).requestId,
+          profile: {
+            name: "Allocation buckets",
+            device: "CPU",
+            peakBytes: 16,
+            events: [
+              {
+                index: 0,
+                node: "",
+                opType: "Relu",
+                existingBytes: 16,
+                outputBytes: 0,
+                scratchBytes: 0,
+                deviceBytes: 16,
+                memory: { inputs: numeric },
+                symbolicMemory: { inputs: symbolic },
+              },
+            ],
+          },
+        },
+      }),
+    );
+    document
+      .getElementById("memory-chart")
+      .dispatchEvent(
+        new window.KeyboardEvent("keydown", { key: "ArrowRight" }),
+      );
+    assert.match(
+      document.getElementById("memory-inspection").textContent,
+      expected,
+    );
+  }
+});
+
+test("memory estimates measure the visible viewport before the first anchored zoom", (t) => {
+  let viewportWidth = 1600;
+  let scrollLeft = 300;
+  const viewer = openViewer(t, "model", (window) => {
+    const results = window.document.getElementById("memory-results");
+    const scroll = window.document.getElementById("memory-chart-scroll");
+    Object.defineProperties(scroll, {
+      clientWidth: {
+        get: () => (results.hidden ? 0 : viewportWidth),
+      },
+      scrollLeft: {
+        get: () => scrollLeft,
+        set: (value) => {
+          if (!results.hidden) scrollLeft = value;
+        },
+      },
+    });
+  });
+  const { document, load } = viewer;
+  load(demoGraph);
+  showMemoryProfile(viewer, [1, 2, 3]);
+  const chart = document.getElementById("memory-chart");
+  assert.equal(chart.getAttribute("viewBox"), "0 0 1600 330");
+  assert.equal(scrollLeft, 0);
+  document.getElementById("memory-zoom-in").click();
+  assert.equal(chart.getAttribute("viewBox"), "0 0 3200 330");
+  assert.equal(scrollLeft, 800);
+  viewportWidth = 2200;
+  showMemoryProfile(viewer, [3, 2, 1]);
+  assert.equal(chart.getAttribute("viewBox"), "0 0 2200 330");
+  assert.equal(scrollLeft, 0);
+  assert.equal(
+    document.getElementById("memory-zoom-level").textContent,
+    "100%",
+  );
+  document.getElementById("memory-zoom-in").click();
+  assert.equal(chart.getAttribute("viewBox"), "0 0 4400 330");
+  assert.equal(scrollLeft, 1100);
+});
+
+test("memory zoom reveals more graduations and operator labels with priority and fallback", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  load(demoGraph);
+  document.getElementById("memory-tab").click();
+  send({
+    type: "memory-inputs",
+    requestId: messages.at(-1).requestId,
+    dimensions: [],
+    stages: [],
+    path: [],
+  });
+  document
+    .getElementById("memory-form")
+    .dispatchEvent(new window.Event("submit", { cancelable: true }));
+  const events = Array.from({ length: 120 }, (_, index) => ({
+    index,
+    node: `node${index}`,
+    opType: "Relu",
+    existingBytes: 20,
+    outputBytes: 0,
+    scratchBytes: 0,
+    deviceBytes: 20,
+    afterBytes: index === 119 ? null : 20,
+    inputs: [],
+    outputs: [],
+    decisions: [],
+  }));
+  events[0].opType = "LayerNormalization";
+  events[1].opType = "MatMul";
+  events[2].opType = "Attention";
+  const display = () =>
+    send({
+      type: "memory-profile",
+      requestId: messages.at(-1).requestId,
+      profile: { name: "Zoom", device: "CPU", peakBytes: 20, events },
+    });
+  const labels = () => {
+    const rows = new Map();
+    const texts = [
+      ...document.querySelectorAll("#memory-operator-labels text"),
+    ];
+    const rightEdge =
+      Number(
+        document
+          .getElementById("memory-chart")
+          .getAttribute("viewBox")
+          .split(" ")[2],
+      ) - 20;
+    for (const text of texts) {
+      const width = text.textContent.length * 8 + 12;
+      const left = Number(text.getAttribute("x")) - width / 2;
+      assert.ok(left >= 60 - 1e-6 && left + width <= rightEdge + 1e-6);
+      const row = text.getAttribute("y");
+      if (!rows.has(row)) rows.set(row, []);
+      rows.get(row).push([left, left + width]);
+    }
+    for (const ranges of rows.values()) {
+      ranges.sort((a, b) => a[0] - b[0]);
+      for (let i = 1; i < ranges.length; i++)
+        assert.ok(ranges[i - 1][1] + 12 <= ranges[i][0] + 1e-6);
+    }
+    return texts.map((e) => e.textContent);
+  };
+  display();
+  assert.ok(labels().includes("#3 Attention"));
+  assert.ok(labels().includes("#2 MatMul"));
+  assert.ok(!labels().includes("#1 LayerNormalization"));
+  assert.ok(labels().some((label) => /Relu/.test(label)));
+  const initialTicks = document.querySelectorAll(".memory-node-number").length;
+  const initialLabels = labels().length;
+  document.getElementById("memory-zoom-in").click();
+  assert.equal(
+    document.getElementById("memory-zoom-level").textContent,
+    "200%",
+  );
+  assert.ok(
+    document.querySelectorAll(".memory-node-number").length > initialTicks,
+  );
+  assert.ok(labels().length > initialLabels);
+  const chart = document.getElementById("memory-chart");
+  chart.dispatchEvent(
+    new window.WheelEvent("wheel", { ctrlKey: false, deltaY: -1 }),
+  );
+  assert.equal(
+    document.getElementById("memory-zoom-level").textContent,
+    "200%",
+  );
+  chart.dispatchEvent(
+    new window.WheelEvent("wheel", {
+      ctrlKey: true,
+      deltaY: -1,
+      cancelable: true,
+    }),
+  );
+  assert.equal(
+    document.getElementById("memory-zoom-level").textContent,
+    "400%",
+  );
+  document.getElementById("memory-zoom-in").click();
+  document.getElementById("memory-zoom-in").click();
+  assert.equal(labels().length, events.length);
+  assert.ok(labels().includes("#1 LayerNormalization"));
+  document.getElementById("memory-zoom-reset").click();
+  assert.equal(chart.getAttribute("viewBox"), "0 0 1000 330");
+  assert.equal(document.getElementById("memory-zoom-out").disabled, true);
+  const scroll = document.getElementById("memory-chart-scroll");
+  Object.defineProperty(scroll, "clientWidth", { value: 1600 });
+  window.dispatchEvent(new window.Event("resize"));
+  assert.equal(chart.getAttribute("viewBox"), "0 0 1600 330");
+  assert.equal(chart.style.width, "1600px");
+  events[1].opType = "Relu";
+  events[2].opType = "Relu";
+  display();
+  assert.ok(labels().includes("#1 LayerNormalization"));
+});
+
 test("memory steps allocate before each two-interval node and release into one-interval gaps", (t) => {
   const { document, window, messages, load } = openViewer(t);
   const send = (data) =>

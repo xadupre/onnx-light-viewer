@@ -76,33 +76,45 @@ public:
 
   void Execute() override {
     try {
-      auto &graph = snapshot_.ref_graph();
-      for (int input = 0; input < graph.input_size(); ++input) {
-        auto &shape = graph.ref_input()[input].ref_type().ref_tensor_type().ref_shape();
-        for (int axis = 0; axis < shape.dim_size(); ++axis) {
-          auto &dimension = shape.ref_dim()[axis];
-          if (!dimension.has_dim_value() || dimension.dim_value() < 0)
-            dimension.set_dim_value(dimensions_.at(DimensionKey(dimension, input, axis)));
-        }
-      }
-      for (auto *values : {&graph.ref_output(), &graph.ref_value_info()})
-        for (auto &value : *values) {
-          if (!value.type().has_tensor_type() || !value.type().tensor_type().has_shape())
-            continue;
-          auto &type = value.ref_type().ref_tensor_type();
-          bool unknown = false;
-          for (auto &dimension : type.ref_shape().ref_dim()) {
-            if (dimension.has_dim_param()) {
-              const auto found = dimensions_.find("symbol:" + std::string(dimension.dim_param()));
-              if (found != dimensions_.end())
-                dimension.set_dim_value(found->second);
-            }
-            unknown |= !dimension.has_dim_value() &&
-                       (!dimension.has_dim_param() || dimension.dim_param().empty());
+      const auto bind = [&](auto &graph, bool named) {
+        for (int input = 0; input < graph.input_size(); ++input) {
+          auto &shape = graph.ref_input()[input].ref_type().ref_tensor_type().ref_shape();
+          for (int axis = 0; axis < shape.dim_size(); ++axis) {
+            auto &dimension = shape.ref_dim()[axis];
+            // Anonymous dimensions have no symbolic spelling.
+            if ((!dimension.has_dim_value() || dimension.dim_value() < 0) &&
+                (named || !dimension.has_dim_param() || dimension.dim_param().empty()))
+              dimension.set_dim_value(dimensions_.at(DimensionKey(dimension, input, axis)));
           }
-          if (unknown)
-            type.clear_shape();
         }
+        for (auto *values : {&graph.ref_output(), &graph.ref_value_info()})
+          for (auto &value : *values) {
+            if (!value.type().has_tensor_type() || !value.type().tensor_type().has_shape())
+              continue;
+            auto &type = value.ref_type().ref_tensor_type();
+            bool unknown = false;
+            for (auto &dimension : type.ref_shape().ref_dim()) {
+              if (named && dimension.has_dim_param()) {
+                const auto found = dimensions_.find("symbol:" + std::string(dimension.dim_param()));
+                if (found != dimensions_.end())
+                  dimension.set_dim_value(found->second);
+              }
+              unknown |= !dimension.has_dim_value() &&
+                         (!dimension.has_dim_param() || dimension.dim_param().empty());
+            }
+            if (unknown)
+              type.clear_shape();
+          }
+      };
+      auto symbolic_snapshot = snapshot_.SharedCopy();
+      bind(symbolic_snapshot.ref_graph(), false);
+      ol::core::compute::ComputeContext symbolic;
+      symbolic.ComputeShapes(symbolic_snapshot);
+      symbolic.ComputeValueAndNodeTags(symbolic_snapshot.graph());
+      symbolic.ComputeInPlaceReuseGraph(symbolic_snapshot.graph(), symbolic.Shapes(), false,
+                                        symbolic.ValueTags());
+      auto &graph = snapshot_.ref_graph();
+      bind(graph, true);
       ol::core::compute::ComputeContext context;
       context.ComputeShapes(snapshot_);
       context.ComputeValueAndNodeTags(graph);
@@ -132,6 +144,14 @@ public:
       };
       for (size_t index = 0; index < context.Memory().size(); ++index) {
         const auto &memory = context.NodeMemory(index);
+        for (const auto &[key, entry] : memory) {
+          if (const auto *value = std::get_if<ol::core::expressions::DimType>(&entry)) {
+            Bytes(*value);
+          } else {
+            for (const auto &[tag, amount] : std::get<ol::core::compute::TaggedMemory>(entry))
+              Bytes(amount);
+          }
+        }
         const auto scalar = [&](const char *key) {
           return Bytes(std::get<ol::core::expressions::DimType>(memory.at(key)));
         };
@@ -148,7 +168,9 @@ public:
                            tensors + scratch,
                            {},
                            describe(node.input()),
-                           describe(node.output())});
+                           describe(node.output()),
+                           memory,
+                           symbolic.NodeMemory(index)});
         peak_ = std::max(peak_, tensors + scratch);
       }
       for (const auto &decision : context.Events())
@@ -176,11 +198,10 @@ public:
       item.Set("outputBytes", Napi::Number::New(Env(), event.outputs));
       item.Set("scratchBytes", Napi::Number::New(Env(), event.scratch));
       item.Set("deviceBytes", Napi::Number::New(Env(), event.total));
-      // The SDK exposes the next pre-node snapshot, but no final post-release snapshot.
-      item.Set("afterBytes",
-               index + 1 < events_.size()
-                   ? Napi::Value(Napi::Number::New(Env(), events_[index + 1].existing))
-                   : Napi::Value(Env().Null()));
+      item.Set(
+          "afterBytes",
+          Napi::Number::New(Env(), Bytes(std::get<ol::core::expressions::DimType>(event.memory.at(
+                                       ol::core::compute::kNodeMemoryAfterBytesKey)))));
       auto decisions = Napi::Array::New(Env(), event.decisions.size());
       for (uint32_t i = 0; i < event.decisions.size(); ++i) {
         const auto &decision = event.decisions[i];
@@ -199,6 +220,8 @@ public:
       item.Set("decisions", decisions);
       item.Set("inputs", TensorDetails(event.inputs));
       item.Set("outputs", TensorDetails(event.output_tensors));
+      item.Set("memory", MemoryDetails(event.memory, false));
+      item.Set("symbolicMemory", MemoryDetails(event.symbolic_memory, true));
       events.Set(index, item);
     }
     result.Set("events", events);
@@ -215,7 +238,27 @@ private:
     int64_t existing, outputs, scratch, total;
     ol::core::compute::ComputeEventLog decisions;
     std::vector<Tensor> inputs, output_tensors;
+    ol::core::compute::NodeMemoryProfile memory, symbolic_memory;
   };
+  Napi::Object MemoryDetails(const ol::core::compute::NodeMemoryProfile &memory, bool symbolic) {
+    auto result = Napi::Object::New(Env());
+    const auto value = [&](const ol::core::expressions::DimType &amount) -> Napi::Value {
+      if (symbolic)
+        return Napi::String::New(Env(), ol::core::expressions::dim_to_string(amount));
+      return Napi::Number::New(Env(), Bytes(amount));
+    };
+    for (const auto &[key, entry] : memory) {
+      if (const auto *scalar = std::get_if<ol::core::expressions::DimType>(&entry)) {
+        result.Set(key, value(*scalar));
+      } else {
+        auto tags = Napi::Object::New(Env());
+        for (const auto &[tag, amount] : std::get<ol::core::compute::TaggedMemory>(entry))
+          tags.Set(tag, value(amount));
+        result.Set(key, tags);
+      }
+    }
+    return result;
+  }
   Napi::Array TensorDetails(const std::vector<Tensor> &tensors) {
     auto result = Napi::Array::New(Env(), tensors.size());
     for (uint32_t index = 0; index < tensors.size(); ++index) {

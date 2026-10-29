@@ -13,6 +13,26 @@ running the model or changing its retained shapes.
    output allocations, scratch estimates and their total. **Previous** / **Next**
    exposes every event, with 100 rows per page.
 
+Hover over the curve to inspect memory **before**, **during** or **after** a node.
+The readout shows exact bytes, scratch, tensor shapes and SDK allocation buckets:
+weights (initializers), inputs, live intermediates and newly allocated outputs,
+split by tensor tag. In-place outputs do not allocate another buffer.
+Symbolic expressions retain named dimensions; unnamed dimensions use the values
+entered above. Symbolic tensor totals exclude scratch and may choose different
+in-place reuse than the concrete estimate.
+
+Use **+** / **−** or **Ctrl+wheel** to zoom, then scroll horizontally.
+More node graduations and operator types appear as space becomes available.
+Crowded labels prioritize **Attention**, then **MatMul**, then
+**Normalization**, with other operators sampled every five or ten nodes.
+Focus the chart and use **Left** / **Right** to inspect nodes without a mouse.
+**Reset zoom**, a new estimate or a stage change returns to the full trace.
+
+.. figure:: ../_static/feature-memory.png
+   :alt: Memory chart with zoom controls and numerical and symbolic allocation inspection.
+
+   Inspect SDK allocation categories and expressions at a node's execution stage.
+
 Choose **Local peaks only** to list memory maxima, then click a node name to open
 **Model**, select the node and center it at readable zoom. Navigation opens the
 estimated root graph or pipeline stage, even if another graph was displayed.

@@ -503,9 +503,11 @@ export function webviewHtml(
       <div id="memory-results" hidden>
         <h3 id="memory-model-name"></h3>
         <dl class="status-details"><dt>Estimated peak</dt><dd id="memory-peak"></dd><dt>Device</dt><dd id="memory-device"></dd></dl>
-        <svg id="memory-chart" viewBox="0 0 1000 330" role="img" aria-labelledby="memory-chart-title memory-chart-description">
+        <nav aria-label="Memory chart zoom"><button id="memory-zoom-out" type="button" aria-label="Zoom out">−</button><button id="memory-zoom-in" type="button" aria-label="Zoom in">+</button><button id="memory-zoom-reset" type="button">Reset zoom</button><span id="memory-zoom-level">100%</span></nav>
+        <div id="memory-chart-scroll">
+        <svg id="memory-chart" viewBox="0 0 1000 330" tabindex="0" role="img" aria-labelledby="memory-chart-title memory-chart-description">
           <title id="memory-chart-title">Estimated device memory by execution event</title>
-          <desc id="memory-chart-description">Step plot: one interval between nodes, two intervals during each node. Outputs and scratch are allocated before execution; releases happen after execution. Rectangles span each node's two-interval execution window, with a gap between nodes. Highlighted rectangles identify common compute-heavy operations, not measured timings. Exact values and SDK decisions are in the table below.</desc>
+          <desc id="memory-chart-description">Hover to inspect memory before, during and after a node. Use left/right arrows to inspect nodes, zoom buttons or Ctrl+wheel to zoom, and scroll horizontally. Step plot: one interval between nodes, two intervals during each node. Outputs and scratch are allocated before execution; releases happen after execution. Highlighted rectangles identify common compute-heavy operations, not measured timings.</desc>
           <path class="memory-axis" d="M60,20V240H980"></path>
           <text id="memory-chart-peak" x="60" y="16"></text><text x="10" y="244">0</text>
           <path id="memory-node-intervals" class="memory-node-interval"></path>
@@ -514,11 +516,13 @@ export function webviewHtml(
           <g id="memory-operator-labels"></g>
           <path id="memory-curve"></path>
         </svg>
-        <p id="memory-final-status" role="status" hidden>Final post-release memory is unavailable in onnx-light. The curve stops before that unknown value.</p>
+        </div>
+        <pre id="memory-inspection" role="status" hidden></pre>
+        <p id="memory-final-status" role="status" hidden>Final post-release memory is unavailable for this profile. The curve stops at the last available value.</p>
         <h3>Estimated execution events</h3>
         <p id="memory-peaks-count"></p>
         <label><input id="memory-peaks-only" type="checkbox"> Local peaks only</label>
-        <div class="memory-table"><table><thead><tr><th scope="col">Event</th><th scope="col">Node</th><th scope="col">Operator</th><th scope="col">Before allocation</th><th scope="col">New outputs</th><th scope="col">Scratch</th><th scope="col">During execution</th><th scope="col">After release</th><th scope="col">In-place</th><th scope="col">Release</th><th scope="col">Release shape</th><th scope="col">Tensor shapes</th></tr></thead><tbody id="memory-events"></tbody></table></div>
+        <div class="memory-table"><table><thead><tr><th scope="col">Event</th><th scope="col">Node</th><th scope="col">Operator</th><th scope="col">Already allocated</th><th scope="col">New outputs</th><th scope="col">Scratch</th><th scope="col">During execution</th><th scope="col">After release</th><th scope="col">In-place</th><th scope="col">Release</th><th scope="col">Release shape</th><th scope="col">Tensor shapes</th></tr></thead><tbody id="memory-events"></tbody></table></div>
         <nav aria-label="Memory events"><button id="memory-previous" type="button" disabled>Previous</button><span id="memory-range" role="status"></span><button id="memory-next" type="button" disabled>Next</button></nav>
       </div>
     </section>

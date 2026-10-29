@@ -214,6 +214,19 @@ test("native memory estimates concretize symbolic inputs without editing the mod
   assert.equal(profile.device, "CPU");
   assert.equal(profile.events.length, original.nodes.length);
   assert.equal(profile.peakBytes, 132);
+  assert.equal(typeof profile.events[0].memory.total_bytes, "number");
+  assert.equal(typeof profile.events[0].symbolicMemory.total_bytes, "string");
+  assert.match(profile.events[0].symbolicMemory.total_bytes, /N/);
+  for (const event of profile.events) {
+    assert.equal(event.memory.already_allocated_bytes, event.existingBytes);
+    assert.equal(event.memory.output_allocation_bytes, event.outputBytes);
+    for (const key of ["inputs", "initializers", "intermediates", "outputs"]) {
+      assert.equal(typeof event.memory[key], "object");
+      assert.equal(typeof event.symbolicMemory[key], "object");
+      for (const bytes of Object.values(event.memory[key]))
+        assert.ok(Number.isSafeInteger(bytes) && bytes >= 0);
+    }
+  }
   assert.equal(profile.events[1].outputBytes, 0);
   for (const event of profile.events)
     assert.equal(
@@ -222,7 +235,7 @@ test("native memory estimates concretize symbolic inputs without editing the mod
     );
   assert.deepEqual(
     profile.events.map((event) => event.afterBytes),
-    [...profile.events.slice(1).map((event) => event.existingBytes), null],
+    profile.events.map((event) => event.memory.after_bytes),
   );
   assert.ok(
     profile.events[1].decisions.some(
@@ -291,7 +304,10 @@ test("memory profiles transport SDK shape-release decisions and concrete scalar 
   assert.deepEqual(model.graph(), original);
   const scalar = await memoryTestModel([]).memoryProfile({});
   assert.equal(scalar.events[0].outputs[0].shape, "[]");
-  assert.equal(scalar.events[0].afterBytes, null);
+  assert.equal(
+    scalar.events[0].afterBytes,
+    scalar.events[0].memory.after_bytes,
+  );
 });
 
 test("native memory estimates reject missing, invalid and unresolved dimensions explicitly", async () => {
