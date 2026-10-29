@@ -3217,7 +3217,7 @@ test("exposes native pattern sets including explicitly enabled Layer patterns", 
   assert.deepEqual(source.optimizationPatterns(), catalog);
 });
 
-test("uses the full catalog and native priority iteration to match operators introduced by earlier patterns", async () => {
+test("uses the full catalog and native priorities without absorbing Gemm output transposes", async () => {
   const source = optimizationModel();
   const catalog = source.optimizationPatterns();
   assert.equal(source.fusionPatterns().includes("GemmTranspose"), false);
@@ -3231,7 +3231,16 @@ test("uses the full catalog and native priority iteration to match operators int
   const patterns = optimized
     .fusionHistory()[0]
     .matches.map((match) => match.pattern);
-  assert.ok(patterns.indexOf("GemmTranspose") > patterns.indexOf("MatMulAdd"));
+  assert.ok(patterns.includes("MatMulAdd"));
+  assert.equal(patterns.includes("GemmTranspose"), false);
+  assert.ok(
+    optimized
+      .graph()
+      .nodes.some(
+        (node) =>
+          node.name === "output_transpose" && node.opType === "Transpose",
+      ),
+  );
   assert.ok(patterns.includes("TransposeTranspose"));
   assert.equal(optimized.fusionCount(), 1);
   assert.equal(
@@ -6357,10 +6366,15 @@ test("refreshes intermediate shapes and types with onnx-light, including symboli
   assert.deepEqual(tensors.y.shape, ["N", "1", "3"]);
 });
 
-test("surfaces unsupported shape inference as a JavaScript error", () => {
-  assert.throws(
-    () => decodeGraph(modelBytes("custom.onnx"), "custom.onnx", true),
-    /unsupported domain.*example/,
+test("infers shapes through custom operators with annotated outputs", () => {
+  const inferred = decodeGraph(modelBytes("custom.onnx"), "custom.onnx", true);
+  assert.deepEqual(
+    inferred.tensors.find(({ name }) => name === "intermediate"),
+    { name: "intermediate", type: "FLOAT", shape: ["1"] },
+  );
+  assert.deepEqual(
+    inferred.tensors.find(({ name }) => name === "y"),
+    { name: "y", type: "FLOAT", shape: ["1"] },
   );
 });
 
@@ -6388,7 +6402,10 @@ test("persists inferred intermediate value_info in the native model without modi
     ["N", "3"],
   );
   assert.deepEqual(bytes, original);
-  const unsupported = loadModel(modelBytes("custom.onnx"), "custom.onnx");
+  const unsupported = loadModel(
+    modelBytes("custom-unannotated.onnx"),
+    "custom-unannotated.onnx",
+  );
   const before = unsupported.graph();
   assert.throws(() => unsupported.graph(true), /unsupported domain.*example/);
   assert.deepEqual(unsupported.graph(), before);
