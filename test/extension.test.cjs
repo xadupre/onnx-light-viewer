@@ -2759,7 +2759,7 @@ test(
     await extension.receive({
       type: "apply-optimization",
       operation: "Optimize",
-      patterns: ["MatMulAdd"],
+      patterns: ["Identity"],
       requestId: 1,
     });
     assert.equal(
@@ -2846,6 +2846,24 @@ test(
       });
     await optimizeNative(["GemmTranspose"]);
     assert.equal(extension.messages.at(-1).type, "optimization-info");
+    assert.equal(extension.messages.at(-1).changed, false);
+    assert.deepEqual(extension.messages.at(-1).matches, []);
+    assert.deepEqual(latest().graph, optimized);
+    assert.equal(latest().file.fusionCount, 0);
+    assert.deepEqual(latest().file.fusionHistory, []);
+    await extension.receive({ type: "undo-fusion" });
+    assert.equal(extension.messages.at(-1).type, "undo-fusion-error");
+    assert.match(extension.messages.at(-1).error, /No fusion operation/);
+    // Leave MatMulAdd for native undo coverage; GemmTranspose absorbs input transposes only.
+    await optimizeNative(["MatMulAdd"]);
+    assert.equal(extension.messages.at(-1).type, "optimization-info");
+    assert.equal(extension.messages.at(-1).changed, true);
+    assert.ok(
+      extension.messages
+        .at(-1)
+        .matches.some(({ pattern }) => pattern === "MatMulAdd"),
+    );
+    assert.notDeepEqual(latest().graph, optimized);
     assert.equal(latest().file.fusionCount, 1);
     await extension.receive({ type: "undo-fusion" });
     assert.deepEqual(latest().graph, optimized);
@@ -2855,7 +2873,9 @@ test(
     assert.match(extension.messages.at(-1).error, /No fusion operation/);
     assert.deepEqual(latest().graph, optimized);
     assert.equal(latest().file.fusionCount, 0);
-    await optimizeNative(["GemmTranspose"]);
+    await optimizeNative(["MatMulAdd"]);
+    assert.equal(extension.messages.at(-1).type, "optimization-info");
+    assert.equal(extension.messages.at(-1).changed, true);
     assert.equal(latest().file.fusionCount, 1);
     await extension.receive({ type: "undo-fusion", all: true });
     assert.deepEqual(latest().graph, optimized);
