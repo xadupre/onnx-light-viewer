@@ -135,6 +135,31 @@ function submitOpen(document, window) {
     .dispatchEvent(new window.Event("submit", { cancelable: true }));
 }
 
+test("Run Prompt recovers after a cancelled model replacement", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  document.getElementById("prompt-tab").click();
+  const receive = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  const enable = () => {
+    const request = messages.findLast(
+      (message) => message.type === "prompt-info",
+    );
+    receive({
+      type: "prompt-info",
+      requestId: request.requestId,
+      info: { available: true, engines: ["onnx-light"] },
+    });
+  };
+  load(demoGraph);
+  enable();
+  assert.equal(document.getElementById("prompt-fields").disabled, false);
+  receive({ type: "load-state", pending: true });
+  assert.equal(document.getElementById("prompt-fields").disabled, true);
+  receive({ type: "load-state", pending: false });
+  enable();
+  assert.equal(document.getElementById("prompt-fields").disabled, false);
+});
+
 function tensorStatistics(name = "weight") {
   return {
     name,
@@ -266,7 +291,7 @@ test("tensor icons open data directly while the tensor browser lists metadata an
   load(graph);
   const tabs = [...document.querySelectorAll(".viewer-tabs button")];
   assert.equal(
-    tabs[tabs.indexOf(document.getElementById("logs-tab")) - 1].id,
+    tabs[tabs.indexOf(document.getElementById("prompt-tab")) - 1].id,
     "tensors-tab",
   );
   const group = document.querySelector('[data-id="node-0"]');
@@ -5174,6 +5199,7 @@ test("tab keyboard order follows the Navigation and Application themes", (t) => 
       "statistics-tab",
       "memory-tab",
       "tensors-tab",
+      "prompt-tab",
       "logs-tab",
       "status-tab",
       "controls-tab",
@@ -6726,7 +6752,7 @@ for (const initialTab of ["model", "logs"]) {
     assert.equal(panel.scrollTop, 0);
 
     document.getElementById("model-tab").click();
-    document.getElementById("tensors-tab").dispatchEvent(
+    document.getElementById("prompt-tab").dispatchEvent(
       new window.KeyboardEvent("keydown", {
         key: "ArrowRight",
         bubbles: true,

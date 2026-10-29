@@ -24,6 +24,23 @@ const { test } = require("node:test");
 const { JSDOM } = require("jsdom");
 const { exportHub } = require("./helpers/export-hub.cjs");
 
+test("prompt host requires workspace trust and a locally saved converted model", async () => {
+  const extension = await openExtension();
+  extension.setTrusted(false);
+  await extension.receive({
+    type: "run-prompt",
+    requestId: 1,
+    options: { engine: "onnx-light", prompt: "Hello", maxTokens: 32 },
+  });
+  assert.equal(extension.messages.at(-1).type, "prompt-error");
+  assert.match(extension.messages.at(-1).error, /Trust this workspace/);
+  extension.setTrusted(true);
+  await extension.receive({ type: "prompt-info", requestId: 2 });
+  assert.match(extension.messages.at(-1).error, /locally saved converted/);
+  await extension.receive({ type: "run-prompt", requestId: -1 });
+  assert.match(extension.messages.at(-1).error, /Invalid prompt request/);
+});
+
 class FileSystemError extends Error {
   constructor(code) {
     super(code);

@@ -26,7 +26,13 @@ for (const initialTab of ["model", "logs"]) {
     assert.deepEqual(groups(".viewer-tabs > .feature-group"), [
       [
         "Navigation",
-        ["model-tab", "statistics-tab", "memory-tab", "tensors-tab"],
+        [
+          "model-tab",
+          "statistics-tab",
+          "memory-tab",
+          "tensors-tab",
+          "prompt-tab",
+        ],
       ],
       [
         "Application",

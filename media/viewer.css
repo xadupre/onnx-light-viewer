@@ -1820,3 +1820,26 @@ button:disabled {
   margin-left: auto;
   padding: 3px;
 }
+#prompt-view {
+  padding: 1rem;
+  overflow: auto;
+}
+
+#prompt-fields {
+  display: grid;
+  gap: 0.5rem;
+  max-width: 48rem;
+}
+
+#prompt-results {
+  overflow-x: auto;
+  margin-block: 1rem;
+}
+
+.prompt-token-table th,
+.prompt-token-table td {
+  padding: 0.4rem 0.75rem;
+  border: 1px solid var(--vscode-panel-border, #888);
+  white-space: pre;
+  text-align: left;
+}

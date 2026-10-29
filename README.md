@@ -19,6 +19,8 @@ files.
 - Use **Convert** to run installed mbext, modelbuilder or Mobius CLIs in a trusted
   workspace, with live output, a chosen output directory, a reproduction script
   and automatic model opening. See [exporting models](docs/features/exporting_models.rst).
+- Use **Run Prompt** for converted language models, with editable prompts and
+  token-aligned Hugging Face validation. See [requirements and SDK limitations](docs/features.rst#running-language-model-prompts).
 - Search nodes and operators with live suggestions; zoom, pan, select and move
   nodes, including in large graphs.
 - Navigate nested subgraphs and model-local function definitions with breadcrumbs.
@@ -45,7 +47,7 @@ files.
 See the [feature guide](docs/features.rst) for controls, examples and limitations.
 Model saving and encrypted I/O are under review in [#115](https://github.com/xadupre/onnx-light-viewer/pull/115),
 not yet available on `main`. Graph rewriting, weight quantization, full tensor
-analytics, execution and benchmarking are planned, not current viewer features.
+analytics, general graph execution and benchmarking are planned, not current viewer features.
 
 <img src="docs/_static/viewer-snapshot.png" width="75%" alt="ONNX Light Viewer showing a graph with symbolic tensor shapes and the Reshape node's parameters">
 

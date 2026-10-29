@@ -48,6 +48,7 @@ import {
 } from "./huggingface";
 import { OliveRecipes } from "./oliveRecipes";
 import { optimizeWithOnnxScript } from "./optimization";
+import { promptInfo, runPrompt, type PromptResult } from "./prompt";
 
 const viewType = "onnxLightViewer.graph";
 const panelSessions = new WeakMap<vscode.WebviewPanel, () => void>();
@@ -496,6 +497,8 @@ async function configurePanel(
   let navigationRequest = 0;
   let statisticsRequest = 0;
   let tensorStatisticsRequest = 0;
+  let promptController: AbortController | undefined;
+  let promptResult: { owner: LoadedModel; result: PromptResult } | undefined;
   let memoryRequest = 0;
   let fusionRequest = 0;
   let diagnosticRequest = 0;
@@ -754,6 +757,7 @@ async function configurePanel(
         maxExternalFileSize?: unknown;
         includeRewritings?: unknown;
         requestId?: unknown;
+        options?: unknown;
         name?: unknown;
         dimensions?: unknown;
         previewId?: unknown;
@@ -934,6 +938,85 @@ async function configurePanel(
           await vscode.window.showErrorMessage(
             `Could not estimate ONNX memory: ${detail}`,
           );
+        }
+      } else if (message?.type === "prompt-cancel") {
+        promptController?.abort();
+      } else if (
+        message?.type === "prompt-info" ||
+        message?.type === "run-prompt"
+      ) {
+        const owner = model;
+        promptController?.abort();
+        const controller = new AbortController();
+        promptController = controller;
+        const isCurrent = () =>
+          active &&
+          model === owner &&
+          promptController === controller &&
+          !controller.signal.aborted;
+        try {
+          if (
+            typeof message.requestId !== "number" ||
+            !Number.isSafeInteger(message.requestId) ||
+            message.requestId < 0
+          )
+            throw new Error("Invalid prompt request.");
+          if (!vscode.workspace.isTrusted)
+            throw new Error("Trust this workspace before running a prompt.");
+          const uri = owner?.source?.uri;
+          if (!owner || !uri || uri.scheme !== "file")
+            throw new Error(
+              "Open a locally saved converted language model first.",
+            );
+          if (message.type === "prompt-info") {
+            promptResult = undefined;
+            const info = await promptInfo(uri.fsPath);
+            if (isCurrent())
+              await postMessage({
+                type: "prompt-info",
+                requestId: message.requestId,
+                info,
+              });
+          } else {
+            const result = await log.run("Run prompt", () =>
+              runPrompt(
+                uri.fsPath,
+                message.options,
+                getApplicationSettings().pythonPath,
+                controller.signal,
+                (output) => {
+                  if (isCurrent())
+                    void postMessage({
+                      type: "prompt-progress",
+                      requestId: message.requestId,
+                      output,
+                    });
+                },
+                message.options &&
+                  typeof message.options === "object" &&
+                  "validate" in message.options &&
+                  message.options.validate === true &&
+                  promptResult?.owner === owner
+                  ? promptResult.result
+                  : undefined,
+              ),
+            );
+            if (isCurrent()) {
+              promptResult = { owner, result };
+              await postMessage({
+                type: "prompt-result",
+                requestId: message.requestId,
+                result,
+              });
+            }
+          }
+        } catch (error) {
+          if (isCurrent())
+            await postMessage({
+              type: "prompt-error",
+              requestId: message.requestId,
+              error: error instanceof Error ? error.message : String(error),
+            });
         }
       } else if (message?.type === "tensor-statistics") {
         const requestedModel = model;
@@ -2850,6 +2933,8 @@ async function configurePanel(
   );
   const dispose = () => {
     active = false;
+    promptController?.abort();
+    promptResult = undefined;
     hubSearch?.abort();
     exporting?.abort();
     recipeController.abort();

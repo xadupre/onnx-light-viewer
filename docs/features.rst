@@ -1,8 +1,9 @@
 Implemented features
 ====================
 
-The viewer inspects ONNX graphs locally with onnx-light. Models are not uploaded
-or executed, and viewer actions do not save or modify the source file.
+The viewer inspects ONNX graphs locally with onnx-light. Models are not uploaded.
+Explicit Convert and Run Prompt actions execute installed Python tooling;
+inspection does not save or modify the source file.
 
 Available in the viewer
 -----------------------
@@ -97,6 +98,41 @@ Moving a node changes only its display position.
    :width: 100%
 
    Inspect a selected node at readable size.
+
+Running language-model prompts
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+After conversion, open **Run Prompt** next to **Tensors**. Select **onnx-light**
+or **onnxruntime-genai** (when a GenAI configuration is available), edit the
+prompt and choose a maximum number of new tokens (default: 32). Requires a
+trusted workspace, a causal language model and the tokenizer/runtime packages
+in Settings' Python environment: ``onnx-light``, its CPU kernels, ``numpy`` and
+``transformers`` for onnx-light, or ``onnxruntime-genai`` for GenAI.
+Hugging Face validation additionally needs ``torch``, ``transformers`` and the
+original cached checkpoint. Execution uses the saved model, not unsaved graph edits.
+GenAI must provide its public ``Generator.get_logits()`` API so raw logits
+can be captured before token-selection penalties modify them.
+
+Conversion saves source information next to each exported model. **Validate
+with Hugging Face** uses that source checkpoint and the same generated prefixes
+to compare logits, rather than comparing unrelated divergent continuations.
+Output text, token IDs, raw-logit scores and reference results share one column
+per generated token. Each column includes maximum absolute and relative error,
+L2 distance, and counts of vocabulary coefficients with absolute differences
+below 0.01, 0.1 and 1. Runtime errors are shown without substituting another
+engine; **Cancel** stops execution.
+
+The onnx-light Python generation API currently returns token IDs without
+logits. Its scores and discrepancy metrics are explicitly unavailable, not
+estimated by the viewer. Scored comparison requires onnxruntime-genai.
+Pipeline execution also requires a supported SDK generation entry point;
+the viewer does not substitute prefill-only execution for a pipeline's decode stage.
+
+.. figure:: _static/feature-run-prompt.png
+   :alt: Run Prompt tab with engine selection, editable prompt and a maximum of 32 new tokens, disabled until a converted model is opened.
+   :width: 100%
+
+   Configure generation after opening a converted language model.
 
 Inspection
 ^^^^^^^^^^

@@ -23,6 +23,8 @@ const {
   ExportHistory,
   exportPlan,
   prepareExportPlan,
+  provenancePath,
+  readProvenance,
   runExport,
 } = require("../dist/export");
 const { exportHub } = require("./helpers/export-hub.cjs");
@@ -34,6 +36,97 @@ const options = (directory, exporter = "mbext") => ({
   directory,
   precision: "fp32",
   provider: "cpu",
+});
+
+test("provenance follows every exporter, nested model and pipeline, and Olive quantization", async (t) => {
+  const root = await mkdtemp(path.join(__dirname, ".provenance-test-"));
+  t.after(() => rm(root, { force: true, recursive: true }));
+  const source = path.join(root, "checkpoint");
+  await mkdir(source);
+  const recipe = path.join(root, "recipe-source");
+  await mkdir(recipe);
+  await writeFile(path.join(recipe, "recipe.json"), "{}");
+  const original = {
+    version: 1,
+    model: "owner/original-model",
+    source,
+    revision: "a".repeat(40),
+    exporter: "mbext",
+  };
+  let exported;
+  for (const exporter of [
+    "mbext",
+    "modelbuilder",
+    "mobius",
+    "olive",
+    "olive-recipes",
+  ]) {
+    const plan = await prepareExportPlan(
+      exportPlan(
+        { ...options(path.join(root, exporter), exporter), model: source },
+        python,
+        undefined,
+        exporter === "olive-recipes"
+          ? { id: "recipe.json", revision: "b".repeat(40), snapshot: recipe }
+          : undefined,
+      ),
+      new AbortController().signal,
+    );
+    plan.provenance = original;
+    plan.args = [
+      "-u",
+      "-c",
+      `
+import pathlib, sys
+root = pathlib.Path(sys.argv[1])
+(root / "nested").mkdir(parents=True, exist_ok=True)
+(root / "model.onnx").write_bytes(b"model")
+(root / "nested" / "stage.onnx").write_bytes(b"stage")
+(root / "nested" / "model.pipe-onnx").write_bytes(b"pipeline")
+`,
+      plan.directory,
+    ];
+    const models = await runExport(
+      plan,
+      new AbortController().signal,
+      () => {},
+    );
+    assert.equal(models.length, 3);
+    for (const model of models) {
+      assert.deepEqual(await readProvenance(model), {
+        ...original,
+        exporter,
+      });
+      assert.match(provenancePath(model), /\.provenance\.json$/);
+    }
+    if (exporter === "mbext") exported = models[0];
+  }
+  const quantize = exportPlan(
+    {
+      ...options(path.join(root, "quantized"), "olive"),
+      model: exported,
+      oliveWorkflow: "quantize",
+      precision: "int8",
+    },
+    python,
+  );
+  quantize.args = [
+    "-c",
+    "import pathlib,sys; pathlib.Path(sys.argv[1]).write_bytes(b'quantized')",
+    path.join(quantize.directory, "model.onnx"),
+  ];
+  const [quantized] = await runExport(
+    quantize,
+    new AbortController().signal,
+    () => {},
+  );
+  assert.deepEqual(await readProvenance(quantized), {
+    ...original,
+    exporter: "olive",
+  });
+  assert.equal(await readProvenance(path.join(root, "absent.onnx")), undefined);
+  await writeFile(provenancePath(quantized), '{"version": 1}');
+  await assert.rejects(readProvenance(quantized), /Invalid model provenance/);
 });
 async function directory(t) {
   const root = await mkdtemp(path.join(tmpdir(), "viewer-export-' spaced-"));
@@ -156,6 +249,117 @@ shutil.copyfile(sys.argv[3], pathlib.Path(sys.argv[2]) / "model.onnx")
     local,
   );
   assert.equal(hub.requests.length, count);
+});
+
+test("recipe provenance pins the configured checkpoint rather than its production display name", async (t) => {
+  const root = await mkdtemp(path.join(__dirname, ".recipe-provenance-"));
+  t.after(() => rm(root, { force: true, recursive: true }));
+  const revision = "f".repeat(40);
+  const cache = path.join(root, "hf-home");
+  const source = path.join(
+    cache,
+    "hub",
+    "models--owner--actual",
+    "snapshots",
+    revision,
+  );
+  await mkdir(source, { recursive: true });
+  await writeFile(path.join(source, "config.json"), "{}");
+  await writeFile(path.join(source, "model.safetensors"), "checkpoint");
+  await writeFile(
+    path.join(source, "modeling_custom.py"),
+    "# trusted recipe model",
+  );
+  const recipe = path.join(root, "recipe");
+  await mkdir(recipe);
+  await writeFile(
+    path.join(recipe, "config.json"),
+    JSON.stringify({
+      input_model: {
+        type: "HfModel",
+        model_path: "owner/actual",
+        load_kwargs: {
+          revision: "release",
+          trust_remote_code: true,
+          extra_args: { trust_remote_code: true },
+        },
+      },
+    }),
+  );
+  await writeFile(
+    path.join(root, "huggingface_hub.py"),
+    `
+import os
+from types import SimpleNamespace as NS
+class HfApi:
+    def model_info(self, model, **kwargs):
+        assert model == "owner/actual" and kwargs == {"revision":"release"}
+        return NS(sha="${revision}", siblings=[
+            NS(rfilename="config.json"), NS(rfilename="model.safetensors"),
+            NS(rfilename="modeling_custom.py")])
+def snapshot_download(model, **kwargs):
+    assert model == "owner/actual" and kwargs["revision"] == "${revision}"
+    assert kwargs["allow_patterns"] == ["config.json","model.safetensors","modeling_custom.py"]
+    assert kwargs["cache_dir"] is None
+    assert os.environ["HF_HOME"] == ${JSON.stringify(cache)}
+    return ${JSON.stringify(source)}
+def hf_hub_download(*args, **kwargs): raise AssertionError("Unexpected shard download")
+`,
+  );
+  const previous = {
+    PYTHONPATH: process.env.PYTHONPATH,
+    HF_HUB_CACHE: process.env.HF_HUB_CACHE,
+    HF_HOME: process.env.HF_HOME,
+  };
+  process.env.PYTHONPATH = root;
+  delete process.env.HF_HUB_CACHE;
+  process.env.HF_HOME = cache;
+  t.after(() => {
+    for (const [key, value] of Object.entries(previous))
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+  });
+  const plan = exportPlan(
+    {
+      ...options(path.join(root, "output"), "olive-recipes"),
+      model: "Pretty production recipe display name",
+    },
+    python,
+    undefined,
+    {
+      id: "config.json",
+      name: "Pretty production recipe display name",
+      revision: "a".repeat(40),
+      snapshot: recipe,
+    },
+  );
+  plan.args = [
+    "-c",
+    "import pathlib,sys; p=pathlib.Path(sys.argv[1]); p.parent.mkdir(parents=True); p.write_bytes(b'export')",
+    path.join(plan.directory, "nested", "model.onnx"),
+  ];
+  const [model] = await runExport(plan, new AbortController().signal, () => {});
+  assert.deepEqual(await readProvenance(model), {
+    version: 1,
+    model: "owner/actual",
+    source,
+    revision,
+    exporter: "olive-recipes",
+  });
+  const pinned = JSON.parse(
+    await readFile(
+      path.join(plan.directory, "olive-recipe", "config.json"),
+      "utf8",
+    ),
+  );
+  assert.equal(pinned.input_model.model_path, source);
+  assert.equal(pinned.input_model.load_kwargs.revision, revision);
+  assert.equal(pinned.input_model.load_kwargs.trust_remote_code, true);
+  assert.equal(
+    pinned.input_model.load_kwargs.extra_args.trust_remote_code,
+    true,
+  );
+  assert.equal(pinned.input_model.load_kwargs.extra_args.revision, undefined);
 });
 
 test("cancels an active source download and cleans only its request metadata", async (t) => {

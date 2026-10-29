@@ -69,6 +69,7 @@ const tabs = [
   "statistics",
   "memory",
   "tensors",
+  "prompt",
   "logs",
   "status",
   "controls",
@@ -107,6 +108,11 @@ const tensorStatisticsPanel = createTensorStatisticsPanel({
   byId,
   postMessage: (message) => vscode.postMessage(message),
 });
+const promptPanel = createPromptPanel({
+  byId,
+  postMessage: (message) => vscode.postMessage(message),
+});
+let promptReloadPending = false;
 const tensorListPanel = createTensorListPanel({
   byId,
   openStatistics: openTensorStatistics,
@@ -191,6 +197,8 @@ function showTab(name, focus = false) {
   }
   if (focus) byId(`${name}-tab`).focus();
   if (name === "model") fit();
+  else if (name === "prompt" && hasModel && !replacementPending)
+    promptPanel.activate();
   else if (name === "statistics") requestStatistics();
   else if (name === "memory") memoryPanel.open();
   else if (name === "tensors") {
@@ -301,6 +309,13 @@ function requestAction(type, action, parameters = {}) {
 
 function setLoading(pending, message = "") {
   if (pending) tensorStatisticsPanel.reset();
+  if (pending) {
+    promptPanel.reset();
+    promptReloadPending = true;
+  } else if (promptReloadPending && hasModel) {
+    promptReloadPending = false;
+    if (!byId("prompt-view").hidden) promptPanel.activate();
+  }
   tensorListPanel.setBusy(pending);
   if (pending) byId("model-error").hidden = true;
   byId("load-progress").hidden = !pending;
@@ -2371,6 +2386,7 @@ window.addEventListener("message", (event) => {
   }
   if (
     tensorStatisticsPanel.handleMessage(event.data) ||
+    promptPanel.handleMessage(event.data) ||
     memoryPanel.handleMessage(event.data) ||
     exportPanel.handleMessage(event.data) ||
     filePanels.handleMessage(event.data) ||
@@ -2474,6 +2490,9 @@ window.addEventListener("message", (event) => {
     filePanels.reset();
     displayedGraph = event.data.graph;
     tensorListPanel.setGraph(displayedGraph);
+    promptReloadPending = false;
+    promptPanel.reset();
+    if (!byId("prompt-view").hidden) promptPanel.activate();
     tensorStatisticsPanel.reset();
     memoryPanel.setGraph(displayedGraph);
     fusionPanel.reset(

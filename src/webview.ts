@@ -43,6 +43,7 @@ export function webviewHtml(
           <button id="statistics-tab" role="tab" aria-controls="statistics-view" aria-selected="false" tabindex="-1">Statistics</button>
           <button id="memory-tab" role="tab" aria-controls="memory-view" aria-selected="false" tabindex="-1">Memory</button>
           <button id="tensors-tab" role="tab" aria-controls="tensors-view" aria-selected="false" tabindex="-1"><svg class="tensor-statistics-icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M4 3v17h17M8 16v-5m5 5V6m5 10V9"/></svg>Tensors</button>
+          <button id="prompt-tab" role="tab" aria-controls="prompt-view" aria-selected="false" tabindex="-1"><svg class="tensor-statistics-icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="m8 5 11 7-11 7Z"/></svg>Run Prompt</button>
         </div>
       </div>
       <div class="feature-group" role="presentation">
@@ -520,6 +521,27 @@ export function webviewHtml(
         <nav aria-label="Memory events"><button id="memory-previous" type="button" disabled>Previous</button><span id="memory-range" role="status"></span><button id="memory-next" type="button" disabled>Next</button></nav>
       </div>
     </section>
+    <section id="prompt-view" role="tabpanel" aria-labelledby="prompt-tab" tabindex="0" hidden>
+      <h1>Run Prompt</h1>
+      <p>Run a converted causal language model using the Python environment in Settings. The saved model on disk is used, not unsaved graph edits.</p>
+      <form id="prompt-form">
+        <fieldset id="prompt-fields" disabled>
+          <label for="prompt-engine">Engine</label>
+          <select id="prompt-engine"><option value="onnx-light">onnx-light</option><option value="onnxruntime-genai" disabled>onnxruntime-genai</option></select>
+          <label for="prompt-text">Prompt</label>
+          <textarea id="prompt-text" rows="3" required>The capital of France is</textarea>
+          <label for="prompt-max-tokens">Maximum new tokens</label>
+          <input id="prompt-max-tokens" type="number" min="1" max="4096" value="32" required>
+          <button type="submit">Run</button>
+        </fieldset>
+      </form>
+      <button id="prompt-cancel" type="button" hidden>Cancel</button>
+      <p id="prompt-status" role="status">Open a converted language model to run a prompt.</p>
+      <pre id="prompt-progress" hidden></pre>
+      <div id="prompt-results" aria-live="polite"></div>
+      <button id="prompt-validate" type="button" hidden>Validate with Hugging Face</button>
+      <p>Validation compares full vocabulary logits using the same generated token prefixes. Counts are absolute differences below each threshold; smaller distances are better.</p>
+    </section>
     <section id="tensors-view" role="tabpanel" aria-labelledby="tensors-tab" tabindex="0" hidden>
       <h2>Tensors</h2>
       <p>Dense, sparse and encoded initializers and constants in the displayed graph. Inputs and intermediate tensors without stored data are not listed. Highlighted rows belong to the selected operator or tensor. The model is not executed.</p>
@@ -863,6 +885,7 @@ export function webviewHtml(
   <script nonce="${nonce}" src="${resource("memory-panel.js")}"></script>
   <script nonce="${nonce}" src="${resource("tensor-list-panel.js")}"></script>
   <script nonce="${nonce}" src="${resource("tensor-statistics-panel.js")}"></script>
+  <script nonce="${nonce}" src="${resource("prompt-panel.js")}"></script>
   <script nonce="${nonce}" src="${resource("vendor/dagre.min.js")}"></script>
   <script nonce="${nonce}" src="${resource("graph-layout.js")}"></script>
   <script nonce="${nonce}" src="${resource("viewer.js")}"></script>

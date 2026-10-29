@@ -15,6 +15,8 @@ panel, update while running and remain visible after success, failure or cancell
    :width: 100%
 
    Conversion is a separate process; inspection never executes the exported graph.
+   For language models, explicitly select **Run Prompt** after conversion to
+   generate text and compare it with the original checkpoint.
 
 1. Trust the VS Code workspace and select your Python executable in **Settings**.
    Install the desired exporter and its dependencies in that environment yourself.
