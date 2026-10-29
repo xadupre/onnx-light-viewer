@@ -136,49 +136,51 @@ test("snapshot-style metadata symlinks remain available", async (t) => {
   ]);
 });
 
-test("native GenAI streams real tokens and measures prefill and each decode step without Python", async (t) => {
-  const { root, model } = await fixture(t);
-  const streamed = [];
-  const result = await runPrompt(
-    model,
-    { ...options, prompt: "HH" },
-    "/this/python/must/not/be/executed",
-    signal(),
-    () => {},
-    undefined,
-    (token, index) => streamed.push({ token, index }),
-  );
-  assert.deepEqual(
-    result.tokens.map((token) => token.id),
-    [1, 1, 1],
-  );
-  assert.deepEqual(
-    result.tokens.map((token) => token.score),
-    [4, 4, 4],
-  );
-  assert.ok(
-    result.tokens.every(
-      (token) => Number.isFinite(token.timeMs) && token.timeMs >= 0,
-    ),
-  );
-  assert.deepEqual(
-    streamed.map(({ token }) => token),
-    result.tokens,
-  );
-  assert.deepEqual(
-    streamed.map(({ index }) => index),
-    [0, 1, 2],
-  );
-  assert.match(result.signature, /^[0-9a-f]{64}$/);
-  assert.ok(result.lifecycle.loadMs >= 0);
-  assert.ok(result.lifecycle.warmupMs >= 0);
-  assert.equal(result.lifecycle.reused, false);
-  assert.equal(result.lifecycle.retained, false);
-  assert.equal(
-    (await readdir(root)).some((name) => name.startsWith(".prompt-")),
-    false,
-  );
-});
+for (const engine of ["onnx-light", "onnxruntime-genai"]) {
+  test(`native ${engine} streams real tokens and measures prefill and each decode step without Python`, async (t) => {
+    const { root, model } = await fixture(t);
+    const streamed = [];
+    const result = await runPrompt(
+      model,
+      { ...options, engine, prompt: "HH" },
+      "/this/python/must/not/be/executed",
+      signal(),
+      () => {},
+      undefined,
+      (token, index) => streamed.push({ token, index }),
+    );
+    assert.deepEqual(
+      result.tokens.map((token) => token.id),
+      [1, 1, 1],
+    );
+    assert.deepEqual(
+      result.tokens.map((token) => token.score),
+      [4, 4, 4],
+    );
+    assert.ok(
+      result.tokens.every(
+        (token) => Number.isFinite(token.timeMs) && token.timeMs >= 0,
+      ),
+    );
+    assert.deepEqual(
+      streamed.map(({ token }) => token),
+      result.tokens,
+    );
+    assert.deepEqual(
+      streamed.map(({ index }) => index),
+      [0, 1, 2],
+    );
+    assert.match(result.signature, /^[0-9a-f]{64}$/);
+    assert.ok(result.lifecycle.loadMs >= 0);
+    assert.ok(result.lifecycle.warmupMs >= 0);
+    assert.equal(result.lifecycle.reused, false);
+    assert.equal(result.lifecycle.retained, false);
+    assert.equal(
+      (await readdir(root)).some((name) => name.startsWith(".prompt-")),
+      false,
+    );
+  });
+}
 
 test("native sessions optionally retain, reuse, reconfigure and unload their model", async (t) => {
   for (const engine of ["onnx-light", "onnxruntime-genai"]) {
@@ -341,6 +343,24 @@ test("parallel loading/session settings use native SDK APIs and profiles exclude
   );
 });
 
+test("the released SDK owning loader reports missing external lengths without a fallback", async (t) => {
+  const { model } = await fixture(t, true, true);
+  await assert.rejects(
+    runPrompt(
+      model,
+      {
+        ...options,
+        engine: "onnx-light",
+        sessionSettings: { sdkLoader: true },
+      },
+      "/no/python",
+      signal(),
+      () => {},
+    ),
+    /requires explicit external tensor lengths/,
+  );
+});
+
 test("cancelling during initialization releases its model without closing the replacement", async (t) => {
   const { model } = await fixture(t);
   const session = new PromptSession();
@@ -381,39 +401,41 @@ test("cancelling during initialization releases its model without closing the re
   }
 });
 
-test("the first native token arrives before completion and cancellation stops the child", async (t) => {
-  const { root, model } = await fixture(t);
-  const controller = new AbortController();
-  let received = 0;
-  await assert.rejects(
-    runPrompt(
-      model,
-      { ...options, maxTokens: 4096 },
-      "/no/python",
-      controller.signal,
-      () => {},
-      undefined,
-      () => {
-        const request = readdirSync(root).find((name) =>
-          name.startsWith(".prompt-"),
-        );
-        assert.ok(request);
-        assert.equal(
-          existsSync(path.join(root, request, "output.json")),
-          false,
-        );
-        received++;
-        controller.abort();
-      },
-    ),
-    { name: "AbortError" },
-  );
-  assert.equal(received, 1);
-  assert.equal(
-    readdirSync(root).some((name) => name.startsWith(".prompt-")),
-    false,
-  );
-});
+for (const engine of ["onnx-light", "onnxruntime-genai"]) {
+  test(`the first ${engine} token arrives before completion and cancellation stops the child`, async (t) => {
+    const { root, model } = await fixture(t);
+    const controller = new AbortController();
+    let received = 0;
+    await assert.rejects(
+      runPrompt(
+        model,
+        { ...options, engine, maxTokens: 4096 },
+        "/no/python",
+        controller.signal,
+        () => {},
+        undefined,
+        () => {
+          const request = readdirSync(root).find((name) =>
+            name.startsWith(".prompt-"),
+          );
+          assert.ok(request);
+          assert.equal(
+            existsSync(path.join(root, request, "output.json")),
+            false,
+          );
+          received++;
+          controller.abort();
+        },
+      ),
+      { name: "AbortError" },
+    );
+    assert.equal(received, 1);
+    assert.equal(
+      readdirSync(root).some((name) => name.startsWith(".prompt-")),
+      false,
+    );
+  });
+}
 
 test("native incremental decoding preserves UTF-8 characters split across token IDs", async (t) => {
   const { root, model } = await fixture(t, true, true);
@@ -449,54 +471,146 @@ test("native incremental decoding preserves UTF-8 characters split across token 
   );
 });
 
-test("native onnx-light generation reports unavailable streaming, timings and logits honestly", async (t) => {
-  const { model } = await fixture(t);
-  const result = await runPrompt(
+test("native SDK snapshots preserve DOUBLE precision and decode FLOAT16/BFLOAT16 raw scores", async (t) => {
+  for (const dtype of ["DOUBLE", "FLOAT16", "BFLOAT16"])
+    await t.test(dtype, async (t) => {
+      const { model } = await fixture(t);
+      await execute(python, [
+        "-c",
+        `
+import struct, sys
+import onnx_light.onnx as onnx
+import onnx_light.onnx.helper as oh
+from onnx_light.onnx import TensorProto as T
+model = onnx.load(sys.argv[1])
+dtype = getattr(T, sys.argv[2])
+if dtype == T.DOUBLE:
+    model.graph.initializer[0].data_type = dtype
+    model.graph.initializer[0].raw_data = struct.pack("<16d", *([0, 4.0000000001, 0, 0] * 4))
+else:
+    model.graph.node[0].output.clear()
+    model.graph.node[0].output.append("float_logits")
+    model.graph.node.append(oh.make_node("Cast", ["float_logits"], ["logits"], to=dtype))
+model.graph.output[0].type.tensor_type.elem_type = dtype
+onnx.save(model, sys.argv[1])
+`,
+        model,
+        dtype,
+      ]);
+      const result = await runPrompt(
+        model,
+        { ...options, engine: "onnx-light" },
+        "/no/python",
+        signal(),
+        () => {},
+      );
+      assert.deepEqual(
+        result.tokens.map((token) => token.score),
+        Array(3).fill(dtype === "DOUBLE" ? 4.0000000001 : 4),
+      );
+      assert.ok(result.tokens.every((token) => token.timeMs >= 0));
+      assert.equal(result.limitations, undefined);
+    });
+});
+
+test("SDK observation retains pipeline input/output names, EOS and unsupported-settings errors", async (t) => {
+  const { root, model } = await fixture(t);
+  const pipeline = path.join(root, "named.pipe-onnx");
+  await writeFile(
+    path.join(root, "config.json"),
+    JSON.stringify({ architectures: ["GPT2LMHeadModel"] }),
+  );
+  await execute(python, [
+    "-c",
+    `
+import sys
+import onnx_light.onnx as onnx
+from onnx_light.onnx import PipelineProto
+model = onnx.load(sys.argv[1])
+model.graph.input[0].name = "tokens"
+model.graph.node[0].input.clear()
+model.graph.node[0].input.extend(["weights", "tokens"])
+model.graph.output[0].name = "prediction"
+model.graph.node[0].output.clear()
+model.graph.node[0].output.append("prediction")
+pipeline = PipelineProto(prefill=model, input_ids_name="tokens", logits_name="prediction",
+                         eos_token_id=1, pad_token_id=2, seed=7)
+with open(sys.argv[2], "wb") as stream: stream.write(pipeline.SerializeToString())
+pipeline.top_k = 1
+with open(sys.argv[3], "wb") as stream: stream.write(pipeline.SerializeToString())
+`,
     model,
+    pipeline,
+    path.join(root, "unsupported.pipe-onnx"),
+  ]);
+  const streamed = [];
+  const result = await runPrompt(
+    pipeline,
     { ...options, engine: "onnx-light" },
     "/no/python",
     signal(),
     () => {},
+    undefined,
+    (token) => streamed.push(token),
   );
   assert.deepEqual(
     result.tokens.map((token) => token.id),
-    [1, 1, 1],
+    [1],
   );
-  assert.ok(
-    result.tokens.every(
-      (token) => token.score === null && token.timeMs === null,
+  assert.deepEqual(
+    result.tokens.map((token) => token.score),
+    [4],
+  );
+  assert.deepEqual(streamed, result.tokens);
+  assert.ok(result.tokens[0].timeMs >= 0);
+  await assert.rejects(
+    runPrompt(
+      path.join(root, "unsupported.pipe-onnx"),
+      { ...options, engine: "onnx-light" },
+      "/no/python",
+      signal(),
+      () => {},
     ),
+    /top-k/,
   );
-  assert.match(result.limitations.join(" "), /upstream SDK.*5692/);
 });
 
-test("native raw scores and timings survive the bounded vocabulary capture limit", async (t) => {
-  const { root, model } = await fixture(t);
-  const input = path.join(root, "input.json");
-  const output = path.join(root, "output.json");
-  const capturePath = path.join(root, "capture.json");
-  await writeFile(
-    input,
-    JSON.stringify({
-      ...options,
-      modelPath: model,
-      source: root,
-      capturePath,
-      captureBudget: 0,
-    }),
-  );
-  await execute(
-    process.execPath,
-    [path.resolve(__dirname, "../media/run_prompt.cjs"), input, output],
-    { env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" } },
-  );
-  const result = JSON.parse(await readFile(output, "utf8"));
-  assert.ok(
-    result.tokens.every((token) => token.score === 4 && token.timeMs >= 0),
-  );
-  assert.match(result.limitations.join(" "), /retention budget/);
-  assert.equal(JSON.parse(await readFile(capturePath, "utf8")).logits, null);
-});
+for (const [engine, captureBudget, expectedScores] of [
+  ["onnx-light", 0, [null, null, null]],
+  ["onnx-light", 32, [4, 4, null]],
+  ["onnxruntime-genai", 0, [4, 4, 4]],
+]) {
+  test(`${engine} timings survive the ${captureBudget}-byte vocabulary capture limit`, async (t) => {
+    const { root, model } = await fixture(t);
+    const input = path.join(root, "input.json");
+    const output = path.join(root, "output.json");
+    const capturePath = path.join(root, "capture.json");
+    await writeFile(
+      input,
+      JSON.stringify({
+        ...options,
+        engine,
+        modelPath: model,
+        source: root,
+        capturePath,
+        captureBudget,
+      }),
+    );
+    await execute(
+      process.execPath,
+      [path.resolve(__dirname, "../media/run_prompt.cjs"), input, output],
+      { env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" } },
+    );
+    const result = JSON.parse(await readFile(output, "utf8"));
+    assert.deepEqual(
+      result.tokens.map((token) => token.score),
+      expectedScores,
+    );
+    assert.ok(result.tokens.every((token) => token.timeMs >= 0));
+    assert.match(result.limitations.join(" "), /retention budget/);
+    assert.equal(JSON.parse(await readFile(capturePath, "utf8")).logits, null);
+  });
+}
 
 test("native runtime and model failures surface without falling back to Python", async (t) => {
   const { root, model } = await fixture(t);
@@ -691,35 +805,37 @@ class AutoModelForCausalLM:
     if (previousPath === undefined) delete process.env.PYTHONPATH;
     else process.env.PYTHONPATH = previousPath;
   });
-  const previous = await runPrompt(
-    model,
-    options,
-    "/no/python",
-    signal(),
-    () => {},
-  );
-  const validated = await runPrompt(
-    model,
-    { ...options, validate: true },
-    python,
-    signal(),
-    () => {},
-    previous,
-  );
-  assert.deepEqual(validated.tokens, previous.tokens);
-  assert.ok(validated.reference.loadMs >= 0);
-  assert.ok(validated.reference.warmupMs >= 0);
-  assert.deepEqual(validated.lifecycle, previous.lifecycle);
-  assert.deepEqual(
-    validated.reference.tokens.map((token) => token.id),
-    [2, 2, 2],
-  );
-  assert.ok(validated.reference.tokens.every((token) => token.timeMs >= 0));
-  assert.ok(
-    validated.discrepancies.every(
-      (metric) => metric.maxAbsolute === 4 && metric.total === 4,
-    ),
-  );
+  for (const engine of ["onnx-light", "onnxruntime-genai"]) {
+    const previous = await runPrompt(
+      model,
+      { ...options, engine },
+      "/no/python",
+      signal(),
+      () => {},
+    );
+    const validated = await runPrompt(
+      model,
+      { ...options, engine, validate: true },
+      python,
+      signal(),
+      () => {},
+      previous,
+    );
+    assert.deepEqual(validated.tokens, previous.tokens);
+    assert.ok(validated.reference.loadMs >= 0);
+    assert.ok(validated.reference.warmupMs >= 0);
+    assert.deepEqual(validated.lifecycle, previous.lifecycle);
+    assert.deepEqual(
+      validated.reference.tokens.map((token) => token.id),
+      [2, 2, 2],
+    );
+    assert.ok(validated.reference.tokens.every((token) => token.timeMs >= 0));
+    assert.ok(
+      validated.discrepancies.every(
+        (metric) => metric.maxAbsolute === 4 && metric.total === 4,
+      ),
+    );
+  }
 });
 
 test("numerical comparison covers all vocabulary entries and strict threshold boundaries", async () => {

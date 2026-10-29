@@ -144,14 +144,17 @@ L2 distance, and counts of vocabulary coefficients with absolute differences
 below 0.01, 0.1 and 1. Runtime errors are shown without substituting another
 engine; **Cancel** stops execution.
 
-With **onnxruntime-genai**, token columns appear as soon as the C++ engine
-produces them. Each column includes its phase and latency in milliseconds.
+With either **onnx-light** or **onnxruntime-genai**, token columns appear as soon
+as the C++ engine produces them. Each column includes its phase and latency in milliseconds.
 The first token is **Prefill**; subsequent tokens are **Decode**. The summary
 shows prefill time and the mean of decode tokens only; a one-token result has
 no decode mean. Hugging Face validation also reports per-token timings, using
 the prompt once and the exported token prefixes with its decode cache thereafter.
-Timings include inference and CPU logit transfer, but exclude loading,
-tokenization, detokenization, retained-logit serialization and UI rendering.
+GenAI timings include inference and CPU logit transfer. onnx-light's SDK observer
+measures per-iteration input preparation, embedding execution, inference and token
+selection; it excludes per-call session construction, snapshot copying and callback
+work. Neither engine includes loading, tokenization, detokenization, retained-logit
+serialization or UI rendering in these token timings.
 
 **Model loading** and **warmup** have separate timings. On each new native
 session, warmup uses the first prompt token alone and generates one token;
@@ -181,7 +184,7 @@ For **parallel loading**, select onnx-light's **SDK owning loader**, then
 configure read/preparation overlap and its admission memory limit. One SDK I/O
 worker overlaps preparation on the CPU executor; CPU threads also apply to
 preparation. Standard ONNX loading remains the default. The owning loader
-currently requires explicit external-data lengths
+still requires explicit external-data lengths in the published 0.2.2 SDK
 (`xadupre/onnx-light#5697 <https://github.com/xadupre/onnx-light/issues/5697>`_)
 and does not accept pipelines
 (`xadupre/onnx-light#5698 <https://github.com/xadupre/onnx-light/issues/5698>`_).
@@ -192,13 +195,22 @@ separate parallel weight-reader thread count. Parallel graph execution is not
 parallel loading. Profiles add overhead and are written under
 ``.prompt-profiles`` beside the model; unload GenAI to finalize its profile.
 
-The onnx-light C++ ``Generate`` API currently returns completed token IDs only.
-Streaming, individual token timings, scores and discrepancy metrics are explicitly
-unavailable, not estimated by dividing the total runtime. These capabilities are
-tracked in `xadupre/onnx-light#5692
-<https://github.com/xadupre/onnx-light/issues/5692>`_.
+onnx-light 0.2.2 uses the SDK's synchronous ``GenerationOptions.on_step`` observer
+for live tokens, genuine per-token timings and bounded raw last-position logits.
+FLOAT, DOUBLE, FLOAT16 and BFLOAT16 outputs support raw scores and the same
+token-aligned HF vocabulary comparisons as GenAI. If the capture budget is
+exhausted, tokens and timings continue, while unavailable scores/comparisons are
+identified explicitly. No timings are estimated by dividing the total runtime.
+Multiple EOS IDs remain unsupported by the SDK
+(`xadupre/onnx-light#5694 <https://github.com/xadupre/onnx-light/issues/5694>`_).
 Native pipeline generation uses the SDK's ``PipelineProto`` overload; unsupported
 stages or inputs fail explicitly, without a viewer-side generation loop.
+
+.. figure:: _static/feature-run-prompt-light.png
+   :alt: Run Prompt with native onnx-light output columns, raw scores, individual prefill and decode times and their decode mean.
+   :width: 100%
+
+   Live SDK observations on a tiny deterministic test model, not an LLM benchmark.
 
 .. figure:: _static/feature-run-prompt.png
    :alt: Run Prompt with native GenAI output columns, prefill and decode phases, individual token times and the decode mean.

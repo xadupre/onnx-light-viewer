@@ -8,11 +8,13 @@
 #include <limits>
 #include <memory>
 #include <onnx_core/runtime/generation.h>
+#include <onnx_core/runtime/kernels/cast_helper.h>
 #include <onnx_core/runtime/runtime_session_loader.h>
 #include <onnx_proto/onnx_helper.h>
 #include <ort_genai_c.h>
 #include <set>
 #include <stdexcept>
+#include <type_traits>
 #include <uv.h>
 
 namespace onnx_light_viewer {
@@ -290,7 +292,9 @@ public:
   }
 
   std::vector<int64_t> LightTokens(const std::vector<int32_t> &prompt, int64_t maximum,
-                                   std::optional<int64_t> eos) {
+                                   std::optional<int64_t> eos,
+                                   rt::GenerationStepCallback on_step = {},
+                                   size_t logit_budget = 0) {
     rt::GenerationOptions options;
     options.max_new_tokens = maximum;
     options.temperature = 0;
@@ -298,6 +302,18 @@ public:
     if (pipeline) {
       if (pipeline->has_input_ids_name())
         options.input_ids_name = pipeline->input_ids_name();
+      if (pipeline->has_logits_name())
+        options.logits_name = pipeline->logits_name();
+      if (pipeline->has_attention_mask_name())
+        options.attention_mask_name = pipeline->attention_mask_name();
+      if (pipeline->has_position_ids_name())
+        options.position_ids_name = pipeline->position_ids_name();
+      if (pipeline->has_seed())
+        options.seed = static_cast<uint64_t>(pipeline->seed());
+      if (pipeline->has_pad_token_id())
+        options.pad_token_id = pipeline->pad_token_id();
+      if (!eos && pipeline->has_eos_token_id())
+        options.eos_token_id = pipeline->eos_token_id();
       pipeline->set_max_new_tokens(maximum);
       pipeline->set_temperature(0);
       if (eos)
@@ -310,9 +326,15 @@ public:
     feeds.emplace(
         options.input_ids_name,
         rt::Tensor::FromInt64(options.input_ids_name, {1, static_cast<int64_t>(ids.size())}, ids));
-    const auto generated = pipeline ? rt::Generate(*pipeline, *context, feeds, session_options)
-                                    : rt::Generate(loaded ? loaded->model() : *plain_model,
-                                                   *context, feeds, options, session_options);
+    // Warmup validates descriptor settings through the SDK; explicit options attach observation.
+    const bool observe = static_cast<bool>(on_step);
+    options.on_step = std::move(on_step);
+    options.max_logit_bytes = logit_budget;
+    const auto generated =
+        pipeline ? (observe ? rt::Generate(*pipeline, *context, feeds, options, session_options)
+                            : rt::Generate(*pipeline, *context, feeds, session_options))
+                 : rt::Generate(loaded ? loaded->model() : *plain_model, *context, feeds, options,
+                                session_options);
     if (generated.data_type != ol::TensorProto::INT64 || generated.shape.size() != 2 ||
         generated.shape[0] != 1 || generated.shape[1] < static_cast<int64_t>(prompt.size()) ||
         generated.shape[1] - static_cast<int64_t>(prompt.size()) > maximum)
@@ -467,7 +489,7 @@ Napi::Value RunNativePrompt(const Napi::CallbackInfo &info) {
     auto logits = Napi::Array::New(env);
     bool capture = true;
     size_t captured = 0;
-    const auto append = [&](int64_t id, const float *row, size_t vocabulary,
+    const auto append = [&](int64_t id, const auto *row, size_t vocabulary,
                             std::optional<double> elapsed) {
       if (id < 0 || id > std::numeric_limits<int32_t>::max() ||
           (row && static_cast<size_t>(id) >= vocabulary))
@@ -481,6 +503,10 @@ Napi::Value RunNativePrompt(const Napi::CallbackInfo &info) {
       token.Set("id", Napi::Number::New(env, id));
       token.Set("score", row ? Napi::Value(Napi::Number::New(env, row[id])) : env.Null());
       token.Set("timeMs", elapsed ? Napi::Value(Napi::Number::New(env, *elapsed)) : env.Null());
+      if (!row) {
+        capture = false;
+        logits = Napi::Array::New(env);
+      }
       if (row && capture) {
         // Include the typed capture, its JSON conversion and worst-case numeric text.
         if (vocabulary > (static_cast<size_t>(budget) - captured) / 40) {
@@ -488,10 +514,11 @@ Napi::Value RunNativePrompt(const Napi::CallbackInfo &info) {
           logits = Napi::Array::New(env);
         } else {
           captured += vocabulary * 40;
-          if (!std::all_of(row, row + vocabulary, [](float value) { return std::isfinite(value); }))
+          if (!std::all_of(row, row + vocabulary, [](auto value) { return std::isfinite(value); }))
             throw std::runtime_error("The native engine returned non-finite vocabulary logits.");
-          auto values = Napi::Float32Array::New(env, vocabulary);
-          std::memcpy(values.Data(), row, vocabulary * sizeof(float));
+          using Value = std::remove_cv_t<std::remove_pointer_t<decltype(row)>>;
+          auto values = Napi::TypedArrayOf<Value>::New(env, vocabulary);
+          std::memcpy(values.Data(), row, vocabulary * sizeof(Value));
           logits.Set(tokens.Length(), values);
         }
       }
@@ -500,9 +527,44 @@ Napi::Value RunNativePrompt(const Napi::CallbackInfo &info) {
       info[1].As<Napi::Function>().Call({token, Napi::Number::New(env, index)});
     };
     if (engine == "onnx-light") {
-      for (auto id : owner->LightTokens(prompt, maximum, eos))
-        append(id, nullptr, 0, std::nullopt);
-      result.Set("logits", env.Null());
+      owner->LightTokens(
+          prompt, maximum, eos,
+          [&](const rt::GenerationStep &step) {
+            if (step.token_ids.size() != 1)
+              throw std::runtime_error("Expected one generated token from the SDK observer.");
+            const auto elapsed =
+                std::chrono::duration<double, std::milli>(step.completed_at - step.started_at)
+                    .count();
+            const auto id = step.token_ids.front();
+            if (!step.raw_logits) {
+              append(id, static_cast<const float *>(nullptr), 0, elapsed);
+              return true;
+            }
+            const auto &row = *step.raw_logits;
+            if (row.shape.size() != 2 || row.shape[0] != 1 || row.shape[1] <= 0 ||
+                row.shape[1] > std::numeric_limits<uint32_t>::max())
+              throw std::runtime_error("Expected one SDK last-position vocabulary row.");
+            const auto vocabulary = static_cast<size_t>(row.shape[1]);
+            if (row.data_type == ol::TensorProto::FLOAT)
+              append(id, row.AsFloat(), vocabulary, elapsed);
+            else if (row.data_type == ol::TensorProto::DOUBLE)
+              append(id, row.AsDouble(), vocabulary, elapsed);
+            else if (row.data_type == ol::TensorProto::FLOAT16 ||
+                     row.data_type == ol::TensorProto::BFLOAT16) {
+              std::vector<float> values(vocabulary);
+              for (size_t index = 0; index < vocabulary; ++index) {
+                uint16_t bits;
+                std::memcpy(&bits, row.bytes() + index * sizeof(bits), sizeof(bits));
+                values[index] = row.data_type == ol::TensorProto::FLOAT16
+                                    ? rt::Float16BitsToFloat(bits)
+                                    : rt::Bfloat16BitsToFloat(bits);
+              }
+              append(id, values.data(), vocabulary, elapsed);
+            } else
+              throw std::runtime_error("The SDK returned an unsupported generation logit dtype.");
+            return true;
+          },
+          static_cast<size_t>(budget));
       auto events = Napi::Array::New(env);
       for (const auto &event : owner->context->TakeEvents()) {
         if (event.action != rt::RuntimeEventAction::kRunNode)
@@ -516,8 +578,8 @@ Napi::Value RunNativePrompt(const Napi::CallbackInfo &info) {
       result.Set("profileEvents", events);
     } else {
       owner->GenaiTokens(prompt, maximum, append);
-      result.Set("logits", capture ? Napi::Value(logits) : env.Null());
     }
+    result.Set("logits", capture ? Napi::Value(logits) : env.Null());
     result.Set("tokens", tokens);
     result.Set("lifecycle", lifecycle);
     if (!request.Get("keepLoaded").ToBoolean())

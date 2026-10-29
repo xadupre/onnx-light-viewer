@@ -322,7 +322,7 @@ test("prompt cancellation and model replacement reject stale results and errors"
   assert.equal(byId("prompt-fields").disabled, true);
 });
 
-test("SDK score limitations are explicit rather than fabricated", (t) => {
+test("SDK capture limits preserve timings without fabricating raw scores", (t) => {
   const { dom, byId, api, messages } = panel(t);
   byId("prompt-form").dispatchEvent(new dom.window.Event("submit"));
   api.handleMessage({
@@ -330,10 +330,10 @@ test("SDK score limitations are explicit rather than fabricated", (t) => {
     requestId: messages.at(-1).requestId,
     result: {
       prompt: "Hello",
-      tokens: [{ text: " world", id: 1, score: null }],
-      limitations: ["The SDK does not expose generation logits."],
+      tokens: [{ text: " world", id: 1, score: null, timeMs: 0.1 }],
+      limitations: ["The SDK logit snapshot budget was exhausted."],
     },
   });
   assert.match(byId("prompt-results").textContent, /Unavailable \(SDK\)/);
-  assert.match(byId("prompt-results").textContent, /does not expose/);
+  assert.match(byId("prompt-results").textContent, /snapshot budget/);
 });

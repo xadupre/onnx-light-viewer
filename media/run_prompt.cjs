@@ -86,16 +86,13 @@ function run(input, output, sessionKey) {
         { flag: "wx", mode: 0o600 },
       );
   }
-  if (request.engine === "onnx-light")
-    result.limitations = [
-      "onnx-light Generate returns completed token IDs only: per-token streaming, " +
-        "timings, raw scores and vocabulary comparisons require an upstream SDK " +
-        "generation observer (xadupre/onnx-light#5692).",
-    ];
-  else if (capture.logits === null)
+  if (capture.logits === null)
     result.limitations = [
       "Vocabulary logits exceeded the retention budget; discrepancy metrics " +
-        "are unavailable. Selected raw scores and token timings remain available.",
+        "are unavailable. Token timings remain available. " +
+        (request.engine === "onnx-light"
+          ? "Raw scores are unavailable for steps without an SDK logit snapshot."
+          : "Selected raw scores remain available."),
     ];
   writeFileSync(
     request.capturePath,

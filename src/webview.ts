@@ -523,7 +523,7 @@ export function webviewHtml(
     </section>
     <section id="prompt-view" role="tabpanel" aria-labelledby="prompt-tab" tabindex="0" hidden>
       <h1>Run Prompt</h1>
-      <p>Run a converted causal language model with native C++ engines. GenAI displays tokens as they arrive, with prefill and decode timings. Python in Settings is used only for Hugging Face validation. The saved model on disk is used, not unsaved graph edits.</p>
+      <p>Run a converted causal language model with native C++ engines. Both engines display tokens as they arrive, with prefill and decode timings and raw scores. Python in Settings is used only for Hugging Face validation. The saved model on disk is used, not unsaved graph edits.</p>
       <div id="prompt-run-page">
       <button id="prompt-settings-open" type="button">Session settings</button>
       <form id="prompt-form">
