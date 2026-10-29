@@ -1847,6 +1847,24 @@ button:disabled {
   align-items: center;
 }
 
+.history-pipeline-status {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  color: var(--muted);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.path-history li:has(.history-pipeline-status) {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+}
+.path-history [data-load-pipeline] {
+  grid-column: 1 / -1;
+  grid-row: 3;
+  justify-self: start;
+}
+
 #prompt-results {
   overflow-x: auto;
   margin-block: 1rem;

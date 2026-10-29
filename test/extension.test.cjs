@@ -1844,6 +1844,73 @@ test("publishes repository file sizes after search results without downloading m
   extension.dispose();
 });
 
+test("history pipeline inspection preserves history and assembles Mobius through the local open action", async (t) => {
+  const directory = await mkdtemp(
+    path.join(tmpdir(), "onnx-viewer-history-pipeline-"),
+  );
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const { promptModel } = require("./helpers/prompt-model.cjs");
+  const model = await promptModel(directory, true);
+  await writeFile(
+    `${model}.provenance.json`,
+    JSON.stringify({
+      version: 1,
+      exporter: "mobius",
+      model: "owner/model",
+      source: directory,
+    }),
+  );
+  const history = {
+    open: [{ source: "local", kind: "file", path: model }],
+    save: [],
+  };
+  const preferences = new Map([["pathHistory", history]]);
+  const extension = await openExtension(
+    undefined,
+    undefined,
+    true,
+    undefined,
+    undefined,
+    preferences,
+  );
+  t.after(() => extension.dispose());
+  await extension.receive({
+    type: "prompt-pipeline-history",
+    requestId: 1,
+    paths: [model],
+  });
+  assert.equal(extension.messages.at(-1).entries[0].available, true);
+  assert.deepEqual(preferences.get("pathHistory"), history);
+  await extension.receive({
+    type: "prompt-pipeline-history",
+    requestId: 2,
+    paths: [path.join(directory, "not-in-history.onnx")],
+  });
+  assert.match(extension.messages.at(-1).error, /Invalid pipeline history/);
+  const open = {
+    type: "open",
+    source: "local",
+    location: model,
+    password: "",
+    asPipeline: true,
+  };
+  extension.setTrusted(false);
+  await extension.receive(open);
+  assert.match(extension.messages.at(-1).error, /Trust this workspace/);
+  assert.deepEqual(preferences.get("pathHistory"), history);
+  extension.setTrusted(true);
+  await extension.receive(open);
+  assert.ok(extension.messages.some(({ type }) => type === "show-prompt"));
+  const graph = extension.messages.findLast(({ type }) => type === "graph");
+  assert.deepEqual(
+    graph.graph.nodes.map((node) => node.name),
+    ["prefill"],
+  );
+  const pipeline = preferences.get("pathHistory").open[0].path;
+  assert.match(pipeline, /viewer-.*\.pipe-onnx$/);
+  assert.ok((await stat(pipeline)).isFile());
+});
+
 test("remembers only successful Open and Save paths and supports persistent removal and clearing", async (t) => {
   const directory = await mkdtemp(
     path.join(tmpdir(), "onnx-viewer-path-history-"),

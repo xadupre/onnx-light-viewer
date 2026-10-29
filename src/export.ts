@@ -393,6 +393,7 @@ export interface ExportProvenance {
   source?: string;
   revision?: string;
   exporter: string;
+  packageDirectory?: string;
 }
 
 export const provenancePath = (model: string): string =>
@@ -416,7 +417,10 @@ export async function readProvenance(
       typeof value.exporter !== "string" ||
       ("source" in value &&
         (typeof value.source !== "string" || !isAbsolute(value.source))) ||
-      ("revision" in value && typeof value.revision !== "string")
+      ("revision" in value && typeof value.revision !== "string") ||
+      ("packageDirectory" in value &&
+        (typeof value.packageDirectory !== "string" ||
+          !isAbsolute(value.packageDirectory)))
     )
       throw new Error("Invalid model provenance.");
     return value as ExportProvenance;
@@ -1175,6 +1179,7 @@ export async function runExport(
         ? { revision: basename(plan.model) }
         : {}),
     exporter: plan.exporter,
+    ...(plan.exporter === "mobius" ? { packageDirectory: plan.directory } : {}),
   };
   for (const model of models) {
     signal.throwIfAborted();

@@ -3443,6 +3443,127 @@ test("suggests remembered paths without submitting forms and supports per-entry 
   );
 });
 
+test("history checks generation assets without reopening or reordering and offers a distinct pipeline action", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  load(demoGraph);
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  const entry = {
+    source: "local",
+    kind: "file",
+    path: "/exports/decoder/model.onnx",
+  };
+  const history = { open: [entry], save: [] };
+  send({ type: "path-history", history });
+  assert.equal(
+    messages.some(({ type }) => type === "prompt-pipeline-history"),
+    false,
+  );
+  document.getElementById("open-model").click();
+  const first = messages.findLast(
+    ({ type }) => type === "prompt-pipeline-history",
+  );
+  assert.deepEqual(Array.from(first.paths), [entry.path]);
+  assert.match(
+    document.getElementById("open-history-entries").textContent,
+    /Checking pipeline assets/,
+  );
+  send({ type: "path-history", history });
+  const current = messages.findLast(
+    ({ type }) => type === "prompt-pipeline-history",
+  );
+  send({
+    type: "prompt-pipeline-history",
+    requestId: first.requestId,
+    entries: [{ path: entry.path, available: true, label: "Stale result" }],
+  });
+  assert.equal(document.querySelector("[data-load-pipeline]"), null);
+  send({
+    type: "prompt-pipeline-history",
+    requestId: current.requestId,
+    entries: [
+      {
+        path: entry.path,
+        available: true,
+        label: "Mobius: generation pipeline can be assembled",
+      },
+    ],
+  });
+  document.querySelector("#open-history-entries button").click();
+  assert.equal(document.getElementById("open-file").value, entry.path);
+  assert.equal(
+    messages.some(
+      ({ type }) => type === "open" || type === "path-history-edit",
+    ),
+    false,
+  );
+  const button = document.querySelector("[data-load-pipeline]");
+  assert.equal(button.textContent, "Load as pipeline");
+  button.click();
+  const requests = messages.filter(({ type }) => type === "open");
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].asPipeline, true);
+  assert.equal(requests[0].location, entry.path);
+  assert.equal(requests[0].source, "local");
+  assert.equal(button.disabled, true);
+  button.click();
+  assert.equal(messages.filter(({ type }) => type === "open").length, 1);
+  send({
+    type: "log-entry",
+    entry: {
+      id: requests[0].actionId,
+      timestamp: new Date().toISOString(),
+      action: "Load generation pipeline",
+      status: "SUCCEEDED",
+    },
+  });
+  load(demoGraph);
+  send({ type: "show-prompt" });
+  assert.equal(document.getElementById("prompt-view").hidden, false);
+  assert.equal(document.activeElement.id, "prompt-tab");
+  assert.equal(messages.at(-1).type, "prompt-info");
+});
+
+test("history displays why a pipeline is unavailable and ignores inspection after closing", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  load(demoGraph);
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  const entry = {
+    source: "local",
+    kind: "file",
+    path: "/exports/embedding/model.onnx",
+  };
+  send({ type: "path-history", history: { open: [entry], save: [] } });
+  document.getElementById("open-model").click();
+  const request = messages.findLast(
+    ({ type }) => type === "prompt-pipeline-history",
+  );
+  send({
+    type: "prompt-pipeline-history",
+    requestId: request.requestId,
+    entries: [
+      {
+        path: entry.path,
+        available: false,
+        label: "Mobius: Separate embedding model is missing.",
+      },
+    ],
+  });
+  assert.match(
+    document.getElementById("open-history-entries").textContent,
+    /embedding model is missing/,
+  );
+  assert.equal(document.querySelector("[data-load-pipeline]"), null);
+  document.getElementById("cancel-open").click();
+  send({
+    type: "prompt-pipeline-history",
+    requestId: request.requestId,
+    entries: [{ path: entry.path, available: true, label: "Stale" }],
+  });
+  assert.equal(document.querySelector("[data-load-pipeline]"), null);
+});
+
 test("shows real download progress, handles unknown totals and ignores stale operation updates", (t) => {
   const { document, window, messages, load } = openViewer(t);
   load(demoGraph);

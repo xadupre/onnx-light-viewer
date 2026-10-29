@@ -38,6 +38,22 @@ dialog for paths outside the workspace.
 
    Choose how to fill Model path without loading a model.
 
+**Recent paths** checks local files for generation assets without loading weights
+or running inference. Mobius exports show whether a pipeline can be assembled,
+or explain missing assets and unsupported input contracts. **Load as pipeline**
+creates a native ``PipelineProto`` beside the export, reusing external weights
+and leaving the original models unchanged, then opens **Run Prompt**. Separate
+embedding/decoder exports and declared past/present caches are connected in C++;
+onnx-light owns generation and cache feedback. Existing pipelines can be opened
+directly. Inspection does not reorder history; only a successful open does.
+These checks do not certify runtime operator support.
+
+.. figure:: _static/feature-history-pipeline.png
+   :alt: Recent local paths with a checked Mobius export and its Load as pipeline button.
+   :width: 100%
+
+   Identify a usable export before loading it; this screenshot uses a tiny test model.
+
 Backend catalog
 ^^^^^^^^^^^^^^^
 

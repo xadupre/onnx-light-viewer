@@ -2407,6 +2407,8 @@ window.addEventListener("message", (event) => {
       sidebar.restoreSettings(event.data.viewer);
   } else if (event.data?.type === "log-entry") {
     displayLog(event.data.entry);
+  } else if (event.data?.type === "show-prompt") {
+    showTab("prompt", true);
   } else if (event.data?.type === "log-history") {
     for (const entry of event.data.entries) displayLog(entry);
     const panel = byId("logs-view");

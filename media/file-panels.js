@@ -51,6 +51,29 @@ function createFilePanels({
   });
   byId("hf-task").addEventListener("change", searchHub);
   let pathHistory = { open: [], save: [] };
+  let pipelineRequest = 0;
+  const pipelineInfo = new Map();
+  function checkPipelines() {
+    const requestId = ++pipelineRequest;
+    if (openSource !== "local" || byId("open-panel").hidden) return;
+    const paths = pathHistory.open
+      .filter((entry) => entry.source === "local" && entry.kind === "file")
+      .map((entry) => entry.path);
+    if (paths.length) {
+      for (const path of paths)
+        if (!pipelineInfo.has(path))
+          pipelineInfo.set(path, {
+            available: false,
+            label: "Checking pipeline assets…",
+          });
+      renderHistory();
+      postMessage({
+        type: "prompt-pipeline-history",
+        requestId,
+        paths,
+      });
+    }
+  }
   function renderHistory() {
     for (const target of ["open", "save"]) {
       const source = target === "open" ? openSource : "local";
@@ -104,7 +127,43 @@ function createFilePanels({
               historyEntry: entry,
             }),
           );
-          item.append(choose, remove);
+          item.append(choose);
+          if (
+            target === "open" &&
+            source === "local" &&
+            entry.kind === "file"
+          ) {
+            const info = pipelineInfo.get(entry.path);
+            const status = document.createElement("span");
+            status.className = "history-pipeline-status";
+            status.textContent =
+              info?.label ?? "Generation pipeline not checked yet";
+            status.title =
+              "Checks exported assets and graph inputs without running inference. Runtime operator support is checked when running the prompt.";
+            item.append(status);
+            if (info?.available) {
+              const load = document.createElement("button");
+              load.type = "button";
+              load.dataset.loadPipeline = "";
+              load.textContent = "Load as pipeline";
+              load.setAttribute(
+                "aria-label",
+                `Load ${entry.path} as generation pipeline`,
+              );
+              load.disabled = isReplacing();
+              load.addEventListener("click", () => {
+                if (isReplacing()) return;
+                requestAction("open", "Load generation pipeline", {
+                  source: "local",
+                  location: entry.path,
+                  password: "",
+                  asPipeline: true,
+                });
+              });
+              item.append(load);
+            }
+          }
+          item.append(remove);
           return item;
         }),
       );
@@ -189,11 +248,13 @@ function createFilePanels({
       revealPanel(panel);
       if (target === "save" || openSource === "backend") browseFiles(target);
       else if (openSource === "huggingface") searchHub();
+      else checkPipelines();
     } else {
       if (target === "open") {
         closePathBrowser();
         invalidateNativePicker();
         invalidateHubSearch();
+        pipelineRequest++;
       }
       fileRequests[target]++;
       byId(`${target}-files`).setAttribute("aria-busy", "false");
@@ -269,6 +330,7 @@ function createFilePanels({
     byId("open-files").setAttribute("aria-busy", "false");
     byId("open-parent").disabled = true;
     renderHistory();
+    checkPipelines();
     byId("open-browse").hidden = source === "backend";
     if (source === "backend") browseFiles("open");
     else if (hub) searchHub();
@@ -446,9 +508,20 @@ function createFilePanels({
           return item;
         }),
       );
+    } else if (data?.type === "prompt-pipeline-history") {
+      if (data.requestId !== pipelineRequest) return true;
+      if (data.error) {
+        byId("open-error").textContent = data.error;
+      } else {
+        for (const entry of data.entries) pipelineInfo.set(entry.path, entry);
+        renderHistory();
+      }
+      return true;
     } else if (data?.type === "path-history") {
       pathHistory = data.history;
+      pipelineInfo.clear();
       renderHistory();
+      checkPipelines();
     } else if (data?.type === "file-list" || data?.type === "file-list-error") {
       if (
         !["open", "save"].includes(data.target) ||
@@ -617,6 +690,10 @@ function createFilePanels({
     byId("open-submit").disabled = pending;
     byId("open-path-browse").disabled = pending;
     byId("open-native-picker").disabled = pending;
+    for (const button of byId("open-history-entries").querySelectorAll(
+      "[data-load-pipeline]",
+    ))
+      button.disabled = pending;
     byId("save-model").disabled =
       pending ||
       !hasModel ||

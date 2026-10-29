@@ -50,6 +50,11 @@ import { OliveRecipes } from "./oliveRecipes";
 import { optimizeWithOnnxScript } from "./optimization";
 import { promptInfo, runPrompt, type PromptResult } from "./prompt";
 import { PromptSession } from "./promptSession";
+import {
+  loadPromptPipeline,
+  promptPipelineInfo,
+  type PromptPipelineChecks,
+} from "./promptPipeline";
 
 const viewType = "onnxLightViewer.graph";
 const panelSessions = new WeakMap<vscode.WebviewPanel, () => void>();
@@ -753,6 +758,8 @@ async function configurePanel(
       message: {
         type?: string;
         path?: unknown;
+        paths?: unknown;
+        asPipeline?: unknown;
         nodeIndex?: unknown;
         actionId?: string;
         entry?: unknown;
@@ -1446,6 +1453,63 @@ async function configurePanel(
             `Could not convert ONNX model: ${detail}`,
           );
         }
+      } else if (message?.type === "prompt-pipeline-history") {
+        try {
+          const allowed = new Set(
+            pathHistory
+              .snapshot()
+              .open.filter(
+                (entry) => entry.source === "local" && entry.kind === "file",
+              )
+              .map((entry) => entry.path),
+          );
+          if (
+            !Number.isSafeInteger(message.requestId) ||
+            !Array.isArray(message.paths) ||
+            message.paths.length > 50 ||
+            !message.paths.every(
+              (path: unknown): path is string =>
+                typeof path === "string" && allowed.has(path),
+            )
+          )
+            throw new Error("Invalid pipeline history request.");
+          const entries = [];
+          const checks: PromptPipelineChecks = new Map();
+          for (const path of message.paths) {
+            if (!active) return;
+            try {
+              entries.push(await promptPipelineInfo(path, checks));
+            } catch (error) {
+              const detail =
+                error instanceof Error ? error.message : String(error);
+              log.record(
+                "FAILED",
+                "Inspect history pipeline",
+                undefined,
+                `${path}: ${detail}`,
+              );
+              entries.push({
+                path,
+                available: false,
+                label: `Inspection failed: ${detail}`,
+              });
+            }
+          }
+          if (active)
+            await postMessage({
+              type: "prompt-pipeline-history",
+              requestId: message.requestId,
+              entries,
+            });
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error);
+          log.record("FAILED", "Inspect history pipelines", undefined, detail);
+          await postMessage({
+            type: "prompt-pipeline-history",
+            requestId: message.requestId,
+            error: detail,
+          });
+        }
       } else if (message?.type === "path-history-edit") {
         if (
           (message.target === "open" || message.target === "save") &&
@@ -1735,8 +1799,20 @@ async function configurePanel(
                   log.record("CANCELLED", "Open ONNX model", id);
                   return;
                 }
+                if (message.asPipeline === true && !vscode.workspace.isTrusted)
+                  throw new Error(
+                    "Trust this workspace before assembling a generation pipeline.",
+                  );
+                const selected =
+                  message.asPipeline === true
+                    ? vscode.Uri.file(
+                        await log.run("Assemble generation pipeline", () =>
+                          loadPromptPipeline(selection[0].fsPath),
+                        ),
+                      )
+                    : selection[0];
                 const loadedModel = await readGraph(
-                  selection[0],
+                  selected,
                   log,
                   undefined,
                   inline ? String(message.password) : undefined,
@@ -1747,11 +1823,11 @@ async function configurePanel(
                 }
                 return {
                   model: loadedModel,
-                  name: posix.basename(selection[0].path),
+                  name: posix.basename(selected.path),
                   history: historyEntries(
                     "local",
-                    locationText(selection[0]),
-                    locationText(vscode.Uri.joinPath(selection[0], "..")),
+                    locationText(selected),
+                    locationText(vscode.Uri.joinPath(selected, "..")),
                   ),
                 };
               }
@@ -1918,6 +1994,8 @@ async function configurePanel(
           model = loaded.model;
           panel.title = `ONNX: ${loaded.name}`;
           await sendGraph();
+          if (message.asPipeline === true)
+            await postMessage({ type: "show-prompt" });
           await updateHistory("open", {
             action: "remember",
             entries: loaded.history,

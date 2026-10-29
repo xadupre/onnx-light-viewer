@@ -96,6 +96,7 @@ root = pathlib.Path(sys.argv[1])
       assert.deepEqual(await readProvenance(model), {
         ...original,
         exporter,
+        ...(exporter === "mobius" ? { packageDirectory: plan.directory } : {}),
       });
       assert.match(provenancePath(model), /\.provenance\.json$/);
     }

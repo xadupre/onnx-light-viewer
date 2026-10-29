@@ -43,6 +43,8 @@ Napi::Object Initialize(Napi::Env env, Napi::Object exports) {
   exports.Set("runNativePrompt", Napi::Function::New(env, onnx_light_viewer::RunNativePrompt));
   exports.Set("releaseNativePrompt",
               Napi::Function::New(env, onnx_light_viewer::ReleaseNativePrompt));
+  exports.Set("preparePromptPipeline",
+              Napi::Function::New(env, onnx_light_viewer::PreparePromptPipeline));
   return exports;
 }
 

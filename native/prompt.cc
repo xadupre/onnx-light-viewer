@@ -11,6 +11,7 @@
 #include <onnx_core/runtime/runtime_session_loader.h>
 #include <onnx_proto/onnx_helper.h>
 #include <ort_genai_c.h>
+#include <set>
 #include <stdexcept>
 #include <uv.h>
 
@@ -270,9 +271,17 @@ public:
         ReadModel(*plain_model, stream, {});
         ol::LoadExternalDataForModel(*plain_model, ModelFilePath(path).parent_path().string());
       }
+      if (pipeline) {
+        std::set<std::string> persistent_inputs;
+        for (const auto &binding : pipeline->prefill().graph().persistent_bindings())
+          persistent_inputs.emplace(binding.input_name());
+        for (const auto &initializer : pipeline->prefill().graph().initializer())
+          if (persistent_inputs.contains(std::string(initializer.name())))
+            initial_feeds.emplace(initializer.name(), rt::TensorFromProto(initializer));
+      }
       if (!loaded)
         prepared = std::make_unique<rt::RuntimeSession>(
-            pipeline ? pipeline->prefill() : *plain_model, session_options);
+            pipeline ? pipeline->prefill() : *plain_model, initial_feeds, session_options);
       auto &base = loaded ? loaded->session() : *prepared;
       session_options.value_store = base.value_store_owner();
       executor = base.cpu_executor();
@@ -296,6 +305,8 @@ public:
     }
     const std::vector<int64_t> ids(prompt.begin(), prompt.end());
     rt::RuntimeValueMap feeds;
+    for (const auto &[name, value] : initial_feeds)
+      feeds.emplace(name, value.BorrowView());
     feeds.emplace(
         options.input_ids_name,
         rt::Tensor::FromInt64(options.input_ids_name, {1, static_cast<int64_t>(ids.size())}, ids));
@@ -368,6 +379,7 @@ public:
   std::shared_ptr<rt::CpuExecutor> executor;
   std::unique_ptr<rt::RuntimeContext> context;
   rt::RuntimeSessionOptions session_options;
+  rt::RuntimeValueMap initial_feeds;
   std::unique_ptr<rt::LoadedRuntimeSession> loaded;
   std::unique_ptr<ol::PipelineProto> pipeline;
   std::unique_ptr<ol::ModelProto> plain_model;
