@@ -169,7 +169,7 @@ layout or camera. A temporary file is written first and renamed only after the
 write succeeds; failures and cancellations appear in Logs.
 
 Models containing ``training_info`` can be inspected, but all export modes
-explicitly reject them: the pinned onnx-light 0.2.1 does not preserve training
+explicitly reject them: the pinned onnx-light 0.2.2 does not preserve training
 or initialization graphs. This avoids silently producing an incomplete copy.
 Local source aliases (including symlinked directories, hard links and case
 aliases on case-insensitive volumes) are rejected as save destinations.
