@@ -5,6 +5,81 @@ const { JSDOM } = require("jsdom");
 const { huggingFaceTasks } = require("../dist/huggingFaceTasks");
 const { webviewHtml } = require("../dist/webview");
 
+for (const initialTab of ["model", "logs"]) {
+  test(`groups viewer features by theme when opening ${initialTab}`, (t) => {
+    const dom = new JSDOM(
+      webviewHtml(
+        (name) => name,
+        "test-source",
+        "test-nonce",
+        "test",
+        initialTab,
+      ),
+    );
+    t.after(() => dom.window.close());
+    const { document } = dom.window;
+    const groups = (selector) =>
+      [...document.querySelectorAll(selector)].map((group) => [
+        group.querySelector(".feature-group-title").textContent,
+        [...group.querySelectorAll("button")].map((button) => button.id),
+      ]);
+    assert.deepEqual(groups(".viewer-tabs > .feature-group"), [
+      [
+        "Navigation",
+        ["model-tab", "statistics-tab", "memory-tab", "tensors-tab"],
+      ],
+      [
+        "Application",
+        [
+          "logs-tab",
+          "status-tab",
+          "controls-tab",
+          "repositories-tab",
+          "settings-tab",
+        ],
+      ],
+    ]);
+    assert.deepEqual(groups("#sidebar-controls > .feature-group"), [
+      [
+        "Navigation",
+        [
+          "open-model",
+          "save-model",
+          "show-find",
+          "show-operator",
+          "show-metadata",
+        ],
+      ],
+      ["Convert", ["export-model"]],
+      ["Optimization", ["optimize-model", "fuse-pattern", "undo-fusion"]],
+    ]);
+    for (const group of document.querySelectorAll(
+      "#sidebar-controls > .feature-group",
+    )) {
+      assert.equal(group.getAttribute("role"), "group");
+      assert.equal(
+        document.getElementById(group.getAttribute("aria-labelledby")),
+        group.querySelector(".feature-group-title"),
+      );
+    }
+    const tabs = [...document.querySelectorAll('[role="tab"]')];
+    assert.deepEqual(
+      tabs
+        .filter((tab) => tab.getAttribute("aria-selected") === "true")
+        .map((tab) => tab.id),
+      [`${initialTab}-tab`],
+    );
+    for (const tab of tabs) {
+      assert.equal(
+        tab.closest('[role="tablist"]').getAttribute("aria-label"),
+        "Viewer",
+      );
+      const panel = document.getElementById(tab.getAttribute("aria-controls"));
+      assert.equal(panel.hidden, tab.id !== `${initialTab}-tab`);
+    }
+  });
+}
+
 test("optimization panel exposes backend buttons without native introductory text", (t) => {
   const dom = new JSDOM(
     webviewHtml((name) => name, "test-source", "test-nonce", "test"),

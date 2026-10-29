@@ -10,9 +10,17 @@ the rows; parallel branches can share a row, with spacing based on block sizes.
 Four barycentric sweeps reduce crossings without adding intermediate nodes
 along long connections.
 
-The **Controls** tab groups keyboard shortcuts, mouse gestures and navigation
-buttons into two-column tables: **Control** and **Action**. It is available even
-before a model is loaded.
+Features are grouped by theme:
+
+* **Navigation** includes Model, Statistics, Memory and Tensors, with Open,
+  Save, Find, Op and Data controls in the model sidebar.
+* **Convert** groups model conversion controls in the sidebar.
+* **Optimization** groups Optimize, Fuse and Unfuse in the sidebar.
+* **Application** includes Logs, Status, Controls, ONNX links and Settings.
+
+The **Controls** tab under **Application** groups keyboard shortcuts, mouse
+gestures and navigation buttons into two-column tables: **Control** and
+**Action**. It is available even before a model is loaded.
 
 Graph navigation buttons are stacked in the bottom-left corner in paired rows:
 **Top** / **Bottom**, **+** / **-**, then **Fit** / **Zoom to readable size**.
