@@ -14,10 +14,20 @@ for (const initialTab of ["model", "logs"]) {
         "test-nonce",
         "test",
         initialTab,
+        require("../package.json").version,
       ),
     );
     t.after(() => dom.window.close());
     const { document } = dom.window;
+    assert.equal(
+      document.getElementById("app-version").textContent,
+      `ONNX Light Viewer ${require("../package.json").version}`,
+    );
+    if (initialTab === "model")
+      assert.equal(
+        document.getElementById("app-version").closest("[hidden]"),
+        null,
+      );
     const groups = (selector) =>
       [...document.querySelectorAll(selector)].map((group) => [
         group.querySelector(".feature-group-title").textContent,
