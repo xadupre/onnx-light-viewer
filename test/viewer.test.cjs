@@ -10234,7 +10234,7 @@ test("fits operator types and middle-truncates long names without reducing their
   const right =
     Number(rect.getAttribute("x")) + Number(rect.getAttribute("width"));
   const { y } = nodePositions(document)[1];
-  pointer(graph, "pointerdown", right + 10, y - 10);
+  pointer(graph, "pointerdown", right + 10, y - 10, { shiftKey: true });
   pointer(graph, "pointermove", right - 2, y + 10);
   pointer(graph, "pointerup", right - 2, y + 10);
   assert.equal(groups[1].getAttribute("aria-pressed"), "true");
@@ -10392,7 +10392,7 @@ test("selects a nearby arc from the background with a screen-space tolerance at 
     graph.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape" }));
     pointer(graph, "pointerdown", source.x + (14 * width) / 1060, y);
     assert.equal(document.getElementById("connection-highlight"), null);
-    assert.equal(graph.classList.contains("selecting"), true);
+    assert.equal(graph.classList.contains("dragging"), true);
     pointer(graph, "pointerup", source.x + (14 * width) / 1060, y);
   }
 });
@@ -11856,6 +11856,127 @@ test("wheel scrolling pans vertically and Shift+wheel pans horizontally without 
   assert.deepEqual(nodePositions(document), positions);
 });
 
+for (const length of [6, 300]) {
+  test(`background dragging pans a ${length}-node model without rearranging or selecting nodes`, async (t) => {
+    const { document, window, load, pointer } = openViewer(t);
+    load(chainGraph(length));
+    const graph = document.getElementById("graph");
+    const viewBox = () => graph.getAttribute("viewBox").split(" ").map(Number);
+    const selection = () =>
+      Array.from(
+        document.querySelectorAll(".selected"),
+        (node) => node.dataset.id,
+      );
+    const before = viewBox();
+    const positions = nodePositions(document);
+    const selected = selection();
+    const start = { x: before[0] + 10, y: before[1] + 10 };
+    const move = async (type, dx, dy, modifiers, waitForFrame = true) => {
+      const current = viewBox();
+      pointer(
+        graph,
+        type,
+        start.x + (dx * before[2]) / 1060 + current[0] - before[0],
+        start.y + (dy * before[3]) / 350 + current[1] - before[1],
+        modifiers,
+      );
+      if (waitForFrame)
+        await new Promise((resolve) => window.requestAnimationFrame(resolve));
+    };
+    await move("pointerdown", 0, 0, { button: 2 });
+    assert.equal(graph.hasPointerCapture(1), false);
+    await move("pointerdown", 0, 0);
+    assert.equal(graph.hasPointerCapture(1), true);
+    assert.equal(graph.classList.contains("dragging"), true);
+    assert.equal(document.querySelector(".selection-rectangle"), null);
+    await move("pointermove", 1, 1);
+    assert.deepEqual(viewBox(), before);
+    await move("pointermove", 100, 50, { pointerId: 2 });
+    assert.deepEqual(viewBox(), before);
+    for (const [dx, dy] of [
+      [100, 50],
+      [160, -30],
+      [-40, 90],
+    ]) {
+      await move("pointermove", dx, dy);
+      const after = viewBox();
+      assert.deepEqual(after.slice(2), before.slice(2));
+      assert.ok(
+        Math.abs(after[0] - before[0] + (dx * before[2]) / 1060) < 1e-9,
+      );
+      assert.ok(Math.abs(after[1] - before[1] + (dy * before[3]) / 350) < 1e-9);
+      assert.deepEqual(selection(), selected);
+    }
+    if (length === 300) {
+      const beforeBurst = viewBox();
+      await move("pointermove", -60, 100, {}, false);
+      await move("pointermove", -80, 120, {}, false);
+      assert.deepEqual(viewBox(), beforeBurst);
+      await new Promise((resolve) => window.requestAnimationFrame(resolve));
+      assert.ok(
+        Math.abs(viewBox()[0] - before[0] - (80 * before[2]) / 1060) < 1e-9,
+      );
+      assert.ok(
+        Math.abs(viewBox()[1] - before[1] + (120 * before[3]) / 350) < 1e-9,
+      );
+    }
+    await move("pointerup", -40, 90);
+    assert.equal(graph.hasPointerCapture(1), false);
+    assert.equal(graph.classList.contains("dragging"), false);
+    assert.deepEqual(
+      nodePositions(document).slice(0, positions.length),
+      positions,
+    );
+    const panned = viewBox();
+    await move("pointermove", 100, 50);
+    assert.deepEqual(viewBox(), panned);
+    document.getElementById("zoom-fit").click();
+    document.getElementById("zoom-in").click();
+    const zoomed = viewBox();
+    const dx = (60 * zoomed[2]) / 1060;
+    const dy = (40 * zoomed[3]) / 350;
+    pointer(graph, "pointerdown", zoomed[0] + 10, zoomed[1] + 10);
+    pointer(graph, "pointerup", zoomed[0] + 10 + dx, zoomed[1] + 10 + dy);
+    await new Promise((resolve) => window.requestAnimationFrame(resolve));
+    assert.ok(Math.abs(viewBox()[0] - zoomed[0] + dx) < 1e-9);
+    assert.ok(Math.abs(viewBox()[1] - zoomed[1] + dy) < 1e-9);
+    load(chainGraph(length));
+    assert.deepEqual(viewBox(), before);
+  });
+}
+
+test("background panning cancels cleanly and background clicks still clear selection", (t) => {
+  const { document, window, load, pointer } = openViewer(t);
+  load(chainGraph());
+  const graph = document.getElementById("graph");
+  const initial = graph.getAttribute("viewBox");
+  for (const cancel of [
+    () => pointer(graph, "pointercancel", 0, 0),
+    () =>
+      graph.dispatchEvent(
+        new window.KeyboardEvent("keydown", { key: "Escape" }),
+      ),
+    () => window.dispatchEvent(new window.Event("blur")),
+  ]) {
+    pointer(graph, "pointerdown", 0, 0);
+    pointer(graph, "pointermove", 100, 50);
+    assert.notEqual(graph.getAttribute("viewBox"), initial);
+    cancel();
+    assert.equal(graph.getAttribute("viewBox"), initial);
+    assert.equal(graph.hasPointerCapture(1), false);
+    assert.equal(graph.classList.contains("dragging"), false);
+    assert.equal(document.querySelectorAll(".graph-node.selected").length, 1);
+  }
+  pointer(graph, "pointerdown", 0, 0);
+  pointer(graph, "pointerup", 0, 0);
+  assert.equal(document.querySelectorAll(".graph-node.selected").length, 0);
+  pointer(graph, "pointerdown", 0, 0);
+  pointer(graph, "pointermove", 100, 50);
+  load(demoGraph);
+  assert.equal(graph.hasPointerCapture(1), false);
+  assert.equal(graph.classList.contains("dragging"), false);
+});
+
 test("panning survives zoom and resize, supports dragging, and resets on Fit or model load", (t) => {
   const { document, window, load, resize, pointer } = openViewer(t);
   load(chainGraph());
@@ -12096,7 +12217,7 @@ test("rectangle selection supports reverse and additive gestures and moves toget
   const graph = document.getElementById("graph");
   const positions = nodePositions(document);
   const selectionBottom = (positions[1].y + positions[2].y) / 2;
-  pointer(graph, "pointerdown", 500, selectionBottom);
+  pointer(graph, "pointerdown", 500, selectionBottom, { shiftKey: true });
   pointer(graph, "pointermove", -10, 110);
   assert.equal(document.querySelectorAll(".graph-node.selected").length, 2);
   assert.ok(document.querySelector(".selection-rectangle"));
@@ -12158,12 +12279,12 @@ test("cancels interrupted drags and rectangles and drops state on model replacem
     assert.equal(graph.hasPointerCapture(1), false);
     assert.equal(graph.classList.contains("dragging"), false);
   }
-  pointer(graph, "pointerdown", 500, 100);
+  pointer(graph, "pointerdown", 500, 100, { shiftKey: true });
   pointer(graph, "pointermove", -10, 900);
   graph.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape" }));
   assert.equal(document.querySelectorAll(".graph-node.selected").length, 1);
   assert.equal(document.querySelector(".selection-rectangle"), null);
-  pointer(graph, "pointerdown", 500, 100);
+  pointer(graph, "pointerdown", 500, 100, { shiftKey: true });
   pointer(graph, "pointermove", -10, 900);
   load(demoGraph);
   assert.equal(graph.hasPointerCapture(1), false);
@@ -12246,10 +12367,12 @@ test("rectangle and modifier selections mix ports with operators and move as one
   const graph = document.getElementById("graph");
   const before = nodePositions(document, "#nodes > g > rect");
   const input = before[0];
-  pointer(graph, "pointerdown", input.x + 75, input.y - 5);
+  pointer(graph, "pointerdown", 0, 0);
+  pointer(graph, "pointerup", 0, 0);
+  pointer(graph, "pointerdown", input.x + 75, input.y - 5, { shiftKey: true });
   pointer(graph, "pointerup", input.x + 61, input.y + 5);
   assert.equal(document.querySelectorAll("#nodes .selected").length, 0);
-  pointer(graph, "pointerdown", input.x + 75, input.y - 5);
+  pointer(graph, "pointerdown", input.x + 75, input.y - 5, { shiftKey: true });
   pointer(graph, "pointerup", input.x + 59, input.y + 5);
   assert.equal(
     document.querySelector(".port:not(.output)").getAttribute("aria-pressed"),

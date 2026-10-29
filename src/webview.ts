@@ -11,6 +11,7 @@ import { huggingFaceTasks } from "./huggingFaceTasks";
  * @param nonce Fresh per-panel nonce authorizing only the bundled scripts.
  * @param onnxLightVersion C++ release embedded in the compiled native addon.
  * @param initialTab Initially selected viewer tab.
+ * @param appVersion Viewer release from the extension's package metadata.
  * @returns Complete HTML document; graph and log data require the ready handshake.
  */
 export function webviewHtml(
@@ -19,6 +20,7 @@ export function webviewHtml(
   nonce: string,
   onnxLightVersion: string,
   initialTab: "model" | "logs" = "model",
+  appVersion: string = "",
 ): string {
   const historyControls = (target: "open" | "save"): string =>
     `<details id="${target}-history" class="path-history" hidden><summary>Recent paths</summary><p>Suggestions are history, not a guarantee that a path still exists or is writable. Selecting one only fills the field.</p><button id="${target}-clear-history" type="button">Clear ${target === "open" ? "Open" : "Save"} history</button><ul id="${target}-history-entries" aria-label="Recent ${target} paths"></ul></details>`;
@@ -60,7 +62,7 @@ export function webviewHtml(
     <section id="model-view" role="tabpanel" aria-labelledby="model-tab"${initialTab === "logs" ? " hidden" : ""}>
       <header class="graph-toolbar">
         <div><a id="repository-link" href="https://github.com/xadupre/onnx-light-viewer" title="ONNX Light Viewer on GitHub" aria-label="Open the ONNX Light Viewer GitHub repository"><img src="${resource("logo.svg")}" alt="" width="24" height="24"></a><button id="refresh-shapes" class="icon-button" disabled title="Refresh shape and type information with onnx-light" aria-label="Refresh shape and type information" aria-describedby="shape-status"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2 6M20 4v7h-7"/></svg>Refresh shapes</button><button id="refresh-metadata" class="icon-button" disabled title="Recompute constants, tags and lifetimes for the displayed graph with onnx-light" aria-label="Refresh metadata for the displayed graph" aria-describedby="metadata-status"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2 6M20 4v7h-7"/></svg>Refresh metadata</button><button id="refresh-positions" class="icon-button" disabled title="Restore the hierarchical layout and reset manually moved positions" aria-label="Refresh node positions"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2 6M20 4v7h-7"/></svg>Refresh positions</button><button id="verify-model" class="icon-button" disabled title="Verify the entire model or all pipeline stages with onnx-light, without changing them" aria-label="Verify model" aria-describedby="verify-status"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg>Verify</button></div>
-        <div class="graph-stats" aria-live="polite"><span id="graph-summary">No model loaded</span><span id="initializer-count">0 initializers</span><span id="onnx-light-version" data-version="${onnxLightVersion}" title="onnx-light C++ release used by this viewer">onnx-light ${onnxLightVersion}</span><span id="shape-status" role="status"></span><span id="metadata-status" role="status"></span><span id="verify-status" role="status"></span><span id="navigation-status" role="status"></span><span id="load-status" role="status"></span></div>
+        <div class="graph-stats" aria-live="polite"><span id="graph-summary">No model loaded</span><span id="initializer-count">0 initializers</span><span id="app-version" title="ONNX Light Viewer version">ONNX Light Viewer ${appVersion}</span><span id="onnx-light-version" data-version="${onnxLightVersion}" title="onnx-light C++ release used by this viewer">onnx-light ${onnxLightVersion}</span><span id="shape-status" role="status"></span><span id="metadata-status" role="status"></span><span id="verify-status" role="status"></span><span id="navigation-status" role="status"></span><span id="load-status" role="status"></span></div>
         <span id="rewriting-count" role="status" title="Rewritings waiting to be reapplied before the next native matching or optimization">0 pending rewritings</span>
         <span id="save-status" role="status"></span>
         <span id="fusion-status" role="status"></span>
@@ -698,7 +700,7 @@ export function webviewHtml(
           <tr><th scope="row">Click the background</th><td>Clear selection.</td></tr>
           <tr><th scope="row"><kbd>Ctrl/Cmd</kbd> or <kbd>Shift</kbd> + click</th><td>Toggle a node in the selection.</td></tr>
           <tr><th scope="row">Drag a node</th><td>Move it. Drag a selected node to move the whole selection.</td></tr>
-          <tr><th scope="row">Drag the background</th><td>Select nodes in a rectangle. Hold <kbd>Ctrl/Cmd</kbd> or <kbd>Shift</kbd> to add to the selection.</td></tr>
+          <tr><th scope="row">Drag the background</th><td>Move the model view without rearranging nodes. Hold <kbd>Ctrl/Cmd</kbd> or <kbd>Shift</kbd> to select nodes in a rectangle and add to the selection.</td></tr>
           <tr><th scope="row">Scroll</th><td>Pan vertically.</td></tr>
           <tr><th scope="row"><kbd>Shift</kbd> + scroll</th><td>Pan horizontally. Horizontal trackpad scrolling also pans horizontally.</td></tr>
           <tr><th scope="row"><kbd>Ctrl</kbd> + scroll</th><td>Zoom in or out around the pointer.</td></tr>

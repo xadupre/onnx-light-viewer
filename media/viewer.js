@@ -1315,7 +1315,16 @@ function endGesture(cancel = false) {
   gesture = undefined;
   previous.rectangle?.remove();
   svg.classList.remove("dragging", "selecting");
-  if (cancel) {
+  if (previous.panOrigin) {
+    if (cancel) {
+      pan = previous.panOrigin;
+      fit();
+    } else if (!previous.moved) {
+      selectConnection(undefined);
+      selected.clear();
+      updateSelection();
+    }
+  } else if (cancel) {
     if (previous.origins) {
       moveNodes(previous.origins, 0, 0);
     } else if (!previous.zoomArea) {
@@ -1344,11 +1353,6 @@ function graphPoint(event, viewport) {
 function moveGesture(event) {
   if (!gesture || gesture.pointerId !== event.pointerId) return;
   gesture.viewport ??= byId("canvas").getBoundingClientRect();
-  const point = graphPoint(event, gesture.viewport);
-  if (!point) {
-    endGesture(true);
-    return;
-  }
   if (
     !gesture.moved &&
     Math.hypot(
@@ -1356,6 +1360,25 @@ function moveGesture(event) {
       event.clientY - gesture.clientY,
     ) < 3
   ) {
+    return;
+  }
+  if (gesture.panOrigin) {
+    gesture.moved = true;
+    pan = {
+      x:
+        gesture.panOrigin.x -
+        (event.clientX - gesture.clientX) * gesture.scaleX,
+      y:
+        gesture.panOrigin.y -
+        (event.clientY - gesture.clientY) * gesture.scaleY,
+    };
+    if (virtualized) schedulePan();
+    else fit();
+    return;
+  }
+  const point = graphPoint(event, gesture.viewport);
+  if (!point) {
+    endGesture(true);
     return;
   }
   gesture.moved = true;
@@ -2176,6 +2199,14 @@ svg.addEventListener("pointerdown", (event) => {
       ),
     };
     svg.classList.add("dragging");
+  } else if (!additive) {
+    gesture = {
+      panOrigin: { ...pan },
+      scaleX: camera.width / viewport.width,
+      scaleY: camera.height / viewport.height,
+    };
+    svg.classList.add("dragging");
+    svg.focus({ preventScroll: true });
   } else {
     selectConnection(undefined);
     selected = additive ? new Set(selected) : new Set();
