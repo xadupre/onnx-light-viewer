@@ -21,16 +21,15 @@ function createPromptPanel({ byId, postMessage }) {
   const progress = byId("prompt-progress");
   const lifecycleStatus = byId("prompt-lifecycle");
   const sessionFields = byId("prompt-session-fields");
-  const settingsEngine = byId("prompt-settings-engine");
   const showSettingsEngine = () => {
-    byId("prompt-settings-light").hidden =
-      settingsEngine.value !== "onnx-light";
-    byId("prompt-settings-genai").hidden =
-      settingsEngine.value !== "onnxruntime-genai";
+    const light = byId("prompt-engine").value === "onnx-light";
+    byId("prompt-settings-light").hidden = !light;
+    byId("prompt-settings-genai").hidden = light;
+    byId("prompt-settings-title").textContent = light
+      ? "onnx-light session settings"
+      : "ONNX Runtime GenAI session settings";
   };
-  settingsEngine.addEventListener("change", showSettingsEngine);
   byId("prompt-settings-open").addEventListener("click", () => {
-    settingsEngine.value = byId("prompt-engine").value;
     showSettingsEngine();
     byId("prompt-run-page").hidden = true;
     byId("prompt-session-page").hidden = false;
@@ -73,7 +72,6 @@ function createPromptPanel({ byId, postMessage }) {
       if (field.disabled || (field.value === "" && field.type !== "checkbox"))
         continue;
       if (!field.checkValidity()) {
-        settingsEngine.value = byId("prompt-engine").value;
         showSettingsEngine();
         byId("prompt-run-page").hidden = true;
         byId("prompt-session-page").hidden = false;
@@ -324,6 +322,7 @@ function createPromptPanel({ byId, postMessage }) {
         for (const option of engine.options)
           option.disabled = !message.info.engines.includes(option.value);
         engine.value = message.info.engines[0] ?? "onnx-light";
+        showSettingsEngine();
         pipeline = !!message.info.pipeline;
         const light = byId("prompt-settings-light");
         const sdkLoader =

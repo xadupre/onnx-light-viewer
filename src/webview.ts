@@ -549,21 +549,19 @@ export function webviewHtml(
       <p>Validation compares full vocabulary logits using the same generated token prefixes. Counts are absolute differences below each threshold; smaller distances are better.</p>
       </div>
       <div id="prompt-session-page" hidden>
-        <h2>Engine session settings</h2>
+        <h2 id="prompt-settings-title">Engine session settings</h2>
         <button id="prompt-settings-back" type="button">Back to Run Prompt</button>
         <p>Applied on the next Run, without modifying the model or its exported configuration. A change unloads the retained session. Blank values preserve SDK/model defaults. Profiling adds overhead and writes to .prompt-profiles beside the model; GenAI finalizes its profile when unloaded.</p>
-        <label for="prompt-settings-engine">Engine settings page</label>
-        <select id="prompt-settings-engine"><option value="onnx-light">onnx-light</option><option value="onnxruntime-genai">onnxruntime-genai</option></select>
         <fieldset id="prompt-session-fields">
           <div id="prompt-settings-light" class="prompt-settings-grid">
             <h3>onnx-light (CPU)</h3>
             <p>CPU kernels only. Automatic graph optimization is not exposed by Generate; use Optimize separately. The SDK recreates internal generation sessions, but reuses the loaded model, context and supported static preparations.</p>
             <label>CPU threads (inference and loading preparation; 0 = automatic)<input data-setting="threads" type="number" min="0" max="4096" placeholder="SDK default"></label>
+            <p id="prompt-pipeline-loading" hidden>For PipelineProto, CPU, memory and diagnostic settings remain available. Only the SDK owning-loader controls below are unavailable: that loader accepts ONNX ModelProto, not pipelines.</p>
             <h3>Parallel loading</h3>
             <label>Model loader<select data-setting="sdkLoader" data-boolean data-loading><option value="">Standard ONNX loading</option><option value="true">SDK owning loader (parallel preparation)</option></select></label>
             <p>The SDK overlaps one I/O worker with preparation on the CPU executor. CPU threads above also control parallel preparation; there is no separate I/O thread-count option.</p>
             <p>The SDK owning loader currently requires explicit external-data lengths. Standard loading supports ONNX files without them; there is no automatic fallback.</p>
-            <p id="prompt-pipeline-loading" hidden>PipelineProto has no SDK parallel loader; the loading controls below are unavailable for pipelines.</p>
             <label>Overlap reads and preparation<select data-setting="loadOverlap" data-boolean data-loading data-sdk-loader disabled><option value="">SDK default (enabled)</option><option value="true">Enabled</option><option value="false">Disabled (sequential)</option></select></label>
             <label>Loading admission memory limit (MiB; 0 = unlimited, not process RSS)<input data-setting="loadMemoryMiB" data-loading data-sdk-loader type="number" min="0" max="1048576" placeholder="SDK default" disabled></label>
             <h3>Memory and diagnostics</h3>
@@ -575,20 +573,21 @@ export function webviewHtml(
           </div>
           <div id="prompt-settings-genai" class="prompt-settings-grid" hidden>
             <h3>ONNX Runtime GenAI</h3>
-            <label>Intra-op threads (also used by initialization/prepacking; 0 = automatic)<input data-setting="intraOpThreads" type="number" min="0" max="4096" placeholder="Model configuration"></label>
-            <label>Inter-op threads (0 = automatic)<input data-setting="interOpThreads" type="number" min="0" max="4096" placeholder="Model configuration"></label>
-            <label>Parallel graph execution<select data-setting="parallelExecution" data-boolean><option value="">Model configuration</option><option value="true">Parallel</option><option value="false">Sequential</option></select></label>
+            <p>Leave a field blank or select "From genai_config.json" to use the exported GenAI configuration. If an option is absent from that file, the engine uses its built-in default. Enter a value or select another option to override it.</p>
+            <label>Intra-op threads (also used by initialization/prepacking; 0 = automatic)<input data-setting="intraOpThreads" type="number" min="0" max="4096" placeholder="From genai_config.json"></label>
+            <label>Inter-op threads (0 = automatic)<input data-setting="interOpThreads" type="number" min="0" max="4096" placeholder="From genai_config.json"></label>
+            <label>Parallel graph execution<select data-setting="parallelExecution" data-boolean><option value="">From genai_config.json</option><option value="true">Parallel</option><option value="false">Sequential</option></select></label>
             <h3>Loading and providers</h3>
             <p>GenAI exposes session initialization/prepacking controls, not a separate parallel weight-reader thread count. Graph execution mode is not a parallel-loading setting.</p>
-            <label>Weight prepacking during initialization<select data-setting="prepacking" data-boolean><option value="">Model configuration</option><option value="true">Enabled</option><option value="false">Disabled</option></select></label>
-            <label>Execution provider<select data-setting="provider"><option value="">Model configuration</option><option value="cpu">CPU</option><option value="cuda">CUDA</option><option value="dml">DirectML</option></select></label>
+            <label>Weight prepacking during initialization<select data-setting="prepacking" data-boolean><option value="">From genai_config.json</option><option value="true">Enabled</option><option value="false">Disabled</option></select></label>
+            <label>Execution provider<select data-setting="provider"><option value="">From genai_config.json</option><option value="cpu">CPU</option><option value="cuda">CUDA</option><option value="dml">DirectML</option></select></label>
             <label>GPU device ID<input data-setting="deviceId" data-gpu type="number" min="0" max="65535" placeholder="Provider default" disabled></label>
             <label>CUDA memory limit (MiB)<input data-setting="gpuMemoryMiB" data-cuda type="number" min="1" max="1048576" placeholder="Provider default" disabled></label>
             <h3>Optimization, memory and diagnostics</h3>
-            <label>Graph optimization<select data-setting="graphOptimization"><option value="">Model configuration</option><option>ORT_DISABLE_ALL</option><option>ORT_ENABLE_BASIC</option><option>ORT_ENABLE_EXTENDED</option><option>ORT_ENABLE_ALL</option></select></label>
-            <label>CPU memory arena<select data-setting="cpuArena" data-boolean><option value="">Model configuration</option><option value="true">Enabled</option><option value="false">Disabled</option></select></label>
-            <label>Memory pattern<select data-setting="memoryPattern" data-boolean><option value="">Model configuration</option><option value="true">Enabled</option><option value="false">Disabled</option></select></label>
-            <label>Log severity (0 verbose, 1 info, 2 warning, 3 error, 4 fatal)<input data-setting="logSeverity" type="number" min="0" max="4" placeholder="Model configuration"></label>
+            <label>Graph optimization<select data-setting="graphOptimization"><option value="">From genai_config.json</option><option>ORT_DISABLE_ALL</option><option>ORT_ENABLE_BASIC</option><option>ORT_ENABLE_EXTENDED</option><option>ORT_ENABLE_ALL</option></select></label>
+            <label>CPU memory arena<select data-setting="cpuArena" data-boolean><option value="">From genai_config.json</option><option value="true">Enabled</option><option value="false">Disabled</option></select></label>
+            <label>Memory pattern<select data-setting="memoryPattern" data-boolean><option value="">From genai_config.json</option><option value="true">Enabled</option><option value="false">Disabled</option></select></label>
+            <label>Log severity (0 verbose, 1 info, 2 warning, 3 error, 4 fatal)<input data-setting="logSeverity" type="number" min="0" max="4" placeholder="From genai_config.json"></label>
             <label class="prompt-checkbox"><input data-setting="profile" type="checkbox"> Enable ONNX Runtime profiling</label>
           </div>
         </fieldset>

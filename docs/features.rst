@@ -151,8 +151,10 @@ now**, cancellation, changing models/engines/settings and closing the panel
 release it. One panel retains at most one native model; keeping it during HF
 validation can hold two models in memory.
 
-Open **Session settings** for a separate page per engine. Controls preserve
-SDK/model defaults unless changed and never edit the exported configuration.
+Select the engine on **Run Prompt**, then open **Session settings** to configure
+that engine only. Controls preserve defaults unless changed and never edit the
+exported configuration. GenAI's **From genai_config.json** uses the exported
+configuration, or the engine default when the option is absent from that file.
 onnx-light exposes CPU threads, shape checks, allocation capacity, intermediate
 release, logging and native kernel profiles. GenAI exposes CPU threads,
 CPU/CUDA/DirectML providers and GPU limits, graph optimization, memory options,
@@ -167,6 +169,8 @@ currently requires explicit external-data lengths
 (`xadupre/onnx-light#5697 <https://github.com/xadupre/onnx-light/issues/5697>`_)
 and does not accept pipelines
 (`xadupre/onnx-light#5698 <https://github.com/xadupre/onnx-light/issues/5698>`_).
+Only these loading controls are disabled for pipelines; CPU, memory and diagnostic
+settings remain editable.
 GenAI exposes initialization/prepacking and session-thread controls, not a
 separate parallel weight-reader thread count. Parallel graph execution is not
 parallel loading. Profiles add overhead and are written under

@@ -134,6 +134,9 @@ test("engine settings pages retain independent controls, including parallel load
   byId("prompt-settings-open").click();
   assert.equal(byId("prompt-session-page").hidden, false);
   assert.equal(byId("prompt-settings-light").hidden, false);
+  assert.equal(byId("prompt-settings-genai").hidden, true);
+  assert.equal(byId("prompt-settings-engine"), null);
+  assert.match(byId("prompt-settings-title").textContent, /onnx-light/);
   field("prompt-settings-light", "threads").value = "2";
   field("prompt-settings-light", "sdkLoader").value = "true";
   field("prompt-settings-light", "sdkLoader").dispatchEvent(
@@ -161,8 +164,12 @@ test("engine settings pages retain independent controls, including parallel load
     info: { available: true, engines: ["onnx-light", "onnxruntime-genai"] },
   });
   byId("prompt-engine").value = "onnxruntime-genai";
+  byId("prompt-engine").dispatchEvent(new dom.window.Event("change"));
+  assert.equal(messages.at(-1).type, "prompt-release");
   byId("prompt-settings-open").click();
   assert.equal(byId("prompt-settings-genai").hidden, false);
+  assert.equal(byId("prompt-settings-light").hidden, true);
+  assert.match(byId("prompt-settings-title").textContent, /GenAI/);
   const provider = field("prompt-settings-genai", "provider");
   provider.value = "cuda";
   provider.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
@@ -179,6 +186,29 @@ test("engine settings pages retain independent controls, including parallel load
   assert.equal(second.options.sessionSettings.prepacking, false);
   assert.equal(second.options.sessionSettings.threads, undefined);
   assert.equal(field("prompt-settings-light", "threads").value, "2");
+});
+
+test("model replacement updates an open settings page to the available engine", (t) => {
+  const { dom, byId, api, messages } = panel(t);
+  api.handleMessage({
+    type: "prompt-info",
+    requestId: messages[0].requestId,
+    info: { available: true, engines: ["onnx-light", "onnxruntime-genai"] },
+  });
+  byId("prompt-engine").value = "onnxruntime-genai";
+  byId("prompt-engine").dispatchEvent(new dom.window.Event("change"));
+  byId("prompt-settings-open").click();
+  assert.equal(byId("prompt-settings-genai").hidden, false);
+  api.load();
+  api.handleMessage({
+    type: "prompt-info",
+    requestId: messages.at(-1).requestId,
+    info: { available: true, engines: ["onnx-light"], pipeline: true },
+  });
+  assert.equal(byId("prompt-session-page").hidden, false);
+  assert.equal(byId("prompt-settings-genai").hidden, true);
+  assert.equal(byId("prompt-settings-light").hidden, false);
+  assert.match(byId("prompt-settings-title").textContent, /onnx-light/);
 });
 
 test("loading and warmup appear before tokens, and unloading updates retained state", (t) => {
@@ -232,6 +262,16 @@ test("invalid settings stop generation and pipeline-only loading limitations are
   );
   assert.equal(overlap.disabled, true);
   assert.equal(byId("prompt-pipeline-loading").hidden, false);
+  assert.equal(byId("prompt-settings-light").hidden, false);
+  assert.equal(byId("prompt-settings-genai").hidden, true);
+  for (const field of byId("prompt-settings-light").querySelectorAll(
+    "[data-setting]",
+  ))
+    assert.equal(
+      field.matches(":disabled"),
+      field.hasAttribute("data-loading"),
+      `${field.dataset.setting} should only be disabled for pipeline loading`,
+    );
   overlap.value = "false";
   byId("prompt-settings-back").click();
   byId("prompt-form").dispatchEvent(new dom.window.Event("submit"));
