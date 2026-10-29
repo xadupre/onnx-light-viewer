@@ -5338,6 +5338,60 @@ test("loads typed attributes and dense/sparse initializer parameters without los
   );
 });
 
+test("displays tensor-type attributes and schema defaults with SDK type names without modifying the model", async () => {
+  const cases = [
+    ["Cast", "to", 1, "FLOAT"],
+    ["Cast", "to", 7, "INT64"],
+    ["LayerNormalization", "stash_type", 16, "BFLOAT16"],
+    ["RandomNormal", "dtype", 10, "FLOAT16"],
+    ["HannWindow", "output_datatype", 11, "DOUBLE"],
+    ["QuantizeLinear", "output_dtype", 2, "UINT8"],
+    ["Cast", "to", 999, "999"],
+    ["Cast", "to", 4294967297, "4294967297"],
+    ["Concat", "axis", 1, "1"],
+    ["Custom", "to", 1, "1", "example"],
+  ];
+  const model = memoryTestModel([1], {
+    opset: 24,
+    extraOpsets: [["example", 1]],
+    nodes: cases.map(([opType, name, value, , domain = ""]) =>
+      Buffer.concat([
+        bytesField(1, "x"),
+        bytesField(2, "y"),
+        bytesField(4, opType),
+        bytesField(7, domain),
+        bytesField(
+          5,
+          Buffer.concat([
+            bytesField(1, name),
+            varintField(3, value),
+            varintField(20, 2),
+          ]),
+        ),
+      ]),
+    ),
+  });
+  const original = await model.serialize();
+  const graph = model.graph();
+  assert.deepEqual(
+    graph.nodes.map((node) => node.attributes[0].value),
+    cases.map(([, , , expected]) => expected),
+  );
+  for (const [index, name] of [
+    [2, "stash_type"],
+    [3, "dtype"],
+  ]) {
+    assert.equal(
+      graph.nodes[index].schema.defaults.find(
+        (attribute) => attribute.name === name,
+      ).value,
+      "FLOAT",
+    );
+    assert.match(graph.nodes[index].schema.doc, /Default: FLOAT/);
+  }
+  assert.deepEqual(await model.serialize(), original);
+});
+
 test("lists local dense, sparse and encoded initializers, including unused weights but not captures", () => {
   const tensor = (name, value) =>
     Buffer.concat([

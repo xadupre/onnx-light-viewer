@@ -4,9 +4,89 @@ function createSettingsPanel({ byId, postMessage, onViewerSettings }) {
   let nextRequestId = 0;
   let trusted = false;
   let pythonPath;
+  let packages;
+  let appVersion;
+  let nativeVersion;
+  let checkingReleases;
+  let releases = new Map();
   let sidebarWidth;
   let pathHistory = { open: [], save: [] };
   let exportHistory = { models: [], directories: [] };
+
+  function renderRelease(cell, name, installed) {
+    cell.replaceChildren();
+    const release = releases.get(name);
+    if (!release) {
+      cell.textContent = "Not checked";
+      return;
+    }
+    if (release.error !== undefined) {
+      cell.textContent = `Unavailable: ${release.error}`;
+    } else {
+      const link = document.createElement("a");
+      link.href = release.url;
+      link.textContent = release.version;
+      cell.append(link);
+      if (installed) {
+        const comparison = document.createElement("span");
+        comparison.className = "package-release-comparison";
+        comparison.textContent =
+          installed.replace(/^v(?=\d)/, "") === release.version
+            ? "Matches latest release"
+            : "Different from latest release";
+        cell.append(comparison);
+      }
+    }
+  }
+
+  function renderVersions() {
+    for (const [id, latestId, name, installed] of [
+      [
+        "settings-app-version",
+        "status-app-latest",
+        "onnx-light-viewer",
+        appVersion,
+      ],
+      [
+        "settings-native-version",
+        "status-native-latest",
+        "onnx-light C++",
+        nativeVersion,
+      ],
+    ]) {
+      const version = byId(id);
+      version.textContent = installed ?? "Unavailable";
+      renderRelease(byId(latestId), name, installed);
+    }
+    byId("settings-packages").replaceChildren();
+    const entries =
+      packages ??
+      [...releases.values()]
+        .filter(
+          ({ name }) =>
+            name !== "onnx-light-viewer" && name !== "onnx-light C++",
+        )
+        .map(({ name }) => ({ name }));
+    for (const pkg of [...entries].sort((a, b) =>
+      a.name.localeCompare(b.name),
+    )) {
+      const row = document.createElement("tr");
+      const name = document.createElement("th");
+      name.scope = "row";
+      name.textContent = pkg.name;
+      const version = document.createElement("td");
+      version.textContent = pkg.source
+        ? `${pkg.version ?? "Version unavailable"} (PYTHONPATH)`
+        : pkg.version === undefined
+          ? "Installed version not checked"
+          : (pkg.version ?? "Not installed");
+      if (pkg.source) version.title = pkg.source;
+      const latest = document.createElement("td");
+      renderRelease(latest, pkg.name, pkg.version);
+      row.append(name, version, latest);
+      byId("settings-packages").append(row);
+    }
+  }
 
   function editStoredData(message) {
     byId("settings-history-feedback").textContent = "Updating stored data…";
@@ -117,10 +197,47 @@ function createSettingsPanel({ byId, postMessage, onViewerSettings }) {
     byId("settings-python-status").textContent = "Checking Python packages…";
     postMessage({ type: "inspect-python", ...inspecting });
   });
+  byId("status-check-releases").addEventListener("click", () => {
+    if (checkingReleases) return;
+    if (!packages && trusted && !inspecting)
+      byId("settings-inspect-python").click();
+    checkingReleases = { requestId: ++nextRequestId };
+    releases = new Map();
+    renderVersions();
+    byId("status-check-releases").disabled = true;
+    byId("status-release-status").textContent =
+      "Checking GitHub and PyPI releases…";
+    postMessage({ type: "check-latest-versions", ...checkingReleases });
+  });
 
   function receive(message) {
     if (!message || typeof message !== "object") return;
-    if (message.type === "settings-info") {
+    if (
+      message.type === "latest-versions-info" ||
+      message.type === "latest-versions-error"
+    ) {
+      if (!checkingReleases || message.requestId !== checkingReleases.requestId)
+        return;
+      checkingReleases = undefined;
+      byId("status-check-releases").disabled = false;
+      if (message.type === "latest-versions-error") {
+        byId("status-release-status").textContent = message.error;
+        return;
+      }
+      releases = new Map(
+        message.releases.map((release) => [release.name, release]),
+      );
+      const failures = message.releases.filter(
+        (release) => release.error !== undefined,
+      ).length;
+      byId("status-release-status").textContent = failures
+        ? `Release check completed; ${failures} lookup${failures === 1 ? "" : "s"} failed. See Logs for details.`
+        : "Latest published versions checked.";
+      renderVersions();
+    } else if (
+      message.type === "settings-info" ||
+      message.type === "status-info"
+    ) {
       byId("settings-download").value = message.application.downloadDirectory;
       byId("settings-python").value = message.application.pythonPath;
       byId("settings-cache-download").textContent =
@@ -133,14 +250,16 @@ function createSettingsPanel({ byId, postMessage, onViewerSettings }) {
       byId("settings-reset-viewer").disabled = false;
       byId("settings-history-feedback").textContent = "";
       if (pythonPath !== message.application.pythonPath) {
-        byId("settings-packages").replaceChildren();
+        packages = undefined;
         byId("settings-python-status").textContent = "Not checked";
       }
       pythonPath = message.application.pythonPath;
       trusted = message.trusted;
-      byId("settings-app-version").textContent = message.appVersion;
-      byId("settings-native-version").textContent = message.nativeVersion;
+      appVersion = message.appVersion;
+      nativeVersion = message.nativeVersion;
+      renderVersions();
       byId("settings-platform").textContent = message.platform;
+      byId("status-check-releases").disabled = Boolean(checkingReleases);
       byId("settings-inspect-python").disabled =
         Boolean(inspecting) || !trusted;
       byId("settings-feedback").textContent = trusted
@@ -171,25 +290,15 @@ function createSettingsPanel({ byId, postMessage, onViewerSettings }) {
       if (message.pythonPath !== pythonPath) return;
       if (message.type === "settings-error") {
         byId("settings-feedback").textContent = message.error;
-        byId("settings-python-status").textContent = "Not checked";
-        byId("settings-packages").replaceChildren();
+        byId("settings-python-status").textContent = message.error;
+        packages = undefined;
+        renderVersions();
         return;
       }
       byId("settings-python-status").textContent =
         `Python ${message.python.version} — ${message.python.executable}`;
-      byId("settings-packages").replaceChildren();
-      for (const pkg of [...message.python.packages].sort((a, b) =>
-        a.name.localeCompare(b.name),
-      )) {
-        const name = document.createElement("dt");
-        name.textContent = pkg.name;
-        const version = document.createElement("dd");
-        version.textContent = pkg.source
-          ? `${pkg.version ?? "Version unavailable"} (PYTHONPATH)`
-          : (pkg.version ?? "Not installed");
-        if (pkg.source) version.title = pkg.source;
-        byId("settings-packages").append(name, version);
-      }
+      packages = message.python.packages;
+      renderVersions();
     } else if (message.type === "settings-error") {
       byId("settings-feedback").textContent = message.error;
       byId("settings-history-feedback").textContent = message.error;

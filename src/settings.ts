@@ -71,6 +71,95 @@ export const pythonPackages = [
   "jax",
 ];
 
+export type PackageRelease = {
+  name: string;
+  url: string;
+} & ({ version: string; error?: never } | { error: string; version?: never });
+
+export async function latestPackageVersions(
+  signal?: AbortSignal,
+): Promise<PackageRelease[]> {
+  const sources = [
+    ...[
+      ["onnx-light-viewer", "onnx-light-viewer"],
+      ["onnx-light C++", "onnx-light"],
+    ].map(([name, repository]) => ({
+      name,
+      api: `https://api.github.com/repos/xadupre/${repository}/releases/latest`,
+      url: `https://github.com/xadupre/${repository}/releases/latest`,
+      github: true,
+    })),
+    ...pythonPackages.map((name) => ({
+      name,
+      api: `https://pypi.org/pypi/${name}/json`,
+      url: `https://pypi.org/project/${name}/`,
+      github: false,
+    })),
+  ];
+  const requestSignal = AbortSignal.any([
+    AbortSignal.timeout(15000),
+    ...(signal ? [signal] : []),
+  ]);
+  const results = new Array<PackageRelease>(sources.length);
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: 6 }, async () => {
+      while (next < sources.length) {
+        const index = next++;
+        const source = sources[index];
+        try {
+          const response = await fetch(source.api, {
+            signal: requestSignal,
+            headers: {
+              Accept: "application/json",
+              "User-Agent": "onnx-light-viewer",
+            },
+          });
+          if (!response.ok) {
+            await response.body?.cancel();
+            if (response.status === 404)
+              throw new Error(
+                source.github
+                  ? "No published GitHub release."
+                  : "No published PyPI project.",
+              );
+            throw new Error(`HTTP ${response.status} ${response.statusText}`);
+          }
+          const metadata: unknown = await response.json();
+          const info =
+            !source.github &&
+            metadata &&
+            typeof metadata === "object" &&
+            "info" in metadata
+              ? metadata.info
+              : metadata;
+          let version: unknown;
+          if (info && typeof info === "object") {
+            if (source.github && "tag_name" in info) version = info.tag_name;
+            else if (!source.github && "version" in info)
+              version = info.version;
+          }
+          if (typeof version !== "string" || !/^v?\d[\w.!+-]*$/.test(version))
+            throw new Error("Invalid published version metadata.");
+          results[index] = {
+            name: source.name,
+            url: source.url,
+            version: version.replace(/^v(?=\d)/, ""),
+          };
+        } catch (error) {
+          if (signal?.aborted) throw error;
+          results[index] = {
+            name: source.name,
+            url: source.url,
+            error: error instanceof Error ? error.message : String(error),
+          };
+        }
+      }
+    }),
+  );
+  return results;
+}
+
 /** Reads distribution metadata without importing model libraries or workspace code. */
 export async function inspectPythonPackages(pythonPath: string): Promise<{
   executable: string;

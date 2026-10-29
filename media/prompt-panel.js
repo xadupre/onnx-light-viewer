@@ -115,7 +115,7 @@ function createPromptPanel({ byId, postMessage }) {
   };
   const showLifecycle = (value) => {
     lifecycleStatus.textContent = value
-      ? `${value.reused ? "Reused model; initial" : "Model"} loading: ${milliseconds(value.loadMs)} ms; warmup (1 input token, 1 generation step): ${value.warmupMs == null ? "running…" : milliseconds(value.warmupMs) + " ms"}. ${value.retained ? "Kept loaded." : busy ? "Unload after run." : "Unloaded."}`
+      ? `${value.reused ? "Reused model; initial" : "Model"} loading: ${formatDecimal(value.loadMs)} ms; warmup (1 input token, 1 generation step): ${value.warmupMs == null ? "running…" : formatDecimal(value.warmupMs) + " ms"}. ${value.retained ? "Kept loaded." : busy ? "Unload after run." : "Unloaded."}`
       : "";
   };
   const setBusy = (value) => {
@@ -148,13 +148,13 @@ function createPromptPanel({ byId, postMessage }) {
     setBusy(false);
     status.textContent = "Open a converted language model to run a prompt.";
   };
-  const milliseconds = (value) =>
+  const formatDecimal = (value) =>
     value == null ? "Unavailable (SDK)" : value.toFixed(3);
   const timingText = (label, first, sum, count, missing) =>
-    `${label}: prefill ${milliseconds(first)} ms; decode mean ${
+    `${label}: prefill ${formatDecimal(first)} ms; decode mean ${
       !count
         ? "N/A (no decode tokens)"
-        : milliseconds(missing ? null : sum / count) + " ms"
+        : formatDecimal(missing ? null : sum / count) + " ms"
     } (${count} decode tokens).`;
   const recordTiming = (token, index) => {
     if (index === 0) prefill = token.timeMs;
@@ -202,8 +202,8 @@ function createPromptPanel({ byId, postMessage }) {
       ["Phase", (_, index) => (index === 0 ? "Prefill" : "Decode")],
       ["Output", (token) => token.text],
       ["Token ID", (token) => token.id],
-      ["Score (logit)", (token) => token.score ?? "Unavailable (SDK)"],
-      ["Time (ms)", (token) => milliseconds(token.timeMs)],
+      ["Score (logit)", (token) => formatDecimal(token.score)],
+      ["Time (ms)", (token) => formatDecimal(token.timeMs)],
     ])
       liveRows.push({ row: row(label, tokens.map(value)), value });
     tokens.forEach(recordTiming);
@@ -218,18 +218,18 @@ function createPromptPanel({ byId, postMessage }) {
       );
       row(
         "Hugging Face score (logit)",
-        result.reference.tokens.map((token) => token.score),
+        result.reference.tokens.map((token) => formatDecimal(token.score)),
       );
       row(
         "Hugging Face time (ms)",
-        result.reference.tokens.map((token) => milliseconds(token.timeMs)),
+        result.reference.tokens.map((token) => formatDecimal(token.timeMs)),
       );
     }
     if (result.discrepancies) {
-      for (const [label, key] of [
-        ["Maximum absolute distance", "maxAbsolute"],
-        ["Relative error", "relative"],
-        ["L2 distance", "l2"],
+      for (const [label, key, format = String] of [
+        ["Maximum absolute distance", "maxAbsolute", formatDecimal],
+        ["Relative error", "relative", formatDecimal],
+        ["L2 distance", "l2", formatDecimal],
         ["Coefficients Δ < 0.01", "below001"],
         ["Coefficients Δ < 0.1", "below01"],
         ["Coefficients Δ < 1", "below1"],
@@ -237,7 +237,7 @@ function createPromptPanel({ byId, postMessage }) {
       ])
         row(
           label,
-          result.discrepancies.map((value) => value[key]),
+          result.discrepancies.map((value) => format(value[key])),
         );
     }
     const prompt = document.createElement("p");
@@ -259,7 +259,7 @@ function createPromptPanel({ byId, postMessage }) {
         decode.some((token) => token.timeMs == null),
       );
       if (result.reference.loadMs != null)
-        referenceTiming.textContent += ` Loading: ${milliseconds(result.reference.loadMs)} ms; warmup (1 input token): ${milliseconds(result.reference.warmupMs)} ms.`;
+        referenceTiming.textContent += ` Loading: ${formatDecimal(result.reference.loadMs)} ms; warmup (1 input token): ${formatDecimal(result.reference.warmupMs)} ms.`;
     }
     const profile = document.createElement("p");
     profile.hidden = !result.profileDirectory;

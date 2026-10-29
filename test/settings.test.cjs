@@ -1,16 +1,103 @@
 const assert = require("node:assert/strict");
 const { execFileSync } = require("node:child_process");
+const { once } = require("node:events");
 const {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } = require("node:fs");
+const { createServer } = require("node:http");
+const { createRequire } = require("node:module");
 const { tmpdir } = require("node:os");
 const path = require("node:path");
 const { test } = require("node:test");
+const vm = require("node:vm");
 const { inspectPythonPackages, pythonPackages } = require("../dist/settings");
+
+test("checks published GitHub and PyPI versions with explicit per-package failures and cancellation", async (t) => {
+  const requests = [];
+  let abort;
+  const server = createServer((request, response) => {
+    requests.push(request.url);
+    if (abort) {
+      abort.abort();
+      response.end();
+      return;
+    }
+    response.setHeader("Content-Type", "application/json");
+    if (request.url.endsWith("/onnxscript/json")) {
+      response.writeHead(503);
+      response.end("{}");
+    } else {
+      response.end(
+        JSON.stringify(
+          request.url.startsWith("/api.github.com/")
+            ? {
+                tag_name: request.url.includes("/onnx-light-viewer/")
+                  ? "v1.2.3"
+                  : "0.2.2",
+              }
+            : {
+                info: {
+                  version: request.url.endsWith("/torch/json") ? 42 : "1.20.0",
+                },
+              },
+        ),
+      );
+    }
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  t.after(async () => {
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+  });
+  const module = { exports: {} };
+  const file = require.resolve("../dist/settings");
+  const execute = vm.runInThisContext(
+    `(function(require, module, exports, fetch) { ${readFileSync(file, "utf8")}\n})`,
+  );
+  execute(createRequire(file), module, module.exports, (url, options) => {
+    const remote = new URL(url);
+    assert.ok(["api.github.com", "pypi.org"].includes(remote.hostname));
+    assert.equal(remote.search, "");
+    return fetch(
+      `http://127.0.0.1:${server.address().port}/${remote.hostname}${remote.pathname}`,
+      options,
+    );
+  });
+  const { latestPackageVersions } = module.exports;
+  const releases = await latestPackageVersions();
+  assert.equal(requests.length, pythonPackages.length + 2);
+  assert.equal(
+    releases.find(({ name }) => name === "onnx-light-viewer").version,
+    "1.2.3",
+  );
+  assert.equal(
+    releases.find(({ name }) => name === "onnx-light C++").version,
+    "0.2.2",
+  );
+  assert.equal(
+    releases.find(({ name }) => name === "onnx").url,
+    "https://pypi.org/project/onnx/",
+  );
+  assert.match(
+    releases.find(({ name }) => name === "onnxscript").error,
+    /HTTP 503/,
+  );
+  assert.match(
+    releases.find(({ name }) => name === "torch").error,
+    /Invalid published version metadata/,
+  );
+  assert.equal(releases.filter(({ error }) => error).length, 2);
+  abort = new AbortController();
+  await assert.rejects(latestPackageVersions(abort.signal), {
+    name: "AbortError",
+  });
+});
 
 function setPythonPath(t, value) {
   const previous = process.env.PYTHONPATH;

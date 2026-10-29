@@ -755,7 +755,9 @@ Napi::Value Schema(Napi::Env env, const std::string &op_type, const std::string 
                   << (attribute.required ? " [required]" : "") << "\n"
                   << attribute.description << "\n";
     if (!std::holds_alternative<std::monostate>(attribute.default_value)) {
-      const auto value = ol::core::schema::AttributeDefaultRepr(attribute.default_value);
+      const auto *integer = std::get_if<int64_t>(&attribute.default_value);
+      const auto value = integer ? IntegerAttributePreview(attribute.name, *integer, domain)
+                                 : ol::core::schema::AttributeDefaultRepr(attribute.default_value);
       documentation << "Default: " << value << "\n";
       auto item = Napi::Object::New(env);
       item.Set("name", attribute.name);
@@ -1109,7 +1111,7 @@ Napi::Object ModelGraph(Napi::Env env, const ol::ModelProto &model, const std::s
       auto item = Napi::Object::New(env);
       item.Set("name", Text(env, attribute.name()));
       item.Set("type", ol::AttributeProto::AttributeType_Name(attribute.type()));
-      item.Set("value", AttributePreview(attribute));
+      item.Set("value", AttributePreview(attribute, domain));
       item.Set("default", false);
       if (attribute.type() == ol::AttributeProto::GRAPH ||
           attribute.type() == ol::AttributeProto::GRAPHS) {

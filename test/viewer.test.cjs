@@ -6583,7 +6583,219 @@ test("Settings exposes histories, removes selected entries, clears categories an
   assert.equal(byId("settings-download").value, "/downloads");
 });
 
-test("Settings edits saved paths and existing sidebar preferences and renders package versions safely", (t) => {
+test("Status exposes package versions and inspection failures without opening Settings or resetting the camera", async (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const byId = (id) => document.getElementById(id);
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  load(demoGraph);
+  byId("zoom-in").click();
+  const camera = byId("graph").getAttribute("viewBox");
+  byId("status-tab").click();
+  assert.equal(messages.at(-1).type, "get-status-info");
+  assert.equal(byId("status-view").hidden, false);
+  assert.equal(byId("settings-view").hidden, true);
+  send({
+    type: "status-info",
+    application: {
+      downloadDirectory: "/downloads",
+      pythonPath: "/usr/bin/python3",
+    },
+    viewer: { panels: { operator: true, find: true, metadata: false } },
+    appVersion: "1.2.3",
+    nativeVersion: "0.2.2",
+    platform: "linux / x64",
+    trusted: true,
+  });
+  for (const id of [
+    "settings-app-version",
+    "settings-native-version",
+    "settings-platform",
+    "settings-inspect-python",
+    "settings-python-status",
+    "settings-packages",
+  ]) {
+    assert.equal(byId(id).closest("[role=tabpanel]").id, "status-view");
+  }
+  assert.equal(byId("settings-app-version").textContent, "1.2.3");
+  assert.equal(byId("settings-native-version").textContent, "0.2.2");
+  await new Promise((resolve) => window.requestAnimationFrame(resolve));
+  assert.equal(byId("graph").getAttribute("viewBox"), camera);
+  byId("settings-inspect-python").click();
+  const inspection = messages.at(-1);
+  assert.equal(inspection.type, "inspect-python");
+  assert.equal(inspection.pythonPath, "/usr/bin/python3");
+  send({
+    ...inspection,
+    type: "python-info",
+    python: {
+      executable: "/usr/bin/python3",
+      version: "3.12.3",
+      packages: [
+        { name: "onnx", version: "1.19.0" },
+        { name: "onnx-light", version: "0.2.2", source: "/sources/onnx_light" },
+        { name: "mobius-onnx", version: null },
+      ],
+    },
+  });
+  assert.match(byId("settings-python-status").textContent, /Python 3\.12\.3/);
+  assert.match(byId("settings-packages").textContent, /onnx1\.19\.0/);
+  assert.match(
+    byId("settings-packages").textContent,
+    /onnx-light0\.2\.2 \(PYTHONPATH\)/,
+  );
+  assert.match(
+    byId("settings-packages").textContent,
+    /mobius-onnxNot installed/,
+  );
+  byId("settings-inspect-python").click();
+  send({
+    ...messages.at(-1),
+    type: "settings-error",
+    error: "Python inspection failed",
+  });
+  assert.equal(
+    byId("settings-python-status").textContent,
+    "Python inspection failed",
+  );
+  assert.equal(byId("settings-packages").children.length, 0);
+  assert.equal(byId("settings-inspect-python").disabled, false);
+});
+
+test("Status checks latest releases on demand without treating development versions or lookup errors as outdated", (t) => {
+  const { document, window, messages } = openViewer(t);
+  const byId = (id) => document.getElementById(id);
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  send({
+    type: "status-info",
+    application: {
+      downloadDirectory: "/downloads",
+      pythonPath: "/usr/bin/python3",
+    },
+    viewer: { panels: { operator: true, find: true, metadata: false } },
+    appVersion: "1.2.3",
+    nativeVersion: "0.2.1",
+    platform: "linux / x64",
+    trusted: true,
+  });
+  assert.equal(
+    messages.some(({ type }) => type === "check-latest-versions"),
+    false,
+  );
+  byId("status-tab").click();
+  byId("status-check-releases").click();
+  const request = messages.at(-1);
+  const inspection = messages.findLast(({ type }) => type === "inspect-python");
+  assert.equal(request.type, "check-latest-versions");
+  assert.equal(inspection.pythonPath, "/usr/bin/python3");
+  assert.equal(byId("status-check-releases").disabled, true);
+  const releases = [
+    ["onnx-light-viewer", "1.2.3"],
+    ["onnx-light C++", "0.2.2"],
+    ["onnx", "1.20.0"],
+    ["onnx-light", "0.2.2"],
+    ["mobius-onnx", "1.0.0"],
+  ].map(([name, version]) => ({
+    name,
+    version,
+    url: `https://pypi.org/project/${name}/`,
+  }));
+  releases.push({
+    name: "onnxscript",
+    url: "https://pypi.org/project/onnxscript/",
+    error: "HTTP 503 Service Unavailable",
+  });
+  send({
+    type: "latest-versions-info",
+    requestId: request.requestId + 1,
+    releases,
+  });
+  assert.equal(byId("status-check-releases").disabled, true);
+  send({ ...request, type: "latest-versions-info", releases });
+  assert.equal(byId("status-check-releases").disabled, false);
+  const buildTable = byId("settings-app-version").closest("table");
+  assert.ok(buildTable);
+  for (const table of [
+    buildTable,
+    byId("settings-packages").closest("table"),
+  ]) {
+    assert.deepEqual(
+      [...table.querySelectorAll("thead th")].map((cell) => cell.textContent),
+      ["Package", "Installed", "Latest published"],
+    );
+    assert.equal(window.getComputedStyle(table).tableLayout, "fixed");
+  }
+  assert.equal(byId("settings-app-version").textContent, "1.2.3");
+  assert.equal(byId("settings-native-version").textContent, "0.2.1");
+  assert.match(
+    byId("status-app-latest").textContent,
+    /1\.2\.3Matches latest release/,
+  );
+  assert.match(
+    byId("status-native-latest").textContent,
+    /0\.2\.2Different from latest release/,
+  );
+  assert.match(
+    byId("settings-packages").textContent,
+    /Installed version not checked/,
+  );
+  send({
+    ...inspection,
+    type: "python-info",
+    python: {
+      executable: "/usr/bin/python3",
+      version: "3.12.3",
+      packages: [
+        { name: "onnx", version: "1.20.0" },
+        {
+          name: "onnx-light",
+          version: "0.3.0.dev0",
+          source: "/sources/onnx_light",
+        },
+        { name: "mobius-onnx", version: null },
+        { name: "onnxscript", version: "0.5.0" },
+      ],
+    },
+  });
+  const row = (name) =>
+    [...byId("settings-packages").rows].find(
+      (row) => row.cells[0].textContent === name,
+    );
+  assert.equal(row("onnx").cells.length, 3);
+  assert.equal(row("onnx").cells[1].textContent, "1.20.0");
+  assert.match(row("onnx").cells[2].textContent, /Matches latest release/);
+  assert.match(
+    row("onnx-light").cells[2].textContent,
+    /Different from latest release/,
+  );
+  assert.doesNotMatch(
+    row("onnx-light").textContent,
+    /outdated|update available/i,
+  );
+  assert.equal(row("onnx-light").cells[1].title, "/sources/onnx_light");
+  assert.match(row("mobius-onnx").cells[1].textContent, /Not installed/);
+  assert.equal(row("mobius-onnx").cells[2].textContent, "1.0.0");
+  assert.match(row("onnxscript").cells[2].textContent, /Unavailable: HTTP 503/);
+  assert.match(byId("status-release-status").textContent, /1 lookup failed/);
+  byId("status-check-releases").click();
+  assert.equal(byId("settings-app-version").textContent, "1.2.3");
+  send({ ...request, type: "latest-versions-info", releases });
+  assert.equal(byId("status-check-releases").disabled, true);
+  send({
+    ...messages.at(-1),
+    type: "latest-versions-error",
+    error: "Release lookup failed",
+  });
+  assert.equal(
+    byId("status-release-status").textContent,
+    "Release lookup failed",
+  );
+  assert.equal(byId("status-check-releases").disabled, false);
+  assert.equal(byId("settings-app-version").textContent, "1.2.3");
+});
+
+test("Settings edits saved paths and sidebar preferences while Status renders package versions safely", (t) => {
   const { document, window, messages } = openViewer(t);
   const send = (data) =>
     window.dispatchEvent(new window.MessageEvent("message", { data }));
@@ -6640,6 +6852,7 @@ test("Settings edits saved paths and existing sidebar preferences and renders pa
   );
   byId("show-find").click();
   assert.equal(byId("settings-find").checked, false);
+  byId("status-tab").click();
   byId("settings-inspect-python").click();
   assert.equal(messages.at(-1).type, "inspect-python");
   const inspection = messages.at(-1);
@@ -6666,7 +6879,7 @@ test("Settings edits saved paths and existing sidebar preferences and renders pa
   assert.match(byId("settings-packages").textContent, /Not installed/);
   assert.equal(byId("settings-packages").querySelector("img"), null);
   assert.deepEqual(
-    [...byId("settings-packages").querySelectorAll("dt")].map(
+    [...byId("settings-packages").querySelectorAll('th[scope="row"]')].map(
       (name) => name.textContent,
     ),
     ["onnx", "torch", "transformers"],
@@ -6676,7 +6889,7 @@ test("Settings edits saved paths and existing sidebar preferences and renders pa
     /Version unavailable \(PYTHONPATH\)/,
   );
   assert.equal(
-    byId("settings-packages").querySelector("dd:last-child").title,
+    byId("settings-packages").querySelector("tr:last-child td").title,
     "/sources/transformers",
   );
   byId("settings-inspect-python").click();
@@ -7195,7 +7408,13 @@ for (const initialTab of ["model", "logs"]) {
     }
     assert.deepEqual(
       messages.map(({ type }) => type),
-      ["ready", "get-settings", "get-settings", "get-settings"],
+      [
+        "ready",
+        "get-settings",
+        "get-settings",
+        "get-status-info",
+        "get-settings",
+      ],
     );
   });
 }
@@ -9220,15 +9439,109 @@ test("shows at most two short attributes and initializers inside operators", (t)
   );
 });
 
+test("stacks an explicit attribute above a long initializer without resizing the operator", (t) => {
+  const { document, load } = openViewer(t);
+  const parameter = {
+    name: "/modelbuilder/external/model.layers.0.attn.qkv_proj.MatMul.weight",
+    type: "BFLOAT16",
+    shape: ["2048", "1024"],
+  };
+  const graph = structuredClone(demoGraph);
+  Object.assign(graph.nodes[0], {
+    name: "cast",
+    opType: "Cast",
+    attributes: [{ name: "to", type: "INT", value: "FLOAT" }],
+    parameters: [parameter],
+  });
+  load(graph);
+  const group = document.querySelector(".graph-node");
+  const body = group.querySelector("rect");
+  assert.equal(body.getAttribute("width"), "276");
+  assert.equal(body.getAttribute("height"), "104");
+  assert.equal(group.querySelector(".node-parameter-summary"), null);
+  const attribute = group.querySelector(".node-attribute");
+  const initializer = group.querySelector(".node-initializer");
+  assert.ok(attribute);
+  assert.ok(initializer);
+  assert.equal(attribute.firstChild.textContent, "to = FLOAT");
+  assert.match(initializer.firstChild.textContent, /BFLOAT16 \[2048, 1024\]/);
+  assert.ok(
+    Number(attribute.getAttribute("y")) < Number(initializer.getAttribute("y")),
+  );
+  const type = group.querySelector(".operator-label");
+  const information = group.querySelector(".node-tensor-info");
+  assert.ok(
+    Number(attribute.getAttribute("y")) - Number(type.getAttribute("y")) >= 12,
+  );
+  assert.ok(
+    Number(information.getAttribute("y")) -
+      Number(initializer.getAttribute("y")) >=
+      12,
+  );
+  const fullDescription = `${parameter.name}: BFLOAT16 [2048, 1024]`;
+  assert.equal(initializer.getAttribute("aria-label"), fullDescription);
+  assert.equal(initializer.querySelector("title").textContent, fullDescription);
+  assert.equal(initializer.style.fontSize, "9px");
+  assert.ok(
+    document
+      .getElementById("node-initializers")
+      .textContent.includes(parameter.name),
+  );
+});
+
+test("distinguishes a Concat attribute from its three initializer inputs", (t) => {
+  const { document, load } = openViewer(t);
+  const initializers = ["q_proj", "k_proj", "v_proj"].map((name, index) => ({
+    name: `${name}.weight`,
+    type: "BFLOAT16",
+    shape: [index === 0 ? "2048" : "1024", "1024"],
+  }));
+  load({
+    ...demoGraph,
+    inputs: [],
+    initializers,
+    initializerCount: initializers.length,
+    nodes: [
+      {
+        ...demoGraph.nodes[0],
+        opType: "Concat",
+        inputs: initializers.map(({ name }) => name),
+        attributes: [{ name: "axis", type: "INT", value: "0" }],
+        parameters: initializers,
+      },
+    ],
+  });
+  assert.equal(
+    document.querySelector(".node-parameter-summary").firstChild.textContent,
+    "1 attribute, 3 initializers (see inspector)",
+  );
+  assert.equal(document.getElementById("attribute-count").textContent, "1");
+  assert.equal(document.getElementById("parameter-count").textContent, "3");
+  assert.equal(document.getElementById("input-count").textContent, "3");
+  assert.equal(document.getElementById("scope-initializers").hidden, true);
+});
+
 test("summarizes numerous or long parameters while preserving inspector details", (t) => {
   const { document, load } = openViewer(t);
   const parameter = { name: "bias", type: "FLOAT", shape: [], value: "[0.5]" };
-  for (const [attributes, parameters, count] of [
-    [[{ name: "axis", type: "INT", value: "-1" }], [parameter, parameter], 3],
-    [[], Array(12).fill(parameter), 12],
-    [[{ name: "text", type: "STRING", value: "x".repeat(32) }], [], 1],
-    [[{ name: "text", type: "STRING", value: "line\nbreak" }], [], 1],
-    [[], [{ ...parameter, value: "x".repeat(80) }], 1],
+  for (const [attributes, parameters, expected] of [
+    [
+      [{ name: "axis", type: "INT", value: "-1" }],
+      [parameter, parameter],
+      "1 attribute, 2 initializers",
+    ],
+    [[], Array(12).fill(parameter), "12 initializers"],
+    [
+      [{ name: "text", type: "STRING", value: "x".repeat(32) }],
+      [],
+      "1 attribute",
+    ],
+    [
+      [{ name: "text", type: "STRING", value: "line\nbreak" }],
+      [],
+      "1 attribute",
+    ],
+    [[], [{ ...parameter, value: "x".repeat(80) }], "1 initializer"],
     [
       [
         {
@@ -9238,7 +9551,7 @@ test("summarizes numerous or long parameters while preserving inspector details"
         },
       ],
       [],
-      1,
+      "1 attribute",
     ],
   ]) {
     const graph = structuredClone(demoGraph);
@@ -9247,10 +9560,7 @@ test("summarizes numerous or long parameters while preserving inspector details"
     load(graph);
     const group = document.querySelector(".graph-node");
     const summary = group.querySelector(".node-parameter-summary");
-    assert.equal(
-      summary.firstChild.textContent,
-      `${count} parameter${count === 1 ? "" : "s"} (see inspector)`,
-    );
+    assert.equal(summary.firstChild.textContent, `${expected} (see inspector)`);
     assert.equal(
       group.querySelectorAll(".node-attribute, .node-initializer").length,
       0,
@@ -9302,7 +9612,7 @@ test("shows tiny initializer values as safe text and omits large and external pa
   assert.equal(document.querySelector(".node-initializer"), null);
   assert.match(
     document.querySelector(".node-parameter-summary").firstChild.textContent,
-    /^\d+ parameters \(see inspector\)$/,
+    /^\d+ initializers \(see inspector\)$/,
   );
 });
 
@@ -9322,7 +9632,7 @@ test("fits initializer previews safely above subgraph links and preserves layout
   const group = document.querySelector('[data-id="node-0"]');
   const body = group.querySelector("rect");
   const row = group.querySelector(".node-parameter-summary");
-  assert.equal(row.firstChild.textContent, "1 parameter (see inspector)");
+  assert.equal(row.firstChild.textContent, "1 initializer (see inspector)");
   assert.ok(
     document
       .getElementById("node-initializers")
@@ -9413,10 +9723,10 @@ test("model inspection lists dense, sparse and encoded weights and clears them o
   const unsafe = '<img src=x onerror="alert(1)">';
   graph.initializers[10].storage.location = unsafe;
   load(graph);
-  assert.equal(document.getElementById("scope-initializers").hidden, false);
+  assert.equal(document.getElementById("scope-initializers").hidden, true);
   assert.equal(
     document.getElementById("scope-dense-initializers").children.length,
-    11,
+    0,
   );
   assert.equal(
     document.getElementById("node-initializers").children.length,
@@ -9453,9 +9763,21 @@ test("model inspection lists dense, sparse and encoded weights and clears them o
   document
     .querySelector(".graph-node")
     .dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter" }));
+  assert.equal(document.getElementById("scope-initializers").hidden, true);
+  assert.equal(document.getElementById("node-parameters").hidden, false);
+  assert.equal(
+    document.getElementById("node-initializers").children.length,
+    graph.nodes[0].parameters.length,
+  );
+  inspectModel();
   assert.equal(document.getElementById("scope-initializers").hidden, false);
   assert.equal(dense.children.length, 11);
   assert.equal(dense.firstElementChild, firstInitializer);
+  document
+    .querySelector(".port")
+    .dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter" }));
+  assert.equal(document.getElementById("scope-initializers").hidden, true);
+  assert.equal(document.getElementById("node-parameters").hidden, true);
   const encoded = decodeGraph(
     readFileSync(require.resolve("../examples/quantized-2bit.onnx")),
     "quantized-2bit.onnx",
@@ -10438,6 +10760,31 @@ test("places late inputs and early outputs locally and restores port positions a
   assert.deepEqual(at("Input: late"), input);
   assert.deepEqual(at("Output: tensor_0"), output);
   assert.equal(edge.querySelector(".edge").getAttribute("d"), before);
+});
+
+test("places initializer transformations beside their consuming operator after loading and refreshing", (t) => {
+  const { document, load } = openViewer(t);
+  const model = chainGraph(8);
+  const weight = { name: "weight", type: "FLOAT", shape: ["4", "4"] };
+  model.initializers = [weight];
+  model.initializerCount = 1;
+  model.nodes[7].inputs.push("transposed_weight");
+  model.nodes.unshift({
+    ...demoGraph.nodes[0],
+    id: "weight-transpose",
+    name: "transpose_weight",
+    opType: "Transpose",
+    inputs: ["weight"],
+    outputs: ["transposed_weight"],
+    parameters: [weight],
+  });
+  load(model);
+  const positions = nodePositions(document);
+  assert.ok(positions[0].y > positions[1].y);
+  assert.equal(positions[0].y, positions[7].y);
+  assert.ok(positions[0].y < positions[8].y);
+  document.getElementById("refresh-positions").click();
+  assert.deepEqual(nodePositions(document), positions);
 });
 
 test("renders a portrait graph with inputs above operators and outputs below", (t) => {

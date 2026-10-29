@@ -1536,6 +1536,12 @@ test("Settings reports defaults, versions and persisted paths without running Py
   );
   assert.equal(info.appVersion, require("../package.json").version);
   assert.equal(info.nativeVersion, require("../dist/graph").onnxLightVersion);
+  await first.receive({ type: "get-status-info" });
+  const status = first.messages.at(-1);
+  assert.equal(status.type, "status-info");
+  assert.equal(status.appVersion, info.appVersion);
+  assert.equal(status.nativeVersion, info.nativeVersion);
+  assert.deepEqual(status.application, info.application);
   assert.deepEqual(info.viewer.panels, {
     operator: true,
     find: true,

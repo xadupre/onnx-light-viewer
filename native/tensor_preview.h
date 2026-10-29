@@ -38,7 +38,8 @@ template <typename Values> Napi::Array Ports(Napi::Env env, const Values &values
 }
 
 bool IsPayloadOmitted(const ol::TensorProto &tensor);
-std::string AttributePreview(const ol::AttributeProto &attribute);
+std::string IntegerAttributePreview(std::string_view name, int64_t value, std::string_view domain);
+std::string AttributePreview(const ol::AttributeProto &attribute, std::string_view domain);
 template <typename Dims>
 std::optional<size_t> TinyElementCount(const Dims &dims, size_t limit = 16) {
   if (std::find(dims.begin(), dims.end(), 0) != dims.end())

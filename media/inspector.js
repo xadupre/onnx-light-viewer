@@ -129,10 +129,11 @@ function createInspector({
         return item;
       }),
     );
-    const inspectInitializers = scope && scope.kind !== "Pipeline";
+    const inspectInitializers =
+      !node && !port && scope && scope.kind !== "Pipeline";
     byId("scope-initializers").hidden = !inspectInitializers;
     if (initializerGraph !== scope?.graph) {
-      initializerGraph = scope?.graph;
+      initializerGraph = inspectInitializers ? scope.graph : undefined;
       for (const [field, id] of [
         ["initializers", "dense"],
         ["sparseInitializers", "sparse"],

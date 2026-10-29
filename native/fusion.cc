@@ -85,7 +85,7 @@ Napi::Object FusionNode(Napi::Env env, const ol::NodeProto &node) {
   for (uint32_t i = 0; i < static_cast<uint32_t>(node.attribute_size()); ++i) {
     auto value = Napi::Object::New(env);
     value.Set("name", node.attribute(i).name().value());
-    value.Set("value", AttributePreview(node.attribute(i)));
+    value.Set("value", AttributePreview(node.attribute(i), node.domain()));
     attributes.Set(i, value);
   }
   result.Set("attributes", attributes);

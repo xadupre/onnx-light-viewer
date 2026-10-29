@@ -96,6 +96,78 @@ test("prompt defaults, engine applicability and aligned validation results", (t)
   );
 });
 
+test("rounds Prompt scores and validation metrics to three decimals without changing IDs, counts or raw values", (t) => {
+  const { byId, api, messages } = panel(t);
+  byId("prompt-form").querySelector('button[type="submit"]').click();
+  const requestId = messages.at(-1).requestId;
+  const tokens = [
+    { text: "1.234567", id: 12345, score: 1.234567, timeMs: 12.345678 },
+    { text: " second", id: 7, score: -2.345678, timeMs: 0.00049 },
+    { text: " missing", id: 8, score: null, timeMs: null },
+  ];
+  const values = (label) =>
+    [...byId("prompt-results").querySelectorAll("tr")].find(
+      (row) => row.cells[0].textContent === label,
+    ).cells;
+  for (const [index, token] of tokens.entries())
+    api.handleMessage({ type: "prompt-token", requestId, index, token });
+  const expectedScores = ["1.235", "-2.346", "Unavailable (SDK)"];
+  assert.deepEqual(
+    [...values("Score (logit)")].slice(1).map((cell) => cell.textContent),
+    expectedScores,
+  );
+  const result = {
+    prompt: "1.234567",
+    engine: "onnx-light",
+    tokens,
+    reference: {
+      tokens: tokens.map((token, index) => ({
+        ...token,
+        score: [0.123456, -12.00049, 2][index],
+      })),
+    },
+    discrepancies: tokens.map(() => ({
+      maxAbsolute: 0.1234567,
+      relative: 0.012345,
+      l2: 1.234567,
+      below001: 2,
+      below01: 3,
+      below1: 4,
+      total: 12345,
+    })),
+  };
+  const original = structuredClone(result);
+  api.handleMessage({ type: "prompt-result", requestId, result });
+  assert.deepEqual(
+    [...values("Score (logit)")].slice(1).map((cell) => cell.textContent),
+    expectedScores,
+  );
+  assert.deepEqual(
+    [...values("Hugging Face score (logit)")]
+      .slice(1)
+      .map((cell) => cell.textContent),
+    ["0.123", "-12.000", "2.000"],
+  );
+  assert.deepEqual(
+    [...values("Time (ms)")].slice(1).map((cell) => cell.textContent),
+    ["12.346", "0.000", "Unavailable (SDK)"],
+  );
+  for (const [label, expected] of [
+    ["Maximum absolute distance", "0.123"],
+    ["Relative error", "0.012"],
+    ["L2 distance", "1.235"],
+    ["Coefficients Δ < 0.01", "2"],
+    ["Coefficients Δ < 0.1", "3"],
+    ["Coefficients Δ < 1", "4"],
+    ["Coefficients compared", "12345"],
+  ]) {
+    assert.equal(values(label)[1].textContent, expected);
+  }
+  assert.equal(values("Token ID")[1].textContent, "12345");
+  assert.equal(values("Output")[1].textContent, "1.234567");
+  assert.deepEqual(result, original);
+});
+
 test("validation accepts an explicit HF source after native generation without changing the generated prompt", (t) => {
   const { dom, byId, api, messages } = panel(t);
   api.handleMessage({
