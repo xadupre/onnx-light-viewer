@@ -5,16 +5,20 @@ import {
   readFile,
   readdir,
   rm,
+  stat,
   writeFile,
 } from "node:fs/promises";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { readProvenance, runProcess } from "./export";
+import { loadModelFile } from "./graph";
 
 export interface PromptToken {
   text: string;
   id: number;
   /** Raw logit, or null when the engine cannot expose it. */
   score: number | null;
+  /** Native generation step latency; the first token includes prefill. */
+  timeMs: number | null;
 }
 
 export interface PromptDiscrepancy {
@@ -95,7 +99,7 @@ function optionsFrom(value: unknown): PromptOptions {
 
 async function exists(file: string): Promise<boolean> {
   try {
-    return (await lstat(file)).isFile();
+    return (await stat(file)).isFile();
   } catch (error) {
     if (
       error instanceof Error &&
@@ -107,7 +111,7 @@ async function exists(file: string): Promise<boolean> {
   }
 }
 
-/** Availability describes model assets; Python dependency errors remain explicit at run time. */
+/** Availability describes model assets; missing native runtime errors surface at run time. */
 export async function promptInfo(modelPath: string): Promise<{
   engines: string[];
   available: boolean;
@@ -119,15 +123,10 @@ export async function promptInfo(modelPath: string): Promise<{
       available: false,
       reason: "Save a local model first.",
     };
-  if (/\.pipe-onnx$/i.test(modelPath))
-    return {
-      engines: [],
-      available: false,
-      reason:
-        "The onnx-light Python API does not directly execute PipelineProto containers. Pipeline execution requires an upstream public SDK capability.",
-    };
   const engines: string[] = [];
-  const genai = await exists(join(dirname(modelPath), "genai_config.json"));
+  const genai =
+    !/\.pipe-onnx$/i.test(modelPath) &&
+    (await exists(join(dirname(modelPath), "genai_config.json")));
   if (genai) engines.push("onnxruntime-genai");
   const provenance = await readProvenance(modelPath);
   const directories = [
@@ -187,7 +186,9 @@ function checkTokens(tokens: unknown): asserts tokens is PromptToken[] {
         typeof token.text !== "string" ||
         !Number.isSafeInteger(token.id) ||
         token.id < 0 ||
-        (token.score !== null && !Number.isFinite(token.score)),
+        (token.score !== null && !Number.isFinite(token.score)) ||
+        (token.timeMs !== null &&
+          (!Number.isFinite(token.timeMs) || token.timeMs < 0)),
     )
   )
     throw new Error("The prompt runner returned invalid tokens or logits.");
@@ -200,6 +201,7 @@ export async function runPrompt(
   signal: AbortSignal,
   progress: (output: string) => void,
   previous?: PromptResult,
+  token?: (token: PromptToken, index: number) => void,
 ): Promise<PromptResult> {
   signal.throwIfAborted();
   const options = optionsFrom(value);
@@ -208,15 +210,65 @@ export async function runPrompt(
   if (!info.engines.includes(options.engine))
     throw new Error(info.reason ?? "This model does not support that engine.");
   const provenance = await readProvenance(modelPath);
+  const directories = [
+    ...(provenance?.source ? [provenance.source] : []),
+    dirname(modelPath),
+  ];
+  let source: string | undefined;
+  for (const directory of directories)
+    if (
+      (await exists(join(directory, "tokenizer.json"))) ||
+      (await exists(join(directory, "tokenizer_config.json")))
+    ) {
+      source = directory;
+      break;
+    }
+  if (options.engine === "onnxruntime-genai") source = dirname(modelPath);
+  if (!source)
+    throw new Error("No local tokenizer is available for this model.");
+  let eosTokenId: number | undefined;
+  if (options.engine === "onnx-light") {
+    for (const name of ["generation_config.json", "config.json"]) {
+      const path = join(source, name);
+      if (!(await exists(path))) continue;
+      const config = JSON.parse(await readFile(path, "utf8")) as {
+        eos_token_id?: unknown;
+      };
+      if (config.eos_token_id === undefined || config.eos_token_id === null)
+        continue;
+      const eos = Array.isArray(config.eos_token_id)
+        ? config.eos_token_id.length === 1
+          ? config.eos_token_id[0]
+          : undefined
+        : config.eos_token_id;
+      if (!Number.isSafeInteger(eos) || (eos as number) < 0)
+        throw new Error(
+          "The onnx-light GenerationOptions SDK requires one integer eos_token_id; this model's EOS configuration cannot be represented.",
+        );
+      eosTokenId = eos as number;
+      break;
+    }
+  }
   const identity = await lstat(modelPath);
+  const saved = await loadModelFile(modelPath, basename(modelPath));
+  signal.throwIfAborted();
+  const paths = new Set([
+    ...(await readdir(dirname(modelPath), { withFileTypes: true }))
+      .filter(
+        (entry) =>
+          (entry.isFile() || entry.isSymbolicLink()) &&
+          !entry.name.startsWith("."),
+      )
+      .map((entry) => join(dirname(modelPath), entry.name)),
+    ...saved
+      .externalDataLocations()
+      .map((location) => resolve(dirname(modelPath), location)),
+  ]);
   const assets = await Promise.all(
-    (await readdir(dirname(modelPath), { withFileTypes: true }))
-      .filter((entry) => entry.isFile() && !entry.name.startsWith("."))
-      .sort((left, right) => left.name.localeCompare(right.name))
-      .map(async (entry) => {
-        const stat = await lstat(join(dirname(modelPath), entry.name));
-        return [entry.name, stat.size, stat.mtimeMs, stat.ctimeMs];
-      }),
+    [...paths].sort().map(async (path) => {
+      const details = await stat(path);
+      return [path, details.size, details.mtimeMs, details.ctimeMs];
+    }),
   );
   const context = JSON.stringify({
     modelPath,
@@ -225,6 +277,8 @@ export async function runPrompt(
     changed: identity.ctimeMs,
     assets,
     provenance,
+    source,
+    eosTokenId,
     engine: options.engine,
     prompt: options.prompt,
     maxTokens: options.maxTokens,
@@ -269,6 +323,8 @@ export async function runPrompt(
         modelPath,
         ...options,
         provenance,
+        source,
+        eosTokenId,
         capturePath: capture,
         captureBudget: retentionBudget,
         ...(previous
@@ -280,14 +336,80 @@ export async function runPrompt(
       }),
       { mode: 0o600, flag: "wx" },
     );
-    const script = resolve(__dirname, "..", "media", "run_prompt.py");
-    await runProcess(
-      { executable: pythonPath, args: ["-u", script, input, output] },
-      signal,
-      progress,
-      { PYTHONUNBUFFERED: "1", HF_HUB_OFFLINE: "1", TRANSFORMERS_OFFLINE: "1" },
-      "Prompt",
-    );
+    if (!previousCapture) {
+      let pending = "";
+      let next = 0;
+      await runProcess(
+        {
+          executable: process.execPath,
+          args: [
+            resolve(__dirname, "..", "media", "run_prompt.cjs"),
+            input,
+            output,
+          ],
+        },
+        signal,
+        (output) => progress(output.replace(/^\x1e.*(?:\n|$)/gm, "")),
+        { ELECTRON_RUN_AS_NODE: "1" },
+        "Native prompt",
+        (chunk) => {
+          pending += chunk;
+          let newline: number;
+          while ((newline = pending.indexOf("\n")) !== -1) {
+            signal.throwIfAborted();
+            const line = pending.slice(0, newline);
+            pending = pending.slice(newline + 1);
+            const marker = line.indexOf("\x1e");
+            if (marker === -1) continue;
+            const event = JSON.parse(line.slice(marker + 1)) as {
+              type: string;
+              index: number;
+              token: PromptToken;
+            };
+            checkTokens([event.token]);
+            if (
+              event.type !== "token" ||
+              event.index !== next ||
+              next >= options.maxTokens
+            )
+              throw new Error(
+                "The native runner returned an invalid token stream.",
+              );
+            token?.(event.token, next);
+            next++;
+          }
+          if (pending.length > 1_000_000)
+            throw new Error(
+              "The native runner returned an oversized token event.",
+            );
+        },
+      );
+      if (pending.startsWith("\x1e"))
+        throw new Error(
+          "The native runner returned an incomplete token event.",
+        );
+    }
+    if (options.validate) {
+      await runProcess(
+        {
+          executable: pythonPath,
+          args: [
+            "-u",
+            resolve(__dirname, "..", "media", "run_prompt.py"),
+            input,
+            output,
+          ],
+        },
+        signal,
+        progress,
+        {
+          PYTHONUNBUFFERED: "1",
+          HF_HUB_OFFLINE: "1",
+          TRANSFORMERS_OFFLINE: "1",
+        },
+        "Hugging Face validation",
+      );
+    }
     signal.throwIfAborted();
     const result = JSON.parse(await readFile(output, "utf8")) as PromptResult;
     if (result.prompt !== options.prompt || result.engine !== options.engine)

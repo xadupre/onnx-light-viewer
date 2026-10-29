@@ -815,6 +815,7 @@ export async function runProcess(
   progress: (output: string) => void,
   environment: NodeJS.ProcessEnv,
   label: string,
+  stdout?: (chunk: string) => void,
 ): Promise<void> {
   signal.throwIfAborted();
   await new Promise<void>((resolve, reject) => {
@@ -855,6 +856,16 @@ export async function runProcess(
     for (const stream of [child.stdout, child.stderr]) {
       stream.setEncoding("utf8");
       stream.on("data", (chunk: string) => {
+        if (finished) return;
+        if (stream === child.stdout && stdout) {
+          try {
+            stdout(chunk);
+          } catch (error) {
+            abort();
+            finish(error instanceof Error ? error : new Error(String(error)));
+            return;
+          }
+        }
         output = (output + chunk).slice(-65536);
         if (!timer) timer = setTimeout(flush, 100);
       });

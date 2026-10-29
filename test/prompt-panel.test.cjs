@@ -45,8 +45,8 @@ test("prompt defaults, engine applicability and aligned validation results", (t)
     prompt: run.options.prompt,
     engine: "onnx-light",
     tokens: [
-      { text: "<img src=x>", id: 8, score: 2 },
-      { text: " Paris", id: 9, score: 3 },
+      { text: "<img src=x>", id: 8, score: 2, timeMs: 120 },
+      { text: " Paris", id: 9, score: 3, timeMs: 4 },
     ],
   };
   api.handleMessage({
@@ -80,9 +80,77 @@ test("prompt defaults, engine applicability and aligned validation results", (t)
     },
   });
   const rows = byId("prompt-results").querySelectorAll("tr");
-  assert.equal(rows.length, 14);
+  assert.equal(rows.length, 17);
   for (const row of rows) assert.equal(row.cells.length, 3);
   assert.match(byId("prompt-results").textContent, /Coefficients Δ < 0.01/);
+  assert.match(
+    byId("prompt-results").textContent,
+    /prefill 120.000 ms; decode mean 4.000 ms/,
+  );
+});
+
+test("appends tokens and updates decode mean before completion without replacing the table", (t) => {
+  const { dom, byId, api, messages } = panel(t);
+  byId("prompt-form").dispatchEvent(new dom.window.Event("submit"));
+  const requestId = messages.at(-1).requestId;
+  const table = byId("prompt-results").querySelector("table");
+  for (const [index, timeMs] of [100, 2, 6].entries()) {
+    api.handleMessage({
+      type: "prompt-token",
+      requestId,
+      index,
+      token: {
+        text: index === 0 ? "<script>" : " token",
+        id: index,
+        score: 1,
+        timeMs,
+      },
+    });
+    assert.equal(byId("prompt-results").querySelector("table"), table);
+    for (const row of table.rows) assert.equal(row.cells.length, index + 2);
+    assert.equal(byId("prompt-validate").hidden, true);
+  }
+  assert.match(
+    byId("prompt-results").textContent,
+    /prefill 100.000 ms; decode mean 4.000 ms \(2 decode tokens\)/,
+  );
+  assert.match(table.textContent, /PrefillDecodeDecode/);
+  assert.equal(byId("prompt-results").querySelector("script"), null);
+  assert.match(byId("prompt-status").textContent, /Generated 3\/32 tokens/);
+  byId("prompt-cancel").click();
+  api.handleMessage({
+    type: "prompt-token",
+    requestId,
+    index: 3,
+    token: { text: "stale", id: 3, score: 1, timeMs: 1 },
+  });
+  assert.doesNotMatch(table.textContent, /stale/);
+});
+
+test("a single prefill token has no decode mean and missing SDK timings are not fabricated", (t) => {
+  const { dom, byId, api, messages } = panel(t);
+  byId("prompt-form").dispatchEvent(new dom.window.Event("submit"));
+  const requestId = messages.at(-1).requestId;
+  api.handleMessage({
+    type: "prompt-token",
+    requestId,
+    index: 0,
+    token: { text: "first", id: 1, score: 1, timeMs: 12 },
+  });
+  assert.match(
+    byId("prompt-results").textContent,
+    /decode mean N\/A \(no decode tokens\)/,
+  );
+  api.handleMessage({
+    type: "prompt-token",
+    requestId,
+    index: 1,
+    token: { text: "second", id: 2, score: null, timeMs: null },
+  });
+  assert.match(
+    byId("prompt-results").textContent,
+    /decode mean Unavailable \(SDK\)/,
+  );
 });
 
 test("prompt cancellation and model replacement reject stale results and errors", (t) => {

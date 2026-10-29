@@ -40,6 +40,16 @@ find_package(onnx_light CONFIG REQUIRED
   NO_DEFAULT_PATH
 )
 
+set(ONNX_RUNTIME_GENAI_VERSION "0.17.0")
+set(_genai_headers "${CMAKE_CURRENT_BINARY_DIR}/genai-include")
+file(MAKE_DIRECTORY "${_genai_headers}")
+file(DOWNLOAD
+  "https://raw.githubusercontent.com/microsoft/onnxruntime-genai/v${ONNX_RUNTIME_GENAI_VERSION}/src/ort_genai_c.h"
+  "${_genai_headers}/ort_genai_c.h"
+  EXPECTED_HASH "SHA256=9c69cc16a779aec3191b8d1f19a629e59667f34597e74fcbf0cdc24f39e0aef3"
+  TLS_VERIFY ON
+)
+
 set(ONNX_LIGHT_CPU_VERSION "0.2.1.1")
 set(ONNX_LIGHT_CPU_BUILD_PYTHON OFF CACHE BOOL "" FORCE)
 set(ONNX_LIGHT_CPU_BUILD_TESTS OFF CACHE BOOL "" FORCE)
@@ -69,6 +79,7 @@ add_library(onnx_light_viewer SHARED
   native/graph_snapshot.cc
   native/tensor_preview.cc
   native/tensor_statistics.cc
+  native/prompt.cc
   ${CMAKE_JS_SRC}
 )
 target_compile_features(onnx_light_viewer PRIVATE cxx_std_20)
@@ -76,7 +87,7 @@ target_compile_definitions(onnx_light_viewer PRIVATE
   NAPI_VERSION=8
   ONNX_LIGHT_VERSION="${ONNX_LIGHT_VERSION}"
 )
-target_include_directories(onnx_light_viewer PRIVATE ${CMAKE_JS_INC})
+target_include_directories(onnx_light_viewer PRIVATE ${CMAKE_JS_INC} "${_genai_headers}")
 target_link_libraries(onnx_light_viewer PRIVATE
   onnx_light::lib_onnx_op onnx_light::lib_onnx_shape
   onnx_light::lib_onnx_patterns
@@ -135,6 +146,12 @@ file(DOWNLOAD
   EXPECTED_HASH "SHA256=d495ab111fc496d1cd0291b4451da584d15c64b8af0895655e9fa52f801ea2c4"
 )
 configure_file(node_modules/node-addon-api/LICENSE.md "${_output}/node-addon-api.LICENSE" COPYONLY)
+file(DOWNLOAD
+  "https://raw.githubusercontent.com/microsoft/onnxruntime-genai/v${ONNX_RUNTIME_GENAI_VERSION}/LICENSE"
+  "${_output}/onnxruntime-genai.LICENSE"
+  EXPECTED_HASH "SHA256=c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+  TLS_VERIFY ON
+)
 configure_file("${onnx_light_cpu_SOURCE_DIR}/LICENSE" "${_output}/onnx-light-cpu.LICENSE" COPYONLY)
 configure_file("${onnx_light_cpu_SOURCE_DIR}/ml_cpu_compute/LICENSE" "${_output}/ml-cpu-compute.LICENSE" COPYONLY)
 file(COPY "${onnx_light_cpp_SOURCE_DIR}/share/licenses/" DESTINATION "${_output}/licenses")

@@ -20,7 +20,8 @@ files.
   workspace, with live output, a chosen output directory, a reproduction script
   and automatic model opening. See [exporting models](docs/features/exporting_models.rst).
 - Use **Run Prompt** for converted language models, with editable prompts and
-  token-aligned Hugging Face validation. See [requirements and SDK limitations](docs/features.rst#running-language-model-prompts).
+  native C++ execution, live GenAI token timings and token-aligned Hugging Face
+  validation. See [requirements and SDK limitations](docs/features.rst#running-language-model-prompts).
 - Search nodes and operators with live suggestions; zoom, pan, select and move
   nodes, including in large graphs.
 - Navigate nested subgraphs and model-local function definitions with breadcrumbs.

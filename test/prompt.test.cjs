@@ -1,336 +1,309 @@
 const assert = require("node:assert/strict");
 const { execFile } = require("node:child_process");
+const { readdirSync, existsSync } = require("node:fs");
 const {
   mkdtemp,
-  mkdir,
   readFile,
   writeFile,
   readdir,
   rm,
-  truncate,
+  mkdir,
+  rename,
+  symlink,
 } = require("node:fs/promises");
 const path = require("node:path");
 const { tmpdir } = require("node:os");
 const { promisify } = require("node:util");
-const { createRequire } = require("node:module");
-const { runInNewContext } = require("node:vm");
 const { test } = require("node:test");
 const { promptInfo, runPrompt } = require("../dist/prompt");
+const {
+  promptModel,
+  nativeEnvironment,
+} = require("./helpers/prompt-model.cjs");
 
-const python = process.platform === "win32" ? "python" : "python3";
 const execute = promisify(execFile);
+const python = process.platform === "win32" ? "python" : "python3";
+const options = { engine: "onnxruntime-genai", prompt: "H", maxTokens: 3 };
 const signal = () => new AbortController().signal;
-const options = {
-  engine: "onnxruntime-genai",
-  prompt: "Hello ' $() 世界",
-  maxTokens: 2,
-};
 
-test("the Python runner is bundled outside the VSIX-excluded scripts directory", async () => {
-  const runner = path.resolve(
-    path.dirname(require.resolve("../dist/prompt")),
-    "..",
-    "media",
-    "run_prompt.py",
-  );
-  assert.match(await readFile(runner, "utf8"), /def generate_genai/);
-  const ignored = await readFile(
-    path.resolve(__dirname, "..", ".vscodeignore"),
-    "utf8",
-  );
-  assert.match(ignored, /^scripts\/\*\*$/m);
-  assert.doesNotMatch(ignored, /^(?:media\/\*\*|\*\*\/\*\.py)$/m);
-});
-
-async function fixture(t) {
+async function fixture(t, environment = true, external = false) {
   const root = await mkdtemp(path.join(tmpdir(), "onnx-viewer-prompt-test-"));
   t.after(() => rm(root, { force: true, recursive: true }));
-  const model = path.join(root, "model.onnx");
-  await writeFile(model, "explicit backend double");
-  await writeFile(
-    path.join(root, "genai_config.json"),
-    JSON.stringify({
-      model: {
-        decoder: { filename: "model.onnx", outputs: { logits: "logits" } },
-      },
-    }),
-  );
-  await writeFile(
-    path.join(root, "onnxruntime_genai.py"),
-    `
-class Row:
-    shape = (1, 1, 3)
-    def __init__(self, values): self.values = values
-    def reshape(self, *args): return self
-    def __getitem__(self, index): return self
-    def astype(self, dtype): return self
-    def tolist(self): return list(self.values)
-class Model:
-    def __init__(self, directory): pass
-class TokenScalar:
-    def __init__(self, value): self.value = value
-    def __int__(self): return self.value
-class Tokenizer:
-    def __init__(self, model): pass
-    def encode(self, prompt):
-        assert prompt == ${JSON.stringify(options.prompt)}
-        return [TokenScalar(0)]
-    def create_stream(self): return self
-    def decode(self, token): return ["zero", "one", "two"][token]
-class GeneratorParams:
-    def __init__(self, model): pass
-    def set_search_options(self, **options):
-        assert options == {"max_length": 3, "do_sample": False, "num_beams":1, "num_return_sequences":1}
-class Generator:
-    def __init__(self, model, params):
-        import pathlib
-        marker = pathlib.Path(__file__).parent / ".generation-count"
-        marker.write_text(str(int(marker.read_text()) + 1) if marker.exists() else "1")
-        self.step = 0
-    def append_tokens(self, tokens): assert tokens == [0]
-    def is_done(self): return self.step == 2
-    def generate_next_token(self):
-        self.step += 1
-        self.row.values[:] = [-100,-100,-100]
-    def get_next_tokens(self): return [self.step]
-    def get_logits(self):
-        self.row = Row([0,4,0] if self.step == 0 else [0,0,5])
-        return self.row
-`,
-  );
-  const previous = process.env.PYTHONPATH;
-  process.env.PYTHONPATH = [root, previous]
-    .filter(Boolean)
-    .join(path.delimiter);
-  t.after(() => {
-    if (previous === undefined) delete process.env.PYTHONPATH;
-    else process.env.PYTHONPATH = previous;
-  });
+  const model = await promptModel(root, external);
+  if (environment) {
+    for (const [name, value] of Object.entries(nativeEnvironment())) {
+      const previous = process.env[name];
+      process.env[name] = value;
+      t.after(() => {
+        if (previous === undefined) delete process.env[name];
+        else process.env[name] = previous;
+      });
+    }
+  }
   return { root, model };
 }
 
-test("prompt availability is based on GenAI assets, not an assumed LLM identity", async (t) => {
+test("native onnx-light Generate owns autoregression, EOS and error propagation", async (t) => {
   const { root, model } = await fixture(t);
+  const run = () =>
+    runPrompt(
+      model,
+      { ...options, engine: "onnx-light" },
+      "/no/python",
+      signal(),
+      () => {},
+    );
+  assert.deepEqual(
+    (await run()).tokens.map((token) => token.id),
+    [1, 1, 1],
+  );
+  const pipelinePath = path.join(root, "model.PIPE-ONNX");
+  await rename(path.join(root, "model.pipe-onnx"), pipelinePath);
+  const pipeline = await runPrompt(
+    pipelinePath,
+    { ...options, engine: "onnx-light" },
+    "/no/python",
+    signal(),
+    () => {},
+  );
+  assert.deepEqual(
+    pipeline.tokens.map((token) => token.id),
+    [1, 1, 1],
+  );
+  await writeFile(
+    path.join(root, "generation_config.json"),
+    JSON.stringify({ eos_token_id: 1 }),
+  );
+  assert.deepEqual(
+    (await run()).tokens.map((token) => token.id),
+    [1],
+  );
+  await writeFile(model, "invalid ONNX");
+  await assert.rejects(run(), /decode|parse|wire|field/i);
+});
+
+test("prompt availability follows local causal metadata and supports native pipeline discovery", async (t) => {
+  const { root, model } = await fixture(t, false);
   assert.deepEqual(await promptInfo(model), {
-    engines: ["onnxruntime-genai"],
+    engines: ["onnx-light", "onnxruntime-genai"],
     available: true,
   });
   await rm(path.join(root, "genai_config.json"));
-  const unavailable = await promptInfo(model);
-  assert.equal(unavailable.available, false);
-  assert.match(unavailable.reason, /local causal-model\/tokenizer metadata/);
-  await writeFile(path.join(root, "tokenizer_config.json"), "{}");
+  assert.deepEqual((await promptInfo(model)).engines, ["onnx-light"]);
+  const pipeline = path.join(root, "model.pipe-onnx");
+  await writeFile(pipeline, "");
+  assert.deepEqual((await promptInfo(pipeline)).engines, ["onnx-light"]);
   await writeFile(
     path.join(root, "config.json"),
     JSON.stringify({ architectures: ["BertForSequenceClassification"] }),
   );
   assert.equal((await promptInfo(model)).available, false);
-  await writeFile(
-    path.join(root, "config.json"),
-    JSON.stringify({ architectures: ["GPT2LMHeadModel"] }),
-  );
-  assert.deepEqual((await promptInfo(model)).engines, ["onnx-light"]);
   assert.equal((await promptInfo("relative.onnx")).available, false);
 });
 
-test("runs isolated Python with preserved PYTHONPATH, raw scores and safe prompt transport", async (t) => {
-  const { root, model } = await fixture(t);
-  const output = [];
-  const result = await runPrompt(model, options, python, signal(), (s) =>
-    output.push(s),
-  );
-  assert.equal(result.prompt, options.prompt);
-  assert.equal(result.engine, options.engine);
-  assert.deepEqual(result.tokens, [
-    { text: "one", id: 1, score: 4 },
-    { text: "two", id: 2, score: 5 },
+test("snapshot-style metadata symlinks remain available", async (t) => {
+  const { root, model } = await fixture(t, false);
+  const blobs = path.join(root, "blobs");
+  await mkdir(blobs);
+  for (const name of [
+    "config.json",
+    "tokenizer.json",
+    "tokenizer_config.json",
+  ]) {
+    const file = path.join(root, name);
+    const blob = path.join(blobs, name);
+    await writeFile(blob, await readFile(file));
+    await rm(file);
+    try {
+      await symlink(blob, file, "file");
+    } catch (error) {
+      if (process.platform === "win32" && error.code === "EPERM") {
+        t.skip("File symlinks require Windows developer privileges.");
+        return;
+      }
+      throw error;
+    }
+  }
+  assert.deepEqual((await promptInfo(model)).engines, [
+    "onnx-light",
+    "onnxruntime-genai",
   ]);
+});
+
+test("native GenAI streams real tokens and measures prefill and each decode step without Python", async (t) => {
+  const { root, model } = await fixture(t);
+  const streamed = [];
+  const result = await runPrompt(
+    model,
+    { ...options, prompt: "HH" },
+    "/this/python/must/not/be/executed",
+    signal(),
+    () => {},
+    undefined,
+    (token, index) => streamed.push({ token, index }),
+  );
+  assert.deepEqual(
+    result.tokens.map((token) => token.id),
+    [1, 1, 1],
+  );
+  assert.deepEqual(
+    result.tokens.map((token) => token.score),
+    [4, 4, 4],
+  );
+  assert.ok(
+    result.tokens.every(
+      (token) => Number.isFinite(token.timeMs) && token.timeMs >= 0,
+    ),
+  );
+  assert.deepEqual(
+    streamed.map(({ token }) => token),
+    result.tokens,
+  );
+  assert.deepEqual(
+    streamed.map(({ index }) => index),
+    [0, 1, 2],
+  );
   assert.match(result.signature, /^[0-9a-f]{64}$/);
-  assert.match(output.at(-1), /Generated 2\/2 tokens/);
   assert.equal(
-    (await readdir(root)).some((entry) => entry.startsWith(".prompt-")),
+    (await readdir(root)).some((name) => name.startsWith(".prompt-")),
     false,
   );
 });
 
-test("full vocabulary retention stops at the budget while selected raw scores remain available", async (t) => {
+test("the first native token arrives before completion and cancellation stops the child", async (t) => {
   const { root, model } = await fixture(t);
-  const input = path.join(root, "request.json");
-  const output = path.join(root, "result.json");
-  const capture = path.join(root, "capture.json");
-  await writeFile(
-    input,
-    JSON.stringify({
-      modelPath: model,
-      ...options,
-      validate: false,
-      capturePath: capture,
-      captureBudget: 0,
-    }),
+  const controller = new AbortController();
+  let received = 0;
+  await assert.rejects(
+    runPrompt(
+      model,
+      { ...options, maxTokens: 4096 },
+      "/no/python",
+      controller.signal,
+      () => {},
+      undefined,
+      () => {
+        const request = readdirSync(root).find((name) =>
+          name.startsWith(".prompt-"),
+        );
+        assert.ok(request);
+        assert.equal(
+          existsSync(path.join(root, request, "output.json")),
+          false,
+        );
+        received++;
+        controller.abort();
+      },
+    ),
+    { name: "AbortError" },
   );
-  await execute(python, [
-    "-B",
-    path.resolve(__dirname, "..", "media", "run_prompt.py"),
-    input,
-    output,
-  ]);
-  const result = JSON.parse(await readFile(output, "utf8"));
-  assert.deepEqual(
-    result.tokens.map((token) => token.score),
-    [4, 5],
+  assert.equal(received, 1);
+  assert.equal(
+    readdirSync(root).some((name) => name.startsWith(".prompt-")),
+    false,
   );
-  assert.match(result.limitations.join(" "), /retention budget/);
-  assert.equal(JSON.parse(await readFile(capture, "utf8")).logits, null);
 });
 
-test("onnx-light uses native generation only with null scores and explicit external weights", async (t) => {
-  const { root, model } = await fixture(t);
-  await rm(path.join(root, "genai_config.json"));
-  await writeFile(
-    path.join(root, "config.json"),
-    JSON.stringify({ architectures: ["GPT2LMHeadModel"] }),
+test("native incremental decoding preserves UTF-8 characters split across token IDs", async (t) => {
+  const { root, model } = await fixture(t, true, true);
+  const file = path.join(root, "tokenizer.json");
+  const tokenizer = JSON.parse(await readFile(file, "utf8"));
+  tokenizer.model.vocab = { "\u00c3": 0, "\u00a9": 1, X: 2, H: 3 };
+  tokenizer.model.unk_token = "X";
+  tokenizer.decoder = {
+    type: "ByteLevel",
+    add_prefix_space: false,
+    trim_offsets: true,
+    use_regex: true,
+  };
+  await writeFile(file, JSON.stringify(tokenizer));
+  const weights = Buffer.alloc(4 * 4 * 4);
+  weights.writeFloatLE(4, (3 * 4 + 0) * 4);
+  weights.writeFloatLE(4, (0 * 4 + 1) * 4);
+  await writeFile(path.join(root, "weights", "decoder.bin"), weights);
+  const result = await runPrompt(
+    model,
+    { ...options, maxTokens: 2 },
+    "/no/python",
+    signal(),
+    () => {},
   );
-  await writeFile(path.join(root, "tokenizer_config.json"), "{}");
-  await writeFile(
-    path.join(root, "numpy.py"),
-    `
-int64 = "int64"
-def asarray(value, dtype=None): return value
-class Generated:
-    def tolist(self): return [[0,1,2]]
-`,
+  assert.deepEqual(
+    result.tokens.map((token) => token.id),
+    [0, 1],
   );
-  await writeFile(
-    path.join(root, "transformers.py"),
-    `
-class AutoTokenizer:
-    eos_token_id = 2
-    @classmethod
-    def from_pretrained(cls, source, **kwargs):
-        assert kwargs == {"trust_remote_code": False, "local_files_only": True}
-        return cls()
-    def encode(self, prompt, **kwargs):
-        assert isinstance(kwargs["add_special_tokens"], bool)
-        return [0]
-    def decode(self, ids, **kwargs): return ["zero","one","two"][ids[0]]
-class Logits:
-    def __init__(self, values): self.values = values
-    def __getitem__(self, key): return self
-    def float(self): return self
-    def cpu(self): return self
-    def tolist(self): return self.values
-class AutoModelForCausalLM:
-    @classmethod
-    def from_pretrained(cls, source, **kwargs):
-        assert kwargs == {"trust_remote_code":False, "local_files_only":True}
-        return cls()
-    def eval(self): return self
-    def __call__(self, input_ids, **kwargs):
-        from types import SimpleNamespace
-        assert input_ids in ([[0]], [[0,1]])
-        return SimpleNamespace(logits=Logits([4,0,0] if input_ids == [[0]] else [0,5,0]))
-`,
+  assert.deepEqual(
+    result.tokens.map((token) => token.text),
+    ["", "\u00e9"],
   );
-  await writeFile(
-    path.join(root, "torch.py"),
-    `
-from contextlib import nullcontext
-inference_mode = nullcontext
-long = "long"
-def tensor(value, **kwargs): return value
-def ones(shape, **kwargs): return shape
-`,
-  );
-  const sdk = path.join(root, "onnx_light", "onnx");
-  await mkdir(sdk, { recursive: true });
-  await writeFile(path.join(root, "onnx_light", "__init__.py"), "");
-  await writeFile(
-    path.join(sdk, "__init__.py"),
-    `
-def load(path, **kwargs):
-    assert kwargs == {"load_external_data":True}
-    return path
-`,
-  );
-  await writeFile(
-    path.join(sdk, "reference.py"),
-    `
-import pathlib
-from numpy import Generated
-class ReferenceEvaluator:
-    def __init__(self, model): self.model = model
-    def generate(self, feeds, **kwargs):
-        if "missing-cache" in self.model:
-            raise RuntimeError("SDK Generate: missing graph feed past_key_values")
-        assert kwargs["max_new_tokens"] == 2 and kwargs["temperature"] == 0
-        assert kwargs["eos_token_id"] == 2
-        assert feeds == {"input_ids":[[0]]}
-        marker = pathlib.Path(__file__).parents[2] / ".native-generation-count"
-        marker.write_text(str(int(marker.read_text()) + 1) if marker.exists() else "1")
-        return Generated()
-    def run(self, *args, **kwargs): raise AssertionError("Viewer must not replay inference")
-`,
-  );
-  assert.deepEqual((await promptInfo(model)).engines, ["onnx-light"]);
+});
+
+test("native onnx-light generation reports unavailable streaming, timings and logits honestly", async (t) => {
+  const { model } = await fixture(t);
   const result = await runPrompt(
     model,
     { ...options, engine: "onnx-light" },
-    python,
+    "/no/python",
     signal(),
     () => {},
   );
-  assert.deepEqual(result.tokens, [
-    { text: "one", id: 1, score: null },
-    { text: "two", id: 2, score: null },
-  ]);
-  assert.match(result.limitations.join(" "), /exposes token IDs only/);
-  const validated = await runPrompt(
-    model,
-    { ...options, engine: "onnx-light", validate: true },
-    python,
-    signal(),
-    () => {},
-    result,
+  assert.deepEqual(
+    result.tokens.map((token) => token.id),
+    [1, 1, 1],
   );
-  assert.deepEqual(validated.reference.tokens, [
-    { text: "zero", id: 0, score: 4 },
-    { text: "one", id: 1, score: 5 },
-  ]);
-  assert.equal(validated.discrepancies, undefined);
-  const pipeline = path.join(root, "model.pipe-onnx");
-  await writeFile(pipeline, "explicit split-pipeline double");
-  assert.equal((await promptInfo(pipeline)).available, false);
+  assert.ok(
+    result.tokens.every(
+      (token) => token.score === null && token.timeMs === null,
+    ),
+  );
+  assert.match(result.limitations.join(" "), /upstream SDK.*5692/);
+});
+
+test("native raw scores and timings survive the bounded vocabulary capture limit", async (t) => {
+  const { root, model } = await fixture(t);
+  const input = path.join(root, "input.json");
+  const output = path.join(root, "output.json");
+  const capturePath = path.join(root, "capture.json");
+  await writeFile(
+    input,
+    JSON.stringify({
+      ...options,
+      modelPath: model,
+      source: root,
+      capturePath,
+      captureBudget: 0,
+    }),
+  );
+  await execute(
+    process.execPath,
+    [path.resolve(__dirname, "../media/run_prompt.cjs"), input, output],
+    { env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" } },
+  );
+  const result = JSON.parse(await readFile(output, "utf8"));
+  assert.ok(
+    result.tokens.every((token) => token.score === 4 && token.timeMs >= 0),
+  );
+  assert.match(result.limitations.join(" "), /retention budget/);
+  assert.equal(JSON.parse(await readFile(capturePath, "utf8")).logits, null);
+});
+
+test("native runtime and model failures surface without falling back to Python", async (t) => {
+  const { root, model } = await fixture(t);
+  process.env.ONNX_LIGHT_VIEWER_GENAI_LIBRARY = path.join(
+    root,
+    "missing-native-library",
+  );
+  await assert.rejects(
+    runPrompt(model, options, "/no/python", signal(), () => {}),
+    /Could not load the native ONNX Runtime GenAI library/,
+  );
   assert.equal(
-    await readFile(path.join(root, ".native-generation-count"), "utf8"),
-    "1",
-  );
-  const unsupported = path.join(root, "separate-decode.pipe-onnx");
-  await writeFile(unsupported, "unsupported separate decode double");
-  await assert.rejects(
-    runPrompt(
-      unsupported,
-      { ...options, engine: "onnx-light" },
-      python,
-      signal(),
-      () => {},
-    ),
-    /does not directly execute PipelineProto/,
-  );
-  const unresolved = path.join(root, "missing-cache.onnx");
-  await writeFile(unresolved, "unresolved required model input double");
-  await assert.rejects(
-    runPrompt(
-      unresolved,
-      { ...options, engine: "onnx-light" },
-      python,
-      signal(),
-      () => {},
-    ),
-    /SDK Generate: missing graph feed past_key_values/,
+    (await readdir(root)).some((name) => name.startsWith(".prompt-")),
+    false,
   );
 });
 
-test("rejects malformed options, stale or tampered previous results and cancellation", async (t) => {
+test("rejects malformed options, tampering, changed assets and cancellation", async (t) => {
   const { root, model } = await fixture(t);
   for (const invalid of [
     null,
@@ -341,52 +314,119 @@ test("rejects malformed options, stale or tampered previous results and cancella
     { ...options, prompt: "" },
     { ...options, trust_remote_code: true },
   ])
-    await assert.rejects(runPrompt(model, invalid, python, signal(), () => {}));
-  const previous = await runPrompt(model, options, python, signal(), () => {});
-  const rerun = await runPrompt(
+    await assert.rejects(
+      runPrompt(model, invalid, "/no/python", signal(), () => {}),
+    );
+  const previous = await runPrompt(
     model,
     options,
-    python,
+    "/no/python",
     signal(),
     () => {},
-    previous,
   );
-  assert.deepEqual(rerun.tokens, previous.tokens);
-  assert.equal(
-    await readFile(path.join(root, ".generation-count"), "utf8"),
-    "2",
-  );
-  const validate = { ...options, validate: true };
   for (const changed of [
     { ...previous, signature: "forged" },
     { ...previous, prompt: "different" },
-    { ...previous, tokens: [{ text: "fake", id: 2, score: 999 }] },
+    { ...previous, tokens: [{ text: "fake", id: 2, score: 999, timeMs: 1 }] },
+    {
+      ...previous,
+      tokens: previous.tokens.map((token) => ({ ...token, timeMs: -1 })),
+    },
   ])
     await assert.rejects(
-      runPrompt(model, validate, python, signal(), () => {}, changed),
-      /previous prompt result/,
+      runPrompt(
+        model,
+        { ...options, validate: true },
+        "/no/python",
+        signal(),
+        () => {},
+        changed,
+      ),
     );
-  await writeFile(model, "changed model bytes");
+  await writeFile(path.join(root, "tokenizer_config.json"), '{"changed":true}');
   await assert.rejects(
-    runPrompt(model, validate, python, signal(), () => {}, previous),
+    runPrompt(
+      model,
+      { ...options, validate: true },
+      "/no/python",
+      signal(),
+      () => {},
+      previous,
+    ),
     /previous prompt result/,
   );
   const controller = new AbortController();
   controller.abort();
   await assert.rejects(
-    runPrompt(model, options, python, controller.signal, () => {}),
+    runPrompt(model, options, "/no/python", controller.signal, () => {}),
     { name: "AbortError" },
   );
   assert.equal(
-    (await readdir(root)).some((x) => x.startsWith(".prompt-")),
+    (await readdir(root)).some((name) => name.startsWith(".prompt-")),
     false,
   );
 });
 
-test("validates an authenticated previous result against the same teacher-forced tokens", async (t) => {
+test("validation invalidates captured logits when nested external weights change", async (t) => {
+  const { root, model } = await fixture(t, true, true);
+  const previous = await runPrompt(
+    model,
+    options,
+    "/no/python",
+    signal(),
+    () => {},
+  );
+  const file = path.join(root, "weights", "decoder.bin");
+  const weights = await readFile(file);
+  weights.writeFloatLE(5, (3 * 4 + 1) * 4);
+  await writeFile(file, weights);
+  await assert.rejects(
+    runPrompt(
+      model,
+      { ...options, validate: true },
+      "/no/python",
+      signal(),
+      () => {},
+      previous,
+    ),
+    /previous prompt result/,
+  );
+});
+
+test("HF resolves a pinned cached checkpoint before an export-only tokenizer directory", async (t) => {
+  const { model } = await fixture(t, false);
+  await execute(python, [
+    "-B",
+    "-c",
+    `
+import importlib.util
+import sys
+import types
+spec = importlib.util.spec_from_file_location("prompt", "media/run_prompt.py")
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+def snapshot(identity, **kwargs):
+    assert identity == "owner/checkpoint"
+    assert kwargs == {"revision":"pinned-revision", "local_files_only":True}
+    return "/local/pinned-checkpoint"
+sys.modules["huggingface_hub"] = types.SimpleNamespace(snapshot_download=snapshot)
+request = {"modelPath":sys.argv[1], "provenance":{
+    "source":"/missing/original/source", "model":"owner/checkpoint", "revision":"pinned-revision"}}
+assert module.source_for(request) == "/local/pinned-checkpoint"
+try: module.source_for({"modelPath":sys.argv[1]})
+except ValueError: pass
+else: raise AssertionError("Export-only directory accepted as a checkpoint")
+`,
+    model,
+  ]);
+});
+
+test("HF reference uses the native capture, exported prefixes and cached decode timings", async (t) => {
   const { root, model } = await fixture(t);
-  await writeFile(path.join(root, "config.json"), "{}");
-  await writeFile(path.join(root, "tokenizer_config.json"), "{}");
+  await writeFile(
+    path.join(root, "model.safetensors"),
+    "explicit HF test double",
+  );
   await writeFile(
     path.join(root, "torch.py"),
     `
@@ -402,31 +442,46 @@ def ones(shape, **kwargs): return shape
     `
 from types import SimpleNamespace
 class Logits:
-    def __init__(self, values): self.values = values
     def __getitem__(self, index): return self
     def float(self): return self
     def cpu(self): return self
-    def tolist(self): return self.values
+    def tolist(self): return [0,3.98,4,0]
 class AutoTokenizer:
     @classmethod
     def from_pretrained(cls, source, **kwargs):
-        assert kwargs == {"trust_remote_code": False, "local_files_only": True}
+        assert kwargs == {"trust_remote_code":False,"local_files_only":True}
         return cls()
-    def encode(self, prompt, **kwargs): return [0]
-    def decode(self, ids, **kwargs): return ["zero","one","two"][ids[0]]
+    def encode(self, prompt, **kwargs): return [3]
+    def decode(self, ids, **kwargs): return str(ids[0])
 class AutoModelForCausalLM:
     @classmethod
     def from_pretrained(cls, source, **kwargs):
-        assert kwargs == {"trust_remote_code": False, "local_files_only": True}
+        assert kwargs == {"trust_remote_code":False,"local_files_only":True}
         return cls()
     def eval(self): return self
     def __call__(self, input_ids, **kwargs):
-        assert input_ids in ([[0]], [[0,1]])
-        row = [0,4,.02] if input_ids == [[0]] else [0,6,5]
-        return SimpleNamespace(logits=Logits(row))
+        assert kwargs["use_cache"] is True
+        step = kwargs.get("past_key_values", 0)
+        assert input_ids == ([[3]] if step == 0 else [[1]])
+        assert kwargs["attention_mask"] == (1, step + 1)
+        return SimpleNamespace(logits=Logits(), past_key_values=step+1)
 `,
   );
-  const previous = await runPrompt(model, options, python, signal(), () => {});
+  const previousPath = process.env.PYTHONPATH;
+  process.env.PYTHONPATH = [root, previousPath]
+    .filter(Boolean)
+    .join(path.delimiter);
+  t.after(() => {
+    if (previousPath === undefined) delete process.env.PYTHONPATH;
+    else process.env.PYTHONPATH = previousPath;
+  });
+  const previous = await runPrompt(
+    model,
+    options,
+    "/no/python",
+    signal(),
+    () => {},
+  );
   const validated = await runPrompt(
     model,
     { ...options, validate: true },
@@ -437,100 +492,18 @@ class AutoModelForCausalLM:
   );
   assert.deepEqual(validated.tokens, previous.tokens);
   assert.deepEqual(
-    validated.reference.tokens.map(({ id, score }) => ({ id, score })),
-    [
-      { id: 1, score: 4 },
-      { id: 1, score: 6 },
-    ],
+    validated.reference.tokens.map((token) => token.id),
+    [2, 2, 2],
   );
-  assert.equal(validated.discrepancies[0].maxAbsolute, 0.02);
-  assert.equal(validated.discrepancies[1].maxAbsolute, 6);
-  assert.ok(validated.discrepancies.every((metric) => metric.total === 3));
-  assert.equal(
-    await readFile(path.join(root, ".generation-count"), "utf8"),
-    "1",
-  );
-  assert.equal("logits" in previous, false);
-  assert.equal("promptIds" in previous, false);
-  assert.deepEqual(Object.keys(previous).sort(), [
-    "engine",
-    "prompt",
-    "signature",
-    "tokens",
-  ]);
-  assert.equal(
-    (await readdir(root)).some((x) => x.startsWith(".prompt-")),
-    false,
+  assert.ok(validated.reference.tokens.every((token) => token.timeMs >= 0));
+  assert.ok(
+    validated.discrepancies.every(
+      (metric) => metric.maxAbsolute === 4 && metric.total === 4,
+    ),
   );
 });
 
-test("tokens-only results can retain HF predictions without discrepancy metrics", async (t) => {
-  const { model } = await fixture(t);
-  const compiled = require.resolve("../dist/prompt");
-  const backend = {};
-  let oversize = false;
-  const localRequire = createRequire(compiled);
-  runInNewContext(await readFile(compiled, "utf8"), {
-    exports: backend,
-    Error,
-    __dirname: path.dirname(compiled),
-    require(name) {
-      if (name !== "./export") return localRequire(name);
-      return {
-        ...localRequire(name),
-        async runProcess(plan) {
-          const request = JSON.parse(await readFile(plan.args[2], "utf8"));
-          const tokens = [{ text: "zero", id: 0, score: null }];
-          const result = {
-            prompt: request.prompt,
-            engine: request.engine,
-            tokens,
-            limitations: ["Full engine vocabulary logits are unavailable."],
-          };
-          if (request.validate)
-            result.reference = {
-              tokens: [{ text: "one", id: 1, score: 4 }],
-            };
-          if (!request.reuseCapture)
-            await writeFile(
-              request.capturePath,
-              JSON.stringify({ promptIds: [0], tokens, logits: null }),
-            );
-          if (oversize)
-            await truncate(request.capturePath, 256 * 1024 * 1024 + 1);
-          await writeFile(plan.args[3], JSON.stringify(result));
-        },
-      };
-    },
-  });
-  const previous = await backend.runPrompt(
-    model,
-    options,
-    python,
-    signal(),
-    () => {},
-  );
-  const result = await backend.runPrompt(
-    model,
-    { ...options, validate: true },
-    python,
-    signal(),
-    () => {},
-    previous,
-  );
-  assert.equal(result.tokens[0].score, null);
-  assert.equal(result.reference.tokens[0].id, 1);
-  assert.equal(result.reference.tokens[0].score, 4);
-  assert.equal(result.discrepancies, undefined);
-  assert.ok(result.limitations.length);
-  oversize = true;
-  await assert.rejects(
-    backend.runPrompt(model, options, python, signal(), () => {}),
-    /capture exceeds the retention budget/,
-  );
-});
-
-test("numerical comparison covers every vocabulary entry and strict threshold boundaries", async () => {
+test("numerical comparison covers all vocabulary entries and strict threshold boundaries", async () => {
   await execute(python, [
     "-B",
     "-c",
@@ -540,85 +513,15 @@ import math
 spec = importlib.util.spec_from_file_location("prompt", "media/run_prompt.py")
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
-result = module.compare_logits([0, .009, .01, .099, .1, .999, 1], [0]*7)
-assert result["below001"] == 2, result
-assert result["below01"] == 4, result
-assert result["below1"] == 6, result
-assert result["total"] == 7
-assert result["maxAbsolute"] == 1
-assert math.isclose(result["l2"], math.sqrt(sum(x*x for x in [0,.009,.01,.099,.1,.999,1])))
+result = module.compare_logits([0,.009,.01,.099,.1,.999,1], [0]*7)
+assert result["below001"] == 2 and result["below01"] == 4 and result["below1"] == 6
+assert result["total"] == 7 and result["maxAbsolute"] == 1
 assert math.isfinite(result["relative"])
-rows, used = module.retain_row([], [1,2,3], 0, 1000)
-assert rows == [[1,2,3]] and used <= 1000
-rows, used = module.retain_row(rows, [1]*100, used, 1000)
-assert rows is None
-rows, used = module.retain_row(rows, [1], used, 1000)
-assert rows is None
 assert module.compare_logits([3,4], [3,0])["relative"] == 4/3
-for left, right in [([], []), ([1], [1,2]), ([float("nan")], [0]), ([0], [float("inf")])]:
-    try: module.compare_logits(left, right)
+for left,right in [([],[]),([1],[1,2]),([float("nan")],[0]),([0],[float("inf")])]:
+    try: module.compare_logits(left,right)
     except ValueError: pass
-    else: raise AssertionError((left, right))
-`,
-  ]);
-});
-
-test("HF predictions may diverge while comparison still teacher-forces exported prefixes", async () => {
-  await execute(python, [
-    "-B",
-    "-c",
-    `
-import contextlib
-import importlib.util
-import sys
-import types
-spec = importlib.util.spec_from_file_location("prompt", "media/run_prompt.py")
-module = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(module)
-prefixes = []
-class Logits:
-    def __getitem__(self, item): return self
-    def float(self): return self
-    def cpu(self): return self
-    def tolist(self): return [1,2,3]
-class Model:
-    def eval(self): return self
-    def __call__(self, **kwargs):
-        prefixes.append(kwargs["input_ids"][0][:])
-        assert kwargs["use_cache"] is False
-        return types.SimpleNamespace(logits=Logits())
-class Tokenizer:
-    def encode(self, prompt, **kwargs):
-        assert prompt == "same prompt" and isinstance(kwargs["add_special_tokens"], bool)
-        return [0,1]
-    def decode(self, ids, **kwargs): return str(ids[0])
-def loader(result):
-    def load(source, **kwargs):
-        assert source == "local-cache"
-        assert kwargs == {"local_files_only": True, "trust_remote_code": False}
-        return result
-    return types.SimpleNamespace(from_pretrained=load)
-sys.modules["torch"] = types.SimpleNamespace(
-    inference_mode=contextlib.nullcontext, long="long",
-    tensor=lambda value, **kw: value, ones=lambda shape, **kw: shape)
-sys.modules["transformers"] = types.SimpleNamespace(
-    AutoModelForCausalLM=loader(Model()), AutoTokenizer=loader(Tokenizer()))
-module.source_for = lambda request: "local-cache"
-request = {"prompt": "same prompt"}
-tokens = [{"id": 1}, {"id": 0}]
-reference, metrics = module.reference_logits(request, [0,1], tokens, [[1,2,3],[1,2,3]])
-assert prefixes == [[0,1], [0,1,1]], prefixes
-assert [x["id"] for x in reference["tokens"]] == [2,2]
-assert [x["score"] for x in reference["tokens"]] == [3,3]
-assert all(x["total"] == 3 and x["maxAbsolute"] == 0 for x in metrics)
-prefixes.clear()
-reference, metrics = module.reference_logits(request, [0,1], tokens, None)
-assert prefixes == [[0,1], [0,1,1]], prefixes
-assert metrics is None
-assert [x["id"] for x in reference["tokens"]] == [2,2]
-try: module.reference_logits(request, [9], tokens, [[1,2,3],[1,2,3]])
-except ValueError as error: assert "tokenizers" in str(error)
-else: raise AssertionError("Mismatched tokenization accepted")
+    else: raise AssertionError((left,right))
 `,
   ]);
 });

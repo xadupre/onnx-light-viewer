@@ -2,7 +2,7 @@ Implemented features
 ====================
 
 The viewer inspects ONNX graphs locally with onnx-light. Models are not uploaded.
-Explicit Convert and Run Prompt actions execute installed Python tooling;
+Explicit Convert and Run Prompt actions execute installed tooling;
 inspection does not save or modify the source file.
 
 Available in the viewer
@@ -105,13 +105,19 @@ Running language-model prompts
 After conversion, open **Run Prompt** next to **Tensors**. Select **onnx-light**
 or **onnxruntime-genai** (when a GenAI configuration is available), edit the
 prompt and choose a maximum number of new tokens (default: 32). Requires a
-trusted workspace, a causal language model and the tokenizer/runtime packages
-in Settings' Python environment: ``onnx-light``, its CPU kernels, ``numpy`` and
-``transformers`` for onnx-light, or ``onnxruntime-genai`` for GenAI.
-Hugging Face validation additionally needs ``torch``, ``transformers`` and the
-original cached checkpoint. Execution uses the saved model, not unsaved graph edits.
-GenAI must provide its public ``Generator.get_logits()`` API so raw logits
-can be captured before token-selection penalties modify them.
+trusted workspace and a causal language model. Both ONNX engines execute in
+C++, in an isolated Node process so cancellation can stop native execution.
+Execution uses the saved model, not unsaved graph edits.
+
+The bundled onnx-light SDK supplies its CPU kernels. Native tokenization for both
+engines uses the ONNX Runtime GenAI C API (0.17.0 or newer), not its Python module.
+Install the matching C++ GenAI and ONNX Runtime libraries and set
+``ONNX_LIGHT_VIEWER_GENAI_LIBRARY`` to the absolute GenAI shared-library path
+before starting VS Code. Set ``ORT_LIB_PATH`` to the absolute ONNX Runtime
+shared-library path when it is not already discoverable. Choose CPU/CUDA libraries
+compatible with the exported configuration; the viewer installs neither.
+Only Hugging Face validation needs ``torch``, ``transformers`` and the original
+cached checkpoint in Settings' Python environment.
 
 Conversion saves source information next to each exported model. **Validate
 with Hugging Face** uses that source checkpoint and the same generated prefixes
@@ -122,17 +128,28 @@ L2 distance, and counts of vocabulary coefficients with absolute differences
 below 0.01, 0.1 and 1. Runtime errors are shown without substituting another
 engine; **Cancel** stops execution.
 
-The onnx-light Python generation API currently returns token IDs without
-logits. Its scores and discrepancy metrics are explicitly unavailable, not
-estimated by the viewer. Scored comparison requires onnxruntime-genai.
-Pipeline execution also requires a supported SDK generation entry point;
-the viewer does not substitute prefill-only execution for a pipeline's decode stage.
+With **onnxruntime-genai**, token columns appear as soon as the C++ engine
+produces them. Each column includes its phase and latency in milliseconds.
+The first token is **Prefill**; subsequent tokens are **Decode**. The summary
+shows prefill time and the mean of decode tokens only; a one-token result has
+no decode mean. Hugging Face validation also reports per-token timings, using
+the prompt once and the exported token prefixes with its decode cache thereafter.
+Timings include inference and CPU logit transfer, but exclude loading,
+tokenization, detokenization, retained-logit serialization and UI rendering.
+
+The onnx-light C++ ``Generate`` API currently returns completed token IDs only.
+Streaming, individual token timings, scores and discrepancy metrics are explicitly
+unavailable, not estimated by dividing the total runtime. These capabilities are
+tracked in `xadupre/onnx-light#5692
+<https://github.com/xadupre/onnx-light/issues/5692>`_.
+Native pipeline generation uses the SDK's ``PipelineProto`` overload; unsupported
+stages or inputs fail explicitly, without a viewer-side generation loop.
 
 .. figure:: _static/feature-run-prompt.png
-   :alt: Run Prompt tab with engine selection, editable prompt and a maximum of 32 new tokens, disabled until a converted model is opened.
+   :alt: Run Prompt with native GenAI output columns, prefill and decode phases, individual token times and the decode mean.
    :width: 100%
 
-   Configure generation after opening a converted language model.
+   Real native GenAI timings on a tiny deterministic test model, not an LLM benchmark.
 
 Inspection
 ^^^^^^^^^^

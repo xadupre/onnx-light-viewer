@@ -999,6 +999,15 @@ async function configurePanel(
                   promptResult?.owner === owner
                   ? promptResult.result
                   : undefined,
+                (token, index) => {
+                  if (isCurrent())
+                    void postMessage({
+                      type: "prompt-token",
+                      requestId: message.requestId,
+                      token,
+                      index,
+                    });
+                },
               ),
             );
             if (isCurrent()) {

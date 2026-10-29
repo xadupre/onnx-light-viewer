@@ -40,6 +40,7 @@ Napi::Object Initialize(Napi::Env env, Napi::Object exports) {
   exports.Set("loadPipelineFile", Napi::Function::New(env, onnx_light_viewer::LoadPipelineFile));
   exports.Set("listBackendTests", Napi::Function::New(env, onnx_light_viewer::ListBackendTests));
   exports.Set("loadBackendTest", Napi::Function::New(env, onnx_light_viewer::LoadBackendTest));
+  exports.Set("runNativePrompt", Napi::Function::New(env, onnx_light_viewer::RunNativePrompt));
   return exports;
 }
 
