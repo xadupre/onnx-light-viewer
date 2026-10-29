@@ -266,7 +266,7 @@ test("tensor icons open data directly while the tensor browser lists metadata an
   load(graph);
   const tabs = [...document.querySelectorAll(".viewer-tabs button")];
   assert.equal(
-    tabs[tabs.indexOf(document.getElementById("status-tab")) - 1].id,
+    tabs[tabs.indexOf(document.getElementById("logs-tab")) - 1].id,
     "tensors-tab",
   );
   const group = document.querySelector('[data-id="node-0"]');
@@ -3568,7 +3568,10 @@ test("shows matching adjacent Open/Save sidebar buttons and an explicit storage/
   assert.equal(save.textContent, "Save");
   assert.equal(open.nextElementSibling, save);
   assert.equal(open.className, save.className);
-  assert.equal(open.parentElement, document.getElementById("sidebar-controls"));
+  assert.equal(
+    open.closest("nav"),
+    document.getElementById("sidebar-controls"),
+  );
   assert.equal(
     open.className,
     document.getElementById("show-operator").className,
@@ -4663,7 +4666,7 @@ test("offers last and all Unfuse actions beside Fuse and preserves repeated undo
     document.getElementById("fuse-pattern").nextElementSibling,
     undo,
   );
-  assert.equal(undo.parentElement.id, "sidebar-controls");
+  assert.equal(undo.closest("nav").id, "sidebar-controls");
   graph(2);
   assert.equal(undo.disabled, false);
   undo.click();
@@ -5161,6 +5164,73 @@ test("preserves save destination separators while browsing directories inline", 
   }
 });
 
+test("tab keyboard order follows the Navigation and Application themes", (t) => {
+  const { document, window } = openViewer(t);
+  const tabs = [...document.querySelectorAll(".viewer-tabs [role=tab]")];
+  assert.deepEqual(
+    tabs.map((tab) => tab.id),
+    [
+      "model-tab",
+      "statistics-tab",
+      "memory-tab",
+      "tensors-tab",
+      "logs-tab",
+      "status-tab",
+      "controls-tab",
+      "repositories-tab",
+      "settings-tab",
+    ],
+  );
+  tabs[0].focus();
+  for (const tab of [...tabs.slice(1), tabs[0]]) {
+    document.activeElement.dispatchEvent(
+      new window.KeyboardEvent("keydown", { key: "ArrowRight" }),
+    );
+    assert.equal(document.activeElement, tab);
+    assert.equal(tab.getAttribute("aria-selected"), "true");
+    assert.equal(
+      document.getElementById(tab.getAttribute("aria-controls")).hidden,
+      false,
+    );
+    assert.equal(tabs.filter((item) => item.tabIndex === 0).length, 1);
+  }
+  for (const [key, expected] of [
+    ["ArrowLeft", tabs.at(-1)],
+    ["Home", tabs[0]],
+    ["End", tabs.at(-1)],
+  ]) {
+    document.activeElement.dispatchEvent(
+      new window.KeyboardEvent("keydown", { key }),
+    );
+    assert.equal(document.activeElement, expected);
+  }
+});
+
+test("reveals sidebar panels below sticky controls or scrolls past static controls", (t) => {
+  const { document } = openViewer(t);
+  const controls = document.getElementById("sidebar-controls");
+  const panel = document.getElementById("metadata-panel");
+  const sidebar = document.getElementById("graph-panels");
+  Object.defineProperty(controls, "offsetHeight", { value: 225 });
+  Object.defineProperty(panel, "offsetTop", { value: 400 });
+  for (const [position, expectedScroll] of [
+    ["sticky", 163],
+    ["static", 388],
+  ]) {
+    controls.style.position = position;
+    document.getElementById("show-metadata").click();
+    assert.equal(panel.hidden, false);
+    assert.equal(sidebar.scrollTop, expectedScroll);
+    document.getElementById("show-metadata").click();
+  }
+  const stylesheet = [...document.styleSheets][0];
+  const responsive = [...stylesheet.cssRules].find(
+    (rule) => rule.conditionText === "(max-width: 760px), (max-height: 600px)",
+  );
+  assert.equal(responsive.cssRules[0].selectorText, "#sidebar-controls");
+  assert.equal(responsive.cssRules[0].style.position, "static");
+});
+
 test("toggles separated, stacked sidebar panels independently from Op Data Find Fuse controls", (t) => {
   const { document, window, load } = openViewer(t);
   const style = document.createElement("style");
@@ -5179,17 +5249,17 @@ test("toggles separated, stacked sidebar panels independently from Op Data Find 
     [
       "Open",
       "Save",
-      "Convert",
       "Find",
+      "Op",
+      "Data",
+      "Convert",
       "Optimize",
       "Fuse",
       "Unfuse",
-      "Op",
-      "Data",
     ],
   );
   assert.match(
-    window.getComputedStyle(controls).gridTemplateColumns,
+    window.getComputedStyle(allButtons[0].parentElement).gridTemplateColumns,
     /^repeat\(3,/,
   );
   const buttons = [
@@ -5299,7 +5369,7 @@ test("runs matching explicitly, highlights candidates and fuses only checked mat
     window.dispatchEvent(new window.MessageEvent("message", { data }));
   const button = document.getElementById("fuse-pattern");
   assert.equal(
-    button.parentElement,
+    button.closest("nav"),
     document.getElementById("sidebar-controls"),
   );
   assert.equal(button.textContent, "Fuse");
@@ -5810,7 +5880,7 @@ test("switches all tabs without logging clicks or changing graph, selection or c
   document
     .getElementById("logs-tab")
     .dispatchEvent(
-      new window.KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }),
+      new window.KeyboardEvent("keydown", { key: "Home", bubbles: true }),
     );
   await Promise.resolve();
   assert.equal(document.activeElement.id, "model-tab");
@@ -6656,7 +6726,7 @@ for (const initialTab of ["model", "logs"]) {
     assert.equal(panel.scrollTop, 0);
 
     document.getElementById("model-tab").click();
-    document.getElementById("model-tab").dispatchEvent(
+    document.getElementById("tensors-tab").dispatchEvent(
       new window.KeyboardEvent("keydown", {
         key: "ArrowRight",
         bubbles: true,

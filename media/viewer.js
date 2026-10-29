@@ -66,10 +66,10 @@ const RefreshStatus = Object.freeze({
 });
 const tabs = [
   "model",
-  "logs",
   "statistics",
   "memory",
   "tensors",
+  "logs",
   "status",
   "controls",
   "repositories",

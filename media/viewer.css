@@ -71,6 +71,27 @@ p {
   overflow-x: auto;
   border-bottom: 1px solid var(--border);
 }
+.feature-group {
+  min-width: 0;
+}
+.feature-group-title {
+  display: block;
+  padding: 4px 8px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+.feature-group-controls {
+  display: flex;
+  gap: 4px;
+}
+.viewer-tabs .feature-group {
+  flex-shrink: 0;
+}
+.viewer-tabs .feature-group + .feature-group {
+  border-left: 1px solid var(--border);
+}
 .viewer-tabs button {
   padding: 8px 20px;
   color: var(--muted);
@@ -917,12 +938,15 @@ aside {
   top: -14px;
   z-index: 1;
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 4px;
   margin: -14px -16px 12px;
   padding: 12px 10px;
   background: var(--panel);
   border-bottom: 1px solid var(--border);
+}
+#sidebar-controls .feature-group-controls {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 #sidebar-controls button {
   padding: 4px 3px;
@@ -1632,6 +1656,11 @@ button:disabled {
   aside {
     border-left: 0;
     border-top: 1px solid var(--border);
+  }
+}
+@media (max-width: 760px), (max-height: 600px) {
+  #sidebar-controls {
+    position: static;
   }
 }
 @media (prefers-reduced-motion: no-preference) {

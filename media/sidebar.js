@@ -11,9 +11,14 @@ function createSidebar({
     metadata: "show-metadata",
   };
   function revealSidebarPanel(panel) {
+    const controls = byId("sidebar-controls");
+    const controlsHeight =
+      getComputedStyle(controls).position === "sticky"
+        ? controls.offsetHeight
+        : 0;
     panel.parentElement.scrollTop = Math.max(
       0,
-      panel.offsetTop - byId("sidebar-controls").offsetHeight - 12,
+      panel.offsetTop - controlsHeight - 12,
     );
   }
   for (const id of ["show-operator", "show-find", "show-metadata"])
