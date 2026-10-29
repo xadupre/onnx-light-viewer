@@ -165,7 +165,7 @@ test("source discovery requires the GenAI configuration in the tokenizer directo
   );
 });
 
-test("source discovery skips incomplete checkpoints and prefers complete source tokenizer packages", async (t) => {
+test("source discovery skips incomplete or malformed checkpoints and prefers complete source tokenizer packages", async (t) => {
   const { root, model } = await fixture(t);
   const source = path.join(root, "checkpoint");
   await mkdir(source);
@@ -206,6 +206,27 @@ test("source discovery skips incomplete checkpoints and prefers complete source 
     await readFile(path.join(root, "genai_config.json")),
   );
   assert.equal((await run()).tokens[0].text, "a");
+  for (const config of ['{"architectures":', "null", "[]"]) {
+    await writeFile(path.join(source, "config.json"), config);
+    assert.deepEqual((await promptInfo(model)).engines, [
+      "onnx-light",
+      "onnxruntime-genai",
+    ]);
+    assert.equal((await run()).tokens[0].text, "o");
+  }
+  await rm(path.join(root, "config.json"));
+  assert.deepEqual((await promptInfo(model)).engines, ["onnxruntime-genai"]);
+  const genai = await runPrompt(
+    model,
+    options,
+    "/no/python",
+    signal(),
+    () => {},
+  );
+  assert.deepEqual(
+    genai.tokens.map((token) => token.id),
+    [1, 1, 1],
+  );
 });
 
 test("GenAI configuration alone does not make a tokenizer package available", async (t) => {

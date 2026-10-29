@@ -275,11 +275,23 @@ async function lightSource(
     const configPath = join(directory, "config.json");
     if (!(await exists(configPath)) || !(await hasTokenizerPackage(directory)))
       continue;
-    const config = JSON.parse(await readFile(configPath, "utf8")) as {
-      architectures?: unknown;
-      is_decoder?: unknown;
-      is_encoder_decoder?: unknown;
-    };
+    const contents = await readFile(configPath, "utf8");
+    let config: Record<string, unknown>;
+    try {
+      config = JSON.parse(contents);
+    } catch (error) {
+      if (!(error instanceof SyntaxError)) throw error;
+      console.warn(
+        `Skipping invalid model configuration at ${configPath}: ${error.message}`,
+      );
+      continue;
+    }
+    if (!config || typeof config !== "object" || Array.isArray(config)) {
+      console.warn(
+        `Skipping invalid model configuration at ${configPath}: expected a JSON object.`,
+      );
+      continue;
+    }
     const causal =
       genai ||
       config.is_decoder === true ||
