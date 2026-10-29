@@ -13,6 +13,18 @@ function createSettingsPanel({ byId, postMessage, onViewerSettings }) {
   let pathHistory = { open: [], save: [] };
   let exportHistory = { models: [], directories: [] };
 
+  function sanitizeReleaseUrl(url) {
+    if (typeof url !== "string" || !url) return undefined;
+    try {
+      const parsed = new URL(url, window.location.href);
+      if (parsed.protocol === "https:" || parsed.protocol === "http:")
+        return parsed.href;
+    } catch {
+      return undefined;
+    }
+    return undefined;
+  }
+
   function renderRelease(cell, name, installed) {
     cell.replaceChildren();
     const release = releases.get(name);
@@ -23,10 +35,17 @@ function createSettingsPanel({ byId, postMessage, onViewerSettings }) {
     if (release.error !== undefined) {
       cell.textContent = `Unavailable: ${release.error}`;
     } else {
-      const link = document.createElement("a");
-      link.href = release.url;
-      link.textContent = release.version;
-      cell.append(link);
+      const safeUrl = sanitizeReleaseUrl(release.url);
+      if (safeUrl) {
+        const link = document.createElement("a");
+        link.href = safeUrl;
+        link.textContent = release.version;
+        cell.append(link);
+      } else {
+        const text = document.createElement("span");
+        text.textContent = release.version;
+        cell.append(text);
+      }
       if (installed) {
         const comparison = document.createElement("span");
         comparison.className = "package-release-comparison";
