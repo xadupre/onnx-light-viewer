@@ -5,12 +5,15 @@
 #include "tensor_preview.h"
 #include <cerrno>
 #include <charconv>
-#include <cmath>
-#include <limits>
+#include <fcntl.h>
 #include <regex>
 #include <set>
 #include <stdexcept>
 #include <system_error>
+
+#ifdef _WIN32
+#include <io.h>
+#endif
 
 namespace onnx_light_viewer {
 
@@ -29,10 +32,10 @@ namespace {
 class PromptPipelineWorker : public Napi::AsyncWorker {
 public:
   PromptPipelineWorker(Napi::Env env, std::string prefill, std::string embedding,
-                       std::string directory, int output)
+                       std::string directory, std::string output)
       : Napi::AsyncWorker(env), deferred_(Napi::Promise::Deferred::New(env)),
         prefill_(std::move(prefill)), embedding_(std::move(embedding)),
-        directory_(std::move(directory)), output_(output) {}
+        directory_(std::move(directory)), output_(std::move(output)) {}
 
   Napi::Promise Promise() const { return deferred_.Promise(); }
 
@@ -47,7 +50,7 @@ public:
           throw std::system_error(errno, std::generic_category(), "Could not open " + path);
         ol::utils::FdReadStream stream(file.get());
         ol::ParseOptions options;
-        options.skip_raw_data = output_ < 0;
+        options.skip_raw_data = output_.empty();
         ReadModel(model, stream, options);
       };
       read(pipeline.ref_prefill(), prefill_);
@@ -163,8 +166,19 @@ public:
       references(pipeline.ref_prefill(), prefill_);
       if (pipeline.has_embedding())
         references(pipeline.ref_embedding(), embedding_);
-      if (output_ >= 0 && !pipeline.SerializeToFileDescriptor(output_))
-        throw std::runtime_error("Could not write the generation pipeline.");
+      if (!output_.empty()) {
+        // Node/libuv descriptors are not CRT descriptors on Windows.
+#ifdef _WIN32
+        FileDescriptor output(_wopen(ModelFilePath(output_).c_str(), _O_WRONLY | _O_BINARY));
+#else
+        FileDescriptor output(open(output_.c_str(), O_WRONLY));
+#endif
+        if (output.get() < 0)
+          throw std::system_error(errno, std::generic_category(),
+                                  "Could not write the generation pipeline.");
+        if (!pipeline.SerializeToFileDescriptor(output.get()))
+          throw std::runtime_error("Could not write the generation pipeline.");
+      }
       available_ = true;
     } catch (const std::exception &error) {
       SetError(error.what());
@@ -181,8 +195,7 @@ public:
 
 private:
   Napi::Promise::Deferred deferred_;
-  std::string prefill_, embedding_, directory_, reason_;
-  int output_;
+  std::string prefill_, embedding_, directory_, output_, reason_;
   bool available_ = false;
 };
 
@@ -304,8 +317,8 @@ Napi::Value PreparePromptPipeline(const Napi::CallbackInfo &info) {
   const auto env = info.Env();
   try {
     if (info.Length() != 4 || !info[0].IsString() || !info[1].IsString() || !info[2].IsString() ||
-        (!info[3].IsNull() && !info[3].IsNumber()))
-      throw std::runtime_error("Expected pipeline source paths and an optional output descriptor.");
+        (!info[3].IsNull() && !info[3].IsString()))
+      throw std::runtime_error("Expected pipeline source paths and an optional output path.");
     std::vector<std::string> paths;
     for (size_t i = 0; i < 3; ++i) {
       auto path = info[i].As<Napi::String>().Utf8Value();
@@ -313,13 +326,11 @@ Napi::Value PreparePromptPipeline(const Napi::CallbackInfo &info) {
         throw std::runtime_error("Invalid pipeline source path.");
       paths.push_back(std::move(path));
     }
-    int output = -1;
+    std::string output;
     if (!info[3].IsNull()) {
-      const auto number = info[3].As<Napi::Number>().DoubleValue();
-      if (!std::isfinite(number) || std::floor(number) != number || number < 0 ||
-          number > std::numeric_limits<int>::max())
-        throw std::runtime_error("Invalid pipeline output descriptor.");
-      output = static_cast<int>(number);
+      output = info[3].As<Napi::String>().Utf8Value();
+      if (output.empty() || output.find('\0') != std::string::npos)
+        throw std::runtime_error("Invalid pipeline output path.");
     }
     auto worker = std::make_unique<PromptPipelineWorker>(env, paths[0], paths[1], paths[2], output);
     const auto promise = worker->Promise();

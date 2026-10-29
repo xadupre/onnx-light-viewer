@@ -7,6 +7,8 @@ const {
   writeFile,
   rm,
   readdir,
+  cp,
+  open,
 } = require("node:fs/promises");
 const { tmpdir } = require("node:os");
 const path = require("node:path");
@@ -19,7 +21,7 @@ const {
   promptPipelineInfo,
   loadPromptPipeline,
 } = require("../dist/promptPipeline");
-const { loadModelFile } = require("../dist/graph");
+const { loadModelFile, preparePromptPipeline } = require("../dist/graph");
 const { runPrompt } = require("../dist/prompt");
 const { provenancePath } = require("../dist/export");
 
@@ -44,6 +46,67 @@ async function fixture(t) {
   }
   return { root, model, provenance };
 }
+
+async function assertRelocatedPipeline(root, model) {
+  assert.equal((await promptPipelineInfo(model)).available, true);
+  const pipeline = await loadPromptPipeline(model);
+  assert.equal(path.dirname(pipeline), root);
+  assert.equal(
+    JSON.parse(await readFile(provenancePath(pipeline), "utf8"))
+      .packageDirectory,
+    root,
+  );
+  const result = await runPrompt(
+    pipeline,
+    { engine: "onnx-light", prompt: "HH", maxTokens: 3 },
+    "/no/python",
+    new AbortController().signal,
+    () => {},
+  );
+  assert.deepEqual(
+    result.tokens.map((token) => token.id),
+    [1, 1, 1],
+  );
+}
+
+test("relocated flat Mobius packages ignore the old root whether it exists or not", async (t) => {
+  const { root, model, provenance } = await fixture(t);
+  await writeFile(
+    provenancePath(model),
+    JSON.stringify({ ...provenance, packageDirectory: root }),
+  );
+  const relocated = `${root}-relocated`;
+  t.after(() => rm(relocated, { force: true, recursive: true }));
+  await cp(root, relocated, { recursive: true });
+  const selected = path.join(relocated, path.basename(model));
+  await assertRelocatedPipeline(relocated, selected);
+  await rm(root, { recursive: true });
+  await assertRelocatedPipeline(relocated, selected);
+});
+
+test("native pipeline output uses a reserved path rather than a Node file descriptor", async (t) => {
+  const { root, model } = await fixture(t);
+  const output = path.join(root, "pipeline-\u00e9.pipe-onnx");
+  await assert.rejects(
+    preparePromptPipeline(model, "", root, output),
+    /Could not write the generation pipeline/,
+  );
+  const handle = await open(output, "wx", 0o600);
+  try {
+    assert.equal(
+      (await preparePromptPipeline(model, "", root, output)).available,
+      true,
+    );
+    assert.deepEqual(
+      (await loadModelFile(output, output))
+        .graph()
+        .nodes.map((node) => node.name),
+      ["prefill"],
+    );
+  } finally {
+    await handle.close();
+  }
+});
 
 test("legacy Mobius history artifacts assemble a reusable native pipeline without modifying sources", async (t) => {
   const { root, model } = await fixture(t);
@@ -142,12 +205,18 @@ onnx.save(decoder, root / "decoder" / "model.onnx")
     JSON.stringify({
       ...provenance,
       source: path.join(root, "missing-checkpoint"),
+      packageDirectory: root,
     }),
   );
   const configPath = path.join(root, "genai_config.json");
   const config = JSON.parse(await readFile(configPath, "utf8"));
   config.model.decoder.filename = "decoder/model.onnx";
   await writeFile(configPath, JSON.stringify(config));
+  const relocated = `${root}-relocated`;
+  t.after(() => rm(relocated, { force: true, recursive: true }));
+  await cp(root, relocated, { recursive: true });
+  const relocatedDecoder = path.join(relocated, "decoder", "model.onnx");
+  await assertRelocatedPipeline(relocated, relocatedDecoder);
   const checks = new Map();
   assert.equal((await promptPipelineInfo(decoder, checks)).available, true);
   assert.equal((await promptPipelineInfo(model, checks)).available, true);
@@ -192,6 +261,8 @@ onnx.save(model, sys.argv[1])
   const unavailable = await promptPipelineInfo(decoder);
   assert.equal(unavailable.available, false);
   assert.match(unavailable.label, /embedding.*missing/);
+  await rm(root, { recursive: true });
+  await assertRelocatedPipeline(relocated, relocatedDecoder);
 });
 
 test("history inspection distinguishes missing and unrelated artifacts and surfaces absent weights", async (t) => {

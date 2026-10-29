@@ -515,7 +515,7 @@ const native: {
     prefill: string,
     embedding: string,
     directory: string,
-    output: number | null,
+    output: string | null,
   ): Promise<{ available: boolean; reason: string }>;
   listBackendTests(): BackendTest[];
   loadBackendTest(id: number): NativeModel;

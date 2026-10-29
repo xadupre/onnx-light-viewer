@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { open, readFile, rm, stat, writeFile } from "node:fs/promises";
-import { basename, dirname, isAbsolute, join } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 import { preparePromptPipeline } from "./graph";
 import {
   readProvenance,
@@ -40,9 +40,16 @@ async function file(path: string): Promise<boolean> {
 async function sources(path: string): Promise<Sources | undefined> {
   const provenance = await readProvenance(path);
   if (provenance?.exporter !== "mobius") return;
-  let root = provenance.packageDirectory ?? dirname(path);
+  const recordedRoot = provenance.packageDirectory;
+  const recordedRelative = recordedRoot ? relative(recordedRoot, path) : "";
+  const useRecordedRoot =
+    recordedRoot &&
+    recordedRelative &&
+    !isAbsolute(recordedRelative) &&
+    recordedRelative.split(sep)[0] !== "..";
+  let root = useRecordedRoot ? recordedRoot : dirname(path);
   if (
-    !provenance.packageDirectory &&
+    !useRecordedRoot &&
     ["decoder", "embedding", "model"].includes(basename(root)) &&
     !(await file(join(root, "config.json"))) &&
     !(await file(join(root, "genai_config.json")))
@@ -174,7 +181,7 @@ export async function loadPromptPipeline(path: string): Promise<string> {
       candidate.prefill,
       candidate.embedding,
       candidate.root,
-      handle.fd,
+      output,
     );
     if (!result.available) throw new Error(result.reason);
     await writeFile(

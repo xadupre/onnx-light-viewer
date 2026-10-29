@@ -201,59 +201,61 @@ for (const engine of ["onnx-light", "onnxruntime-genai"]) {
   });
 }
 
-test("GenAI discovers installed native SDK libraries without library environment variables", async (t) => {
-  const { model } = await fixture(t);
-  delete process.env.ONNX_LIGHT_VIEWER_GENAI_LIBRARY;
-  delete process.env.ORT_LIB_PATH;
-  const session = new PromptSession();
-  const run = (executable) =>
-    runPrompt(
-      model,
-      { ...options, keepLoaded: true },
-      executable,
-      signal(),
-      () => {},
-      undefined,
-      undefined,
-      session,
-    );
-  try {
-    const first = await run(python);
-    assert.deepEqual(
-      first.tokens.map((token) => token.id),
-      [1, 1, 1],
-    );
-    assert.equal(first.lifecycle.reused, false);
-    const second = await run("/no/python-needed-for-retained-native-session");
-    assert.deepEqual(
-      second.tokens.map((token) => token.id),
-      [1, 1, 1],
-    );
-    assert.equal(second.lifecycle.reused, true);
-  } finally {
-    await session.close();
-  }
-});
+for (const engine of ["onnx-light", "onnxruntime-genai"]) {
+  test(`${engine} discovers installed native SDK libraries without library environment variables`, async (t) => {
+    const { model } = await fixture(t);
+    delete process.env.ONNX_LIGHT_VIEWER_GENAI_LIBRARY;
+    delete process.env.ORT_LIB_PATH;
+    const session = new PromptSession();
+    const run = (executable) =>
+      runPrompt(
+        model,
+        { ...options, engine, keepLoaded: true },
+        executable,
+        signal(),
+        () => {},
+        undefined,
+        undefined,
+        session,
+      );
+    try {
+      const first = await run(python);
+      assert.deepEqual(
+        first.tokens.map((token) => token.id),
+        [1, 1, 1],
+      );
+      assert.equal(first.lifecycle.reused, false);
+      const second = await run("/no/python-needed-for-retained-native-session");
+      assert.deepEqual(
+        second.tokens.map((token) => token.id),
+        [1, 1, 1],
+      );
+      assert.equal(second.lifecycle.reused, true);
+    } finally {
+      await session.close();
+    }
+  });
 
-test("GenAI discovery reports missing SDK packages in the selected Python environment", async (t) => {
-  const { root, model } = await fixture(t);
-  delete process.env.ONNX_LIGHT_VIEWER_GENAI_LIBRARY;
-  delete process.env.ORT_LIB_PATH;
-  const environment = path.join(root, "empty-python");
-  await execute(python, ["-m", "venv", "--without-pip", environment]);
-  const executable = path.join(
-    environment,
-    process.platform === "win32" ? "Scripts/python.exe" : "bin/python",
-  );
-  await assert.rejects(
-    runPrompt(model, options, executable, signal(), () => {}),
-    /Missing onnxruntime_genai in the Python environment selected in Settings/,
-  );
-  assert.equal(
-    (await readdir(root)).some((name) => name.startsWith(".prompt-")),
-    false,
-  );
-});
+  test(`${engine} discovery reports missing SDK packages in the selected Python environment`, async (t) => {
+    const { root, model } = await fixture(t);
+    delete process.env.ONNX_LIGHT_VIEWER_GENAI_LIBRARY;
+    delete process.env.ORT_LIB_PATH;
+    const environment = path.join(root, "empty-python");
+    await execute(python, ["-m", "venv", "--without-pip", environment]);
+    const executable = path.join(
+      environment,
+      process.platform === "win32" ? "Scripts/python.exe" : "bin/python",
+    );
+    await assert.rejects(
+      runPrompt(model, { ...options, engine }, executable, signal(), () => {}),
+      /Missing onnxruntime_genai in the Python environment selected in Settings/,
+    );
+    assert.equal(
+      (await readdir(root)).some((name) => name.startsWith(".prompt-")),
+      false,
+    );
+  });
+}
 
 test("native sessions optionally retain, reuse, reconfigure and unload their model", async (t) => {
   for (const engine of ["onnx-light", "onnxruntime-genai"]) {
@@ -770,10 +772,18 @@ test("native runtime and model failures surface without falling back to Python",
     root,
     "missing-native-library",
   );
-  await assert.rejects(
-    runPrompt(model, options, "/no/python", signal(), () => {}),
-    /Could not load the native ONNX Runtime GenAI library/,
-  );
+  for (const engine of ["onnx-light", "onnxruntime-genai"]) {
+    await assert.rejects(
+      runPrompt(
+        model,
+        { ...options, engine },
+        "/no/python",
+        signal(),
+        () => {},
+      ),
+      /Could not load the native ONNX Runtime GenAI library/,
+    );
+  }
   assert.equal(
     (await readdir(root)).some((name) => name.startsWith(".prompt-")),
     false,

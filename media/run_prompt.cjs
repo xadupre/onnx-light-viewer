@@ -76,7 +76,6 @@ function run(input, output, sessionKey) {
     capture = generate();
   } catch (error) {
     if (
-      request.engine !== "onnxruntime-genai" ||
       process.env.ONNX_LIGHT_VIEWER_GENAI_LIBRARY ||
       !error.message?.startsWith(
         "Could not load the native ONNX Runtime GenAI library:",
