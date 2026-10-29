@@ -49,6 +49,21 @@ custom = oh.make_model(
 )
 checker.check_model(custom)
 save_model(custom, Path(__file__).with_name("custom.onnx"))
+custom_unannotated = oh.make_model(
+    oh.make_graph(
+        [
+            oh.make_node("Custom", ["x"], ["unannotated"], domain="example"),
+            oh.make_node("Identity", ["unannotated"], ["y"]),
+        ],
+        "Custom operators",
+        [value_info("x")],
+        [value_info("y")],
+    ),
+    ir_version=9,
+    opset_imports=[oh.make_opsetid("", 13), oh.make_opsetid("example", 1)],
+)
+checker.check_model(custom_unannotated)
+save_model(custom_unannotated, Path(__file__).with_name("custom-unannotated.onnx"))
 
 function_branches = [
     oh.make_graph(

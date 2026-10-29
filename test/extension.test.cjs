@@ -2960,20 +2960,22 @@ test("previews global passes without editing, rejects stale previews and optimiz
   assert.equal(extension.messages.at(-1).type, "optimization-info");
   const report = extension.messages.at(-1).optimizationReport;
   assert.ok(report.wallTimeNs > 0);
-  assert.ok(
+  assert.equal(
     report.patterns.some(
       (pattern) => pattern.name === "GemmTranspose" && pattern.matches > 0,
     ),
+    false,
   );
   assert.ok(
     report.patterns.some(
       (pattern) => pattern.name === "MatMulAdd" && pattern.matches > 0,
     ),
   );
-  assert.ok(
+  assert.equal(
     extension.messages
       .at(-1)
       .matches.some((match) => match.pattern === "GemmTranspose"),
+    false,
   );
   const optimized = latest().graph;
   await extension.receive({ type: "fusion-patterns", requestId: 8 });
@@ -4638,7 +4640,9 @@ test("recovers a downloaded model from its published cache path after the tempor
     path.join(tmpdir(), "onnx-viewer-hf-recovery-"),
   );
   t.after(() => rm(storage, { recursive: true }));
-  const bytes = await readFile(path.join(__dirname, "models/custom.onnx"));
+  const bytes = await readFile(
+    path.join(__dirname, "models/custom-unannotated.onnx"),
+  );
   let downloads = 0;
   const server = createServer((_request, response) => {
     downloads++;
@@ -4973,7 +4977,7 @@ test("selects optimization groups and previews global passes through the real we
   );
   const results = document.getElementById("optimization-results");
   assert.match(results.textContent, /MatMulAdd/);
-  assert.match(results.textContent, /GemmTranspose/);
+  assert.doesNotMatch(results.textContent, /GemmTranspose/);
   const matchedPatterns = results.textContent;
   const restoreOriginal = document.getElementById(
     "optimization-restore-original",
@@ -5272,7 +5276,7 @@ test("keeps operation logs quiet and exposes real native exception recovery in S
   await flush();
   assert.equal(entries().length, count);
 
-  await extension.open("custom.onnx");
+  await extension.open("custom-unannotated.onnx");
   const reads = extension.reads.length;
   const failedHandle = extension.nativeModels.at(-1);
   document.getElementById("model-tab").click();
@@ -5801,7 +5805,7 @@ test("opens the bundled symbolic transformer through its command and refreshes i
 
 test("reports native inference errors without publishing partial results or changing the current graph", async () => {
   const extension = await openExtension();
-  await extension.open("custom.onnx");
+  await extension.open("custom-unannotated.onnx");
   const before = extension.messages.at(-1).graph;
   await extension.receive({ type: "refresh-shapes" });
   assert.equal(extension.messages.at(-1).type, "shape-error");
