@@ -387,7 +387,12 @@ function createTensorListPanel({ byId, openStatistics }) {
       button.setAttribute("aria-haspopup", "dialog");
       button.disabled = busy;
       button.append(byId("tensors-tab").querySelector("svg").cloneNode(true));
-      button.addEventListener("click", () => openStatistics([entry.name]));
+      button.addEventListener("click", () =>
+        openStatistics(
+          matching.map((entry) => entry.name),
+          entry.name,
+        ),
+      );
       action.append(button);
       row.append(action);
       body.append(row);
@@ -425,6 +430,10 @@ function createTensorListPanel({ byId, openStatistics }) {
 
   return {
     storedInputs,
+    storedTensorNames() {
+      if (!records) build();
+      return [...storedNames];
+    },
     hasStoredTensor(name) {
       if (!records) build();
       return storedNames.has(name);

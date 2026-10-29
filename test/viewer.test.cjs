@@ -378,7 +378,7 @@ test("tensor icons open data directly while the tensor browser lists metadata an
   assert.equal(document.getElementById("tensor-statistics-dialog").open, true);
   assert.equal(
     document.getElementById("tensor-statistics-picker").hidden,
-    true,
+    false,
   );
   assert.equal(messages.at(-1).name, weight);
   document.getElementById("close-tensor-statistics").click();
@@ -936,6 +936,111 @@ test("tensor inspection displays small values without charts or statistics and c
   assert.equal(content.querySelector("pre").textContent, values);
 });
 
+test("tensor statistics navigates filtered initializers across tensor-list pages", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const byId = (id) => document.getElementById(id);
+  const requests = () => messages.filter((m) => m.type === "tensor-statistics");
+  load({
+    ...demoGraph,
+    initializers: [
+      { name: "excluded", type: "INT64", shape: [] },
+      ...Array.from({ length: 102 }, (_, index) => ({
+        name: `weight-${index}`,
+        type: "FLOAT",
+        shape: ["16"],
+      })),
+    ],
+  });
+  byId("tensors-tab").click();
+  byId("tensor-list-search").value = "weight";
+  byId("tensor-list-search").dispatchEvent(new window.Event("input"));
+  byId("tensor-list-type").value = "FLOAT";
+  byId("tensor-list-type").dispatchEvent(new window.Event("change"));
+  inspectTensor(document, "weight-99");
+  assert.equal(requests().length, 1, "only the clicked tensor is requested");
+  assert.equal(requests().at(-1).name, "weight-99");
+  assert.equal(byId("tensor-statistics-position").textContent, "100 of 102");
+  assert.equal(byId("tensor-statistics-previous").disabled, false);
+  assert.equal(byId("tensor-statistics-next").disabled, false);
+  byId("tensor-statistics-next").click();
+  const next = requests().at(-1);
+  assert.equal(next.name, "weight-100");
+  assert.deepEqual(Array.from(next.path), []);
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: {
+        type: "tensor-statistics-info",
+        requestId: requests()[0].requestId,
+        statistics: tensorStatistics("weight-99"),
+      },
+    }),
+  );
+  assert.equal(byId("tensor-statistics-content").children.length, 0);
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: {
+        type: "tensor-statistics-info",
+        requestId: next.requestId,
+        statistics: tensorStatistics(next.name),
+      },
+    }),
+  );
+  assert.match(byId("tensor-statistics-content").textContent, /weight-100/);
+  byId("tensor-statistics-next").click();
+  assert.equal(requests().at(-1).name, "weight-101");
+  assert.equal(byId("tensor-statistics-position").textContent, "102 of 102");
+  assert.equal(byId("tensor-statistics-next").disabled, true);
+  byId("tensor-statistics-next").click();
+  assert.equal(requests().length, 3);
+  byId("tensor-statistics-previous").click();
+  assert.equal(requests().length, 3, "returning uses the cached summary");
+  assert.equal(byId("tensor-statistics-name").value, "weight-100");
+  assert.match(byId("tensor-statistics-content").textContent, /weight-100/);
+  byId("close-tensor-statistics").click();
+  byId("tensor-list-next").click();
+  inspectTensor(document, "weight-101");
+  assert.equal(byId("tensor-statistics-position").textContent, "102 of 102");
+  byId("close-tensor-statistics").click();
+  byId("tensor-list-search").value = "weight-0";
+  byId("tensor-list-search").dispatchEvent(new window.Event("input"));
+  inspectTensor(document, "weight-0");
+  assert.equal(byId("tensor-statistics-picker").hidden, true);
+  assert.equal(byId("tensor-statistics-previous").disabled, true);
+  assert.equal(byId("tensor-statistics-next").disabled, true);
+});
+
+test("tensor statistics opens the clicked inspector initializer with graph-scope neighbors", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const byId = (id) => document.getElementById(id);
+  const request = () =>
+    messages.filter((m) => m.type === "tensor-statistics").at(-1);
+  load(weightsGraph());
+  document
+    .querySelector('[data-id="node-1"]')
+    .dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter" }));
+  document
+    .querySelector("#node-initializers .tensor-statistics-button")
+    .click();
+  assert.equal(request().name, "other-weight");
+  assert.equal(byId("tensors-view").hidden, true);
+  assert.equal(byId("tensor-statistics-name").value, "other-weight");
+  assert.equal(byId("tensor-statistics-position").textContent, "2 of 2");
+  assert.equal(byId("tensor-statistics-next").disabled, true);
+  byId("tensor-statistics-previous").click();
+  assert.equal(request().name, "weight");
+  assert.equal(byId("tensor-statistics-position").textContent, "1 of 2");
+  assert.equal(byId("tensor-statistics-previous").disabled, true);
+  const count = messages.length;
+  byId("tensor-statistics-previous").click();
+  assert.equal(messages.length, count);
+  byId("tensor-statistics-next").click();
+  assert.equal(request().name, "other-weight");
+  byId("tensor-statistics-name").value = "weight";
+  byId("tensor-statistics-name").dispatchEvent(new window.Event("change"));
+  assert.equal(request().name, "weight");
+  assert.equal(byId("tensor-statistics-position").textContent, "1 of 2");
+});
+
 test("tensor statistics lazily browses selection, renders SDK summaries and caches successes", (t) => {
   const { document, window, messages, load } = openViewer(t);
   const byId = (id) => document.getElementById(id);
@@ -1107,7 +1212,7 @@ test("tensor statistics ignores changed names, close, Escape, reload and navigat
   };
   load(weightsGraph());
   const first = open();
-  byId("tensor-statistics-name").value = "other-weight";
+  byId("tensor-statistics-name").value = "missing-weight";
   byId("tensor-statistics-name").dispatchEvent(new window.Event("input"));
   assert.equal(byId("tensor-statistics-progress").hidden, true);
   reply(first);
@@ -1236,7 +1341,7 @@ test("tensor statistics icons open stored tensors directly and never appear on i
     .querySelector("#node-initializers .tensor-statistics-button")
     .click();
   assert.equal(byId("tensor-statistics-dialog").open, true);
-  assert.equal(byId("tensor-statistics-picker").hidden, true);
+  assert.equal(byId("tensor-statistics-picker").hidden, false);
   assert.equal(request().name, "weight");
   assert.equal(byId("tensors-view").hidden, true);
   assert.equal(

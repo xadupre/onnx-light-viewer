@@ -247,8 +247,10 @@ payloads are not read for previews; this is not a full tensor-data browser.
 Tensor statistics
 ^^^^^^^^^^^^^^^^^
 
-Open **Tensor statistics** for selected nodes or a connection, **All tensors**
-for the current scope, or **Tensor statistics** beside an inspector tensor.
+Open the statistics icon on a node, beside an inspector tensor, or in **Tensors**.
+Use **Previous tensor** / **Next tensor** without closing the dialog.
+From **Tensors**, navigation follows the filtered list across pages; from the
+inspector, it follows the current scope's stored tensors.
 Browse mean, median, extrema, quartiles, shape/dtype, a histogram and a square
 color map. Low-bit numeric tensors and SDK-supported encoded quantized weights
 are supported. See :doc:`features/inspection`.
@@ -258,6 +260,12 @@ are supported. See :doc:`features/inspection`.
    :width: 100%
 
    Statistics describe stored values, without executing the graph.
+
+.. figure:: _static/feature-initializer-navigation.png
+   :alt: Tensor values dialog opened on weight.right, with Previous tensor and Next tensor buttons and position 2 of 3.
+   :width: 100%
+
+   Browse neighboring initializers without closing the dialog.
 
 Stored tensor distributions
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^

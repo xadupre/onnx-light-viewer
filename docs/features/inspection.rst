@@ -132,11 +132,14 @@ do not change these totals. Inputs and intermediate activations are excluded.
 Tensor statistics
 -----------------
 
-Use **Tensor statistics** for the selected nodes' tensors or selected connection,
-**All tensors** for the current graph scope, or **Tensor statistics** beside a tensor
-in **Op**. Open a pipeline stage first. The dialog browses one tensor at a time
+Use the statistics icon on a node, beside a stored tensor in **Op**, or in the
+**Tensors** tab. Open a pipeline stage first. The dialog browses one tensor at a time
 with a name picker and **Previous tensor** / **Next tensor**;
 **Close** or Escape dismisses it.
+Opening an individual tensor keeps it selected and enables browsing its neighbors.
+In **Tensors**, navigation follows the filtered list, including other pages.
+In **Op**, it follows the current graph's stored tensor catalogue.
+The node icon limits navigation to that node's stored inputs and captures.
 
 It shows dtype, shape, count, stored byte size, mean, median, min/max and quartiles
 (25%, 50%, 75%, linearly interpolated). The SDK supplies a finite-value histogram

@@ -100,7 +100,8 @@ const inspector = createInspector({
   tensorDescription,
   subgraphLabel,
   navigate,
-  openTensorStatistics: (name) => openTensorStatistics([name]),
+  openTensorStatistics: (name) =>
+    openTensorStatistics(tensorListPanel.storedTensorNames(), name),
   hasStoredTensor: (name) => tensorListPanel.hasStoredTensor(name),
   nodeInitializers: (node) => tensorListPanel.nodeInitializers(node),
 });
@@ -118,7 +119,7 @@ const tensorListPanel = createTensorListPanel({
   openStatistics: openTensorStatistics,
 });
 
-function openTensorStatistics(names) {
+function openTensorStatistics(names, selectedName) {
   if (
     !hasModel ||
     replacementPending ||
@@ -129,6 +130,7 @@ function openTensorStatistics(names) {
   tensorStatisticsPanel.open(
     names,
     displayedGraph?.breadcrumbs?.at(-1)?.path ?? [],
+    selectedName,
   );
 }
 
