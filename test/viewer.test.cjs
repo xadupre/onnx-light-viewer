@@ -2171,6 +2171,46 @@ test("memory hover inspects numerical and symbolic allocations at each phase, sa
   assert.equal(document.getElementById("memory-results").hidden, true);
 });
 
+test("memory estimates measure the visible viewport before the first anchored zoom", (t) => {
+  let viewportWidth = 1600;
+  let scrollLeft = 300;
+  const viewer = openViewer(t, "model", (window) => {
+    const results = window.document.getElementById("memory-results");
+    const scroll = window.document.getElementById("memory-chart-scroll");
+    Object.defineProperties(scroll, {
+      clientWidth: {
+        get: () => (results.hidden ? 0 : viewportWidth),
+      },
+      scrollLeft: {
+        get: () => scrollLeft,
+        set: (value) => {
+          if (!results.hidden) scrollLeft = value;
+        },
+      },
+    });
+  });
+  const { document, load } = viewer;
+  load(demoGraph);
+  showMemoryProfile(viewer, [1, 2, 3]);
+  const chart = document.getElementById("memory-chart");
+  assert.equal(chart.getAttribute("viewBox"), "0 0 1600 330");
+  assert.equal(scrollLeft, 0);
+  document.getElementById("memory-zoom-in").click();
+  assert.equal(chart.getAttribute("viewBox"), "0 0 3200 330");
+  assert.equal(scrollLeft, 800);
+  viewportWidth = 2200;
+  showMemoryProfile(viewer, [3, 2, 1]);
+  assert.equal(chart.getAttribute("viewBox"), "0 0 2200 330");
+  assert.equal(scrollLeft, 0);
+  assert.equal(
+    document.getElementById("memory-zoom-level").textContent,
+    "100%",
+  );
+  document.getElementById("memory-zoom-in").click();
+  assert.equal(chart.getAttribute("viewBox"), "0 0 4400 330");
+  assert.equal(scrollLeft, 1100);
+});
+
 test("memory zoom reveals more graduations and operator labels with priority and fallback", (t) => {
   const { document, window, messages, load } = openViewer(t);
   const send = (data) =>
@@ -2209,10 +2249,33 @@ test("memory zoom reveals more graduations and operator labels with priority and
       requestId: messages.at(-1).requestId,
       profile: { name: "Zoom", device: "CPU", peakBytes: 20, events },
     });
-  const labels = () =>
-    [...document.querySelectorAll("#memory-operator-labels text")].map(
-      (e) => e.textContent,
-    );
+  const labels = () => {
+    const rows = new Map();
+    const texts = [
+      ...document.querySelectorAll("#memory-operator-labels text"),
+    ];
+    const rightEdge =
+      Number(
+        document
+          .getElementById("memory-chart")
+          .getAttribute("viewBox")
+          .split(" ")[2],
+      ) - 20;
+    for (const text of texts) {
+      const width = text.textContent.length * 8 + 12;
+      const left = Number(text.getAttribute("x")) - width / 2;
+      assert.ok(left >= 60 - 1e-6 && left + width <= rightEdge + 1e-6);
+      const row = text.getAttribute("y");
+      if (!rows.has(row)) rows.set(row, []);
+      rows.get(row).push([left, left + width]);
+    }
+    for (const ranges of rows.values()) {
+      ranges.sort((a, b) => a[0] - b[0]);
+      for (let i = 1; i < ranges.length; i++)
+        assert.ok(ranges[i - 1][1] + 12 <= ranges[i][0] + 1e-6);
+    }
+    return texts.map((e) => e.textContent);
+  };
   display();
   assert.ok(labels().includes("#3 Attention"));
   assert.ok(labels().includes("#2 MatMul"));

@@ -194,7 +194,6 @@ function createMemoryPanel({ byId, postMessage, formatFileSize, selectNode }) {
       );
     }
     const markers = [];
-    const rows = [[], []];
     const priority = (type) =>
       /Attention/i.test(type)
         ? 0
@@ -203,31 +202,19 @@ function createMemoryPanel({ byId, postMessage, formatFileSize, selectNode }) {
           : /Normalization/i.test(type)
             ? 2
             : 3;
-    const candidates = events.map((event, index) => ({ event, index }));
-    candidates.sort(
-      (a, b) =>
-        priority(a.event.opType) - priority(b.event.opType) ||
-        a.index - b.index,
-    );
+    const dense = plotWidth / events.length < 72;
+    const stride = plotWidth / events.length < 14 ? 10 : 5;
+    const candidates = [];
     for (const [index, event] of events.entries()) {
+      const rank = priority(event.opType);
       if (
-        priority(event.opType) < 3 ||
+        rank < 3 ||
         /^(?:Gemm|Conv|ConvInteger|QLinearConv|ConvTranspose|Einsum|LSTM|GRU|RNN)$/i.test(
           event.opType,
         )
       )
         markers.push(interval(index));
-    }
-    const dense = plotWidth / events.length < 72;
-    const stride = plotWidth / events.length < 14 ? 10 : 5;
-    const placed = [];
-    for (const { event, index } of candidates) {
-      if (
-        dense &&
-        priority(event.opType) === 3 &&
-        index !== 0 &&
-        (index + 1) % stride !== 0
-      )
+      if (dense && rank === 3 && index !== 0 && (index + 1) % stride !== 0)
         continue;
       const position = center(index);
       const text = `#${event.index + 1} ${event.opType}`;
@@ -237,14 +224,39 @@ function createMemoryPanel({ byId, postMessage, formatFileSize, selectNode }) {
         60,
         Math.min(position - width / 2, plotWidth + 60 - width),
       );
-      const row = rows.findIndex((ranges) =>
-        ranges.every(
-          ([start, end]) => left >= end + 12 || left + width + 12 <= start,
-        ),
-      );
+      candidates.push({ event, index, left, width, text, rank });
+    }
+    const starts = candidates.map(({ left }) => left).sort((a, b) => a - b);
+    const lowerBound = (position) => {
+      let low = 0;
+      let high = starts.length;
+      while (low < high) {
+        const middle = Math.floor((low + high) / 2);
+        if (starts[middle] < position) low = middle + 1;
+        else high = middle;
+      }
+      return low;
+    };
+    // Fenwick prefix maxima index label ends by start for O(log n) overlap checks.
+    const rows = [0, 1].map(() =>
+      new Float64Array(starts.length + 1).fill(-Infinity),
+    );
+    candidates.sort((a, b) => a.rank - b.rank || a.index - b.index);
+    const placed = [];
+    for (const candidate of candidates) {
+      const { left, width } = candidate;
+      const end = left + width + 12;
+      const limit = lowerBound(end);
+      const row = rows.findIndex((ends) => {
+        let maximum = -Infinity;
+        for (let i = limit; i > 0; i -= i & -i)
+          maximum = Math.max(maximum, ends[i]);
+        return maximum <= left;
+      });
       if (row < 0) continue;
-      rows[row].push([left, left + width]);
-      placed.push({ event, index, left, width, row, text });
+      for (let i = lowerBound(left) + 1; i < rows[row].length; i += i & -i)
+        rows[row][i] = Math.max(rows[row][i], end);
+      placed.push({ ...candidate, row });
     }
     placed.sort((a, b) => a.index - b.index);
     for (const { event, left, width, row, text } of placed) {
@@ -508,6 +520,7 @@ function createMemoryPanel({ byId, postMessage, formatFileSize, selectNode }) {
       profile = message.profile;
       zoom = 1;
       inspectedIndex = 0;
+      results.hidden = false;
       scroll.scrollLeft = 0;
       inspection.hidden = true;
       peaks = [];
@@ -539,7 +552,6 @@ function createMemoryPanel({ byId, postMessage, formatFileSize, selectNode }) {
       byId("memory-model-name").textContent = profile.name || "Unnamed model";
       chart();
       table();
-      results.hidden = false;
       status.textContent = `${profile.events.length.toLocaleString()} estimated node events. No model execution was performed.`;
     }
     busy(false);
