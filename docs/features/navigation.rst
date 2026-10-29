@@ -56,14 +56,16 @@ Graph navigation buttons are stacked in the bottom-left corner in paired rows:
 * Wheel scrolling moves the view vertically; Shift+wheel moves it horizontally.
   Horizontal trackpad scrolling is supported. Large graphs combine wheel events
   into one redraw per animation frame without dropping scroll distance.
+* Drag the background to move the model view without rearranging nodes or
+  changing selection. Escape cancels the movement.
 * Drag an operator, input or output to move it. Connections and tensor labels
   follow, including while zoomed. Drag a selected node to move the selection.
 * Selected operators, inputs and outputs have a blue fill and a thick gold
   border, distinct from the mint hover outline. The selection border keeps its
   screen width while zooming; high-contrast mode uses system selection colors.
 * Ctrl, Cmd or Shift+click adds an unselected node or removes a selected one
-  without changing the other selected nodes. Drag a rectangle on the
-  background to select a group; hold a selection modifier to add to it.
+  without changing the other selected nodes. Hold Ctrl, Cmd or Shift while
+  dragging a rectangle on the background to add a group to the selection.
   Click the background to clear selection.
 * Ctrl+A (Cmd+A on macOS) selects all nodes when the graph has focus.
   Enter or Space selects a focused node. Escape cancels a drag/selection
