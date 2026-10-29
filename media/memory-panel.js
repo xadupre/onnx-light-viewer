@@ -293,10 +293,14 @@ function createMemoryPanel({ byId, postMessage, formatFileSize, selectNode }) {
       value == null
         ? "Unavailable"
         : `${formatFileSize(value)} (${value} bytes)`;
+    const tagMap = (value) =>
+      Object.prototype.toString.call(value) === "[object Object]"
+        ? value
+        : undefined;
     const lines = [
       `#${event.index + 1} ${event.opType}${event.node ? `: ${event.node}` : ""} — ${phase} execution`,
       `Memory: ${amount(bytes)}`,
-      `Before allocation: ${amount(event.existingBytes)}`,
+      `Already allocated: ${amount(event.existingBytes)}`,
       `New outputs: ${amount(event.outputBytes)}`,
       `Scratch: ${amount(event.scratchBytes)}`,
       `After release: ${amount(event.afterBytes)}`,
@@ -308,8 +312,8 @@ function createMemoryPanel({ byId, postMessage, formatFileSize, selectNode }) {
       ["intermediates", "Intermediates"],
       ["outputs", "New output tensors"],
     ]) {
-      const numeric = event.memory?.[key];
-      const symbolic = event.symbolicMemory?.[key];
+      const numeric = tagMap(event.memory?.[key]);
+      const symbolic = tagMap(event.symbolicMemory?.[key]);
       const tags = new Set([
         ...Object.keys(numeric ?? {}),
         ...Object.keys(symbolic ?? {}),

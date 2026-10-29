@@ -2128,6 +2128,11 @@ test("memory hover inspects numerical and symbolic allocations at each phase, sa
     );
   hover(0.5);
   assert.match(inspection.textContent, /before execution\nMemory: .*10 bytes/);
+  assert.match(inspection.textContent, /Already allocated: .*20 bytes/);
+  assert.equal(
+    document.querySelectorAll("#memory-results thead th")[3].textContent,
+    "Already allocated",
+  );
   hover(2);
   assert.equal(inspection.hidden, false);
   assert.match(inspection.textContent, /during execution\nMemory: .*100 bytes/);
@@ -2169,6 +2174,63 @@ test("memory hover inspects numerical and symbolic allocations at each phase, sa
   assert.equal(inspection.hidden, true);
   load(demoGraph);
   assert.equal(document.getElementById("memory-results").hidden, true);
+});
+
+test("memory inspection ignores scalar and array allocation buckets", (t) => {
+  const viewer = openViewer(t);
+  const { document, window, messages, load } = viewer;
+  load(demoGraph);
+  showMemoryProfile(viewer, [16]);
+  for (const [numeric, symbolic, expected] of [
+    [12, "6*N", /Inputs:\n  —\nIntermediates:/],
+    [[12], ["6*N"], /Inputs:\n  —\nIntermediates:/],
+    [
+      12,
+      { "": "6*N" },
+      /Inputs:\n  tensor: Unavailable; symbolic: 6\*N bytes\n/,
+    ],
+    [
+      { "": 12 },
+      "6*N",
+      /Inputs:\n  tensor: .*12 bytes.*symbolic: Unavailable bytes\n/,
+    ],
+  ]) {
+    window.dispatchEvent(
+      new window.MessageEvent("message", {
+        data: {
+          type: "memory-profile",
+          requestId: messages.at(-1).requestId,
+          profile: {
+            name: "Allocation buckets",
+            device: "CPU",
+            peakBytes: 16,
+            events: [
+              {
+                index: 0,
+                node: "",
+                opType: "Relu",
+                existingBytes: 16,
+                outputBytes: 0,
+                scratchBytes: 0,
+                deviceBytes: 16,
+                memory: { inputs: numeric },
+                symbolicMemory: { inputs: symbolic },
+              },
+            ],
+          },
+        },
+      }),
+    );
+    document
+      .getElementById("memory-chart")
+      .dispatchEvent(
+        new window.KeyboardEvent("keydown", { key: "ArrowRight" }),
+      );
+    assert.match(
+      document.getElementById("memory-inspection").textContent,
+      expected,
+    );
+  }
 });
 
 test("memory estimates measure the visible viewport before the first anchored zoom", (t) => {
