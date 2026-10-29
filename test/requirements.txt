@@ -5,3 +5,6 @@ onnx-light @ https://github.com/xadupre/onnx-light/releases/download/0.2.1/onnx_
 onnx-light==0.2.1
 onnx-light-cpu==0.2.1.1
 huggingface-hub>=0.34,<2
+# Supply real native GenAI/ORT shared libraries for prompt integration tests.
+onnxruntime-genai==0.17.0
+tokenizers>=0.22.2,<1

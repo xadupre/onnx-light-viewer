@@ -33,8 +33,9 @@ import pathlib
 import sys
 from huggingface_hub import HfApi, hf_hub_download, snapshot_download
 
-model, cache, result, include_weights, include_code = sys.argv[1:]
-info = HfApi().model_info(model)
+model, cache, result, include_weights, include_code, *revision = sys.argv[1:]
+cache = cache or None
+info = HfApi().model_info(model, **({"revision": revision[0]} if revision and revision[0] else {}))
 if not info.sha:
     raise ValueError("The repository did not provide an immutable revision.")
 files = {entry.rfilename for entry in info.siblings}
@@ -59,7 +60,7 @@ metadata = {name for name in files if name.endswith((
 ))}
 if include_code == "1":
     metadata.update(name for name in files if name.endswith(".py"))
-print(f"Downloading {model}@{info.sha} into {cache}", flush=True)
+print(f"Downloading {model}@{info.sha} into {cache or 'the Hugging Face cache'}", flush=True)
 source = snapshot_download(model, revision=info.sha, cache_dir=cache,
                            allow_patterns=sorted(metadata | weights))
 with open(result, "w", encoding="utf-8") as stream:
@@ -383,6 +384,51 @@ export interface ExportPlan {
   directoryTemplate?: string;
   command: string;
   script: string;
+  provenance?: ExportProvenance;
+}
+
+export interface ExportProvenance {
+  version: 1;
+  model: string;
+  source?: string;
+  revision?: string;
+  exporter: string;
+  packageDirectory?: string;
+}
+
+export const provenancePath = (model: string): string =>
+  `${model}.provenance.json`;
+
+export async function readProvenance(
+  model: string,
+): Promise<ExportProvenance | undefined> {
+  try {
+    const value: unknown = JSON.parse(
+      await readFile(provenancePath(model), "utf8"),
+    );
+    if (
+      !value ||
+      typeof value !== "object" ||
+      !("version" in value) ||
+      value.version !== 1 ||
+      !("model" in value) ||
+      typeof value.model !== "string" ||
+      !("exporter" in value) ||
+      typeof value.exporter !== "string" ||
+      ("source" in value &&
+        (typeof value.source !== "string" || !isAbsolute(value.source))) ||
+      ("revision" in value && typeof value.revision !== "string") ||
+      ("packageDirectory" in value &&
+        (typeof value.packageDirectory !== "string" ||
+          !isAbsolute(value.packageDirectory)))
+    )
+      throw new Error("Invalid model provenance.");
+    return value as ExportProvenance;
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT")
+      return undefined;
+    throw error;
+  }
 }
 
 /** Builds an argument vector, never an executable shell command. */
@@ -689,6 +735,7 @@ export async function prepareExportPlan(
       : plan.directory;
     return {
       ...exportPlan({ ...plan, directory }, plan.executable),
+      ...(plan.provenance ? { provenance: plan.provenance } : {}),
       script: join(staging, "export_model.py"),
       ...(plan.directoryTemplate === undefined
         ? {}
@@ -708,13 +755,14 @@ export async function prepareExportPlan(
       undefined,
       plan.recipe,
     ),
+    ...(plan.provenance ? { provenance: plan.provenance } : {}),
     ...(plan.directoryTemplate === undefined
       ? {}
       : { directoryTemplate: plan.directoryTemplate }),
   };
 }
 
-async function terminateExport(child: ChildProcess): Promise<void> {
+export async function terminateExport(child: ChildProcess): Promise<void> {
   const pid = child.pid;
   if (pid === undefined) return;
   if (process.platform === "win32") {
@@ -771,6 +819,7 @@ export async function runProcess(
   progress: (output: string) => void,
   environment: NodeJS.ProcessEnv,
   label: string,
+  stdout?: (chunk: string) => void,
 ): Promise<void> {
   signal.throwIfAborted();
   await new Promise<void>((resolve, reject) => {
@@ -811,6 +860,16 @@ export async function runProcess(
     for (const stream of [child.stdout, child.stderr]) {
       stream.setEncoding("utf8");
       stream.on("data", (chunk: string) => {
+        if (finished) return;
+        if (stream === child.stdout && stdout) {
+          try {
+            stdout(chunk);
+          } catch (error) {
+            abort();
+            finish(error instanceof Error ? error : new Error(String(error)));
+            return;
+          }
+        }
         output = (output + chunk).slice(-65536);
         if (!timer) timer = setTimeout(flush, 100);
       });
@@ -874,6 +933,15 @@ export async function downloadExportSource(
       throw new Error("The downloader did not return a local model directory.");
     return {
       ...exportPlan({ ...plan, model: source }, plan.executable),
+      provenance: {
+        version: 1,
+        model: plan.provenance?.model ?? plan.model,
+        source,
+        ...(basename(dirname(source)) === "snapshots"
+          ? { revision: basename(source) }
+          : {}),
+        exporter: plan.exporter,
+      },
       script: plan.script,
       ...(plan.directoryTemplate === undefined
         ? {}
@@ -886,6 +954,146 @@ export async function downloadExportSource(
 
 export function exportNeedsDownload(plan: ExportPlan): boolean {
   return plan.exporter !== "olive-recipes" && !isAbsolute(plan.model);
+}
+
+async function pinRecipeSource(
+  plan: ExportPlan,
+  signal: AbortSignal,
+  progress: (output: string) => void,
+): Promise<ExportProvenance | undefined> {
+  if (!plan.recipe) return undefined;
+  const recipe = join(plan.directory, "olive-recipe", plan.recipe.id);
+  const contents = await readFile(recipe, "utf8");
+  const value: unknown = /\.ya?ml$/i.test(recipe)
+    ? (await import("yaml")).parse(contents)
+    : JSON.parse(contents);
+  const record = (value: unknown): value is Record<string, unknown> =>
+    !!value && typeof value === "object" && !Array.isArray(value);
+  const unknown: ExportProvenance = {
+    version: 1,
+    model: `olive-recipe:${plan.recipe.id}@${plan.recipe.revision}`,
+    exporter: plan.exporter,
+  };
+  if (!record(value) || !record(value.input_model)) return unknown;
+  const input = record(value.input_model.config)
+    ? value.input_model.config
+    : value.input_model;
+  const kwargs = record(input.load_kwargs) ? input.load_kwargs : {};
+  const extra = record(kwargs.extra_args) ? kwargs.extra_args : {};
+  const hfModel =
+    typeof value.input_model.type === "string" &&
+    /hf|huggingface/i.test(value.input_model.type);
+  if (typeof input.model_path !== "string" || !input.model_path.trim())
+    return unknown;
+  const original = input.model_path;
+  let source = resolve(dirname(recipe), original);
+  let model = original;
+  let revision: string | undefined;
+  const requestedRevision =
+    typeof kwargs.revision === "string"
+      ? kwargs.revision
+      : typeof extra.revision === "string"
+        ? extra.revision
+        : typeof input.revision === "string"
+          ? input.revision
+          : "";
+  if (!(await pathExists(source))) {
+    if (!hfModel || !/^[\w.-]+(?:\/[\w.-]+)?$/.test(original)) return unknown;
+    const request = await mkdtemp(join(plan.directory, ".recipe-source-"));
+    try {
+      const result = join(request, "source.json");
+      await runProcess(
+        {
+          executable: plan.executable,
+          args: [
+            "-u",
+            "-c",
+            downloadSource,
+            original,
+            process.env.HF_HUB_CACHE ?? "",
+            result,
+            "1",
+            kwargs.trust_remote_code === true ||
+            extra.trust_remote_code === true ||
+            input.trust_remote_code === true
+              ? "1"
+              : "0",
+            requestedRevision,
+          ],
+        },
+        signal,
+        progress,
+        exportEnvironment,
+        "Recipe source downloader",
+      );
+      const downloaded: unknown = JSON.parse(await readFile(result, "utf8"));
+      if (
+        typeof downloaded !== "string" ||
+        !isAbsolute(downloaded) ||
+        !(await lstat(downloaded)).isDirectory()
+      )
+        throw new Error(
+          "The recipe downloader did not return a local checkpoint.",
+        );
+      source = downloaded;
+    } finally {
+      await rm(request, { recursive: true, force: true });
+    }
+  }
+  if ((await lstat(source)).isDirectory()) {
+    const configPath = join(source, "config.json");
+    if (await pathExists(configPath)) {
+      const config: unknown = JSON.parse(await readFile(configPath, "utf8"));
+      if (record(config)) {
+        if (
+          isAbsolute(original) &&
+          typeof config._name_or_path === "string" &&
+          /^[\w.-]+(?:\/[\w.-]+)?$/.test(config._name_or_path)
+        )
+          model = config._name_or_path;
+        if (
+          typeof config._commit_hash === "string" &&
+          /^[a-f0-9]{40}$/i.test(config._commit_hash)
+        )
+          revision = config._commit_hash;
+      }
+    }
+    if (
+      basename(dirname(source)) === "snapshots" &&
+      /^[a-f0-9]{40}$/i.test(basename(source))
+    )
+      revision = basename(source);
+  } else {
+    const inherited = await readProvenance(source);
+    if (inherited) {
+      input.model_path = source;
+      await writeFile(recipe, `${JSON.stringify(value, null, 2)}\n`);
+      return { ...inherited, exporter: plan.exporter };
+    }
+  }
+  input.model_path = source;
+  if (record(input.load_kwargs))
+    input.load_kwargs = {
+      ...kwargs,
+      ...(revision && "revision" in kwargs ? { revision } : {}),
+      ...(record(kwargs.extra_args)
+        ? {
+            extra_args: {
+              ...extra,
+              ...(revision && "revision" in extra ? { revision } : {}),
+            },
+          }
+        : {}),
+    };
+  if (revision && "revision" in input) input.revision = revision;
+  await writeFile(recipe, `${JSON.stringify(value, null, 2)}\n`);
+  return {
+    version: 1,
+    model,
+    source,
+    ...(revision ? { revision } : {}),
+    exporter: plan.exporter,
+  };
 }
 
 /** Runs the selected CLI with bounded, throttled output and explicit cancellation. */
@@ -929,6 +1137,7 @@ export async function runExport(
         return true;
       },
     });
+  const recipeProvenance = await pinRecipeSource(plan, signal, progress);
   signal.throwIfAborted();
   const script = `${plan.recipe ? `# Olive recipes commit: ${plan.recipe.revision}\n` : ""}import os\nimport subprocess\n\nsubprocess.run(${JSON.stringify([plan.executable, ...plan.args])}, cwd=${JSON.stringify(plan.cwd ?? homedir())}, env={**os.environ, **${JSON.stringify(environment)}}, check=True)\n`;
   await writeFile(plan.script, script, { flag: "wx" });
@@ -950,5 +1159,35 @@ export async function runExport(
     throw new Error(
       "The exporter completed but produced no ONNX model or pipeline.",
     );
+  const inherited =
+    plan.provenance ??
+    recipeProvenance ??
+    (plan.oliveWorkflow === "quantize"
+      ? await readProvenance(plan.model)
+      : undefined);
+  const provenance: ExportProvenance = {
+    version: 1,
+    model: inherited?.model ?? plan.model,
+    ...(inherited?.source
+      ? { source: inherited.source }
+      : isAbsolute(plan.model)
+        ? { source: plan.model }
+        : {}),
+    ...(inherited?.revision
+      ? { revision: inherited.revision }
+      : isAbsolute(plan.model) && basename(dirname(plan.model)) === "snapshots"
+        ? { revision: basename(plan.model) }
+        : {}),
+    exporter: plan.exporter,
+    ...(plan.exporter === "mobius" ? { packageDirectory: plan.directory } : {}),
+  };
+  for (const model of models) {
+    signal.throwIfAborted();
+    await writeFile(
+      provenancePath(model),
+      `${JSON.stringify(provenance, null, 2)}\n`,
+      { flag: "wx" },
+    );
+  }
   return models.sort();
 }

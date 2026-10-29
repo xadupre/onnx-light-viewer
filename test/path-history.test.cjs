@@ -2,6 +2,28 @@ const assert = require("node:assert/strict");
 const { test } = require("node:test");
 const { PathHistory, historyEntries } = require("../dist/pathHistory");
 
+test("reopening a remembered path preserves every entry and its order without persisting an edit", async () => {
+  const first = historyEntries("local", "/models/first.onnx", "/models");
+  const second = historyEntries("local", "/models/second.onnx", "/models");
+  let stored = { open: [second[0], ...first], save: first };
+  const expected = structuredClone(stored);
+  const writes = [];
+  const published = [];
+  const history = new PathHistory({
+    get: () => stored,
+    update: async (key, value) => {
+      writes.push([key, value]);
+      stored = value;
+    },
+  });
+  history.subscribe((value) => published.push(value));
+  for (const target of ["open", "save"])
+    await history.update(target, { action: "remember", entries: first });
+  assert.deepEqual(history.snapshot(), expected);
+  assert.deepEqual(writes, []);
+  assert.deepEqual(published, []);
+});
+
 test("serializes recent path edits, deduplicates, bounds and persists separate action histories", async () => {
   const values = new Map();
   const storage = {
@@ -20,12 +42,12 @@ test("serializes recent path edits, deduplicates, bounds and persists separate a
   ]);
   assert.deepEqual(
     history.snapshot().open.map(({ path }) => path),
-    ["/models/second.onnx", "/models", "/models/first.onnx"],
+    ["/models/second.onnx", "/models/first.onnx", "/models"],
   );
   await history.update("open", { action: "remember", entries: first });
   assert.deepEqual(
     history.snapshot().open.map(({ path }) => path),
-    ["/models/first.onnx", "/models", "/models/second.onnx"],
+    ["/models/second.onnx", "/models/first.onnx", "/models"],
   );
   await history.update("open", { action: "remove", entry: first[0] });
   const reopened = new PathHistory(storage);

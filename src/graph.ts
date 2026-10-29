@@ -528,12 +528,19 @@ const native: {
   ): Promise<NativeModel>;
   loadPipeline(bytes: Uint8Array, fileName: string): PipelineData;
   loadPipelineFile(filePath: string, fileName: string): Promise<PipelineData>;
+  preparePromptPipeline(
+    prefill: string,
+    embedding: string,
+    directory: string,
+    output: string | null,
+  ): Promise<{ available: boolean; reason: string }>;
   listBackendTests(): BackendTest[];
   loadBackendTest(id: number): NativeModel;
 } = require("./native/onnx_light_viewer.node");
 
 /** C++ library release embedded in the addon, independent of the loaded model. */
 export const onnxLightVersion = native.onnxLightVersion;
+export const preparePromptPipeline = native.preparePromptPipeline;
 
 /** Minimal Relu snapshot with native schema documentation, requiring no model file. */
 export const demoGraph: Graph = {

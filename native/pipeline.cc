@@ -1,11 +1,19 @@
 /** @file PipelineProto containers reuse retained ModelProto stage handles. */
 #include "pipeline.h"
 #include "addon.h"
+#include "model_storage.h"
 #include "tensor_preview.h"
 #include <cerrno>
 #include <charconv>
+#include <fcntl.h>
+#include <regex>
+#include <set>
 #include <stdexcept>
 #include <system_error>
+
+#ifdef _WIN32
+#include <io.h>
+#endif
 
 namespace onnx_light_viewer {
 
@@ -20,6 +28,176 @@ ol::ModelProto &PipelineStage(ol::PipelineProto &pipeline, const std::string &ro
 }
 
 namespace {
+
+class PromptPipelineWorker : public Napi::AsyncWorker {
+public:
+  PromptPipelineWorker(Napi::Env env, std::string prefill, std::string embedding,
+                       std::string directory, std::string output)
+      : Napi::AsyncWorker(env), deferred_(Napi::Promise::Deferred::New(env)),
+        prefill_(std::move(prefill)), embedding_(std::move(embedding)),
+        directory_(std::move(directory)), output_(std::move(output)) {}
+
+  Napi::Promise Promise() const { return deferred_.Promise(); }
+
+  void Execute() override {
+    try {
+      ol::PipelineProto pipeline;
+      pipeline.set_name("Mobius generation pipeline");
+      pipeline.set_producer_name("onnx-light-viewer");
+      const auto read = [&](ol::ModelProto &model, const std::string &path) {
+        FileDescriptor file(OpenModelFile(path));
+        if (file.get() < 0)
+          throw std::system_error(errno, std::generic_category(), "Could not open " + path);
+        ol::utils::FdReadStream stream(file.get());
+        ol::ParseOptions options;
+        options.skip_raw_data = output_.empty();
+        ReadModel(model, stream, options);
+      };
+      read(pipeline.ref_prefill(), prefill_);
+      auto &graph = pipeline.ref_prefill().ref_graph();
+      const auto names = [](const auto &ports) {
+        std::set<std::string> result;
+        for (const auto &port : ports)
+          result.emplace(port.name());
+        return result;
+      };
+      auto inputs = names(graph.input());
+      const auto outputs = names(graph.output());
+      if (!outputs.contains("logits")) {
+        reason_ = "No logits output: this is not a token-generation decoder.";
+        return;
+      }
+      std::set<std::string> supplied{"input_ids", "attention_mask", "position_ids"};
+      if (!inputs.contains("input_ids")) {
+        if (embedding_.empty()) {
+          reason_ = "Separate embedding model is missing.";
+          return;
+        }
+        read(pipeline.ref_embedding(), embedding_);
+        const auto &embedding = pipeline.embedding().graph();
+        if (!names(embedding.input()).contains("input_ids")) {
+          reason_ = "Embedding model does not accept input_ids.";
+          return;
+        }
+        auto embedding_supplied = supplied;
+        for (const auto &initializer : embedding.initializer())
+          embedding_supplied.emplace(initializer.name());
+        for (const auto &input : embedding.input())
+          if (!embedding_supplied.contains(std::string(input.name()))) {
+            reason_ = "Embedding requires additional input: " + std::string(input.name());
+            return;
+          }
+        for (const auto &name : names(embedding.output()))
+          supplied.insert(name);
+      }
+      const auto initializers = names(graph.initializer());
+      std::set<std::string> bound;
+      for (const auto &binding : graph.persistent_bindings())
+        bound.emplace(binding.input_name());
+      const std::regex cache_name(R"(^past_key_values\.([0-9]+)\.(key|value)$)");
+      for (const auto &input : graph.input()) {
+        const std::string name = input.name();
+        if (supplied.contains(name))
+          continue;
+        std::smatch match;
+        if (!std::regex_match(name, match, cache_name)) {
+          if (initializers.contains(name) || bound.contains(name))
+            continue;
+          reason_ = "Decoder requires additional input: " + name;
+          return;
+        }
+        const std::string present = "present." + match[1].str() + "." + match[2].str();
+        if (!outputs.contains(present) || !input.type().has_tensor_type()) {
+          reason_ = "Missing cache output/type for " + name;
+          return;
+        }
+        if (!bound.contains(name)) {
+          auto *binding = graph.add_persistent_bindings();
+          binding->set_input_name(name);
+          binding->set_output_name(present);
+        }
+        if (initializers.contains(name))
+          continue;
+        const auto &type = input.type().tensor_type();
+        const auto &dimensions = type.shape().dim();
+        if (dimensions.size() != 4 || !dimensions[1].has_dim_value() ||
+            !dimensions[3].has_dim_value() ||
+            (dimensions[0].has_dim_value() && dimensions[0].dim_value() != 1) ||
+            (dimensions[2].has_dim_value() && dimensions[2].dim_value() != 0)) {
+          reason_ = "Cache needs an explicit empty [batch, heads, past, width] layout: " + name;
+          return;
+        }
+        // Declare an empty initial cache; generation and feedback remain SDK-owned.
+        auto *initial = graph.add_initializer();
+        initial->set_name(name);
+        initial->set_data_type(type.elem_type());
+        for (const auto dimension :
+             {int64_t{1}, dimensions[1].dim_value(), int64_t{0}, dimensions[3].dim_value()})
+          initial->add_dims(dimension);
+      }
+      std::map<std::filesystem::path, std::string> locations;
+      const auto references = [&](ol::ModelProto &model, const std::string &path) {
+        std::vector<ol::EncodedValueProto *> encoded;
+        const auto tensors = ModelSaveTensors(model, &encoded);
+        const auto rebase = [&](auto &tensor) {
+          for (auto &entry : tensor.ref_external_data())
+            if (entry.key() == "location") {
+              const auto source = (ModelFilePath(path).parent_path() / std::string(entry.value()))
+                                      .lexically_normal();
+              auto found = locations.find(source);
+              if (found == locations.end()) {
+                if (!std::filesystem::is_regular_file(source))
+                  throw std::runtime_error("Missing external weights: " + source.string());
+                const auto relative =
+                    source.lexically_relative(ModelFilePath(directory_).lexically_normal());
+                if (relative.empty() || *relative.begin() == "..")
+                  throw std::runtime_error(
+                      "Pipeline weights must remain inside the export package.");
+                found = locations.emplace(source, relative.generic_string()).first;
+              }
+              entry.set_value(found->second);
+            }
+        };
+        for (auto *tensor : tensors)
+          rebase(*tensor);
+        for (auto *value : encoded)
+          rebase(*value);
+      };
+      references(pipeline.ref_prefill(), prefill_);
+      if (pipeline.has_embedding())
+        references(pipeline.ref_embedding(), embedding_);
+      if (!output_.empty()) {
+        // Node/libuv descriptors are not CRT descriptors on Windows.
+#ifdef _WIN32
+        FileDescriptor output(_wopen(ModelFilePath(output_).c_str(), _O_WRONLY | _O_BINARY));
+#else
+        FileDescriptor output(open(output_.c_str(), O_WRONLY));
+#endif
+        if (output.get() < 0)
+          throw std::system_error(errno, std::generic_category(),
+                                  "Could not write the generation pipeline.");
+        if (!pipeline.SerializeToFileDescriptor(output.get()))
+          throw std::runtime_error("Could not write the generation pipeline.");
+      }
+      available_ = true;
+    } catch (const std::exception &error) {
+      SetError(error.what());
+    }
+  }
+
+  void OnOK() override {
+    auto result = Napi::Object::New(Env());
+    result.Set("available", available_);
+    result.Set("reason", reason_);
+    deferred_.Resolve(result);
+  }
+  void OnError(const Napi::Error &error) override { deferred_.Reject(error.Value()); }
+
+private:
+  Napi::Promise::Deferred deferred_;
+  std::string prefill_, embedding_, directory_, output_, reason_;
+  bool available_ = false;
+};
 
 Napi::Array PipelineMetadata(Napi::Env env, const ol::PipelineProto &pipeline) {
   auto result = Napi::Array::New(env);
@@ -134,6 +312,36 @@ private:
 };
 
 } // namespace
+
+Napi::Value PreparePromptPipeline(const Napi::CallbackInfo &info) {
+  const auto env = info.Env();
+  try {
+    if (info.Length() != 4 || !info[0].IsString() || !info[1].IsString() || !info[2].IsString() ||
+        (!info[3].IsNull() && !info[3].IsString()))
+      throw std::runtime_error("Expected pipeline source paths and an optional output path.");
+    std::vector<std::string> paths;
+    for (size_t i = 0; i < 3; ++i) {
+      auto path = info[i].As<Napi::String>().Utf8Value();
+      if (path.find('\0') != std::string::npos)
+        throw std::runtime_error("Invalid pipeline source path.");
+      paths.push_back(std::move(path));
+    }
+    std::string output;
+    if (!info[3].IsNull()) {
+      output = info[3].As<Napi::String>().Utf8Value();
+      if (output.empty() || output.find('\0') != std::string::npos)
+        throw std::runtime_error("Invalid pipeline output path.");
+    }
+    auto worker = std::make_unique<PromptPipelineWorker>(env, paths[0], paths[1], paths[2], output);
+    const auto promise = worker->Promise();
+    worker->Queue();
+    worker.release();
+    return promise;
+  } catch (const std::exception &error) {
+    Napi::Error::New(env, error.what()).ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+}
 
 Napi::Object PipelineHandle(Napi::Env env, std::shared_ptr<StoredPipeline> pipeline) {
   auto result = Napi::Object::New(env);

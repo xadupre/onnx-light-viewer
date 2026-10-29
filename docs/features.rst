@@ -1,8 +1,9 @@
 Implemented features
 ====================
 
-The viewer inspects ONNX graphs locally with onnx-light. Models are not uploaded
-or executed, and viewer actions do not save or modify the source file.
+The viewer inspects ONNX graphs locally with onnx-light. Models are not uploaded.
+Explicit Convert and Run Prompt actions execute installed tooling;
+inspection does not save or modify the source file.
 
 Available in the viewer
 -----------------------
@@ -36,6 +37,22 @@ dialog for paths outside the workspace.
    :width: 100%
 
    Choose how to fill Model path without loading a model.
+
+**Recent paths** checks local files for generation assets without loading weights
+or running inference. Mobius exports show whether a pipeline can be assembled,
+or explain missing assets and unsupported input contracts. **Load as pipeline**
+creates a native ``PipelineProto`` beside the export, reusing external weights
+and leaving the original models unchanged, then opens **Run Prompt**. Separate
+embedding/decoder exports and declared past/present caches are connected in C++;
+onnx-light owns generation and cache feedback. Existing pipelines can be opened
+directly. Inspection does not reorder history; only a successful open does.
+These checks do not certify runtime operator support.
+
+.. figure:: _static/feature-history-pipeline.png
+   :alt: Recent local paths with a checked Mobius export and its Load as pipeline button.
+   :width: 100%
+
+   Identify a usable export before loading it; this screenshot uses a tiny test model.
 
 Backend catalog
 ^^^^^^^^^^^^^^^
@@ -97,6 +114,121 @@ Moving a node changes only its display position.
    :width: 100%
 
    Inspect a selected node at readable size.
+
+Running language-model prompts
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+After conversion, open **Run Prompt** next to **Tensors**. Select **onnx-light**
+or **onnxruntime-genai** (when a GenAI configuration is available), edit the
+prompt and choose a maximum number of new tokens (default: 32). Requires a
+trusted workspace and a causal language model. Both ONNX engines execute in
+C++, in an isolated Node process so cancellation can stop native execution.
+Execution uses the saved model, not unsaved graph edits.
+
+The bundled onnx-light SDK supplies its CPU kernels. Native tokenization for both
+engines uses the ONNX Runtime GenAI C API (0.17.0 or newer), not its Python module.
+Install the matching C++ GenAI and ONNX Runtime libraries and set
+``ONNX_LIGHT_VIEWER_GENAI_LIBRARY`` to the absolute GenAI shared-library path
+before starting VS Code. Set ``ORT_LIB_PATH`` to the absolute ONNX Runtime
+shared-library path when it is not already discoverable. Choose CPU/CUDA libraries
+compatible with the exported configuration; the viewer installs neither.
+Only Hugging Face validation needs ``torch``, ``transformers`` and the original
+cached checkpoint in Settings' Python environment.
+
+Conversion saves source information next to each exported model. **Validate
+with Hugging Face** uses that source checkpoint and the same generated prefixes
+to compare logits, rather than comparing unrelated divergent continuations.
+Output text, token IDs, raw-logit scores and reference results share one column
+per generated token. Each column includes maximum absolute and relative error,
+L2 distance, and counts of vocabulary coefficients with absolute differences
+below 0.01, 0.1 and 1. Runtime errors are shown without substituting another
+engine; **Cancel** stops execution.
+
+With either **onnx-light** or **onnxruntime-genai**, token columns appear as soon
+as the C++ engine produces them. Each column includes its phase and latency in milliseconds.
+The first token is **Prefill**; subsequent tokens are **Decode**. The summary
+shows prefill time and the mean of decode tokens only; a one-token result has
+no decode mean. Hugging Face validation also reports per-token timings, using
+the prompt once and the exported token prefixes with its decode cache thereafter.
+GenAI timings include inference and CPU logit transfer. onnx-light's SDK observer
+measures per-iteration input preparation, embedding execution, inference and token
+selection; it excludes per-call session construction, snapshot copying and callback
+work. Neither engine includes loading, tokenization, detokenization, retained-logit
+serialization or UI rendering in these token timings.
+
+**Model loading** and **warmup** have separate timings. On each new native
+session, warmup uses the first prompt token alone and generates one token;
+the real run starts with a fresh generation/cache state. HF validation also
+measures loading and a one-token warmup forward separately.
+Native loading covers runtime, tokenizer and model/session initialization,
+not viewer preflight discovery or prompt encoding.
+
+**Keep the current model loaded** is optional and off by default to avoid
+unnecessary memory use and swapping. A retained session reports its original
+loading/warmup times as **initial** timings, not costs paid again. **Unload model
+now**, cancellation, changing models/engines/settings and closing the panel
+release it. One panel retains at most one native model; keeping it during HF
+validation can hold two models in memory.
+
+Select the engine on **Run Prompt**, then open **Session settings** to configure
+that engine only. Controls preserve defaults unless changed and never edit the
+exported configuration. GenAI's **From genai_config.json** uses the exported
+configuration, or the engine default when the option is absent from that file.
+onnx-light exposes CPU threads, shape checks, allocation capacity, intermediate
+release, logging and native kernel profiles. GenAI exposes CPU threads,
+CPU/CUDA/DirectML providers and GPU limits, graph optimization, memory options,
+prepacking, graph execution mode, logging and ORT profiling. Unsupported
+providers/options raise runtime errors, without switching engines.
+
+For **parallel loading**, select onnx-light's **SDK owning loader**, then
+configure read/preparation overlap and its admission memory limit. One SDK I/O
+worker overlaps preparation on the CPU executor; CPU threads also apply to
+preparation. Standard ONNX loading remains the default. The owning loader
+still requires explicit external-data lengths in the published 0.2.2 SDK
+(`xadupre/onnx-light#5697 <https://github.com/xadupre/onnx-light/issues/5697>`_)
+and does not accept pipelines
+(`xadupre/onnx-light#5698 <https://github.com/xadupre/onnx-light/issues/5698>`_).
+Only these loading controls are disabled for pipelines; CPU, memory and diagnostic
+settings remain editable.
+GenAI exposes initialization/prepacking and session-thread controls, not a
+separate parallel weight-reader thread count. Parallel graph execution is not
+parallel loading. Profiles add overhead and are written under
+``.prompt-profiles`` beside the model; unload GenAI to finalize its profile.
+
+onnx-light 0.2.2 uses the SDK's synchronous ``GenerationOptions.on_step`` observer
+for live tokens, genuine per-token timings and bounded raw last-position logits.
+FLOAT, DOUBLE, FLOAT16 and BFLOAT16 outputs support raw scores and the same
+token-aligned HF vocabulary comparisons as GenAI. If the capture budget is
+exhausted, tokens and timings continue, while unavailable scores/comparisons are
+identified explicitly. No timings are estimated by dividing the total runtime.
+Multiple EOS IDs remain unsupported by the SDK
+(`xadupre/onnx-light#5694 <https://github.com/xadupre/onnx-light/issues/5694>`_).
+Native pipeline generation uses the SDK's ``PipelineProto`` overload; unsupported
+stages or inputs fail explicitly, without a viewer-side generation loop.
+
+.. figure:: _static/feature-run-prompt-light.png
+   :alt: Run Prompt with native onnx-light output columns, raw scores, individual prefill and decode times and their decode mean.
+   :width: 100%
+
+   Live SDK observations on a tiny deterministic test model, not an LLM benchmark.
+
+.. figure:: _static/feature-run-prompt.png
+   :alt: Run Prompt with native GenAI output columns, prefill and decode phases, individual token times and the decode mean.
+   :width: 100%
+
+   Real native GenAI timings on a tiny deterministic test model, not an LLM benchmark.
+
+.. figure:: _static/feature-prompt-settings-light.png
+   :alt: onnx-light session settings page with CPU threads, owning-loader overlap and memory admission controls.
+   :width: 100%
+
+   onnx-light session and parallel-loading controls, backed by supported SDK APIs.
+
+.. figure:: _static/feature-prompt-settings-genai.png
+   :alt: GenAI session settings page with thread counts, providers, initialization, graph optimization, memory and profiling controls.
+   :width: 100%
+
+   GenAI session options are overlaid in memory; the exported configuration is unchanged.
 
 Inspection
 ^^^^^^^^^^

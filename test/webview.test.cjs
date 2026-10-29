@@ -6,7 +6,7 @@ const { huggingFaceTasks } = require("../dist/huggingFaceTasks");
 const { webviewHtml } = require("../dist/webview");
 
 for (const initialTab of ["model", "logs"]) {
-  test(`groups viewer features by theme when opening ${initialTab}`, (t) => {
+  test(`keeps sidebar actions ungrouped when opening ${initialTab}`, (t) => {
     const dom = new JSDOM(
       webviewHtml(
         (name) => name,
@@ -36,7 +36,13 @@ for (const initialTab of ["model", "logs"]) {
     assert.deepEqual(groups(".viewer-tabs > .feature-group"), [
       [
         "Navigation",
-        ["model-tab", "statistics-tab", "memory-tab", "tensors-tab"],
+        [
+          "model-tab",
+          "statistics-tab",
+          "memory-tab",
+          "tensors-tab",
+          "prompt-tab",
+        ],
       ],
       [
         "Application",
@@ -49,29 +55,22 @@ for (const initialTab of ["model", "logs"]) {
         ],
       ],
     ]);
-    assert.deepEqual(groups("#sidebar-controls > .feature-group"), [
+    const controls = document.getElementById("sidebar-controls");
+    assert.deepEqual(
+      [...controls.children].map((button) => button.id),
       [
-        "Navigation",
-        [
-          "open-model",
-          "save-model",
-          "show-find",
-          "show-operator",
-          "show-metadata",
-        ],
+        "open-model",
+        "save-model",
+        "show-find",
+        "show-operator",
+        "show-metadata",
+        "export-model",
+        "optimize-model",
+        "fuse-pattern",
+        "undo-fusion",
       ],
-      ["Convert", ["export-model"]],
-      ["Optimization", ["optimize-model", "fuse-pattern", "undo-fusion"]],
-    ]);
-    for (const group of document.querySelectorAll(
-      "#sidebar-controls > .feature-group",
-    )) {
-      assert.equal(group.getAttribute("role"), "group");
-      assert.equal(
-        document.getElementById(group.getAttribute("aria-labelledby")),
-        group.querySelector(".feature-group-title"),
-      );
-    }
+    );
+    assert.equal(controls.querySelector(".feature-group-title"), null);
     const tabs = [...document.querySelectorAll('[role="tab"]')];
     assert.deepEqual(
       tabs
@@ -202,6 +201,55 @@ test("action buttons use rounded neutral surfaces and distinct typography", (t) 
     dom.window.getComputedStyle(document.getElementById("model-tab"))
       .backgroundColor,
     "rgba(0, 0, 0, 0)",
+  );
+});
+
+test("Prompt and Settings align labels beside their controls, including session settings", (t) => {
+  const dom = new JSDOM(
+    webviewHtml((name) => name, "test-source", "test-nonce", "test"),
+  );
+  t.after(() => dom.window.close());
+  const { document } = dom.window;
+  const stylesheet = document.createElement("style");
+  stylesheet.textContent = readFileSync(
+    require.resolve("../media/viewer.css"),
+    "utf8",
+  );
+  document.head.append(stylesheet);
+  for (const id of [
+    "prompt-engine",
+    "prompt-text",
+    "prompt-max-tokens",
+    "prompt-keep-loaded",
+    "prompt-reference-source",
+    "prompt-validate-run",
+    "settings-download",
+    "settings-python",
+    "settings-width",
+  ]) {
+    const control = document.getElementById(id);
+    const label = document.querySelector(`label[for="${id}"]`);
+    assert.equal(label.parentElement, control.parentElement, id);
+    assert.equal(
+      dom.window.getComputedStyle(control.parentElement).gridTemplateColumns,
+      "minmax(0, 1fr) minmax(0, 2fr)",
+      id,
+    );
+  }
+  for (const label of document.querySelectorAll(
+    ".prompt-settings-grid label, #settings-panels label",
+  )) {
+    assert.equal(
+      dom.window.getComputedStyle(label).gridTemplateColumns,
+      "minmax(0, 1fr) minmax(0, 2fr)",
+    );
+    assert.ok(label.lastElementChild.matches("input, select"));
+  }
+  assert.ok(
+    document
+      .getElementById("prompt-reference-source")
+      .compareDocumentPosition(document.getElementById("prompt-results")) &
+      dom.window.Node.DOCUMENT_POSITION_FOLLOWING,
   );
 });
 

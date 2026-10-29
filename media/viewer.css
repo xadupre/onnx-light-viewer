@@ -156,8 +156,6 @@ p {
   flex: none;
 }
 #application-settings-form {
-  display: grid;
-  gap: 8px;
   max-width: 720px;
   margin: 16px 0;
 }
@@ -165,9 +163,8 @@ p {
   justify-self: start;
 }
 #settings-panels {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 16px;
+  display: grid;
+  gap: 8px;
   margin-top: 12px;
 }
 #settings-view input[type="text"] {
@@ -948,15 +945,12 @@ aside {
   top: -14px;
   z-index: 1;
   display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 4px;
   margin: -14px -16px 12px;
   padding: 12px 10px;
   background: var(--panel);
   border-bottom: 1px solid var(--border);
-}
-#sidebar-controls .feature-group-controls {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 #sidebar-controls button {
   padding: 4px 3px;
@@ -1829,4 +1823,88 @@ button:disabled {
   flex: none;
   margin-left: auto;
   padding: 3px;
+}
+#prompt-view {
+  padding: 1rem;
+  overflow: auto;
+}
+
+.form-grid,
+.prompt-settings-grid label,
+#settings-panels label {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+  gap: 0.5rem 1rem;
+  align-items: start;
+  min-width: 0;
+  max-width: 48rem;
+}
+
+.form-grid > p {
+  grid-column: 1 / -1;
+}
+
+.form-grid > button {
+  grid-column: 2;
+  justify-self: start;
+}
+
+.form-grid > input,
+.form-grid > select,
+.form-grid > textarea,
+.prompt-settings-grid label > input,
+.prompt-settings-grid label > select {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.form-grid > input[type="checkbox"],
+.prompt-settings-grid label > input[type="checkbox"] {
+  width: auto;
+  justify-self: start;
+}
+
+.prompt-settings-grid:not([hidden]) {
+  display: grid;
+  gap: 0.75rem;
+  max-width: 48rem;
+}
+
+.history-pipeline-status {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  color: var(--muted);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.path-history li:has(.history-pipeline-status) {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+}
+.path-history [data-load-pipeline] {
+  grid-column: 1 / -1;
+  grid-row: 3;
+  justify-self: start;
+}
+
+#prompt-results {
+  overflow-x: auto;
+  margin-block: 1rem;
+}
+
+#prompt-progress {
+  max-height: 24rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.prompt-token-table th,
+.prompt-token-table td {
+  padding: 0.4rem 0.75rem;
+  border: 1px solid var(--vscode-panel-border, #888);
+  white-space: pre;
+  text-align: left;
 }
