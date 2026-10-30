@@ -2588,16 +2588,24 @@ test("optimization shares large initializer and Constant payloads across snapsho
             const preview = await source.previewFusion("TransposeTranspose", ${JSON.stringify(file)});
             assert.equal(preview.matches.length, 1);
             global.gc();
-            const before = process.resourceUsage().maxRSS;
+            const before = process.memoryUsage.rss();
+            let peak = before;
+            const sample = () => { peak = Math.max(peak, process.memoryUsage.rss()); };
+            const sampling = setInterval(sample, 1);
+            sampling.unref();
             const clones = [preview.model.clone(), preview.model.clone()];
+            sample();
             const started = process.hrtime.bigint();
             const optimized = await clones[0].optimize(["TransposeTranspose"], "Optimize");
             const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+            sample();
             const matched = await clones[1].previewFusion("TransposeTranspose");
+            sample();
+            clearInterval(sampling);
             assert.equal(matched.matches.length, 1);
             optimized.verify();
             assert.equal(optimized.optimizationReport().rewrites, 1);
-            const increase = (process.resourceUsage().maxRSS - before) * 1024;
+            const increase = peak - before;
             console.log(JSON.stringify({
               increase,
               elapsedMs,
