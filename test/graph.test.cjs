@@ -33,9 +33,31 @@ const {
   isEncryptedModel,
 } = require("../dist/graph");
 const { PipelineModel } = require("../dist/pipeline");
+const python =
+  process.env.ONNX_PATTERN_PYTHON ??
+  (process.platform === "win32" ? "python" : "python3");
 
 function modelBytes(name) {
   return readFileSync(path.join(__dirname, "models", name));
+}
+
+function functionPatternTexts(source) {
+  return JSON.parse(
+    execFileSync(
+      python,
+      [
+        "-c",
+        [
+          "import ast, json, sys",
+          "tree = ast.parse(sys.stdin.read())",
+          "names = {'match_text', 'replacement_text'}",
+          "texts = {node.targets[0].id: ast.literal_eval(node.value) for node in tree.body if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name) and node.targets[0].id in names}",
+          "print(json.dumps(texts))",
+        ].join("\n"),
+      ],
+      { input: source, encoding: "utf8" },
+    ),
+  );
 }
 
 function memoryTestModel(
@@ -2445,6 +2467,732 @@ test("saves complete streamed weights, inferred shapes and authenticated encrypt
   );
 });
 
+test("selection FunctionPatterns retain exports and catalog across repeated matches, undo and optimize", async () => {
+  const source = loadModel(modelBytes("fusion.onnx"), "selection");
+  const original = source.graph();
+  const originalBytes = Buffer.from(await source.serialize());
+  const definition = source.createFunctionPattern(
+    [1, 0],
+    "SelectedTransposePair",
+  );
+  assert.equal(definition.name, "SelectedTransposePair");
+  assert.match(definition.text, /SelectedTransposePair/);
+  assert.match(definition.text, /Transpose/);
+  assert.equal(definition.replacement, definition.text);
+  assert.match(definition.text, /opset_import: \["" : 13\]/);
+  assert.match(definition.text, /^# A=x\n/);
+  assert.match(definition.text, /SelectedTransposePair \(A\) => \(C\)/);
+  assert.match(definition.text, /^\s+B = Transpose/m);
+  assert.match(definition.text, /^\s+C = Transpose/m);
+  assert.doesNotMatch(definition.python, /\[first\]|\[second\]/);
+  assert.match(definition.python, /as_function=True/);
+  assert.match(definition.python, /GraphBuilder/);
+  assert.match(definition.python, /parse_function\(match_text\)/);
+  assert.match(definition.python, /parse_function\(replacement_text\)/);
+  assert.doesNotMatch(definition.python, /ParseFromString|fromhex/);
+  assert.deepEqual(functionPatternTexts(definition.python), {
+    match_text: definition.text,
+    replacement_text: definition.replacement,
+  });
+  assert.deepEqual(
+    source.optimizationPatterns().find(({ name }) => name === definition.name),
+    {
+      name: definition.name,
+      priority: 1,
+      device: "Undefined",
+      enabledByDefault: false,
+      groups: ["Selection patterns", "all"],
+      definition,
+    },
+  );
+  assert.ok(
+    !loadModel(modelBytes("fusion.onnx"), "independent")
+      .fusionPatterns()
+      .includes(definition.name),
+  );
+  const preview = await source.clone().previewFusion(definition.name);
+  assert.deepEqual(
+    preview.matches.map(({ nodes }) => [...nodes].sort()),
+    [
+      [0, 1],
+      [2, 3],
+    ],
+  );
+  for (const match of preview.matches) {
+    assert.equal(match.replacement[0].opType, definition.name);
+    assert.equal(
+      (await source.explainFusion(definition.name, match.anchor)).status,
+      "matched",
+    );
+  }
+  const fused = await preview.model.applyFusion(
+    definition.name,
+    preview.matches.map(({ anchor }) => anchor),
+  );
+  fused.verify();
+  const calls = fused.graph().nodes.filter(({ function: fn }) => fn);
+  assert.equal(calls.length, 2);
+  assert.equal(
+    calls[0].function.path.at(-1).function,
+    calls[1].function.path.at(-1).function,
+  );
+  assert.deepEqual(
+    fused
+      .graph(false, calls[0].function.path)
+      .nodes.map(({ opType }) => opType),
+    ["Transpose", "Transpose"],
+  );
+  assert.deepEqual(
+    fused
+      .graph(false, calls[0].function.path)
+      .nodes.map(({ outputs }) => outputs),
+    [["B"], ["C"]],
+  );
+  fused.createFunctionPattern(
+    [fused.graph().nodes.length - 1],
+    "SelectedMatMul",
+  );
+  const undone = fused.undoFusion();
+  assert.deepEqual(undone.graph(), original);
+  assert.ok(undone.fusionPatterns().includes("SelectedMatMul"));
+  assert.deepEqual(
+    undone.optimizationPatterns().find(({ name }) => name === definition.name)
+      .definition,
+    definition,
+  );
+  assert.equal(
+    (await undone.previewFusion("SelectedMatMul")).matches.length,
+    1,
+  );
+  const optimized = await source.optimize(["SelectedMatMul"], "Optimize");
+  optimized.verify();
+  assert.equal(
+    optimized.graph().nodes.filter(({ opType }) => opType === "SelectedMatMul")
+      .length,
+    1,
+  );
+  const optimizedAfterFusion = await fused.optimize(
+    ["SelectedMatMul"],
+    "Optimize",
+  );
+  optimizedAfterFusion.verify();
+  assert.equal(
+    optimizedAfterFusion
+      .graph()
+      .nodes.filter(({ opType }) => opType === "SelectedMatMul").length,
+    1,
+  );
+  const [optimizedPlan] = rewritingPlans(
+    Buffer.from(
+      await optimizedAfterFusion.serialize(undefined, undefined, true),
+    ),
+  );
+  const optimizedReplay = loadModel(optimizedPlan.bytes, "optimized-replay");
+  optimizedReplay.verify();
+  const callsByName = (model) =>
+    model
+      .graph()
+      .nodes.map(({ opType, domain, inputs, outputs, function: fn }) => ({
+        opType,
+        domain,
+        inputs,
+        outputs,
+        function: fn?.name,
+      }));
+  assert.deepEqual(
+    callsByName(optimizedReplay),
+    callsByName(optimizedAfterFusion),
+  );
+  for (const fn of optimizedAfterFusion.graph().localFunctions) {
+    const replayedFn = optimizedReplay
+      .graph()
+      .localFunctions.find(({ name }) => name === fn.name);
+    assert.ok(replayedFn);
+    assert.deepEqual(
+      optimizedReplay.graph(false, replayedFn.path).nodes,
+      optimizedAfterFusion.graph(false, fn.path).nodes,
+    );
+  }
+  const loaded = loadModel(await fused.serialize(), "exported");
+  loaded.verify();
+  assert.deepEqual(loaded.graph(), fused.graph());
+  assert.throws(
+    () => loaded.createFunctionPattern([0], definition.name),
+    /already exists/i,
+  );
+  const [plan] = rewritingPlans(
+    Buffer.from(await fused.serialize(undefined, undefined, true)),
+  );
+  const replayed = loadModel(plan.bytes, "replayed");
+  replayed.verify();
+  assert.deepEqual(replayed.graph(), fused.graph());
+  assert.deepEqual(Buffer.from(await source.serialize()), originalBytes);
+});
+
+test("selection FunctionPatterns omit original operator names without changing the source model", async () => {
+  const source = memoryTestModel([2, 3, 4], {
+    nodes: [
+      Buffer.concat([
+        bytesField(1, "x"),
+        bytesField(2, "y"),
+        bytesField(3, "model/Shape_node_9"),
+        bytesField(4, "Shape"),
+        ...[
+          ["end", 2],
+          ["start", 1],
+        ].map(([name, value]) =>
+          bytesField(
+            5,
+            Buffer.concat([
+              bytesField(1, name),
+              varintField(3, value),
+              varintField(20, 2),
+            ]),
+          ),
+        ),
+      ]),
+    ],
+    outputType: 7,
+    outputDimensions: [1],
+  });
+  const original = Buffer.from(await source.serialize());
+  const definition = source.createFunctionPattern([0], "ShortShape");
+  assert.match(
+    definition.text,
+    /^\s+B = Shape <end: int = 2, start: int = 1> \(A\)$/m,
+  );
+  for (const text of [
+    definition.text,
+    definition.replacement,
+    definition.python,
+  ])
+    assert.doesNotMatch(text, /model\/Shape_node_9/);
+  assert.equal(source.graph().nodes[0].name, "model/Shape_node_9");
+  assert.deepEqual(Buffer.from(await source.serialize()), original);
+  const texts = functionPatternTexts(definition.python);
+  source.updateFunctionPattern(
+    definition.name,
+    texts.match_text,
+    texts.replacement_text,
+  );
+  const preview = await source.previewFusion(definition.name);
+  assert.equal(preview.matches.length, 1);
+  const fused = await preview.model.applyFusion(definition.name, [
+    preview.matches[0].anchor,
+  ]);
+  fused.verify();
+});
+
+test("selection FunctionPatterns update SDK text atomically and use both edited bodies everywhere", async () => {
+  const source = loadModel(modelBytes("fusion.onnx"), "editable-selection");
+  const original = source.graph();
+  const definition = source.createFunctionPattern([0, 1], "EditablePair");
+  const roundTrip = source.updateFunctionPattern(
+    definition.name,
+    definition.text,
+    definition.replacement,
+  );
+  assert.equal(roundTrip.text, definition.text);
+  assert.equal(roundTrip.replacement, definition.replacement);
+  const clone = source.clone();
+  const pending = clone.previewFusion(definition.name);
+  const noMatch = source.updateFunctionPattern(
+    definition.name,
+    definition.text.replaceAll("[1, 0]", "[0, 1]"),
+    definition.replacement,
+  );
+  assert.equal((await pending).matches.length, 2);
+  assert.equal((await clone.previewFusion(definition.name)).matches.length, 0);
+  assert.deepEqual(
+    clone.optimizationPatterns().find(({ name }) => name === definition.name)
+      .definition,
+    noMatch,
+  );
+  for (const [name, text, replacement] of [
+    [undefined, definition.text, definition.replacement],
+    [definition.name, null, definition.replacement],
+    [definition.name, definition.text, {}],
+    ["TransposeTranspose", definition.text, definition.replacement],
+    ["MissingCustomPattern", definition.text, definition.replacement],
+    [definition.name, "not function syntax", definition.replacement],
+    [definition.name, definition.text, "not function syntax"],
+    [definition.name, `${definition.text}\ntrailing`, definition.replacement],
+    [definition.name, definition.text, `${definition.replacement}\ntrailing`],
+    [
+      definition.name,
+      definition.text,
+      '<domain: "onnx_light.viewer", opset_import: ["" : 13]> Invalid(x, y) => (a) { a = Add(x, y) }',
+    ],
+  ]) {
+    assert.throws(() => source.updateFunctionPattern(name, text, replacement));
+    assert.deepEqual(
+      source.optimizationPatterns().find(({ name }) => name === definition.name)
+        .definition,
+      noMatch,
+    );
+  }
+  const updated = source.updateFunctionPattern(
+    definition.name,
+    definition.text,
+    '<domain: "onnx_light.viewer", opset_import: ["" : 13]> EditedReplacement(x) => (a) { a = Identity(x) }',
+  );
+  assert.match(updated.text, /Transpose/);
+  assert.match(updated.replacement, /Identity/);
+  assert.doesNotMatch(updated.replacement, /Transpose/);
+  assert.match(
+    updated.python,
+    /FunctionPattern\(match_function, replacement_function,/,
+  );
+  const texts = functionPatternTexts(updated.python);
+  assert.equal(texts.match_text, updated.text);
+  assert.equal(texts.replacement_text, updated.replacement);
+  assert.deepEqual(
+    source.updateFunctionPattern(
+      definition.name,
+      texts.match_text,
+      texts.replacement_text,
+    ),
+    updated,
+  );
+  const preview = await clone.previewFusion(definition.name);
+  assert.equal(preview.matches.length, 2);
+  assert.equal(preview.matches[0].replacement[0].opType, "EditedReplacement");
+  const fused = await source.applyFusion(definition.name, [
+    preview.matches[0].anchor,
+  ]);
+  fused.verify();
+  const call = fused
+    .graph()
+    .nodes.find(({ opType }) => opType === "EditedReplacement");
+  assert.deepEqual(
+    fused.graph(false, call.function.path).nodes.map(({ opType }) => opType),
+    ["Identity"],
+  );
+  const undone = fused.undoFusion();
+  assert.deepEqual(undone.graph(), original);
+  assert.deepEqual(
+    undone.optimizationPatterns().find(({ name }) => name === definition.name)
+      .definition,
+    updated,
+  );
+  const matmul = source.createFunctionPattern([4], "MatMulTemplate");
+  const optimizedDefinition = source.updateFunctionPattern(
+    definition.name,
+    matmul.text,
+    '<domain: "onnx_light.viewer", opset_import: ["" : 13]> OptimizedReplacement(x, weight) => (z) { temp = MatMul(x, weight) z = Identity(temp) }',
+  );
+  assert.equal((await source.previewFusion(definition.name)).matches.length, 1);
+  const optimized = await undone.optimize([definition.name], "Optimize");
+  optimized.verify();
+  assert.equal(
+    optimized
+      .graph()
+      .nodes.filter(({ opType }) => opType === "OptimizedReplacement").length,
+    1,
+  );
+  const optimizedCall = optimized
+    .graph()
+    .nodes.find(({ opType }) => opType === "OptimizedReplacement");
+  assert.deepEqual(
+    optimized
+      .graph(false, optimizedCall.function.path)
+      .nodes.map(({ opType }) => opType),
+    ["MatMul", "Identity"],
+  );
+  assert.deepEqual(
+    optimized
+      .optimizationPatterns()
+      .find(({ name }) => name === definition.name).definition,
+    optimizedDefinition,
+  );
+  assert.deepEqual(source.graph(), original);
+});
+
+test(
+  "selection FunctionPatterns execute exported Python CLI and apply_pattern with the published SDK",
+  { skip: !process.env.ONNX_PATTERN_PYTHON },
+  async (t) => {
+    const directory = mkdtempSync(
+      path.join(tmpdir(), "onnx-function-pattern-python-"),
+    );
+    t.after(() => rmSync(directory, { recursive: true, force: true }));
+    const source = loadModel(modelBytes("fusion.onnx"), "python-export");
+    const selected = source.createFunctionPattern([4], "PublishedWheelMatMul");
+    const definition = source.updateFunctionPattern(
+      selected.name,
+      selected.text,
+      '<domain: "onnx_light.viewer", opset_import: ["" : 13]> PublishedReplacement(x, weight) => (z) { temp = MatMul(x, weight) z = Identity(temp) }',
+    );
+    const script = path.join(directory, "pattern.py");
+    const input = path.join(__dirname, "models", "fusion.onnx");
+    const cliOutput = path.join(directory, "cli.onnx");
+    const importedOutput = path.join(directory, "imported.onnx");
+    writeFileSync(script, definition.python);
+    execFileSync(
+      process.env.ONNX_PATTERN_PYTHON,
+      [
+        "-c",
+        [
+          "import json, sys",
+          "from onnx_light.onnx_lib.parser import parse_function",
+          "definition = json.load(sys.stdin)",
+          "assert [node.op_type for node in parse_function(definition['text']).node] == ['MatMul']",
+          "assert [node.op_type for node in parse_function(definition['replacement']).node] == ['MatMul', 'Identity']",
+        ].join("\n"),
+      ],
+      { input: JSON.stringify(definition) },
+    );
+    execFileSync(process.env.ONNX_PATTERN_PYTHON, [script, input, cliOutput]);
+    execFileSync(process.env.ONNX_PATTERN_PYTHON, [
+      "-c",
+      [
+        "import importlib.util, sys",
+        "from onnx_light.onnx import load, save",
+        "spec = importlib.util.spec_from_file_location('exported_pattern', sys.argv[1])",
+        "module = importlib.util.module_from_spec(spec)",
+        "spec.loader.exec_module(module)",
+        "save(module.apply_pattern(load(sys.argv[2])), sys.argv[3])",
+      ].join("\n"),
+      script,
+      input,
+      importedOutput,
+    ]);
+    for (const file of [cliOutput, importedOutput]) {
+      const result = loadModel(readFileSync(file), "python-result");
+      result.verify();
+      const calls = result
+        .graph()
+        .nodes.filter(({ opType }) => opType === "PublishedReplacement");
+      assert.equal(calls.length, 1);
+      assert.deepEqual(
+        result
+          .graph(false, calls[0].function.path)
+          .nodes.map(({ opType }) => opType),
+        ["MatMul", "Identity"],
+      );
+    }
+  },
+);
+
+test("selection FunctionPatterns preserve initializer inputs and every escaping output", async () => {
+  const node = (op, inputs, output) =>
+    Buffer.concat([
+      ...inputs.map((input) => bytesField(1, input)),
+      bytesField(2, output),
+      bytesField(4, op),
+    ]);
+  const source = memoryTestModel([2], {
+    nodes: [
+      node("Add", ["x", "bias"], "sum"),
+      node("Relu", ["sum"], "activated"),
+      node("Add", ["sum", "activated"], "y"),
+    ],
+    initializers: [
+      Buffer.concat([
+        varintField(1, 2),
+        varintField(2, 1),
+        bytesField(8, "bias"),
+        bytesField(9, Buffer.alloc(8)),
+      ]),
+    ],
+  });
+  const definition = source.createFunctionPattern([0, 1], "AddAndRelu");
+  assert.match(definition.text, /^# A=x\n# B=bias\n# C=sum\n# D=activated\n/);
+  assert.match(definition.text, /AddAndRelu \(A, B\) => \(C, D\)/);
+  const preview = await source.previewFusion("AddAndRelu");
+  assert.equal(preview.matches.length, 1);
+  assert.deepEqual(preview.matches[0].replacement[0].inputs, ["x", "bias"]);
+  assert.deepEqual(preview.matches[0].replacement[0].outputs, [
+    "sum",
+    "activated",
+  ]);
+  const fused = await preview.model.applyFusion("AddAndRelu", [
+    preview.matches[0].anchor,
+  ]);
+  fused.verify();
+  assert.equal(fused.graph().nodes.length, 2);
+});
+
+test("selection FunctionPattern aliases cover inputs, keep standalone original-name comments and continue past Z", async () => {
+  const weight = "/modelbuilder/checkpoint/lm_head.weight";
+  const nodes = Array.from({ length: 28 }, (_, index) =>
+    Buffer.concat([
+      bytesField(1, index ? `result_${index - 1}` : weight),
+      ...(index ? [] : [bytesField(1, "x")]),
+      bytesField(2, index === 27 ? "y" : `result_${index}`),
+      bytesField(4, index ? "Relu" : "Add"),
+    ]),
+  );
+  const source = memoryTestModel([2], {
+    nodes,
+    initializers: [
+      Buffer.concat([
+        varintField(1, 2),
+        varintField(2, 1),
+        bytesField(8, weight),
+        bytesField(9, Buffer.alloc(8)),
+      ]),
+    ],
+  });
+  const original = Buffer.from(await source.serialize());
+  const definition = source.createFunctionPattern(
+    nodes.map((_, index) => index),
+    "ReadableResults",
+  );
+  assert.match(
+    definition.text,
+    /^# A=\/modelbuilder\/checkpoint\/lm_head.weight\n# B=x\n/,
+  );
+  assert.match(definition.text, /ReadableResults \(A, B\) => \(AD\)/);
+  assert.match(definition.text, /C = Add \(A, B\)/);
+  assert.match(definition.text, /AA = Relu \(Z\)/);
+  assert.match(definition.text, /AD = Relu \(AC\)/);
+  const body = definition.text
+    .split("\n")
+    .filter((line) => !line.startsWith("#"))
+    .join("\n");
+  assert.doesNotMatch(body, /result_|modelbuilder|lm_head/);
+  assert.deepEqual(Buffer.from(await source.serialize()), original);
+  const annotated = "# note: ''' \\\\ and \"quotes\"\r\n" + definition.text;
+  const roundTrip = source.updateFunctionPattern(
+    definition.name,
+    annotated,
+    definition.replacement,
+  );
+  assert.equal(roundTrip.text, annotated);
+  assert.equal(roundTrip.replacement, definition.replacement);
+  assert.deepEqual(functionPatternTexts(roundTrip.python), {
+    match_text: annotated,
+    replacement_text: definition.replacement,
+  });
+  const preview = await source.previewFusion(definition.name);
+  assert.equal(preview.matches.length, 1);
+  const fused = await preview.model.applyFusion(definition.name, [
+    preview.matches[0].anchor,
+  ]);
+  fused.verify();
+  assert.deepEqual(fused.graph().nodes[0].inputs, [weight, "x"]);
+  assert.deepEqual(fused.graph().nodes[0].outputs, ["y"]);
+});
+
+test("selection FunctionPatterns keep weight arguments lazy without reopening their source", async (t) => {
+  const directory = mkdtempSync(path.join(__dirname, ".function-pattern-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const file = path.join(directory, "weights.onnx");
+  const count = 1024 * 1024;
+  const source = memoryTestModel([count], {
+    nodes: [
+      Buffer.concat([
+        bytesField(1, "x"),
+        bytesField(1, "weights"),
+        bytesField(2, "y"),
+        bytesField(4, "Add"),
+      ]),
+    ],
+    initializers: [
+      Buffer.concat([
+        varintField(1, count),
+        varintField(2, 1),
+        bytesField(8, "weights"),
+        bytesField(9, Buffer.alloc(count * 4)),
+      ]),
+    ],
+  });
+  writeFileSync(file, Buffer.from(await source.serialize()));
+  const local = await loadModelFile(file, "weights.onnx");
+  rmSync(file);
+  const definition = local.createFunctionPattern([0], "LazyWeights");
+  assert.match(definition.text, /^# A=x\n# B=weights\n/);
+  assert.match(definition.text, /C = Add \(A, B\)/);
+});
+
+test("selection FunctionPatterns restore omitted and external Constant payloads before export", async (t) => {
+  const directory = mkdtempSync(path.join(__dirname, ".function-pattern-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const raw = Buffer.alloc(512);
+  for (let i = 0; i < 128; i++) raw.writeFloatLE(i + 0.25, i * 4);
+  writeFileSync(path.join(directory, "tensor.bin"), raw);
+  for (const external of [false, true]) {
+    const payload = external
+      ? Buffer.concat([
+          bytesField(
+            13,
+            Buffer.concat([
+              bytesField(1, "location"),
+              bytesField(2, "tensor.bin"),
+            ]),
+          ),
+          bytesField(
+            13,
+            Buffer.concat([
+              bytesField(1, "length"),
+              bytesField(2, String(raw.length)),
+            ]),
+          ),
+          varintField(14, 1),
+        ])
+      : bytesField(9, raw);
+    const nodes = [
+      Buffer.concat([
+        bytesField(2, "literal"),
+        bytesField(4, "Constant"),
+        bytesField(
+          5,
+          Buffer.concat([
+            bytesField(1, "value"),
+            bytesField(
+              5,
+              Buffer.concat([varintField(1, 128), varintField(2, 1), payload]),
+            ),
+            varintField(20, 4),
+          ]),
+        ),
+      ]),
+      Buffer.concat([
+        bytesField(1, "literal"),
+        bytesField(2, "y"),
+        bytesField(4, "Relu"),
+      ]),
+    ];
+    const port = (name) =>
+      Buffer.concat([
+        bytesField(1, name),
+        bytesField(
+          2,
+          bytesField(
+            1,
+            Buffer.concat([
+              varintField(1, 1),
+              bytesField(2, bytesField(1, varintField(1, 128))),
+            ]),
+          ),
+        ),
+      ]);
+    const file = path.join(
+      directory,
+      external ? "external.onnx" : "constant.onnx",
+    );
+    writeFileSync(
+      file,
+      Buffer.concat([
+        varintField(1, 9),
+        bytesField(8, varintField(2, 18)),
+        bytesField(
+          7,
+          Buffer.concat([
+            ...nodes.map((node) => bytesField(1, node)),
+            bytesField(2, "constant"),
+            bytesField(11, port("x")),
+            bytesField(12, port("y")),
+          ]),
+        ),
+      ]),
+    );
+    const local = await loadModelFile(file, "constant");
+    const definition = local.createFunctionPattern([0, 1], "SelectedConstant");
+    assert.equal(
+      (await local.previewFusion(definition.name)).matches.length,
+      1,
+    );
+    const roundTrip = local.updateFunctionPattern(
+      definition.name,
+      definition.text,
+      definition.replacement,
+    );
+    assert.equal(roundTrip.text, definition.text);
+    assert.equal(roundTrip.replacement, definition.replacement);
+    const texts = functionPatternTexts(definition.python);
+    assert.equal(texts.match_text, definition.text);
+    assert.equal(texts.replacement_text, definition.replacement);
+    assert.match(texts.match_text, /float\[128\][^\n]*\{0\.25,.*127\.25\}/);
+    assert.deepEqual(
+      local.optimizationPatterns().find(({ name }) => name === definition.name)
+        .definition,
+      roundTrip,
+    );
+  }
+});
+
+test("selection FunctionPatterns reject invalid transport and name collisions without registering", () => {
+  const source = loadModel(modelBytes("fusion.onnx"), "selection");
+  for (const nodes of [null, undefined, {}, "0"])
+    assert.throws(
+      () => source.createFunctionPattern(nodes, "InvalidSelection"),
+      /expected/i,
+    );
+  for (const name of [null, undefined, 1, {}])
+    assert.throws(() => source.createFunctionPattern([0], name), /expected/i);
+  for (const nodes of [
+    [],
+    [-1],
+    [0.5],
+    [NaN],
+    [Infinity],
+    [99],
+    ["0"],
+    [0, 0],
+  ]) {
+    assert.throws(
+      () => source.createFunctionPattern(nodes, "InvalidSelection"),
+      /select|index|duplicate/i,
+    );
+    assert.ok(!source.fusionPatterns().includes("InvalidSelection"));
+  }
+  for (const name of ["", "not a name", "bad-name", "1name", "a\0b"])
+    assert.throws(() => source.createFunctionPattern([0, 1], name), /name/i);
+  for (const name of ["TransposeTranspose", "IdentityRemoval"])
+    assert.throws(
+      () => source.createFunctionPattern([0, 1], name),
+      /already exists/i,
+    );
+  source.createFunctionPattern([0, 1], "UniqueSelection");
+  assert.throws(
+    () => source.createFunctionPattern([0, 1], "UniqueSelection"),
+    /already exists/i,
+  );
+});
+
+test("selection FunctionPatterns survive pipeline undo after another stage creates a pattern", async () => {
+  const source = loadModel(
+    pipelineBytes({
+      prefill: modelBytes("fusion.onnx"),
+      decode: modelBytes("fusion.onnx"),
+    }),
+    "selection.pipe-onnx",
+  );
+  const prefill = [{ pipeline: "prefill" }];
+  const decode = [{ pipeline: "decode" }];
+  source.createFunctionPattern([0, 1], "PrefillPair", prefill);
+  assert.ok(!source.fusionPatterns(decode).includes("PrefillPair"));
+  const preview = await source.previewFusion("PrefillPair", undefined, prefill);
+  const fused = await preview.model.applyFusion(
+    "PrefillPair",
+    [preview.matches[0].anchor],
+    prefill,
+  );
+  const selected = fused.createFunctionPattern([0, 1], "DecodePair", decode);
+  const definition = fused.updateFunctionPattern(
+    selected.name,
+    selected.text,
+    '<domain: "onnx_light.viewer", opset_import: ["" : 13]> DecodeReplacement(x) => (a) { a = Identity(x) }',
+    decode,
+  );
+  const undone = fused.undoFusion();
+  assert.deepEqual(undone.graph(false, prefill), source.graph(false, prefill));
+  assert.ok(undone.fusionPatterns(prefill).includes("PrefillPair"));
+  assert.deepEqual(
+    undone
+      .optimizationPatterns(decode)
+      .find(({ name }) => name === "DecodePair").definition,
+    definition,
+  );
+  assert.equal(
+    (await undone.previewFusion("DecodePair", undefined, decode)).matches
+      .length,
+    2,
+  );
+});
+
 test("previews native fusion matches and applies only selected disjoint matches without changing the source", async () => {
   const model = loadModel(modelBytes("fusion.onnx"), "fusion");
   const original = Buffer.from(await model.serialize());
@@ -2682,6 +3430,125 @@ function optimizationModel() {
     "Optimization playground",
   );
 }
+
+test("optimization shares large initializer and Constant payloads across snapshots", async (t) => {
+  const directory = mkdtempSync(path.join(tmpdir(), "optimization-payloads-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const size = 64 * 1024 * 1024;
+  for (const storage of ["initializer", "Constant", "external"]) {
+    const external = storage === "external";
+    const tensor = Buffer.concat([
+      varintField(1, size / 4),
+      varintField(2, 1),
+      bytesField(8, "weight"),
+      bytesField(9, Buffer.alloc(size, 63)),
+    ]);
+    const node = (op, inputs, output, attributes = []) =>
+      Buffer.concat([
+        ...inputs.map((name) => bytesField(1, name)),
+        bytesField(2, output),
+        bytesField(4, op),
+        ...attributes,
+      ]);
+    const perm = bytesField(
+      5,
+      Buffer.concat([
+        bytesField(1, "perm"),
+        varintField(8, 1),
+        varintField(8, 0),
+        varintField(20, 7),
+      ]),
+    );
+    const nodes = [
+      ...(storage === "Constant"
+        ? [
+            node("Constant", [], "weight", [
+              bytesField(
+                5,
+                Buffer.concat([
+                  bytesField(1, "value"),
+                  bytesField(5, tensor),
+                  varintField(20, 4),
+                ]),
+              ),
+            ]),
+          ]
+        : []),
+      node("Transpose", ["x"], "transposed", [perm]),
+      node("Transpose", ["transposed"], "restored", [perm]),
+      ...Array.from({ length: 2000 }, (_, i) =>
+        node("Relu", [i ? `r${i - 1}` : "restored"], `r${i}`),
+      ),
+      node("Add", ["r1999", "weight"], "y"),
+    ];
+    const file = path.join(directory, `${storage}.onnx`);
+    const model = memoryTestModel([1, size / 4], {
+      nodes,
+      initializers: storage === "Constant" ? [] : [tensor],
+    });
+    if (external) {
+      const files = await model.serializeFiles(size, "weight");
+      writeFileSync(file, files.model);
+      for (const weight of files.weights)
+        writeFileSync(path.join(directory, weight.name), weight.bytes);
+    } else {
+      writeFileSync(file, await model.serialize());
+    }
+    const measurement = JSON.parse(
+      execFileSync(
+        process.execPath,
+        [
+          "--expose-gc",
+          "-e",
+          `
+          const assert = require("node:assert/strict");
+          const { readFileSync } = require("node:fs");
+          const { loadModel } = require(${JSON.stringify(require.resolve("../dist/graph"))});
+          (async () => {
+            const source = loadModel(readFileSync(${JSON.stringify(file)}), "large");
+            const preview = await source.previewFusion("TransposeTranspose", ${JSON.stringify(file)});
+            assert.equal(preview.matches.length, 1);
+            global.gc();
+            const before = process.memoryUsage.rss();
+            let peak = before;
+            const sample = () => { peak = Math.max(peak, process.memoryUsage.rss()); };
+            const sampling = setInterval(sample, 1);
+            sampling.unref();
+            const clones = [preview.model.clone(), preview.model.clone()];
+            sample();
+            const started = process.hrtime.bigint();
+            const optimized = await clones[0].optimize(["TransposeTranspose"], "Optimize");
+            const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+            sample();
+            const matched = await clones[1].previewFusion("TransposeTranspose");
+            sample();
+            clearInterval(sampling);
+            assert.equal(matched.matches.length, 1);
+            optimized.verify();
+            assert.equal(optimized.optimizationReport().rewrites, 1);
+            const increase = peak - before;
+            console.log(JSON.stringify({
+              increase,
+              elapsedMs,
+              matchingTimeNs: optimized.optimizationReport().matchingTimeNs,
+            }));
+          })().catch(error => { console.error(error); process.exitCode = 1; });
+          `,
+        ],
+        { encoding: "utf8" },
+      ),
+    );
+    t.diagnostic(`${storage}: ${JSON.stringify(measurement)}`);
+    assert.ok(
+      measurement.increase < (size * 3) / 4,
+      `${storage}: snapshots allocated ${measurement.increase} bytes`,
+    );
+    assert.ok(
+      measurement.matchingTimeNs < 3e9,
+      `${storage}: matching exceeded three seconds`,
+    );
+  }
+});
 
 test("explains one native pattern/node without changing matching, history or the source model", async () => {
   const source = loadModel(modelBytes("fusion.onnx"), "fusion");

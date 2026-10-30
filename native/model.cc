@@ -22,6 +22,7 @@ std::shared_ptr<StoredModel> CloneStoredModel(const std::shared_ptr<StoredModel>
   copy->fusion_base = model->fusion_base;
   copy->fusion_previous = model->fusion_previous;
   copy->fusion_history = model->fusion_history;
+  copy->function_patterns = model->function_patterns;
   copy->optimization_report = model->optimization_report;
   copy->optimization_wall_time_ns = model->optimization_wall_time_ns;
   copy->rewriting_base = model->rewriting_base;

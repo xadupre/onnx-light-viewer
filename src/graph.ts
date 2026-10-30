@@ -212,6 +212,15 @@ export interface OptimizationPattern {
   device: string;
   enabledByDefault: boolean;
   groups: string[];
+  /** Exportable definition for a model-local selection pattern. */
+  definition?: FunctionPatternDefinition;
+}
+
+export interface FunctionPatternDefinition {
+  name: string;
+  text: string;
+  replacement: string;
+  python: string;
 }
 
 export interface FusionDiagnostic {
@@ -377,6 +386,7 @@ export interface NativeModel {
     dimensions: Record<string, number>,
     path?: GraphPath,
   ): Promise<MemoryProfile>;
+  /** Copies graph state while retaining this model lineage's pattern catalog. */
   clone(): NativeModel;
   /** Number of applied Fuse operations available for session-local undo. */
   fusionCount(): number;
@@ -394,6 +404,19 @@ export interface NativeModel {
   summary(inferShapes?: boolean): GraphSummary;
   /** Pipeline fusions require the path of a stage root; ordinary models use []. */
   fusionPatterns(path?: GraphPath): string[];
+  /** Registers a model-local pattern without rewriting the selected graph. */
+  createFunctionPattern(
+    nodes: number[],
+    name: string,
+    path?: GraphPath,
+  ): FunctionPatternDefinition;
+  /** Replaces an existing custom pattern using SDK ONNX function text syntax. */
+  updateFunctionPattern(
+    name: string,
+    text: string,
+    replacement: string,
+    path?: GraphPath,
+  ): FunctionPatternDefinition;
   optimizationPatterns(path?: GraphPath): OptimizationPattern[];
   /** Native report for the last optimization of this snapshot, including no-op runs. */
   optimizationReport(path?: GraphPath): OptimizationReport | null;

@@ -406,15 +406,6 @@ export async function runPrompt(
     throw new Error("Keeping a model loaded requires a panel session owner.");
   if (!options.validate) previous = undefined;
   const info = await promptInfo(modelPath);
-  if (
-    info.pipeline &&
-    (options.sessionSettings.sdkLoader === true ||
-      "loadOverlap" in options.sessionSettings ||
-      "loadMemoryMiB" in options.sessionSettings)
-  )
-    throw new Error(
-      "The viewer does not yet expose SDK owning-loader options for pipelines.",
-    );
   if (!info.engines.includes(options.engine))
     throw new Error(
       info.reason ??

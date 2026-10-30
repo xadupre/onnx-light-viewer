@@ -12,7 +12,6 @@ function createPromptPanel({ byId, postMessage }) {
   let decodeSum = 0;
   let decodeCount = 0;
   let missingDecode = false;
-  let pipeline = false;
   let validationRequiresReference = false;
   const fields = byId("prompt-fields");
   const status = byId("prompt-status");
@@ -76,7 +75,7 @@ function createPromptPanel({ byId, postMessage }) {
     const sdkLoader =
       light.querySelector('[data-setting="sdkLoader"]').value === "true";
     for (const field of light.querySelectorAll("[data-sdk-loader]"))
-      field.disabled = pipeline || !sdkLoader;
+      field.disabled = !sdkLoader;
     const pane = byId("prompt-settings-genai");
     const provider = pane.querySelector('[data-setting="provider"]').value;
     for (const field of pane.querySelectorAll("[data-gpu]"))
@@ -374,14 +373,11 @@ function createPromptPanel({ byId, postMessage }) {
           ? "onnxruntime-genai"
           : (message.info.engines[0] ?? "onnx-light");
         showSettingsEngine();
-        pipeline = !!message.info.pipeline;
         const light = byId("prompt-settings-light");
         const sdkLoader =
           light.querySelector('[data-setting="sdkLoader"]').value === "true";
         for (const field of light.querySelectorAll("[data-loading]"))
-          field.disabled =
-            pipeline || (field.hasAttribute("data-sdk-loader") && !sdkLoader);
-        byId("prompt-pipeline-loading").hidden = !pipeline;
+          field.disabled = field.hasAttribute("data-sdk-loader") && !sdkLoader;
         setBusy(false);
         status.textContent = available
           ? "Ready. ONNX engines and tokenization use native C++ libraries; Python can locate SDK libraries and run Hugging Face validation."

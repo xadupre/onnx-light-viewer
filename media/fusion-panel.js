@@ -7,6 +7,7 @@ function createFusionPanel({
   canFuse,
   clearSelection,
   selectedNode,
+  selectedNodes,
   focusNodes,
 }) {
   let fusionGraph;
@@ -30,6 +31,61 @@ function createFusionPanel({
   let diagnosticNode;
   let diagnosticResult;
   let nativePatterns = new Set();
+  let creatingPattern = false;
+  let selectionCatalogLoaded = false;
+  const selectionPatterns = new Map();
+  function canOpenSelectionPattern() {
+    return canFuse() && !fusionBusy && selectedNodes().length > 0;
+  }
+  function openSelectionPattern() {
+    if (!canOpenSelectionPattern()) return false;
+    selectionChanged();
+    byId("selection-pattern-dialog").showModal();
+    if (!selectionCatalogLoaded) {
+      fusionControls(true);
+      byId("selection-pattern-status").textContent =
+        "Loading created patterns…";
+      requestAction("fusion-patterns", "List selection patterns", {
+        requestId: ++fusionRequest,
+      });
+    }
+    return true;
+  }
+  function selectionPatternControls() {
+    const count = selectedNodes().length;
+    byId("open-selection-pattern").disabled = !canOpenSelectionPattern();
+    byId("create-function-pattern").disabled =
+      fusionBusy ||
+      !canFuse() ||
+      !count ||
+      !byId("selection-pattern-name").value.trim();
+    byId("selection-pattern-name").disabled = fusionBusy || !canFuse();
+    const pattern = selectionPatterns.get(
+      byId("selection-pattern-picker").value,
+    );
+    for (const id of [
+      "selection-pattern-text",
+      "selection-pattern-replacement",
+    ])
+      byId(id).disabled = fusionBusy || !canFuse();
+    byId("selection-pattern-picker").disabled = fusionBusy;
+    byId("update-function-pattern").disabled =
+      fusionBusy ||
+      !canFuse() ||
+      !pattern ||
+      (byId("selection-pattern-text").value === pattern.text &&
+        byId("selection-pattern-replacement").value === pattern.replacement);
+  }
+  function showSelectionPattern() {
+    const pattern = selectionPatterns.get(
+      byId("selection-pattern-picker").value,
+    );
+    byId("selection-pattern-result").hidden = !pattern;
+    byId("selection-pattern-text").value = pattern?.text ?? "";
+    byId("selection-pattern-replacement").value = pattern?.replacement ?? "";
+    byId("selection-pattern-python").value = pattern?.python ?? "";
+    selectionPatternControls();
+  }
   function diagnosticControls() {
     const picker = byId("diagnostic-pattern");
     picker.disabled = fusionBusy || !canFuse() || !picker.options.length;
@@ -61,6 +117,12 @@ function createFusionPanel({
     diagnosticControls();
   }
   function selectionChanged() {
+    selectionPatternControls();
+    const count = selectedNodes().length;
+    if (!fusionBusy)
+      byId("selection-pattern-status").textContent = count
+        ? `${count} operator${count === 1 ? "" : "s"} selected. Create a pattern without changing the model.`
+        : "Select one or more operators in the graph.";
     const node = selectedNode();
     if (node?.id === diagnosticNode?.id) return;
     diagnosticNode = node;
@@ -300,6 +362,7 @@ function createFusionPanel({
   function fusionControls(busy, message = "") {
     if (busy && diagnosticBusy) clearDiagnostic();
     fusionBusy = busy;
+    selectionPatternControls();
     diagnosticControls();
     byId("show-optimization-report").disabled = busy || !optimizationReport;
     for (const backend of ["onnx-light", "onnxscript"]) {
@@ -328,8 +391,14 @@ function createFusionPanel({
       "input, button",
     ))
       control.disabled = busy;
-    byId("fusion-panel").setAttribute("aria-busy", String(busy));
-    byId("optimization-panel").setAttribute("aria-busy", String(busy));
+    for (const id of [
+      "fusion-panel",
+      "optimization-panel",
+      "selection-pattern-dialog",
+      "fuse-pattern",
+      "optimize-model",
+    ])
+      byId(id).setAttribute("aria-busy", String(busy));
     const patterns = byId("fusion-pattern");
     patterns.disabled = busy || !patterns.querySelector("input");
     byId("fusion-pattern-group").disabled =
@@ -342,8 +411,8 @@ function createFusionPanel({
     byId("select-fusions").disabled = busy || !fusionPreview?.matches.length;
     byId("clear-fusions").disabled = busy || !fusionSelection().length;
     byId("apply-fusion").disabled = busy || !fusionSelection().length;
-    byId("fuse-pattern").disabled = !canFuse();
-    byId("optimize-model").disabled = !canFuse();
+    byId("fuse-pattern").disabled = creatingPattern || !canFuse();
+    byId("optimize-model").disabled = creatingPattern || !canFuse();
     const optimization = byId("optimization-patterns");
     optimization.disabled =
       busy || !canFuse() || !optimization.querySelector("input");
@@ -419,24 +488,45 @@ function createFusionPanel({
     nativePatterns = new Set(patterns.map((pattern) => pattern.name));
     const fieldset = byId("optimization-patterns");
     fieldset.replaceChildren();
+    const fromSelection = (pattern) =>
+      pattern.groups?.includes("Selection patterns");
     const priorities = [
-      ...new Set(patterns.map((pattern) => pattern.priority)),
+      ...new Set(
+        patterns
+          .filter((pattern) => !fromSelection(pattern))
+          .map((pattern) => pattern.priority),
+      ),
     ].sort((a, b) => a - b);
-    for (const priority of priorities) {
+    const buckets = priorities.map((priority) => ({
+      priority,
+      title: `Priority ${priority}`,
+      members: patterns.filter(
+        (pattern) => !fromSelection(pattern) && pattern.priority === priority,
+      ),
+    }));
+    const custom = patterns.filter(fromSelection);
+    if (custom.length)
+      buckets.push({
+        priority: "selection",
+        title: "Selection patterns",
+        members: custom,
+      });
+    for (const { priority, title, members: unsorted } of buckets) {
       const group = document.createElement("details");
       const summary = document.createElement("summary");
       const toggle = document.createElement("input");
       toggle.type = "checkbox";
       toggle.dataset.priority = String(priority);
-      toggle.setAttribute("aria-label", `Select priority ${priority} patterns`);
-      const members = patterns
-        .filter((pattern) => pattern.priority === priority)
-        .sort((a, b) => a.name.localeCompare(b.name));
+      toggle.setAttribute(
+        "aria-label",
+        priority === "selection"
+          ? "Select selection patterns"
+          : `Select ${title.toLowerCase()} patterns`,
+      );
+      const members = unsorted.sort((a, b) => a.name.localeCompare(b.name));
       summary.append(
         toggle,
-        document.createTextNode(
-          ` Priority ${priority} (${members.length} patterns)`,
-        ),
+        document.createTextNode(` ${title} (${members.length} patterns)`),
       );
       group.append(summary);
       for (const pattern of members) {
@@ -839,6 +929,62 @@ function createFusionPanel({
       "Click Run Matching to find candidates for the selected patterns.";
     postMessage({ type: "cancel-fusion" });
   }
+  byId("selection-pattern-name").addEventListener(
+    "input",
+    selectionPatternControls,
+  );
+  byId("close-selection-pattern").addEventListener("click", () => {
+    byId("selection-pattern-dialog").close();
+  });
+  byId("selection-pattern-picker").addEventListener(
+    "change",
+    showSelectionPattern,
+  );
+  for (const field of ["text", "replacement"]) {
+    byId(`selection-pattern-${field}`).addEventListener(
+      "input",
+      selectionPatternControls,
+    );
+  }
+  for (const format of ["text", "replacement", "python"]) {
+    byId(`copy-selection-pattern-${format}`).addEventListener("click", () => {
+      postMessage({
+        type: "copy-function-pattern",
+        name: byId("selection-pattern-picker").value,
+        format,
+        text: byId(`selection-pattern-${format}`).value,
+      });
+    });
+  }
+  byId("update-function-pattern").addEventListener("click", () => {
+    if (byId("update-function-pattern").disabled) return;
+    creatingPattern = true;
+    fusionPreview = undefined;
+    byId("fusion-matches").replaceChildren();
+    fusionControls(true);
+    byId("selection-pattern-status").textContent =
+      "Applying FunctionPattern edits…";
+    requestAction("update-function-pattern", "Update FunctionPattern", {
+      requestId: ++fusionRequest,
+      name: byId("selection-pattern-picker").value,
+      text: byId("selection-pattern-text").value,
+      replacement: byId("selection-pattern-replacement").value,
+    });
+  });
+  byId("create-function-pattern").addEventListener("click", () => {
+    if (byId("create-function-pattern").disabled) return;
+    const nodes = selectedNodes();
+    creatingPattern = true;
+    fusionPreview = undefined;
+    byId("fusion-matches").replaceChildren();
+    fusionControls(true);
+    byId("selection-pattern-status").textContent = "Creating FunctionPattern…";
+    requestAction("create-function-pattern", "Create FunctionPattern", {
+      requestId: ++fusionRequest,
+      nodes,
+      name: byId("selection-pattern-name").value.trim(),
+    });
+  });
   byId("fusion-pattern").addEventListener("change", changeFusionPatterns);
   for (const [id, checked] of [
     ["select-patterns", true],
@@ -898,6 +1044,26 @@ function createFusionPanel({
     });
 
   function showFusionCatalog(data) {
+    selectionCatalogLoaded = true;
+    for (const pattern of data.optimizationPatterns ?? [])
+      if (pattern.definition)
+        selectionPatterns.set(pattern.name, pattern.definition);
+    const available = new Set(
+      (data.optimizationPatterns ?? []).map((pattern) => pattern.name),
+    );
+    for (const name of selectionPatterns.keys())
+      if (!available.has(name)) selectionPatterns.delete(name);
+    const previous = byId("selection-pattern-picker").value;
+    byId("selection-pattern-picker").replaceChildren(
+      ...[...selectionPatterns.keys()].map((name) => {
+        const option = document.createElement("option");
+        option.value = option.textContent = name;
+        return option;
+      }),
+    );
+    if (selectionPatterns.has(previous))
+      byId("selection-pattern-picker").value = previous;
+    showSelectionPattern();
     showScenarios(data.scenarios, data.name);
     showOptimizationPatterns(data.optimizationPatterns);
     byId("fusion-pattern").replaceChildren();
@@ -925,6 +1091,45 @@ function createFusionPanel({
   }
 
   function handleMessage(data) {
+    if (
+      data?.type === "function-pattern-copied" ||
+      data?.type === "function-pattern-copy-error"
+    ) {
+      if (data.name === byId("selection-pattern-picker").value)
+        byId("selection-pattern-status").textContent =
+          data.type === "function-pattern-copied"
+            ? `Copied ${data.format === "text" ? "pattern" : data.format}.`
+            : `Copy failed: ${data.error}`;
+      return true;
+    }
+    if (
+      data?.type === "function-pattern-created" ||
+      data?.type === "function-pattern-error"
+    ) {
+      if (data.requestId !== fusionRequest) return true;
+      creatingPattern = false;
+      if (data.type === "function-pattern-error") {
+        fusionControls(false);
+        byId("selection-pattern-status").textContent = data.error;
+        return true;
+      }
+      selectionPatterns.set(data.pattern.name, data.pattern);
+      showFusionCatalog(data);
+      byId("selection-pattern-picker").value = data.pattern.name;
+      showSelectionPattern();
+      const checkbox = [
+        ...byId("fusion-pattern").querySelectorAll("input"),
+      ].find((input) => input.value === data.pattern.name);
+      if (checkbox) checkbox.checked = true;
+      updateDiagnosticPatterns();
+      fusionControls(
+        false,
+        "Run Matching to find this pattern throughout the model.",
+      );
+      byId("selection-pattern-status").textContent =
+        `Ready: ${data.pattern.name}. Close this window, open Fuse and select this pattern, or enable Selection patterns in Global optimization.`;
+      return true;
+    }
     if (
       data?.type === "fusion-diagnostic" ||
       data?.type === "fusion-diagnostic-error"
@@ -1000,6 +1205,11 @@ function createFusionPanel({
           ? `${data.patterns.length} native patterns available. Select patterns, then click Run Matching.`
           : "No native patterns have compatible anchors in this graph.",
       );
+      if (
+        data.type === "fusion-patterns" &&
+        byId("selection-pattern-dialog").open
+      )
+        selectionChanged();
       if (data.type !== "fusion-patterns") {
         byId("fusion-status").textContent =
           data.type === "optimization-info"
@@ -1057,6 +1267,9 @@ function createFusionPanel({
       )
         byId("onnxscript-optimization-output").textContent = data.error;
       fusionControls(false, data.error);
+      if (byId("selection-pattern-dialog").open)
+        byId("selection-pattern-status").textContent =
+          `Could not load patterns: ${data.error}`;
       byId("fusion-status").textContent = `Fusion failed: ${data.error}`;
       if (!byId("optimization-panel").hidden)
         byId("optimization-status").textContent =
@@ -1067,6 +1280,15 @@ function createFusionPanel({
     return true;
   }
   function reset(graph, operationRequestId, file) {
+    if (byId("selection-pattern-dialog").open)
+      byId("selection-pattern-dialog").close();
+    creatingPattern = false;
+    selectionCatalogLoaded = false;
+    selectionPatterns.clear();
+    byId("selection-pattern-picker").replaceChildren();
+    showSelectionPattern();
+    byId("selection-pattern-status").textContent =
+      "Select one or more operators in the graph.";
     const restoring =
       restoreRequest !== undefined && restoreRequest === operationRequestId;
     restoreRequest = undefined;
@@ -1113,8 +1335,8 @@ function createFusionPanel({
     }
   }
   function setEnabled(enabled) {
-    byId("fuse-pattern").disabled = !enabled;
-    byId("optimize-model").disabled = !enabled;
+    byId("fuse-pattern").disabled = creatingPattern || !enabled;
+    byId("optimize-model").disabled = creatingPattern || !enabled;
     for (const id of [
       "optimization-unfuse-last",
       "optimization-restore-original",
@@ -1123,6 +1345,7 @@ function createFusionPanel({
     byId("replay-rewritings").disabled =
       !enabled || fusionBusy || !pendingRewritings.length;
     diagnosticControls();
+    selectionPatternControls();
   }
 
   return {
@@ -1134,8 +1357,13 @@ function createFusionPanel({
     },
     setEnabled,
     selectionChanged,
+    canOpenSelectionPattern,
+    openSelectionPattern,
     refresh: () => fusionControls(fusionBusy),
     invalidate: () => {
+      if (byId("selection-pattern-dialog").open)
+        byId("selection-pattern-dialog").close();
+      creatingPattern = false;
       restoreRequest = undefined;
       fusionRequest++;
       fusionCompletion = undefined;
