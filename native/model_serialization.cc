@@ -51,7 +51,7 @@ public:
           *combined.add_rewrites() = edit.SharedCopy();
         // Each captured plan contains the complete declarations at that step.
         combined.ref_required_opset_imports() = plan.required_opset_imports();
-        combined.ref_added_functions() = plan.added_functions();
+        combined.ref_added_functions() = plan.added_functions().SharedCopy();
       }
       std::string name = "onnx-light-viewer.fusions";
       for (size_t suffix = 2; snapshot_.rewritings().contains(name); ++suffix)
@@ -75,7 +75,9 @@ public:
                 "External weights require a local source model path when saving.");
           LoadExternalTensor(*value, ModelFilePath(file_path_).parent_path());
         }
-      auto external_weights = source_->external_weights;
+      std::vector<StoredModel::ExternalWeight> external_weights;
+      for (const auto &weight : source_->external_weights)
+        external_weights.push_back({weight.reference.SharedCopy(), weight.value.SharedCopy()});
       for (auto *tensor : tensors)
         if ((!layout_tensors.contains(tensor) || tensor->has_data_location()) &&
             tensor->data_location() == ol::TensorProto::EXTERNAL) {
