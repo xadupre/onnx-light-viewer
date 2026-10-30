@@ -190,9 +190,9 @@ For **parallel loading**, select onnx-light's **SDK owning loader**, then
 configure read/preparation overlap and its admission memory limit. One SDK I/O
 worker overlaps preparation on the CPU executor; CPU threads also apply to
 preparation. Standard ONNX loading remains the default. Both loaders support
-external tensors without explicit lengths. SDK 0.2.3 also supports owning pipeline
-loading, but the viewer does not yet expose it. Only these loading controls are
-disabled for pipelines; CPU, memory and diagnostic settings remain editable.
+external tensors without explicit lengths. The same controls support owning pipeline
+loading with SDK 0.2.3; its stages share one loading admission budget and prepared
+static store.
 GenAI exposes initialization/prepacking and session-thread controls, not a
 separate parallel weight-reader thread count. Parallel graph execution is not
 parallel loading. Profiles add overhead and are written under
@@ -209,6 +209,9 @@ of non-negative integers in ``generation_config.json`` or ``config.json``.
 Generation stops on any listed EOS ID; an empty list disables EOS stopping.
 Native pipeline generation uses the SDK's ``PipelineProto`` overload; unsupported
 stages or inputs fail explicitly, without a viewer-side generation loop.
+With the owning loader, the SDK's ``LoadedRuntimePipeline`` overload uses explicit
+generation options: Prompt's token limit and greedy decoding replace stored
+sampling settings, while pipeline interface names and EOS defaults are preserved.
 
 .. figure:: _static/feature-run-prompt-light.png
    :alt: Run Prompt with native onnx-light output columns, raw scores, individual prefill and decode times and their decode mean.

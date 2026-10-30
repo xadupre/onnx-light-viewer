@@ -317,6 +317,30 @@ test("snapshot-style metadata symlinks remain available", async (t) => {
 });
 
 for (const engine of ["onnx-light", "onnxruntime-genai"]) {
+  test(`native ${engine} selects the first-token argmax despite model sampling defaults`, async (t) => {
+    const { root, model } = await fixture(t);
+    const configPath = path.join(root, "genai_config.json");
+    const config = JSON.parse(await readFile(configPath, "utf8"));
+    config.search = {
+      ...config.search,
+      do_sample: true,
+      temperature: 100,
+      top_k: 4,
+      top_p: 1,
+    };
+    await writeFile(configPath, JSON.stringify(config));
+    const result = await runPrompt(
+      model,
+      { ...options, engine, maxTokens: 1 },
+      "/no/python",
+      signal(),
+      () => {},
+    );
+    assert.equal(result.tokens.length, 1);
+    assert.equal(result.tokens[0].id, 1);
+    assert.equal(result.tokens[0].score, 4);
+  });
+
   test(`native ${engine} streams real tokens and measures prefill and each decode step without Python`, async (t) => {
     const { root, model } = await fixture(t);
     const streamed = [];
@@ -580,22 +604,191 @@ test("parallel loading/session settings use native SDK APIs and profiles exclude
 });
 
 test("the released SDK owning loader supports external tensors without explicit lengths", async (t) => {
-  const { model } = await fixture(t, true, true);
-  const result = await runPrompt(
+  const { root, model } = await fixture(t, true, true);
+  for (const loadOverlap of [false, true]) {
+    const run = () =>
+      runPrompt(
+        model,
+        {
+          ...options,
+          engine: "onnx-light",
+          sessionSettings: { sdkLoader: true, loadOverlap },
+        },
+        "/no/python",
+        signal(),
+        () => {},
+      );
+    for (const [eos, expected] of [
+      [[], [1, 1, 1]],
+      [[2, 1], [1]],
+    ]) {
+      await writeFile(
+        path.join(root, "generation_config.json"),
+        JSON.stringify({ eos_token_id: eos }),
+      );
+      assert.deepEqual(
+        (await run()).tokens.map((token) => token.id),
+        expected,
+      );
+    }
+  }
+});
+
+test("SDK owning pipeline generation reuses embedding preparation and preserves interface names", async (t) => {
+  const { root, model } = await fixture(t, true, true);
+  const pipeline = path.join(root, "embedding.pipe-onnx");
+  const overBudget = path.join(root, "over-budget.pipe-onnx");
+  await execute(python, [
+    "-c",
+    `
+import sys
+import onnx_light.onnx as onnx
+import onnx_light.onnx.helper as oh
+from onnx_light.onnx import PipelineProto, TensorProto as T
+embedding = onnx.load(sys.argv[1], load_external_data=False)
+embedding.graph.input[0].name = "tokens"
+embedding.graph.node[0].input.clear()
+embedding.graph.node[0].input.extend(["weights", "tokens"])
+embedding.graph.node[0].output.clear()
+embedding.graph.node[0].output.append("embeddings")
+embedding.graph.output[0].name = "embeddings"
+prefill = oh.make_model(oh.make_graph(
+    [oh.make_node("Identity", ["embeddings"], ["prediction"])], "prefill",
+    [oh.make_tensor_value_info("embeddings", T.FLOAT, ["batch", "sequence", 4])],
+    [oh.make_tensor_value_info("prediction", T.FLOAT, ["batch", "sequence", 4])]),
+    opset_imports=[oh.make_opsetid("", 18)])
+pipeline = PipelineProto(embedding=embedding, prefill=prefill,
+                         input_ids_name="tokens", logits_name="prediction",
+                         max_new_tokens=1, temperature=9.0, top_k=1, top_p=0.9,
+                         eos_token_ids=[2, 1])
+with open(sys.argv[2], "wb") as stream: stream.write(pipeline.SerializeToString())
+for name, stage in [("embedding", pipeline.embedding), ("prefill", pipeline.prefill)]:
+    stage.graph.initializer.append(oh.make_tensor(name + "_padding", T.FLOAT,
+                                                [150000], bytes(600000), raw=True))
+with open(sys.argv[3], "wb") as stream: stream.write(pipeline.SerializeToString())
+`,
     model,
-    {
-      ...options,
-      engine: "onnx-light",
-      sessionSettings: { sdkLoader: true },
-    },
-    "/no/python",
-    signal(),
-    () => {},
-  );
-  assert.deepEqual(
-    result.tokens.map((token) => token.id),
-    [1, 1, 1],
-  );
+    pipeline,
+    overBudget,
+  ]);
+  for (const loadOverlap of [false, true]) {
+    const result = await runPrompt(
+      pipeline,
+      {
+        ...options,
+        engine: "onnx-light",
+        sessionSettings: {
+          sdkLoader: true,
+          loadOverlap,
+          loadMemoryMiB: 1,
+          threads: 2,
+          profile: true,
+        },
+      },
+      "/no/python",
+      signal(),
+      () => {},
+    );
+    assert.deepEqual(
+      result.tokens.map((token) => token.id),
+      [1, 1, 1],
+    );
+    const profiles = await readdir(result.profileDirectory);
+    const events = JSON.parse(
+      await readFile(path.join(result.profileDirectory, profiles[0]), "utf8"),
+    );
+    assert.equal(events.length, options.maxTokens * 2);
+    assert.deepEqual(
+      [...new Set(events.map((event) => event.operator))].sort(),
+      ["Gather", "Identity"],
+    );
+    assert.ok(events.every((event) => event.effectiveThreads === 2));
+    await assert.rejects(
+      runPrompt(
+        overBudget,
+        {
+          ...options,
+          engine: "onnx-light",
+          sessionSettings: {
+            sdkLoader: true,
+            loadOverlap,
+            loadMemoryMiB: 2,
+          },
+        },
+        "/no/python",
+        signal(),
+        () => {},
+      ),
+      /memory admission limit/,
+    );
+  }
+});
+
+test("SDK owning pipelines support sequential/overlapped preparation and retained generation", async (t) => {
+  for (const externalLength of [false, true])
+    await t.test(`external length ${externalLength}`, async (t) => {
+      const { root } = await fixture(t, true, true, externalLength);
+      const model = path.join(root, "model.pipe-onnx");
+      const session = new PromptSession();
+      const run = (sessionSettings) =>
+        runPrompt(
+          model,
+          {
+            ...options,
+            engine: "onnx-light",
+            keepLoaded: true,
+            sessionSettings,
+          },
+          "/no/python",
+          signal(),
+          () => {},
+          undefined,
+          undefined,
+          session,
+        );
+      try {
+        for (const loadOverlap of [undefined, false, true]) {
+          const settings = {
+            sdkLoader: true,
+            threads: 2,
+            loadMemoryMiB: 1,
+            ...(loadOverlap === undefined ? {} : { loadOverlap }),
+          };
+          for (const reused of [false, true]) {
+            const result = await run(settings);
+            assert.deepEqual(
+              result.tokens.map((token) => token.id),
+              [1, 1, 1],
+            );
+            assert.ok(
+              result.tokens.every(
+                (token) => token.score === 4 && token.timeMs >= 0,
+              ),
+            );
+            assert.equal(result.lifecycle.reused, reused);
+            assert.equal(result.lifecycle.retained, true);
+          }
+        }
+        await writeFile(
+          path.join(root, "generation_config.json"),
+          JSON.stringify({ eos_token_id: [2, 1] }),
+        );
+        assert.deepEqual(
+          (await run({ sdkLoader: true })).tokens.map((token) => token.id),
+          [1],
+        );
+        await writeFile(
+          path.join(root, "generation_config.json"),
+          JSON.stringify({ eos_token_id: [] }),
+        );
+        assert.deepEqual(
+          (await run({ sdkLoader: true })).tokens.map((token) => token.id),
+          [1, 1, 1],
+        );
+      } finally {
+        await session.close();
+      }
+    });
 });
 
 test("cancelling during initialization releases its model without closing the replacement", async (t) => {
@@ -859,26 +1052,28 @@ with open(sys.argv[3], "wb") as stream: stream.write(pipeline.SerializeToString(
     pipeline,
     path.join(root, "unsupported.pipe-onnx"),
   ]);
-  const streamed = [];
-  const result = await runPrompt(
-    pipeline,
-    { ...options, engine: "onnx-light" },
-    "/no/python",
-    signal(),
-    () => {},
-    undefined,
-    (token) => streamed.push(token),
-  );
-  assert.deepEqual(
-    result.tokens.map((token) => token.id),
-    [1],
-  );
-  assert.deepEqual(
-    result.tokens.map((token) => token.score),
-    [4],
-  );
-  assert.deepEqual(streamed, result.tokens);
-  assert.ok(result.tokens[0].timeMs >= 0);
+  for (const sdkLoader of [false, true]) {
+    const streamed = [];
+    const result = await runPrompt(
+      pipeline,
+      { ...options, engine: "onnx-light", sessionSettings: { sdkLoader } },
+      "/no/python",
+      signal(),
+      () => {},
+      undefined,
+      (token) => streamed.push(token),
+    );
+    assert.deepEqual(
+      result.tokens.map((token) => token.id),
+      [1],
+    );
+    assert.deepEqual(
+      result.tokens.map((token) => token.score),
+      [4],
+    );
+    assert.deepEqual(streamed, result.tokens);
+    assert.ok(result.tokens[0].timeMs >= 0);
+  }
   await assert.rejects(
     runPrompt(
       path.join(root, "unsupported.pipe-onnx"),

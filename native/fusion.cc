@@ -281,7 +281,7 @@ void FinalizeCapturedPlan(const ol::ModelProto &model, ol::RewritingProto &plan,
   for (size_t i = 0; i < final_nodes.size(); ++i) {
     reorder->add_matched_nodes(i);
     *reorder->add_added_nodes() = final_nodes[i].SharedCopy();
-    reorder->ref_added_nodes()[i].ref_attribute() = builder.Nodes()[i].attribute();
+    reorder->ref_added_nodes()[i].ref_attribute() = builder.Nodes()[i].attribute().SharedCopy();
     reorder->add_added_nodes_positions(i);
   }
 }
@@ -485,10 +485,11 @@ public:
         canonical_(!scenario.empty() && source_->rewriting_base ? source_->rewriting_base
                                                                 : source_),
         snapshot_(canonical_->model->SharedCopy()), patterns_(std::move(patterns)),
-        anchors_(std::move(anchors)), path_(std::move(path)),
-        weights_(canonical_->external_weights), history_(source_->fusion_history),
+        anchors_(std::move(anchors)), path_(std::move(path)), history_(source_->fusion_history),
         scenario_(std::move(scenario)), all_(all), operation_(std::move(operation)),
         diagnostic_anchor_(diagnostic_anchor) {
+    for (const auto &weight : canonical_->external_weights)
+      weights_.push_back({weight.reference.SharedCopy(), weight.value.SharedCopy()});
     for (const auto &[name, functions] : *source_->function_patterns)
       function_patterns_.emplace(
           name, StoredModel::FunctionPatternFunctions{
@@ -701,7 +702,7 @@ public:
         edit->add_added_initializer_positions(i);
       }
       auto declarations = graph.ToModel(snapshot_.ir_version());
-      plan.ref_added_functions() = declarations.functions();
+      plan.ref_added_functions() = declarations.functions().SharedCopy();
       plan.ref_required_opset_imports() = declarations.opset_import();
       builder::GraphBuilder original(snapshot_);
       auto rewritten = original.ApplyRewritings(plan);
@@ -877,14 +878,14 @@ private:
       builder::GraphGraph optimizer(graph, std::move(chosen));
       optimization_report_ = std::make_shared<builder::OptimizationReport>();
       auto rewrites = optimizer.Optimize(-1, optimization_report_.get());
-      plan_.ref_added_functions() = rewrites.added_functions();
+      plan_.ref_added_functions() = rewrites.added_functions().SharedCopy();
       plan_.ref_required_opset_imports() = rewrites.required_opset_imports();
       for (const auto &edit : rewrites.rewrites())
         *plan_.add_rewrites() = edit.SharedCopy();
-      const auto optimized_graph = graph.BuildGraph();
+      auto optimized_graph = graph.BuildGraph();
       scopes = CaptureScopes(graph);
       snapshot_ = graph.ToModel(snapshot_.ir_version());
-      *snapshot_.mutable_graph() = optimized_graph;
+      *snapshot_.mutable_graph() = std::move(optimized_graph);
       PreserveFunctionBodies(snapshot_, original);
       {
         builder::GraphGraph canonicalizer(
@@ -899,9 +900,9 @@ private:
     if (!plan_.added_functions().empty()) {
       ol::ModelProto declarations;
       declarations.mutable_graph()->set_name("Optimization function declarations");
-      declarations.ref_struct_types() = snapshot_.struct_types();
+      declarations.ref_struct_types() = snapshot_.struct_types().SharedCopy();
       declarations.ref_opset_import() = snapshot_.opset_import();
-      declarations.ref_functions() = snapshot_.functions();
+      declarations.ref_functions() = snapshot_.functions().SharedCopy();
       // Compare both sides after the same SDK model-import/export normalization.
       expected_functions = builder::GraphBuilder(declarations)
                                .ToModel(original.ir_version())
