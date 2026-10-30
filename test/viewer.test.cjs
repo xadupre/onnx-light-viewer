@@ -6688,6 +6688,98 @@ test("Settings exposes histories, removes selected entries, clears categories an
   assert.equal(byId("settings-download").value, "/downloads");
 });
 
+test("mbext stays hidden until its package is available and follows Python inspection changes", (t) => {
+  const { document, window, messages } = openViewer(t);
+  const byId = (id) => document.getElementById(id);
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  const option = byId("export-tool").querySelector('[value="mbext"]');
+  const settings = {
+    type: "settings-info",
+    application: {
+      downloadDirectory: "/downloads",
+      pythonPath: "/first/python",
+    },
+    viewer: { panels: { operator: true, find: true, metadata: false } },
+    trusted: true,
+    exportHistory: { exporter: "mbext", models: [], directories: [] },
+  };
+  const inspect = (packages) => {
+    byId("settings-inspect-python").click();
+    const request = messages.at(-1);
+    assert.equal(request.type, "inspect-python");
+    send({
+      ...request,
+      type: "python-info",
+      python: { executable: request.pythonPath, version: "3.12", packages },
+    });
+    return request;
+  };
+  const assertVisibility = (available) => {
+    assert.equal(byId("mbext-repository").hidden, !available);
+    assert.equal(option.hidden, !available);
+    assert.equal(option.disabled, !available);
+    assert.equal(
+      [...byId("settings-packages").querySelectorAll("th")].some(
+        (cell) => cell.textContent === "modelbuilder",
+      ),
+      available,
+    );
+  };
+  assertVisibility(false);
+  byId("repositories-tab").click();
+  assert.equal(messages.at(-1).type, "get-settings");
+  send({ ...settings, trusted: false });
+  assert.notEqual(messages.at(-1).type, "inspect-python");
+  send(settings);
+  assert.equal(messages.at(-1).type, "inspect-python");
+  assert.equal(byId("export-tool").value, "modelbuilder");
+  inspect([
+    { name: "modelbuilder", version: null },
+    { name: "onnx", version: null },
+  ]);
+  assertVisibility(false);
+  assert.match(byId("settings-packages").textContent, /onnxNot installed/);
+  const installed = [{ name: "modelbuilder", version: "0.2.1" }];
+  const old = inspect(installed);
+  assertVisibility(true);
+  assert.equal(byId("export-tool").value, "mbext");
+  inspect([
+    { name: "modelbuilder", version: null, source: "/sources/modelbuilder" },
+  ]);
+  assertVisibility(true);
+  assert.match(byId("settings-packages").textContent, /PYTHONPATH/);
+  send({
+    ...settings,
+    application: { ...settings.application, pythonPath: "/second/python" },
+  });
+  assertVisibility(false);
+  assert.equal(byId("export-tool").value, "modelbuilder");
+  send({
+    ...old,
+    type: "python-info",
+    python: {
+      executable: "/first/python",
+      version: "3.12",
+      packages: installed,
+    },
+  });
+  assertVisibility(false);
+  byId("export-tool").value = "mobius";
+  byId("export-tool").dispatchEvent(new window.Event("change"));
+  inspect(installed);
+  assertVisibility(true);
+  assert.equal(byId("export-tool").value, "mobius");
+  byId("settings-inspect-python").click();
+  send({
+    ...messages.at(-1),
+    type: "settings-error",
+    error: "Python inspection failed",
+  });
+  assertVisibility(false);
+  assert.equal(byId("export-tool").value, "mobius");
+});
+
 test("Status exposes package versions and inspection failures without opening Settings or resetting the camera", async (t) => {
   const { document, window, messages, load } = openViewer(t);
   const byId = (id) => document.getElementById(id);
@@ -6959,8 +7051,8 @@ test("Settings edits saved paths and sidebar preferences while Status renders pa
   assert.equal(byId("settings-find").checked, false);
   byId("status-tab").click();
   byId("settings-inspect-python").click();
-  assert.equal(messages.at(-1).type, "inspect-python");
-  const inspection = messages.at(-1);
+  const inspection = messages.findLast(({ type }) => type === "inspect-python");
+  assert.ok(inspection);
   assert.equal(inspection.pythonPath, "/usr/bin/python3");
   assert.equal(byId("settings-inspect-python").disabled, true);
   send({
@@ -7339,7 +7431,10 @@ for (const initialTab of ["model", "logs"]) {
       );
       assert.ok(documentationLink.querySelector("svg path"));
       documentationLink.focus();
-      assert.equal(document.activeElement, documentationLink);
+      assert.equal(card.hidden, name === "mbext");
+      if (card.hidden)
+        assert.notEqual(document.activeElement, documentationLink);
+      else assert.equal(document.activeElement, documentationLink);
       assert.ok(card.querySelector("p").textContent.trim().length > 20);
       if (name === "mbext") {
         assert.match(
@@ -7414,7 +7509,15 @@ for (const initialTab of ["model", "logs"]) {
     }
     assert.deepEqual(
       messages.map(({ type }) => type),
-      ["ready", "get-settings", "get-settings", "get-settings"],
+      [
+        "ready",
+        "get-settings",
+        "get-settings",
+        "get-settings",
+        "get-settings",
+        "get-settings",
+        "get-settings",
+      ],
     );
   });
 
@@ -7515,6 +7618,8 @@ for (const initialTab of ["model", "logs"]) {
       messages.map(({ type }) => type),
       [
         "ready",
+        "get-settings",
+        "get-settings",
         "get-settings",
         "get-settings",
         "get-status-info",

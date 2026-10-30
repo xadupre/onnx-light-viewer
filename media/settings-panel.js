@@ -1,4 +1,9 @@
-function createSettingsPanel({ byId, postMessage, onViewerSettings }) {
+function createSettingsPanel({
+  byId,
+  postMessage,
+  onViewerSettings,
+  onPythonPackages,
+}) {
   const panelNames = ["operator", "find", "metadata"];
   let inspecting;
   let nextRequestId = 0;
@@ -86,9 +91,9 @@ function createSettingsPanel({ byId, postMessage, onViewerSettings }) {
             name !== "onnx-light-viewer" && name !== "onnx-light C++",
         )
         .map(({ name }) => ({ name }));
-    for (const pkg of [...entries].sort((a, b) =>
-      a.name.localeCompare(b.name),
-    )) {
+    for (const pkg of entries
+      .filter((pkg) => pkg.name !== "modelbuilder" || pkg.version || pkg.source)
+      .sort((a, b) => a.name.localeCompare(b.name))) {
       const row = document.createElement("tr");
       const name = document.createElement("th");
       name.scope = "row";
@@ -270,6 +275,7 @@ function createSettingsPanel({ byId, postMessage, onViewerSettings }) {
       byId("settings-history-feedback").textContent = "";
       if (pythonPath !== message.application.pythonPath) {
         packages = undefined;
+        onPythonPackages(packages);
         byId("settings-python-status").textContent = "Not checked";
       }
       pythonPath = message.application.pythonPath;
@@ -285,6 +291,8 @@ function createSettingsPanel({ byId, postMessage, onViewerSettings }) {
         ? "Settings loaded."
         : "Trust this workspace to inspect Python packages.";
       restoreViewer(message.viewer);
+      if (trusted && !packages && !inspecting)
+        byId("settings-inspect-python").click();
     } else if (
       message.type === "path-history" ||
       message.type === "export-history"
@@ -311,12 +319,14 @@ function createSettingsPanel({ byId, postMessage, onViewerSettings }) {
         byId("settings-feedback").textContent = message.error;
         byId("settings-python-status").textContent = message.error;
         packages = undefined;
+        onPythonPackages(packages);
         renderVersions();
         return;
       }
       byId("settings-python-status").textContent =
         `Python ${message.python.version} — ${message.python.executable}`;
       packages = message.python.packages;
+      onPythonPackages(packages);
       renderVersions();
     } else if (message.type === "settings-error") {
       byId("settings-feedback").textContent = message.error;
