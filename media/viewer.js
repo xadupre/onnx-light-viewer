@@ -921,10 +921,19 @@ function dimensionStatus(
   status = pending ? RefreshStatus.PENDING : RefreshStatus.IDLE,
 ) {
   const button = byId("shorten-dimensions");
-  button.disabled = pending || replacementPending || !hasModel;
   button.setAttribute("aria-busy", String(pending));
+  updateDimensionEnabled();
   refreshButtonStatus("shorten-dimensions", status, message);
   byId("dimension-status").textContent = message;
+}
+
+function updateDimensionEnabled() {
+  const button = byId("shorten-dimensions");
+  button.disabled =
+    button.getAttribute("aria-busy") === "true" ||
+    replacementPending ||
+    !hasModel ||
+    svg.getAttribute("aria-busy") === "true";
 }
 
 function updateReleases() {
@@ -1782,11 +1791,13 @@ function findNode(event) {
 }
 
 function navigate(path, nodeIndex) {
+  if (byId("shorten-dimensions").getAttribute("aria-busy") === "true") return;
   tensorStatisticsPanel.reset();
   tensorListPanel.setBusy(true);
   endGesture();
   byId("navigation-status").textContent = "Opening graph…";
   svg.setAttribute("aria-busy", "true");
+  updateDimensionEnabled();
   fit();
   requestAction("navigate", "Navigate graph", {
     path,
@@ -1823,8 +1834,8 @@ function render(graph, metadata) {
   endGesture();
   refreshStatus(false);
   verificationStatus(false);
-  dimensionStatus(false);
   svg.setAttribute("aria-busy", "false");
+  dimensionStatus(false);
   byId("navigation-status").textContent = "";
   const breadcrumbs = graph.breadcrumbs ?? [];
   const navigation = graph.pipelineStages?.length
@@ -2382,6 +2393,7 @@ byId("refresh-shapes").addEventListener("click", () => {
   requestAction("refresh-shapes", "Refresh shapes");
 });
 byId("shorten-dimensions").addEventListener("click", () => {
+  if (svg.getAttribute("aria-busy") === "true") return;
   dimensionStatus(true, "Renaming dynamic dimensions...");
   requestAction("shorten-dimensions", "Shorten dynamic dimension names");
 });
@@ -2603,6 +2615,7 @@ window.addEventListener("message", (event) => {
   } else if (event.data?.type === "navigation-error") {
     svg.setAttribute("aria-busy", "false");
     tensorListPanel.setBusy(replacementPending);
+    updateDimensionEnabled();
     byId("navigation-status").textContent =
       `Could not open graph: ${event.data.error}`;
     fit();
@@ -2630,12 +2643,16 @@ window.addEventListener("message", (event) => {
     if (event.data.graph) {
       displayedGraph = event.data.graph;
       updateTensorInformation(displayedGraph.tensors);
+      tensorListPanel.setGraph(displayedGraph);
       for (const node of displayedGraph.nodes) {
         const view = nodeViews.get(node.id);
-        if (view?.node.pipelineModel) view.node = node;
+        if (view?.node) view.node = node;
       }
       memoryPanel.setGraph(displayedGraph);
+      const selection = new Set(selected);
       fusionPanel.invalidate();
+      selected = selection;
+      updateSelection([...selected].at(-1));
       fusionPanel.updateGraph(displayedGraph);
       inspect(inspectedView);
       refreshStatus(false);

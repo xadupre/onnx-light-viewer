@@ -230,6 +230,153 @@ test("Symbolic edits preserve graph view, fusion undo and pending rewritings", a
   assert.equal(button.disabled, false);
 });
 
+test("dimension shortening refreshes node snapshots and encoded tensor shapes", (t) => {
+  const { document, window, load } = openViewer(t);
+  const source = weightsGraph();
+  const oldName = "component.model.N";
+  const graph = {
+    ...source,
+    encodedInitializers: [
+      { name: "encoded", type: "FLOAT16", shape: [oldName] },
+    ],
+    nodes: source.nodes.map((node, index) =>
+      index
+        ? node
+        : {
+            ...node,
+            inputs: [...node.inputs, "encoded"],
+            attributes: [{ name: "shape", type: "STRING", value: oldName }],
+            parameters: [{ name: "weight", type: "FLOAT", shape: [oldName] }],
+          },
+    ),
+  };
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  const click = (element) =>
+    element.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  load(graph);
+  click(document.querySelector('[data-id="node-0"]'));
+  assert.ok(
+    document.getElementById("node-attributes").textContent.includes(oldName),
+  );
+  assert.ok(
+    document.getElementById("node-initializers").textContent.includes(oldName),
+  );
+  document.getElementById("tensors-tab").click();
+  const tensorRow = () =>
+    [...document.querySelectorAll("#tensor-list-rows tr")].find(
+      (row) => row.dataset.name === "encoded",
+    );
+  assert.equal(tensorRow().cells[3].textContent, `[${oldName}]`);
+
+  const edited = structuredClone(graph);
+  edited.encodedInitializers[0].shape = ["N"];
+  edited.nodes[0].attributes[0].value = "N";
+  edited.nodes[0].parameters[0].shape = ["N"];
+  send({
+    type: "dimension-info",
+    graph: edited,
+    prefix: "component.model.",
+    count: 1,
+  });
+
+  assert.equal(
+    document.querySelector('[data-id="node-0"]').classList.contains("selected"),
+    true,
+  );
+  assert.ok(
+    !document.getElementById("node-attributes").textContent.includes(oldName),
+  );
+  assert.ok(
+    document.getElementById("node-attributes").textContent.includes("N"),
+  );
+  assert.ok(
+    !document.getElementById("node-initializers").textContent.includes(oldName),
+  );
+  assert.ok(
+    document.getElementById("node-initializers").textContent.includes("N"),
+  );
+  assert.equal(tensorRow().cells[3].textContent, "[N]");
+});
+
+test("dimension shortening preserves graph selection while invalidating fusion matches", async (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const native = loadModel(
+    readFileSync(require.resolve("./models/fusion.onnx")),
+    "fusion",
+  );
+  const preview = await native.previewFusion("TransposeTranspose");
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  load(native.graph());
+  document.getElementById("fuse-pattern").click();
+  send({
+    type: "fusion-patterns",
+    requestId: messages.at(-1).requestId,
+    patterns: ["TransposeTranspose"],
+  });
+  document.getElementById("fusion-pattern").querySelector("label").click();
+  document.getElementById("preview-fusion").click();
+  send({
+    type: "fusion-preview",
+    requestId: messages.at(-1).requestId,
+    previewId: 1,
+    matches: preview.matches,
+  });
+  const node = document.querySelector('[data-id="node-0"]');
+  node.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  assert.equal(node.classList.contains("selected"), true);
+
+  send({
+    type: "dimension-info",
+    graph: native.graph(),
+    prefix: "component.model.",
+    count: 1,
+  });
+  assert.equal(node.classList.contains("selected"), true);
+});
+
+test("dimension shortening and graph navigation cannot overlap", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const model = loadModel(
+    readFileSync(require.resolve("./models/subgraphs.onnx")),
+    "subgraphs.onnx",
+  );
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  load(model.graph());
+  const dimensions = document.getElementById("shorten-dimensions");
+  const link = () => document.querySelector(".subgraph-link");
+  const click = (element) =>
+    element.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+
+  dimensions.click();
+  const rename = messages.at(-1);
+  assert.equal(rename.type, "shorten-dimensions");
+  click(link());
+  assert.equal(messages.at(-1), rename);
+  assert.equal(
+    document.getElementById("graph").getAttribute("aria-busy"),
+    "false",
+  );
+
+  send({
+    type: "dimension-info",
+    graph: model.graph(),
+    prefix: "",
+    count: 0,
+  });
+  click(link());
+  const navigation = messages.at(-1);
+  assert.equal(navigation.type, "navigate");
+  assert.equal(dimensions.disabled, true);
+  dimensions.click();
+  assert.equal(messages.at(-1), navigation);
+
+  send({ type: "navigation-error", error: "cancelled" });
+  assert.equal(dimensions.disabled, false);
+});
+
 test("Run Prompt recovers after a cancelled model replacement", (t) => {
   const { document, window, messages, load } = openViewer(t);
   document.getElementById("prompt-tab").click();
