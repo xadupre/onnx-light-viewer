@@ -5,7 +5,7 @@
 import * as vscode from "vscode";
 import { randomBytes } from "node:crypto";
 import { mkdir, open, stat } from "node:fs/promises";
-import { dirname, isAbsolute, join, posix, relative } from "node:path";
+import { dirname, isAbsolute, join, posix, relative, resolve } from "node:path";
 import { homedir } from "node:os";
 import {
   listBackendTests,
@@ -627,13 +627,18 @@ async function configurePanel(
       await mkdir(application.downloadDirectory, { recursive: true });
       await Promise.all([
         prunePathHistory(),
-        exportHistory.prune(
-          async (entry, target) =>
-            (target === "models" && !isAbsolute(entry)) ||
-            (target === "directories" &&
-              /<(?:model_id|exporter)>/.test(entry)) ||
-            (await historyPathExists(entry)),
-        ),
+        exportHistory.prune(async (entry, target) => {
+          if (target === "models" && !isAbsolute(entry)) return true;
+          if (target === "directories" && /<(?:model_id|exporter)>/.test(entry))
+            return true;
+          const isUri =
+            /^[a-z][a-z\d+.-]*:/i.test(entry) && !/^[a-z]:/i.test(entry);
+          return historyPathExists(
+            target === "directories" && !isAbsolute(entry) && !isUri
+              ? resolve(application.downloadDirectory, entry)
+              : entry,
+          );
+        }),
       ]);
     }
     return postMessage({
@@ -719,7 +724,7 @@ async function configurePanel(
     } catch (error) {
       if (
         (error instanceof vscode.FileSystemError &&
-          error.code === "FileNotFound") ||
+          ["FileNotFound", "FileNotADirectory"].includes(error.code)) ||
         (error instanceof Error &&
           "code" in error &&
           (error.code === "ENOENT" || error.code === "ENOTDIR"))

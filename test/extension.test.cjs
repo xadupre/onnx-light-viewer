@@ -258,7 +258,14 @@ async function openExtension(
           await mkdir(uri.path, { recursive: true });
         },
         stat: async (uri) => {
-          const details = await stat(uri.path);
+          let details;
+          try {
+            details = await stat(uri.path);
+          } catch (error) {
+            if (error.code === "ENOTDIR")
+              throw new FileSystemError("FileNotADirectory");
+            throw error;
+          }
           return {
             type: details.isDirectory() ? 2 : 1,
             ctime: details.ctimeMs,
@@ -2074,6 +2081,8 @@ test("displaying histories removes missing local paths but preserves references,
   await writeFile(file, "keep");
   const missing = path.join(directory, "missing.onnx");
   const missingDirectory = path.join(directory, "missing");
+  const relativeDirectory = `${path.basename(directory)}-conversion-output`;
+  await mkdir(path.join(directory, relativeDirectory));
   const entry = (location, kind = "file", source = "local") => ({
     source,
     kind,
@@ -2114,7 +2123,7 @@ test("displaying histories removes missing local paths but preserves references,
       "exportHistory",
       {
         models: [missingDirectory, "Qwen/Qwen3-0.6B", directory],
-        directories: [missingDirectory, directory, template],
+        directories: [missingDirectory, relativeDirectory, directory, template],
         exporter: "mobius",
       },
     ],
@@ -2145,7 +2154,7 @@ test("displaying histories removes missing local paths but preserves references,
   );
   assert.deepEqual(settings.exportHistory, {
     models: ["Qwen/Qwen3-0.6B", directory],
-    directories: [directory, template],
+    directories: [relativeDirectory, directory, template],
     exporter: "mobius",
   });
   assert.deepEqual(settings.pathHistory, preferences.get("pathHistory"));

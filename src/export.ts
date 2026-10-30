@@ -742,6 +742,7 @@ async function reserveExportDirectory(
   parent: string,
   exporter: Exporter,
   signal: AbortSignal,
+  excludedDirectory?: string,
 ): Promise<string> {
   const now = new Date();
   const date = [
@@ -756,6 +757,11 @@ async function reserveExportDirectory(
       parent,
       attempt === 1 ? prefix : `${prefix}-${attempt}`,
     );
+    if (
+      excludedDirectory !== undefined &&
+      resolve(directory) === resolve(excludedDirectory)
+    )
+      continue;
     try {
       await mkdir(directory);
       return directory;
@@ -785,6 +791,7 @@ export async function prepareExportPlan(
       occupied ? plan.directory : parent,
       plan.exporter,
       signal,
+      plan.directory,
     );
     signal.throwIfAborted();
     const directory = occupied

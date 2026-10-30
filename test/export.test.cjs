@@ -1207,6 +1207,27 @@ test("expands model and exporter directory templates without allowing model path
     );
 });
 
+test("Mobius uses a separate staging directory for an unused dated destination", async (t) => {
+  const date = new Date();
+  const prefix = `mobius-${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+  for (const [destinationName, stagingName, reservePrefix] of [
+    [prefix, `${prefix}-2`, false],
+    [`${prefix}-2`, `${prefix}-3`, true],
+  ]) {
+    const root = await directory(t);
+    if (reservePrefix) await mkdir(path.join(root, prefix));
+    const destination = path.join(root, destinationName);
+    const plan = exportPlan(options(destination, "mobius"), python);
+    const prepared = await prepareExportPlan(
+      plan,
+      new AbortController().signal,
+    );
+    assert.equal(prepared.directory, destination);
+    assert.equal(path.dirname(prepared.script), path.join(root, stagingName));
+    await assert.rejects(readdir(destination), { code: "ENOENT" });
+  }
+});
+
 test("shows plain command arguments without quotes and quotes only shell-sensitive values", () => {
   const destination =
     process.platform === "win32" ? "C:\\models\\output" : "/tmp/output";

@@ -33,15 +33,18 @@ const {
   isEncryptedModel,
 } = require("../dist/graph");
 const { PipelineModel } = require("../dist/pipeline");
+const python =
+  process.env.ONNX_PATTERN_PYTHON ??
+  (process.platform === "win32" ? "python" : "python3");
 
 function modelBytes(name) {
   return readFileSync(path.join(__dirname, "models", name));
 }
 
-function functionPatternTexts(python) {
+function functionPatternTexts(source) {
   return JSON.parse(
     execFileSync(
-      "python3",
+      python,
       [
         "-c",
         [
@@ -52,7 +55,7 @@ function functionPatternTexts(python) {
           "print(json.dumps(texts))",
         ].join("\n"),
       ],
-      { input: python, encoding: "utf8" },
+      { input: source, encoding: "utf8" },
     ),
   );
 }
