@@ -21,7 +21,12 @@ function createSidebar({
       panel.offsetTop - controlsHeight - 12,
     );
   }
-  for (const id of ["show-operator", "show-find", "show-metadata"])
+  for (const id of [
+    "show-operator",
+    "show-find",
+    "show-metadata",
+    "show-symbolic",
+  ])
     byId(id).addEventListener("click", () => {
       const button = byId(id);
       const panel = byId(button.getAttribute("aria-controls"));
@@ -29,7 +34,7 @@ function createSidebar({
       button.setAttribute("aria-expanded", String(!panel.hidden));
       if (!panel.hidden) revealSidebarPanel(panel);
       if (id === "show-metadata") onMetadataToggle(!panel.hidden);
-      saveSettings();
+      if (id !== "show-symbolic") saveSettings();
     });
   const sidebar = byId("graph-panels");
   const sidebarResizer = byId("sidebar-resizer");

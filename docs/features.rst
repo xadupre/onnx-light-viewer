@@ -318,7 +318,7 @@ See :doc:`features/opening_models`. No pipeline execution or encryption.
 Shape/type inference
 ^^^^^^^^^^^^^^^^^^^^
 
-Choose **Refresh shapes** for visible update counts and refreshed labels without
+Open **Symbolic** and choose **Refresh shapes** for visible update counts and refreshed labels without
 resetting the camera or selection. See :doc:`features/inspection`.
 In-memory only; unsupported operators may fail.
 
@@ -327,6 +327,20 @@ In-memory only; unsupported operators may fail.
    :width: 100%
 
    Refresh inferred shapes without modifying the source file.
+
+Symbolic dimension names
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+In **Symbolic**, choose **Shorten dimension names** to remove a common namespace
+prefix, such as ``component.model.``. This edits the model; **Save** keeps the
+renamed dimensions. No weight payloads are read during renaming.
+See :doc:`features/inspection`.
+
+.. figure:: _static/feature-symbolic.png
+   :alt: Symbolic controls alongside a graph with shortened dimension names.
+   :width: 100%
+
+   Refresh, verify and simplify dimension names from one panel.
 
 Static metadata
 ^^^^^^^^^^^^^^^

@@ -143,6 +143,545 @@ function submitOpen(document, window) {
     .dispatchEvent(new window.Event("submit", { cancelable: true }));
 }
 
+test("Symbolic edits preserve graph view, fusion undo and pending rewritings", async (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const button = document.getElementById("shorten-dimensions");
+  const panel = document.getElementById("symbolic-panel");
+  const status = document.getElementById("dimension-status");
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  assert.equal(button.disabled, true);
+  assert.equal(panel.hidden, true);
+  document.getElementById("show-symbolic").click();
+  assert.equal(panel.hidden, false);
+  let fused = loadModel(
+    readFileSync(require.resolve("./models/prefixed-dimensions.onnx")),
+    "prefixed",
+  );
+  for (let index = 0; index < 2; index++) {
+    const preview = await fused.previewFusion("TransposeTranspose");
+    fused = await preview.model.applyFusion("TransposeTranspose", [
+      preview.matches[0].anchor,
+    ]);
+  }
+  const model = fused.undoFusion();
+  send({
+    type: "graph",
+    graph: model.graph(),
+    file: {
+      fusionCount: model.fusionCount(),
+      fusionHistory: model.fusionHistory(),
+      pendingRewritings: fused.fusionHistory().slice(model.fusionCount()),
+    },
+  });
+  const pending = document.getElementById("rewriting-count").textContent;
+  const history = document.getElementById("unfuse-history").textContent;
+  const refreshButtons = [
+    "refresh-shapes",
+    "refresh-metadata",
+    "verify-model",
+  ].map((id) => document.getElementById(id));
+  for (const refresh of refreshButtons) {
+    refresh.click();
+    assert.equal(refresh.getAttribute("aria-busy"), "true");
+  }
+  const node = document.querySelector(".graph-node");
+  node.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  document.getElementById("zoom-in").click();
+  const graph = document.getElementById("graph");
+  const camera = graph.getAttribute("viewBox");
+  const position = node.querySelector("rect").outerHTML;
+  button.click();
+  assert.equal(messages.at(-1).type, "shorten-dimensions");
+  assert.equal(button.disabled, true);
+  const edited = model.shortenDimensionNames();
+  send({
+    type: "dimension-info",
+    graph: edited.model.graph(),
+    prefix: edited.prefix,
+    count: edited.count,
+  });
+  assert.equal(button.disabled, false);
+  assert.equal(button.dataset.refreshStatus, "updated");
+  assert.match(status.textContent, /Save to keep/);
+  for (const refresh of refreshButtons) {
+    assert.equal(refresh.disabled, false);
+    assert.equal(refresh.getAttribute("aria-busy"), "false");
+  }
+  assert.equal(graph.getAttribute("viewBox"), camera);
+  assert.equal(node.querySelector("rect").outerHTML, position);
+  assert.equal(node.classList.contains("selected"), true);
+  assert.equal(document.getElementById("rewriting-count").textContent, pending);
+  assert.equal(document.getElementById("unfuse-history").textContent, history);
+  assert.equal(document.getElementById("replay-rewritings").disabled, false);
+  assert.equal(
+    document.getElementById("optimization-unfuse-last").disabled,
+    false,
+  );
+  assert.ok(
+    [...graph.querySelectorAll(".tensor-info")].every(
+      (label) =>
+        !label.getAttribute("aria-label")?.includes("component.model."),
+    ),
+  );
+  button.click();
+  send({ type: "dimension-info", prefix: "", count: 0 });
+  assert.equal(button.dataset.refreshStatus, "unchanged");
+  assert.match(status.textContent, /No common/);
+  button.click();
+  send({ type: "dimension-error", error: "<img src=x>" });
+  assert.equal(button.dataset.refreshStatus, "failed");
+  assert.equal(status.querySelector("img"), null);
+  assert.match(status.textContent, /<img src=x>/);
+  load(demoGraph);
+  assert.equal(status.textContent, "");
+  assert.equal(button.disabled, false);
+});
+
+test("dimension shortening refreshes node snapshots and encoded tensor shapes", (t) => {
+  const { document, window, load } = openViewer(t);
+  const source = weightsGraph();
+  const oldName = "component.model.very_long_namespace.N";
+  const graph = {
+    ...source,
+    encodedInitializers: [
+      { name: "encoded", type: "FLOAT16", shape: [oldName] },
+    ],
+    nodes: source.nodes.map((node, index) =>
+      index
+        ? node
+        : {
+            ...node,
+            inputs: [...node.inputs, "encoded"],
+            attributes: [{ name: "shape", type: "STRING", value: oldName }],
+            parameters: [
+              {
+                name: "weight",
+                type: "FLOAT",
+                shape: [oldName],
+                distribution: { elementCount: "2" },
+              },
+            ],
+          },
+    ),
+  };
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  const click = (element) =>
+    element.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  load(graph);
+  click(document.querySelector('[data-id="node-0"]'));
+  assert.ok(
+    document.getElementById("node-attributes").textContent.includes(oldName),
+  );
+  assert.ok(
+    document.getElementById("node-initializers").textContent.includes(oldName),
+  );
+  document.getElementById("tensors-tab").click();
+  const tensorRow = () =>
+    [...document.querySelectorAll("#tensor-list-rows tr")].find(
+      (row) => row.dataset.name === "encoded",
+    );
+  assert.equal(tensorRow().cells[3].textContent, `[${oldName}]`);
+  const node = document.querySelector('[data-id="node-0"]');
+  const bounds = node.querySelector("rect").outerHTML;
+  const position = node.getAttribute("transform");
+  const rows = [...node.querySelectorAll(".node-attribute, .node-initializer")];
+  assert.equal(rows.length, 2);
+  assert.ok(rows.every((row) => row.textContent.includes(oldName)));
+
+  const edited = structuredClone(graph);
+  edited.encodedInitializers[0].shape = ["N"];
+  edited.nodes[0].attributes[0].value = "N";
+  edited.nodes[0].parameters[0].shape = ["N"];
+  send({
+    type: "dimension-info",
+    graph: edited,
+    prefix: "component.model.very_long_namespace.",
+    count: 1,
+  });
+
+  assert.equal(
+    document.querySelector('[data-id="node-0"]').classList.contains("selected"),
+    true,
+  );
+  assert.ok(
+    !document.getElementById("node-attributes").textContent.includes(oldName),
+  );
+  assert.ok(
+    document.getElementById("node-attributes").textContent.includes("N"),
+  );
+  assert.ok(
+    !document.getElementById("node-initializers").textContent.includes(oldName),
+  );
+  assert.ok(
+    document.getElementById("node-initializers").textContent.includes("N"),
+  );
+  assert.equal(tensorRow().cells[3].textContent, "[N]");
+  assert.equal(node.querySelector("rect").outerHTML, bounds);
+  assert.equal(node.getAttribute("transform"), position);
+  for (const row of rows) {
+    assert.ok(!row.textContent.includes(oldName));
+    assert.ok(row.textContent.includes("N"));
+    assert.ok(!row.getAttribute("aria-label").includes(oldName));
+    assert.ok(!row.querySelector("title").textContent.includes(oldName));
+  }
+});
+
+test("dimension shortening refreshes virtualized parameter rows before they are remounted", (t) => {
+  const { document, window, load } = openViewer(t);
+  const graph = chainGraph(300);
+  const node = graph.nodes[0];
+  node.attributes = [{ name: "shape", type: "STRING", value: "mod.N" }];
+  node.parameters = [
+    {
+      name: "weight",
+      type: "FLOAT",
+      shape: ["mod.N"],
+      distribution: { elementCount: "2" },
+    },
+  ];
+  load(graph);
+  const operator = () => document.querySelector('[data-id="node-0"]');
+  const bounds = operator().querySelector("rect").outerHTML;
+  const edited = structuredClone(graph);
+  edited.nodes[0].attributes[0].value = "N";
+  edited.nodes[0].parameters[0].shape = ["N"];
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: { type: "dimension-info", graph: edited, prefix: "mod.", count: 1 },
+    }),
+  );
+  document.getElementById("zoom-fit").click();
+  assert.equal(operator(), null);
+  document.getElementById("zoom-readable").click();
+  assert.equal(operator().querySelector("rect").outerHTML, bounds);
+  const rows = operator().querySelectorAll(
+    ".node-attribute, .node-initializer",
+  );
+  assert.equal(rows.length, 2);
+  for (const row of rows) {
+    assert.ok(!row.textContent.includes("mod.N"));
+    assert.ok(row.getAttribute("aria-label").includes("N"));
+    assert.ok(!row.querySelector("title").textContent.includes("mod.N"));
+  }
+});
+
+for (const generating of [false, true]) {
+  for (const visible of [false, true]) {
+    test(`dimension shortening resets ${generating ? "generation" : "pending Prompt information"} with Prompt ${visible ? "visible" : "hidden"}`, (t) => {
+      const { document, window, messages, load } = openViewer(t);
+      const send = (data) =>
+        window.dispatchEvent(new window.MessageEvent("message", { data }));
+      const promptRequest = () =>
+        messages.findLast(({ type }) => type === "prompt-info");
+      load(demoGraph);
+      document.getElementById("prompt-tab").click();
+      if (generating) {
+        send({
+          type: "prompt-info",
+          requestId: promptRequest().requestId,
+          info: { available: true, engines: ["onnx-light"] },
+        });
+        document
+          .getElementById("prompt-form")
+          .dispatchEvent(
+            new window.Event("submit", { bubbles: true, cancelable: true }),
+          );
+        assert.equal(messages.at(-1).type, "run-prompt");
+      }
+      const stale = messages.at(-1).requestId;
+      if (!visible) document.getElementById("model-tab").click();
+      const before = promptRequest();
+      send({
+        type: "dimension-info",
+        graph: structuredClone(demoGraph),
+        prefix: "component.model.",
+        count: 1,
+      });
+      if (!visible) {
+        assert.equal(promptRequest(), before);
+        document.getElementById("prompt-tab").click();
+      }
+      const current = promptRequest();
+      assert.notEqual(current, before);
+      assert.ok(current.requestId > stale);
+      if (generating)
+        assert.equal(
+          messages.filter(({ type }) => type === "prompt-cancel").length,
+          1,
+        );
+      send({
+        type: "prompt-info",
+        requestId: current.requestId,
+        info: { available: true, engines: ["onnx-light"] },
+      });
+      send({ type: "prompt-error", requestId: stale, error: "Obsolete error" });
+      assert.equal(document.getElementById("prompt-fields").disabled, false);
+      assert.equal(document.getElementById("prompt-cancel").hidden, true);
+      assert.match(
+        document.getElementById("prompt-status").textContent,
+        /^Ready/,
+      );
+    });
+  }
+}
+
+test("dimension shortening preserves graph selection while invalidating fusion matches", async (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const native = loadModel(
+    readFileSync(require.resolve("./models/fusion.onnx")),
+    "fusion",
+  );
+  const preview = await native.previewFusion("TransposeTranspose");
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  load(native.graph());
+  document.getElementById("fuse-pattern").click();
+  send({
+    type: "fusion-patterns",
+    requestId: messages.at(-1).requestId,
+    patterns: ["TransposeTranspose"],
+  });
+  document.getElementById("fusion-pattern").querySelector("label").click();
+  document.getElementById("preview-fusion").click();
+  send({
+    type: "fusion-preview",
+    requestId: messages.at(-1).requestId,
+    previewId: 1,
+    matches: preview.matches,
+  });
+  const node = document.querySelector('[data-id="node-0"]');
+  node.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  assert.equal(node.classList.contains("selected"), true);
+
+  send({
+    type: "dimension-info",
+    graph: native.graph(),
+    prefix: "component.model.",
+    count: 1,
+  });
+  assert.equal(node.classList.contains("selected"), true);
+});
+
+test("dimension shortening and graph navigation cannot overlap", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const model = loadModel(
+    readFileSync(require.resolve("./models/subgraphs.onnx")),
+    "subgraphs.onnx",
+  );
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  load(model.graph());
+  const dimensions = document.getElementById("shorten-dimensions");
+  const link = () => document.querySelector(".subgraph-link");
+  const click = (element) =>
+    element.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+
+  dimensions.click();
+  const rename = messages.at(-1);
+  assert.equal(rename.type, "shorten-dimensions");
+  click(link());
+  assert.equal(messages.at(-1), rename);
+  assert.equal(
+    document.getElementById("graph").getAttribute("aria-busy"),
+    "false",
+  );
+
+  send({
+    type: "dimension-info",
+    graph: model.graph(),
+    prefix: "",
+    count: 0,
+  });
+  click(link());
+  const navigation = messages.at(-1);
+  assert.equal(navigation.type, "navigate");
+  assert.equal(dimensions.disabled, true);
+  dimensions.click();
+  assert.equal(messages.at(-1), navigation);
+
+  send({ type: "navigation-error", error: "cancelled" });
+  assert.equal(dimensions.disabled, false);
+});
+
+for (const all of [false, true]) {
+  test(`dimension shortening releases cancelled unfuse ${all ? "all" : "last"} controls but preserves live requests`, (t) => {
+    const { document, window, messages } = openViewer(t);
+    const byId = (id) => document.getElementById(id);
+    const send = (data) =>
+      window.dispatchEvent(new window.MessageEvent("message", { data }));
+    send({
+      type: "graph",
+      graph: demoGraph,
+      file: {
+        fusionCount: 1,
+        fusionHistory: [{ matches: [{ pattern: "Example", nodes: [0] }] }],
+      },
+    });
+    const rename = byId("shorten-dimensions");
+    const undo = byId("undo-fusion");
+    const last = byId("unfuse-last");
+    const everything = byId("unfuse-all");
+    const history = byId("unfuse-history").querySelector("button");
+    const start = () => {
+      rename.click();
+      assert.equal(messages.at(-1).type, "shorten-dimensions");
+      (all ? everything : last).click();
+      assert.equal(messages.at(-1).type, "undo-fusion");
+      assert.equal(messages.at(-1).all, all);
+      assert.equal(undo.getAttribute("aria-busy"), "true");
+      assert.ok(
+        [undo, last, everything, history].every((button) => button.disabled),
+      );
+    };
+    start();
+    send({ type: "dimension-info", prefix: "", count: 0 });
+    assert.equal(undo.getAttribute("aria-busy"), "true");
+    assert.ok(
+      [undo, last, everything, history].every((button) => button.disabled),
+    );
+    send({ type: "undo-fusion-error", error: "Cancelled by user" });
+    assert.ok(
+      [undo, last, everything, history].every((button) => !button.disabled),
+    );
+    start();
+    send({
+      type: "dimension-info",
+      graph: structuredClone(demoGraph),
+      prefix: "module.",
+      count: 1,
+    });
+    assert.equal(undo.getAttribute("aria-busy"), "false");
+    assert.ok(
+      [undo, last, everything, history].every((button) => !button.disabled),
+    );
+    (all ? everything : last).click();
+    assert.equal(messages.at(-1).type, "undo-fusion");
+  });
+}
+
+for (const visible of [false, true]) {
+  test(`dimension shortening refreshes statistics with Statistics ${visible ? "visible" : "hidden"}`, (t) => {
+    const { document, window, messages, load } = openViewer(t);
+    const byId = (id) => document.getElementById(id);
+    const send = (data) =>
+      window.dispatchEvent(new window.MessageEvent("message", { data }));
+    const request = () =>
+      messages.findLast(({ type }) => type === "get-statistics");
+    load(demoGraph);
+    byId("shorten-dimensions").click();
+    byId("statistics-tab").click();
+    const stale = request();
+    if (!visible) byId("model-tab").click();
+    send({
+      type: "dimension-info",
+      graph: structuredClone(demoGraph),
+      prefix: "module.",
+      count: 1,
+    });
+    if (!visible) {
+      assert.equal(request(), stale);
+      assert.equal(byId("statistics-view").getAttribute("aria-busy"), "false");
+      assert.match(byId("statistics-empty").textContent, /Open Statistics/);
+    } else {
+      assert.notEqual(request(), stale);
+      assert.equal(byId("statistics-view").getAttribute("aria-busy"), "true");
+    }
+    send({
+      type: "statistics-info",
+      requestId: stale.requestId,
+      statistics: demoGraph,
+    });
+    send({
+      type: "statistics-error",
+      requestId: stale.requestId,
+      error: "Obsolete error",
+    });
+    assert.equal(byId("statistics-content").hidden, true);
+    assert.doesNotMatch(byId("statistics-empty").textContent, /Obsolete error/);
+    if (!visible) byId("statistics-tab").click();
+    const current = request();
+    assert.ok(current.requestId > stale.requestId);
+    send({
+      type: "statistics-info",
+      requestId: current.requestId,
+      statistics: demoGraph,
+    });
+    assert.equal(byId("statistics-view").getAttribute("aria-busy"), "false");
+    assert.equal(byId("statistics-content").hidden, false);
+  });
+}
+
+test("dimension shortening resets cancelled tensor inspection and its cache only when the model changes", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const byId = (id) => document.getElementById(id);
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  const request = () =>
+    messages.findLast(({ type }) => type === "tensor-statistics");
+  const graph = weightsGraph();
+  load(graph);
+  byId("tensors-tab").click();
+  inspectTensor(document, "weight");
+  send({
+    type: "tensor-statistics-info",
+    requestId: request().requestId,
+    statistics: tensorStatistics(),
+  });
+  byId("close-tensor-statistics").click();
+  byId("shorten-dimensions").click();
+  inspectTensor(document, "other-weight");
+  const stale = request();
+  const dialog = byId("tensor-statistics-dialog");
+  assert.equal(dialog.getAttribute("aria-busy"), "true");
+
+  send({ type: "dimension-info", prefix: "", count: 0 });
+  assert.equal(dialog.open, true);
+  assert.equal(dialog.getAttribute("aria-busy"), "true");
+  byId("shorten-dimensions").click();
+  send({
+    type: "dimension-info",
+    graph: structuredClone(graph),
+    prefix: "module.",
+    count: 1,
+  });
+  assert.equal(dialog.open, false);
+  assert.equal(dialog.getAttribute("aria-busy"), "false");
+  assert.equal(byId("tensor-statistics-progress").hidden, true);
+  assert.equal(byId("tensor-statistics-content").children.length, 0);
+
+  inspectTensor(document, "weight");
+  const current = request();
+  assert.equal(current.name, "weight");
+  assert.ok(current.requestId > stale.requestId);
+  send({
+    type: "tensor-statistics-info",
+    requestId: stale.requestId,
+    statistics: tensorStatistics("other-weight"),
+  });
+  send({
+    type: "tensor-statistics-error",
+    requestId: stale.requestId,
+    error: "Obsolete error",
+  });
+  assert.equal(dialog.getAttribute("aria-busy"), "true");
+  assert.equal(byId("tensor-statistics-content").children.length, 0);
+  assert.match(byId("tensor-statistics-status").textContent, /Loading.*weight/);
+  assert.doesNotMatch(
+    byId("tensor-statistics-status").textContent,
+    /Obsolete error/,
+  );
+  send({
+    type: "tensor-statistics-info",
+    requestId: current.requestId,
+    statistics: tensorStatistics(),
+  });
+  assert.equal(dialog.open, true);
+  assert.equal(dialog.getAttribute("aria-busy"), "false");
+  assert.ok(byId("tensor-statistics-content").children.length > 0);
+});
+
 test("Run Prompt recovers after a cancelled model replacement", (t) => {
   const { document, window, messages, load } = openViewer(t);
   document.getElementById("prompt-tab").click();
@@ -1803,7 +2342,7 @@ test("Verify reports success and errors, prevents duplicate requests and resets 
   const send = (data) =>
     window.dispatchEvent(new window.MessageEvent("message", { data }));
   assert.equal(button.disabled, true);
-  assert.ok(button.closest(".graph-toolbar"));
+  assert.equal(button.closest("section").id, "symbolic-panel");
   load(demoGraph);
   const graph = document.getElementById("nodes").innerHTML;
   button.click();
@@ -6437,6 +6976,7 @@ test("toggles separated, stacked sidebar panels independently from Op Data Find 
       "Find",
       "Op",
       "Data",
+      "Symbolic",
       "Convert",
       "Optimize",
       "Fuse",
@@ -6465,6 +7005,7 @@ test("toggles separated, stacked sidebar panels independently from Op Data Find 
           "save-options",
           "export-panel",
           "unfuse-panel",
+          "symbolic-panel",
         ].includes(panel.id),
     ),
     panels,
@@ -8713,7 +9254,7 @@ for (const [kind, panelOpen] of [
   });
 }
 
-test("refreshes whole-model metadata from the global toolbar with the inspector closed", (t) => {
+test("refreshes whole-model metadata from Symbolic with the inspector closed", (t) => {
   const { document, window, messages, load } = openViewer(t);
   const refresh = document.getElementById("refresh-metadata");
   assert.equal(refresh.disabled, true);
@@ -8722,9 +9263,10 @@ test("refreshes whole-model metadata from the global toolbar with the inspector 
     "analysis.onnx",
   );
   load(model.graph());
-  assert.ok(refresh.closest(".graph-toolbar"));
-  assert.ok(
-    document.getElementById("metadata-status").closest(".graph-toolbar"),
+  assert.equal(refresh.closest("section").id, "symbolic-panel");
+  assert.equal(
+    document.getElementById("metadata-status").closest("section").id,
+    "symbolic-panel",
   );
   assert.equal(refresh.disabled, false);
   refresh.click();

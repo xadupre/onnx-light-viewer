@@ -382,6 +382,7 @@ function setLoading(pending, message = "") {
     "refresh-metadata",
     "refresh-positions",
     "verify-model",
+    "shorten-dimensions",
   ])
     byId(id).disabled =
       pending || !hasModel || byId(id).getAttribute("aria-busy") === "true";
@@ -739,6 +740,57 @@ function isSmallInitializer(parameter) {
   );
 }
 
+function operatorParameters(node) {
+  const attributes = (node.attributes ?? []).filter(
+    (attribute) => !attribute.graphs?.length,
+  );
+  const initializers = node.parameters ?? [];
+  const showInitializers =
+    initializers.length < 4 && initializers.every(isSmallInitializer);
+  const parameters = attributes.map((attribute, index) => ({
+    description: `${attribute.name} = ${attribute.value}`,
+    className: "node-attribute",
+    index,
+  }));
+  if (initializers.length)
+    parameters.push({
+      description: `${initializers.length} initializer${initializers.length === 1 ? "" : "s"}`,
+      className: "node-parameter-summary",
+    });
+  if (showInitializers)
+    parameters.push(
+      ...initializers.map((parameter, index) => {
+        const suffix = `: ${parameter.type}${parameter.shape === undefined ? "" : ` [${parameter.shape?.join(", ") ?? "?"}]`}${parameter.value === undefined ? "" : ` = ${parameter.value}`}`;
+        return {
+          description: `${parameter.name}${suffix}`,
+          displayDescription: `${shortName(parameter.name, 22, true)}${suffix}`,
+          className: "node-initializer",
+          index: parameters.length + index,
+        };
+      }),
+    );
+  return parameters;
+}
+
+function updateOperatorParameters(view) {
+  const parameters = operatorParameters(view.node);
+  const labels = view.group?.querySelectorAll(".node-parameter");
+  // Keep the original bounds, row layout and font sizes; renamed dimensions only get shorter.
+  view.parameterRows.forEach((row, index) => {
+    if (row.index === undefined) return;
+    const parameter = parameters[row.index];
+    row.description = parameter.description;
+    row.displayDescription = (
+      parameter.displayDescription ?? parameter.description
+    ).replace(/[\r\n]+/g, " ");
+    const text = labels?.[index];
+    if (!text) return;
+    text.firstChild.nodeValue = row.displayDescription ?? row.description;
+    text.setAttribute("aria-label", row.description);
+    text.querySelector("title").textContent = row.description;
+  });
+}
+
 function operatorSizes(nodes) {
   const context = document.createElement("canvas").getContext("2d");
   const family = getComputedStyle(svg).fontFamily;
@@ -754,32 +806,7 @@ function operatorSizes(nodes) {
     nodes.map((node) => {
       const typeWidth = widths.get(node.opType);
       const nameWidth = context.measureText(node.name).width;
-      const attributes = (node.attributes ?? []).filter(
-        (attribute) => !attribute.graphs?.length,
-      );
-      const initializers = node.parameters ?? [];
-      const showInitializers =
-        initializers.length < 4 && initializers.every(isSmallInitializer);
-      const parameters = attributes.map((attribute) => ({
-        description: `${attribute.name} = ${attribute.value}`,
-        className: "node-attribute",
-      }));
-      if (initializers.length)
-        parameters.push({
-          description: `${initializers.length} initializer${initializers.length === 1 ? "" : "s"}`,
-          className: "node-parameter-summary",
-        });
-      if (showInitializers)
-        parameters.push(
-          ...initializers.map((parameter) => {
-            const suffix = `: ${parameter.type}${parameter.shape === undefined ? "" : ` [${parameter.shape?.join(", ") ?? "?"}]`}${parameter.value === undefined ? "" : ` = ${parameter.value}`}`;
-            return {
-              description: `${parameter.name}${suffix}`,
-              displayDescription: `${shortName(parameter.name, 22, true)}${suffix}`,
-              className: "node-initializer",
-            };
-          }),
-        );
+      const parameters = operatorParameters(node);
       const parameterRows = parameters.map((parameter, index) => {
         const displayDescription = (
           parameter.displayDescription ?? parameter.description
@@ -951,6 +978,27 @@ function verificationStatus(
   byId("verify-status").textContent = message;
   if (gesture) gesture.viewport = undefined;
   if (svg.hasAttribute("viewBox")) fit();
+}
+
+function dimensionStatus(
+  pending,
+  message = "",
+  status = pending ? RefreshStatus.PENDING : RefreshStatus.IDLE,
+) {
+  const button = byId("shorten-dimensions");
+  button.setAttribute("aria-busy", String(pending));
+  updateDimensionEnabled();
+  refreshButtonStatus("shorten-dimensions", status, message);
+  byId("dimension-status").textContent = message;
+}
+
+function updateDimensionEnabled() {
+  const button = byId("shorten-dimensions");
+  button.disabled =
+    button.getAttribute("aria-busy") === "true" ||
+    replacementPending ||
+    !hasModel ||
+    svg.getAttribute("aria-busy") === "true";
 }
 
 function updateReleases() {
@@ -1838,11 +1886,13 @@ function findNode(event) {
 }
 
 function navigate(path, nodeIndex) {
+  if (byId("shorten-dimensions").getAttribute("aria-busy") === "true") return;
   tensorStatisticsPanel.reset();
   tensorListPanel.setBusy(true);
   endGesture();
   byId("navigation-status").textContent = "Opening graph…";
   svg.setAttribute("aria-busy", "true");
+  updateDimensionEnabled();
   fit();
   requestAction("navigate", "Navigate graph", {
     path,
@@ -1880,6 +1930,7 @@ function render(graph, metadata) {
   refreshStatus(false);
   verificationStatus(false);
   svg.setAttribute("aria-busy", "false");
+  dimensionStatus(false);
   byId("navigation-status").textContent = "";
   const breadcrumbs = graph.breadcrumbs ?? [];
   const navigation = graph.pipelineStages?.length
@@ -2233,6 +2284,7 @@ function render(graph, metadata) {
       halfHeight: size.height / 2,
       typeFontSize: size.typeFontSize,
       subgraphs: size.subgraphs,
+      parameterRows: size.parameterRows,
     });
     if (!virtualized) nodes.append(nodeViews.get(node.id).group);
     for (const input of [...node.inputs, ...(node.captures ?? [])]) {
@@ -2475,6 +2527,11 @@ byId("refresh-shapes").addEventListener("click", () => {
   refreshStatus(true, "Inferring shapes/types…");
   requestAction("refresh-shapes", "Refresh shapes");
 });
+byId("shorten-dimensions").addEventListener("click", () => {
+  if (svg.getAttribute("aria-busy") === "true") return;
+  dimensionStatus(true, "Renaming dynamic dimensions...");
+  requestAction("shorten-dimensions", "Shorten dynamic dimension names");
+});
 byId("refresh-positions").addEventListener("click", () => {
   const entry = newAction("Refresh positions");
   try {
@@ -2693,6 +2750,7 @@ window.addEventListener("message", (event) => {
   } else if (event.data?.type === "navigation-error") {
     svg.setAttribute("aria-busy", "false");
     tensorListPanel.setBusy(replacementPending);
+    updateDimensionEnabled();
     byId("navigation-status").textContent =
       `Could not open graph: ${event.data.error}`;
     fit();
@@ -2714,6 +2772,53 @@ window.addEventListener("message", (event) => {
     metadataStatus(
       false,
       `Metadata analysis failed: ${event.data.error}`,
+      RefreshStatus.FAILED,
+    );
+  } else if (event.data?.type === "dimension-info") {
+    if (event.data.graph) {
+      displayedGraph = event.data.graph;
+      updateTensorInformation(displayedGraph.tensors);
+      tensorListPanel.setGraph(displayedGraph);
+      for (const node of displayedGraph.nodes) {
+        const view = nodeViews.get(node.id);
+        if (view?.node) {
+          view.node = node;
+          updateOperatorParameters(view);
+        }
+      }
+      promptReloadPending = false;
+      promptPanel.reset();
+      if (!byId("prompt-view").hidden) promptPanel.activate();
+      tensorStatisticsPanel.reset();
+      memoryPanel.setGraph(displayedGraph);
+      const selection = new Set(selected);
+      fusionPanel.invalidate();
+      selected = selection;
+      updateSelection([...selected].at(-1));
+      fusionPanel.updateGraph(displayedGraph);
+      inspect(inspectedView);
+      refreshStatus(false);
+      verificationStatus(false);
+      metadataStatus(false);
+      byId("undo-fusion").setAttribute("aria-busy", "false");
+      setLoading(replacementPending);
+      if (!byId("statistics-view").hidden) requestStatistics();
+      else {
+        statisticsRequest++;
+        statisticsStatus("Open Statistics to update model statistics.");
+      }
+    }
+    dimensionStatus(
+      false,
+      event.data.count
+        ? `${event.data.count} dynamic dimension${event.data.count === 1 ? "" : "s"} renamed; removed prefix "${event.data.prefix}". Save to keep the changes.`
+        : "No common namespace prefix to remove.",
+      event.data.count ? RefreshStatus.UPDATED : RefreshStatus.UNCHANGED,
+    );
+  } else if (event.data?.type === "dimension-error") {
+    dimensionStatus(
+      false,
+      `Dimension renaming failed: ${event.data.error}`,
       RefreshStatus.FAILED,
     );
   } else if (event.data?.type === "shape-info") {

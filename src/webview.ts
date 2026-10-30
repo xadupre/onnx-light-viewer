@@ -26,6 +26,7 @@ export function webviewHtml(
     `<details id="${target}-history" class="path-history" hidden><summary>Recent paths</summary><p>Missing local paths are removed automatically. Selecting a path only fills the field.</p><button id="${target}-clear-history" type="button">Clear ${target === "open" ? "Open" : "Save"} history</button><ul id="${target}-history-entries" aria-label="Recent ${target} paths"></ul></details>`;
   const documentationLink = (name: string, url: string): string =>
     `<a class="repository-documentation" href="${url}" aria-label="${name} documentation" title="${name} documentation"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path d="M12 5v16M12 5C9 3 5 3 2 4v15c3-1 7-1 10 2 3-3 7-3 10-2V4c-3-1-7-1-10 1Z"/></svg></a>`;
+  const refreshIcon = `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2 6M20 4v7h-7"/></svg>`;
   const fusionHourglass = `<svg class="fusion-hourglass" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M6 3h12M6 21h12M7 3v4l10 10v4M17 3v4L7 17v4M8 7h8M8 17h8"/></svg>`;
   const copyPatternButton = (format: string, label: string): string =>
     `<button id="copy-selection-pattern-${format}" class="icon-button selection-pattern-copy" type="button" aria-label="${label}" title="${label}"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>`;
@@ -44,6 +45,7 @@ export function webviewHtml(
       <div class="feature-group" role="presentation">
         <span class="feature-group-title" id="navigation-theme">Navigation</span>
         <div class="feature-group-controls" role="presentation">
+          <a id="repository-link" href="https://github.com/xadupre/onnx-light-viewer" title="ONNX Light Viewer on GitHub" aria-label="Open the ONNX Light Viewer GitHub repository"><img src="${resource("logo.svg")}" alt="" width="24" height="24"></a>
           <button id="model-tab" role="tab" aria-controls="model-view" aria-selected="${initialTab === "model"}" tabindex="${initialTab === "model" ? 0 : -1}">Model</button>
           <button id="statistics-tab" role="tab" aria-controls="statistics-view" aria-selected="false" tabindex="-1">Statistics</button>
           <button id="memory-tab" role="tab" aria-controls="memory-view" aria-selected="false" tabindex="-1">Memory</button>
@@ -64,8 +66,7 @@ export function webviewHtml(
     </nav>
     <section id="model-view" role="tabpanel" aria-labelledby="model-tab"${initialTab === "logs" ? " hidden" : ""}>
       <header class="graph-toolbar">
-        <div><a id="repository-link" href="https://github.com/xadupre/onnx-light-viewer" title="ONNX Light Viewer on GitHub" aria-label="Open the ONNX Light Viewer GitHub repository"><img src="${resource("logo.svg")}" alt="" width="24" height="24"></a><button id="refresh-shapes" class="icon-button" disabled title="Refresh shape and type information with onnx-light" aria-label="Refresh shape and type information" aria-describedby="shape-status"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2 6M20 4v7h-7"/></svg>Refresh shapes</button><button id="refresh-metadata" class="icon-button" disabled title="Recompute constants, tags and lifetimes for the displayed graph with onnx-light" aria-label="Refresh metadata for the displayed graph" aria-describedby="metadata-status"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2 6M20 4v7h-7"/></svg>Refresh metadata</button><button id="refresh-positions" class="icon-button" disabled title="Restore the hierarchical layout and reset manually moved positions" aria-label="Refresh node positions"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2 6M20 4v7h-7"/></svg>Refresh positions</button><button id="verify-model" class="icon-button" disabled title="Verify the entire model or all pipeline stages with onnx-light, without changing them" aria-label="Verify model" aria-describedby="verify-status"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg>Verify</button></div>
-        <div class="graph-stats" aria-live="polite"><span id="graph-summary">No model loaded</span><span id="initializer-count">0 initializers</span><span id="app-version" title="ONNX Light Viewer version">ONNX Light Viewer ${appVersion}</span><span id="onnx-light-version" data-version="${onnxLightVersion}" title="onnx-light C++ release used by this viewer">onnx-light ${onnxLightVersion}</span><span id="shape-status" role="status"></span><span id="metadata-status" role="status"></span><span id="verify-status" role="status"></span><span id="navigation-status" role="status"></span><span id="load-status" role="status"></span></div>
+        <div class="graph-stats" aria-live="polite"><span id="graph-summary">No model loaded</span><span id="initializer-count">0 initializers</span><span id="app-version" title="ONNX Light Viewer version">ONNX Light Viewer ${appVersion}</span><span id="onnx-light-version" data-version="${onnxLightVersion}" title="onnx-light C++ release used by this viewer">onnx-light ${onnxLightVersion}</span><span id="navigation-status" role="status"></span><span id="load-status" role="status"></span></div>
         <span id="rewriting-count" role="status" title="Rewritings waiting to be reapplied before the next native matching or optimization">0 pending rewritings</span>
         <span id="save-status" role="status"></span>
         <span id="fusion-status" role="status"></span>
@@ -86,11 +87,27 @@ export function webviewHtml(
             <button id="show-find" class="icon-button" aria-expanded="true" aria-controls="find-panel" title="Show or hide node search">Find</button>
             <button id="show-operator" class="icon-button" aria-expanded="true" aria-controls="operator-panel" title="Show or hide operator and tensor details">Op</button>
             <button id="show-metadata" class="icon-button" aria-expanded="false" aria-controls="metadata-panel" title="Show or hide native constants, tags, lifetimes and stored metadata">Data</button>
+            <button id="show-symbolic" class="icon-button" aria-expanded="false" aria-controls="symbolic-panel" title="Show or hide symbolic dimension and model checks">Symbolic</button>
             <button id="export-model" class="icon-button" title="Convert a model to ONNX with Python" aria-expanded="false" aria-controls="export-panel">Convert</button>
             <button id="optimize-model" class="icon-button" disabled title="Show or hide full native model optimization" aria-expanded="false" aria-controls="optimization-panel">Optimize${fusionHourglass}</button>
             <button id="fuse-pattern" class="icon-button" disabled title="Show or hide fusion patterns and select candidates to fuse on the main graph" aria-expanded="false" aria-controls="fusion-panel">Fuse${fusionHourglass}</button>
             <button id="undo-fusion" class="icon-button" disabled title="Choose whether to unfuse the last operation or all operations" aria-expanded="false" aria-controls="unfuse-panel" aria-describedby="fusion-status">Unfuse${fusionHourglass}</button>
           </nav>
+          <section id="symbolic-panel" class="inspector-panel" aria-labelledby="symbolic-title" hidden>
+            <h2 id="symbolic-title" class="eyebrow panel-title">Symbolic</h2>
+            <div class="symbolic-actions">
+              <button id="refresh-shapes" class="icon-button" disabled title="Refresh shape and type information with onnx-light" aria-label="Refresh shape and type information" aria-describedby="shape-status">${refreshIcon}Refresh shapes</button>
+              <button id="refresh-metadata" class="icon-button" disabled title="Recompute constants, tags and lifetimes for the displayed graph with onnx-light" aria-label="Refresh metadata for the displayed graph" aria-describedby="metadata-status">${refreshIcon}Refresh metadata</button>
+              <button id="refresh-positions" class="icon-button" disabled title="Restore the hierarchical layout and reset manually moved positions" aria-label="Refresh node positions">${refreshIcon}Refresh positions</button>
+              <button id="verify-model" class="icon-button" disabled title="Verify the entire model or all pipeline stages with onnx-light, without changing them" aria-label="Verify model" aria-describedby="verify-status"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg>Verify</button>
+              <button id="shorten-dimensions" class="icon-button" disabled title="Remove the shared namespace prefix from dynamic dimension names in the model; Save keeps these edits" aria-describedby="dimension-status">Shorten dimension names</button>
+            </div>
+            <p>Remove the common prefix from dynamic dimensions, for example component.model.batch becomes batch. Save keeps the renamed dimensions.</p>
+            <p id="shape-status" role="status"></p>
+            <p id="metadata-status" role="status"></p>
+            <p id="verify-status" role="status"></p>
+            <p id="dimension-status" role="status"></p>
+          </section>
           <section id="export-panel" class="inspector-panel file-panel" aria-labelledby="export-title" hidden>
             <h2 id="export-title" class="eyebrow panel-title">Convert to ONNX</h2>
             <table id="export-timings" aria-label="Download and conversion times" hidden>

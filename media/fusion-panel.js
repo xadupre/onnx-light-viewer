@@ -1351,6 +1351,10 @@ function createFusionPanel({
   return {
     handleMessage,
     reset,
+    updateGraph: (graph) => {
+      fusionGraph = graph;
+      fusionControls(false);
+    },
     setEnabled,
     selectionChanged,
     canOpenSelectionPattern,

@@ -76,6 +76,7 @@ add_library(onnx_light_viewer SHARED
   native/fusion.cc
   native/graph_analysis.cc
   native/memory_profile.cc
+  native/model_dimensions.cc
   native/graph_snapshot.cc
   native/tensor_preview.cc
   native/tensor_statistics.cc

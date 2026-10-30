@@ -64,6 +64,7 @@ for (const initialTab of ["model", "logs"]) {
         "show-find",
         "show-operator",
         "show-metadata",
+        "show-symbolic",
         "export-model",
         "optimize-model",
         "fuse-pattern",
@@ -71,6 +72,19 @@ for (const initialTab of ["model", "logs"]) {
       ],
     );
     assert.equal(controls.querySelector(".feature-group-title"), null);
+    assert.equal(
+      document.getElementById("model-tab").previousElementSibling.id,
+      "repository-link",
+    );
+    const symbolic = document.getElementById("symbolic-panel");
+    for (const id of [
+      "refresh-shapes",
+      "refresh-metadata",
+      "refresh-positions",
+      "verify-model",
+      "shorten-dimensions",
+    ])
+      assert.equal(document.getElementById(id).closest("section"), symbolic);
     const tabs = [...document.querySelectorAll('[role="tab"]')];
     assert.deepEqual(
       tabs

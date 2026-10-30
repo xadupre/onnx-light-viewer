@@ -1,4 +1,5 @@
 import type {
+  DimensionRename,
   FusionDiagnostic,
   FusionMatch,
   FusionOperation,
@@ -61,6 +62,7 @@ export class PipelineModel implements NativeModel {
     private readonly models = data.models,
     private readonly previous?: PipelineModel,
     private readonly fusionOrder: PipelineRole[] = [],
+    private readonly undoDimensionPrefixes: readonly string[] = [],
   ) {}
 
   private stages(): [PipelineRole, NativeModel][] {
@@ -96,6 +98,7 @@ export class PipelineModel implements NativeModel {
       ),
       this.previous,
       this.fusionOrder,
+      this.undoDimensionPrefixes,
     );
   }
 
@@ -108,7 +111,56 @@ export class PipelineModel implements NativeModel {
       ),
       this.previous,
       this.fusionOrder,
+      this.undoDimensionPrefixes,
     );
+  };
+
+  dimensionPrefix = (): string | null => {
+    const prefixes = this.stages()
+      .map(([, model]) => model.dimensionPrefix())
+      .filter((prefix): prefix is string => prefix !== null);
+    if (!prefixes.length) return null;
+    let prefix = prefixes[0];
+    for (const candidate of prefixes) {
+      let length = 0;
+      while (
+        length < prefix.length &&
+        length < candidate.length &&
+        prefix[length] === candidate[length]
+      )
+        length++;
+      prefix = prefix.slice(0, length);
+    }
+    const boundary = Math.max(
+      ...[".", "/", ":", "_"].map((separator) => prefix.lastIndexOf(separator)),
+    );
+    return prefix.slice(0, boundary + 1);
+  };
+
+  shortenDimensionNames: (prefix?: string) => DimensionRename<PipelineModel> = (
+    prefix = this.dimensionPrefix() ?? "",
+  ) => {
+    let count = 0;
+    const models: Partial<Record<PipelineRole, NativeModel>> = {};
+    for (const [role, model] of this.stages()) {
+      const edited = model.shortenDimensionNames(prefix);
+      models[role] = edited.model;
+      count += edited.count;
+    }
+    return {
+      model: count
+        ? new PipelineModel(
+            this.data,
+            this.fileName,
+            models,
+            this.previous,
+            this.fusionOrder,
+            [...this.undoDimensionPrefixes, prefix],
+          )
+        : this.clone(),
+      prefix,
+      count,
+    };
   };
 
   fusionCount = (): number =>
@@ -130,7 +182,11 @@ export class PipelineModel implements NativeModel {
 
   undoFusion = (): PipelineModel => {
     if (!this.previous) throw new Error("No fusion operation to undo.");
-    return this.previous.clone();
+    let restored = this.previous.clone();
+    // Independent pipeline snapshots are renamed only when restored.
+    for (const prefix of this.undoDimensionPrefixes)
+      restored = restored.shortenDimensionNames(prefix).model;
+    return restored;
   };
 
   summary = (inferShapes = false): GraphSummary => {
