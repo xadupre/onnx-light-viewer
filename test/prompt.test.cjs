@@ -712,7 +712,7 @@ with open(sys.argv[3], "wb") as stream: stream.write(pipeline.SerializeToString(
           sessionSettings: {
             sdkLoader: true,
             loadOverlap,
-            loadMemoryMiB: 1,
+            loadMemoryMiB: 2,
           },
         },
         "/no/python",
