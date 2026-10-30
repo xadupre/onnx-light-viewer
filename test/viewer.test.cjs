@@ -11,6 +11,14 @@ const {
 } = require("../dist/graph");
 const { webviewHtml } = require("../dist/webview");
 
+function closeViewerAfterTest(t, window) {
+  t.after(() => {
+    window.close();
+    // Test hooks outlive their execution; do not retain the viewer's VM context.
+    window = undefined;
+  });
+}
+
 function openViewer(t, initialTab = "model", setup = () => {}) {
   const messages = [];
   const postedMessages = new EventEmitter();
@@ -25,7 +33,7 @@ function openViewer(t, initialTab = "model", setup = () => {}) {
     ),
     { runScripts: "outside-only", pretendToBeVisual: true },
   );
-  t.after(() => dom.window.close());
+  closeViewerAfterTest(t, dom.window);
   dom.window.structuredClone = structuredClone;
   dom.window.HTMLCanvasElement.prototype.getContext = () => ({
     font: "",
