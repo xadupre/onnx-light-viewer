@@ -488,7 +488,12 @@ public:
         anchors_(std::move(anchors)), path_(std::move(path)),
         weights_(canonical_->external_weights), history_(source_->fusion_history),
         scenario_(std::move(scenario)), all_(all), operation_(std::move(operation)),
-        diagnostic_anchor_(diagnostic_anchor), function_patterns_(*source_->function_patterns) {}
+        diagnostic_anchor_(diagnostic_anchor) {
+    for (const auto &[name, functions] : *source_->function_patterns)
+      function_patterns_.emplace(
+          name, StoredModel::FunctionPatternFunctions{
+                    functions.pattern.SharedCopy(), functions.replacement.SharedCopy(), {}, {}});
+  }
   Napi::Promise Promise() const { return deferred_.Promise(); }
   void Execute() override {
     try {

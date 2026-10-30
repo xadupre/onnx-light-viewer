@@ -4510,6 +4510,10 @@ test("creates a selection FunctionPattern, displays safe text and Python, and of
   byId("open-selection-pattern").click();
   assert.equal(byId("graph-context-menu").hidden, true);
   assert.equal(dialog.open, true);
+  assert.equal(
+    document.activeElement,
+    document.querySelector('[data-id="node-0"]'),
+  );
   assert.equal(byId("fusion-panel").hidden, true);
   assert.equal(messages.at(-1).type, "fusion-patterns");
   assert.equal(byId("create-function-pattern").disabled, true);

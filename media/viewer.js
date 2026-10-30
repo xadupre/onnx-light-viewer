@@ -210,7 +210,7 @@ function showGraphContextMenu(event, id) {
 }
 
 byId("open-selection-pattern").addEventListener("click", () => {
-  closeGraphContextMenu();
+  closeGraphContextMenu(true);
   fusionPanel.openSelectionPattern();
 });
 byId("graph-context-menu").addEventListener("keydown", (event) => {
