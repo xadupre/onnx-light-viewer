@@ -260,7 +260,7 @@ async function openExtension(
         stat: async (uri) => {
           let details;
           try {
-            details = await stat(uri.path);
+            details = await stat(uri.fsPath);
           } catch (error) {
             if (error.code === "ENOTDIR")
               throw new FileSystemError("FileNotADirectory");
