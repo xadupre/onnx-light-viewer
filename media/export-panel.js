@@ -7,6 +7,7 @@ function createExportPanel({ byId, postMessage, requestAction, revealPanel }) {
   let loading = false;
   let defaultDirectory = true;
   let exporterChosen = false;
+  let rememberedExporter;
   let clock;
   let phase;
   let phaseStarted;
@@ -253,6 +254,23 @@ function createExportPanel({ byId, postMessage, requestAction, revealPanel }) {
   });
   updateAdvancedOptions();
   return {
+    setPythonPackages(packages) {
+      const available = !!packages?.some(
+        (pkg) => pkg.name === "modelbuilder" && (pkg.version || pkg.source),
+      );
+      byId("mbext-repository").hidden = !available;
+      const tool = byId("export-tool");
+      const previous = tool.value;
+      const option = tool.querySelector('[value="mbext"]');
+      option.hidden = option.disabled = !available;
+      if (!available && tool.value === "mbext") tool.value = "modelbuilder";
+      else if (available && !exporterChosen && rememberedExporter === "mbext")
+        tool.value = "mbext";
+      if (tool.value !== previous) {
+        updateAdvancedOptions();
+        preview();
+      }
+    },
     start(id) {
       stopClock();
       actionId = id;
@@ -327,8 +345,13 @@ function createExportPanel({ byId, postMessage, requestAction, revealPanel }) {
         byId("export-trust").hidden = data.trusted;
         if (data.exportHistory) {
           historySuggestions(data.exportHistory);
+          rememberedExporter = data.exportHistory.exporter;
           if (!exporterChosen && !running && data.exportHistory.exporter) {
-            byId("export-tool").value = data.exportHistory.exporter;
+            const option = [...byId("export-tool").options].find(
+              (option) => option.value === data.exportHistory.exporter,
+            );
+            if (option && !option.disabled)
+              byId("export-tool").value = data.exportHistory.exporter;
             updateAdvancedOptions();
           }
         }
@@ -346,6 +369,7 @@ function createExportPanel({ byId, postMessage, requestAction, revealPanel }) {
         return false;
       }
       if (data?.type === "export-history") {
+        rememberedExporter = data.history.exporter;
         historySuggestions(data.history);
         return true;
       }

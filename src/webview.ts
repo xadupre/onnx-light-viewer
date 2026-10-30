@@ -103,7 +103,7 @@ export function webviewHtml(
               <fieldset id="export-fields">
                 <div class="export-field">
                   <label for="export-tool">Exporter</label>
-                  <select id="export-tool"><option value="modelbuilder">modelbuilder (ONNX Runtime GenAI)</option><option value="mobius">Mobius</option><option value="olive">Olive</option><option value="olive-recipes">Olive recipes (model export workflows)</option><option value="mbext">mbext (fast export)</option></select>
+                  <select id="export-tool"><option value="modelbuilder">modelbuilder (ONNX Runtime GenAI)</option><option value="mobius">Mobius</option><option value="olive">Olive</option><option value="olive-recipes">Olive recipes (model export workflows)</option><option value="mbext" hidden disabled>mbext (fast export)</option></select>
                 </div>
                 <div id="export-olive-options" class="export-option" hidden>
                   <div class="export-field">
@@ -587,11 +587,10 @@ export function webviewHtml(
             <h3>onnx-light (CPU)</h3>
             <p>CPU kernels only. Automatic graph optimization is not exposed by Generate; use Optimize separately. The SDK recreates internal generation sessions, but reuses the loaded model, context and supported static preparations.</p>
             <label>CPU threads (inference and loading preparation; 0 = automatic)<input data-setting="threads" type="number" min="0" max="4096" placeholder="SDK default"></label>
-            <p id="prompt-pipeline-loading" hidden>For PipelineProto, CPU, memory and diagnostic settings remain available. Only the SDK owning-loader controls below are unavailable: that loader accepts ONNX ModelProto, not pipelines.</p>
+            <p id="prompt-pipeline-loading" hidden>For PipelineProto, CPU, memory and diagnostic settings remain available. Only the SDK owning-loader controls below are unavailable: the viewer does not yet expose the SDK's owning pipeline loader.</p>
             <h3>Parallel loading</h3>
             <label>Model loader<select data-setting="sdkLoader" data-boolean data-loading><option value="">Standard ONNX loading</option><option value="true">SDK owning loader (parallel preparation)</option></select></label>
             <p>The SDK overlaps one I/O worker with preparation on the CPU executor. CPU threads above also control parallel preparation; there is no separate I/O thread-count option.</p>
-            <p>The SDK owning loader currently requires explicit external-data lengths. Standard loading supports ONNX files without them; there is no automatic fallback.</p>
             <label>Overlap reads and preparation<select data-setting="loadOverlap" data-boolean data-loading data-sdk-loader disabled><option value="">SDK default (enabled)</option><option value="true">Enabled</option><option value="false">Disabled (sequential)</option></select></label>
             <label>Loading admission memory limit (MiB; 0 = unlimited, not process RSS)<input data-setting="loadMemoryMiB" data-loading data-sdk-loader type="number" min="0" max="1048576" placeholder="SDK default" disabled></label>
             <h3>Memory and diagnostics</h3>
@@ -877,7 +876,7 @@ export function webviewHtml(
         </li>
       </ul>
       <h3>Exporters</h3>
-      <p>Use Convert in the right panel to run an installed mbext, modelbuilder or Mobius exporter and open its ONNX output. Supported models and target runtimes vary by exporter.</p>
+      <p>Use Convert in the right panel to run an installed exporter and open its ONNX output. Supported models and target runtimes vary by exporter.</p>
       <ul class="repository-list">
         <li>
           <div class="repository-heading">
@@ -897,7 +896,7 @@ export function webviewHtml(
           <p>The ONNX Runtime GenAI model builder constructs optimized and quantized ONNX graphs for supported generative architectures.</p>
           <p class="repository-specialization"><strong>Specialized for:</strong> Hugging Face Transformers models targeting onnxruntime-genai.</p>
         </li>
-        <li>
+        <li id="mbext-repository" hidden>
           <div class="repository-heading">
           <a href="https://github.com/xadupre/mbext"><svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true"><path d="M14 3h7v7M21 3l-9 9M10 3H3v18h18v-7"/></svg>mbext</a>
           ${documentationLink("mbext", "https://xadupre.github.io/docs/mbext/index.html")}

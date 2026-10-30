@@ -775,6 +775,8 @@ test("pipeline metadata preserves present empty strings, exact integers and untr
     varintField(15, 0),
     varint(16 * 8 + 5),
     topP,
+    varintField(22, 2),
+    varintField(22, 1),
   ]);
   const model = loadModel(bytes, "metadata.pipe-onnx");
   const metadata = model.metadata();
@@ -786,7 +788,7 @@ test("pipeline metadata preserves present empty strings, exact integers and untr
   assert.equal(entries.seed, "9007199254740993");
   assert.equal(entries.top_k, "0");
   assert.equal(entries.top_p, "0.25");
-  assert.equal(Object.hasOwn(entries, "eos_token_id"), false);
+  assert.equal(entries.eos_token_ids, "2, 1");
   metadata.model[0].value = "changed";
   assert.equal(model.metadata().model[0].value, "Test pipeline");
 });

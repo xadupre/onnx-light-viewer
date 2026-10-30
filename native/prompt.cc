@@ -331,13 +331,14 @@ public:
   }
 
   std::vector<int64_t> LightTokens(const std::vector<int32_t> &prompt, int64_t maximum,
-                                   std::optional<int64_t> eos,
+                                   const std::optional<std::vector<int64_t>> &eos,
                                    rt::GenerationStepCallback on_step = {},
                                    size_t logit_budget = 0) {
     rt::GenerationOptions options;
     options.max_new_tokens = maximum;
     options.temperature = 0;
-    options.eos_token_id = eos;
+    if (eos)
+      options.eos_token_ids = *eos;
     if (pipeline) {
       if (pipeline->has_input_ids_name())
         options.input_ids_name = pipeline->input_ids_name();
@@ -351,12 +352,16 @@ public:
         options.seed = static_cast<uint64_t>(pipeline->seed());
       if (pipeline->has_pad_token_id())
         options.pad_token_id = pipeline->pad_token_id();
-      if (!eos && pipeline->has_eos_token_id())
-        options.eos_token_id = pipeline->eos_token_id();
+      if (!eos)
+        options.eos_token_ids.assign(pipeline->eos_token_ids().begin(),
+                                     pipeline->eos_token_ids().end());
       pipeline->set_max_new_tokens(maximum);
       pipeline->set_temperature(0);
-      if (eos)
-        pipeline->set_eos_token_id(*eos);
+      if (eos) {
+        pipeline->clear_eos_token_ids();
+        for (const auto id : *eos)
+          pipeline->add_eos_token_ids(id);
+      }
     }
     const std::vector<int64_t> ids(prompt.begin(), prompt.end());
     rt::RuntimeValueMap feeds;
@@ -496,11 +501,17 @@ Napi::Value RunNativePrompt(const Napi::CallbackInfo &info) {
       throw std::runtime_error("The tokenizer produced an empty or oversized prompt.");
     const auto *data = api.OgaSequencesGetSequenceData(sequences.get(), 0);
     const std::vector<int32_t> prompt(data, data + count);
-    const auto eos_value = request.Get("eosTokenId");
-    const auto eos =
-        eos_value.IsUndefined() || eos_value.IsNull()
-            ? std::nullopt
-            : std::optional(Integer(eos_value, 0, std::numeric_limits<int32_t>::max()));
+    const auto eos_value = request.Get("eosTokenIds");
+    std::optional<std::vector<int64_t>> eos;
+    if (!eos_value.IsUndefined() && !eos_value.IsNull()) {
+      if (!eos_value.IsArray())
+        throw std::runtime_error("eosTokenIds must be an array of token IDs.");
+      const auto values = eos_value.As<Napi::Array>();
+      eos.emplace();
+      eos->reserve(values.Length());
+      for (uint32_t i = 0; i < values.Length(); ++i)
+        eos->push_back(Integer(values.Get(i), 0, std::numeric_limits<int32_t>::max()));
+    }
     auto lifecycle = Napi::Object::New(env);
     lifecycle.Set("loadMs", owner->load_ms);
     lifecycle.Set("reused", reused);

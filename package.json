@@ -2,7 +2,7 @@
   "name": "onnx-light-viewer",
   "displayName": "ONNX Light Viewer",
   "description": "A lightweight, interactive ONNX graph viewer for VS Code.",
-  "version": "0.0.1",
+  "version": "0.2.3",
   "publisher": "xadupre",
   "license": "Apache-2.0",
   "repository": {

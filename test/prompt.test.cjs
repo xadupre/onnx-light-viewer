@@ -85,6 +85,37 @@ test("native onnx-light Generate owns autoregression, EOS and error propagation"
     (await run()).tokens.map((token) => token.id),
     [1],
   );
+  await writeFile(
+    path.join(root, "generation_config.json"),
+    JSON.stringify({ eos_token_id: [2, 1] }),
+  );
+  for (const file of [model, pipelinePath])
+    assert.deepEqual(
+      (
+        await runPrompt(
+          file,
+          { ...options, engine: "onnx-light" },
+          "/no/python",
+          signal(),
+          () => {},
+        )
+      ).tokens.map((token) => token.id),
+      [1],
+    );
+  await writeFile(
+    path.join(root, "generation_config.json"),
+    JSON.stringify({ eos_token_id: [] }),
+  );
+  assert.deepEqual(
+    (await run()).tokens.map((token) => token.id),
+    [1, 1, 1],
+  );
+  await writeFile(
+    path.join(root, "generation_config.json"),
+    JSON.stringify({ eos_token_id: [1, "2"] }),
+  );
+  await assert.rejects(run(), /eos_token_id must be/);
+  await rm(path.join(root, "generation_config.json"));
   await writeFile(model, "invalid ONNX");
   await assert.rejects(run(), /decode|parse|wire|field/i);
 });
@@ -548,21 +579,22 @@ test("parallel loading/session settings use native SDK APIs and profiles exclude
   );
 });
 
-test("the released SDK owning loader reports missing external lengths without a fallback", async (t) => {
+test("the released SDK owning loader supports external tensors without explicit lengths", async (t) => {
   const { model } = await fixture(t, true, true);
-  await assert.rejects(
-    runPrompt(
-      model,
-      {
-        ...options,
-        engine: "onnx-light",
-        sessionSettings: { sdkLoader: true },
-      },
-      "/no/python",
-      signal(),
-      () => {},
-    ),
-    /requires explicit external tensor lengths/,
+  const result = await runPrompt(
+    model,
+    {
+      ...options,
+      engine: "onnx-light",
+      sessionSettings: { sdkLoader: true },
+    },
+    "/no/python",
+    signal(),
+    () => {},
+  );
+  assert.deepEqual(
+    result.tokens.map((token) => token.id),
+    [1, 1, 1],
   );
 });
 
@@ -818,7 +850,7 @@ model.graph.output[0].name = "prediction"
 model.graph.node[0].output.clear()
 model.graph.node[0].output.append("prediction")
 pipeline = PipelineProto(prefill=model, input_ids_name="tokens", logits_name="prediction",
-                         eos_token_id=1, pad_token_id=2, seed=7)
+                         eos_token_ids=[2, 1], pad_token_id=2, seed=7)
 with open(sys.argv[2], "wb") as stream: stream.write(pipeline.SerializeToString())
 pipeline.top_k = 1
 with open(sys.argv[3], "wb") as stream: stream.write(pipeline.SerializeToString())

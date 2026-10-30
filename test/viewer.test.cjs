@@ -6893,6 +6893,210 @@ test("Settings exposes histories, removes selected entries, clears categories an
   assert.equal(byId("settings-download").value, "/downloads");
 });
 
+test("mbext stays hidden until its package is available and follows Python inspection changes", (t) => {
+  const { document, window, messages } = openViewer(t);
+  const byId = (id) => document.getElementById(id);
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  const option = byId("export-tool").querySelector('[value="mbext"]');
+  const settings = {
+    type: "settings-info",
+    application: {
+      downloadDirectory: "/downloads",
+      pythonPath: "/first/python",
+    },
+    viewer: { panels: { operator: true, find: true, metadata: false } },
+    trusted: true,
+    exportHistory: { exporter: "mbext", models: [], directories: [] },
+  };
+  const inspect = (packages) => {
+    byId("settings-inspect-python").click();
+    const request = messages.at(-1);
+    assert.equal(request.type, "inspect-python");
+    send({
+      ...request,
+      type: "python-info",
+      python: { executable: request.pythonPath, version: "3.12", packages },
+    });
+    return request;
+  };
+  const assertVisibility = (available) => {
+    assert.equal(byId("mbext-repository").hidden, !available);
+    assert.equal(option.hidden, !available);
+    assert.equal(option.disabled, !available);
+    assert.equal(
+      [...byId("settings-packages").querySelectorAll("th")].some(
+        (cell) => cell.textContent === "modelbuilder",
+      ),
+      available,
+    );
+  };
+  assertVisibility(false);
+  byId("repositories-tab").click();
+  assert.equal(messages.at(-1).type, "get-settings");
+  send({ ...settings, trusted: false });
+  assert.notEqual(messages.at(-1).type, "inspect-python");
+  send(settings);
+  assert.equal(messages.at(-1).type, "inspect-python");
+  assert.equal(byId("export-tool").value, "modelbuilder");
+  inspect([
+    { name: "modelbuilder", version: null },
+    { name: "onnx", version: null },
+  ]);
+  assertVisibility(false);
+  assert.match(byId("settings-packages").textContent, /onnxNot installed/);
+  const installed = [{ name: "modelbuilder", version: "0.2.1" }];
+  const old = inspect(installed);
+  assertVisibility(true);
+  assert.equal(byId("export-tool").value, "mbext");
+  inspect([
+    { name: "modelbuilder", version: null, source: "/sources/modelbuilder" },
+  ]);
+  assertVisibility(true);
+  assert.match(byId("settings-packages").textContent, /PYTHONPATH/);
+  send({
+    ...settings,
+    application: { ...settings.application, pythonPath: "/second/python" },
+  });
+  assertVisibility(false);
+  assert.equal(byId("export-tool").value, "modelbuilder");
+  send({
+    ...old,
+    type: "python-info",
+    python: {
+      executable: "/first/python",
+      version: "3.12",
+      packages: installed,
+    },
+  });
+  assertVisibility(false);
+  byId("export-tool").value = "mobius";
+  byId("export-tool").dispatchEvent(new window.Event("change"));
+  inspect(installed);
+  assertVisibility(true);
+  assert.equal(byId("export-tool").value, "mobius");
+  byId("settings-inspect-python").click();
+  send({
+    ...messages.at(-1),
+    type: "settings-error",
+    error: "Python inspection failed",
+  });
+  assertVisibility(false);
+  assert.equal(byId("export-tool").value, "mobius");
+});
+
+test("clearing conversion history during Python inspection does not restore the forgotten exporter", (t) => {
+  const { document, window, messages } = openViewer(t);
+  const byId = (id) => document.getElementById(id);
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  send({
+    type: "settings-info",
+    application: {
+      downloadDirectory: "/downloads",
+      pythonPath: "/usr/bin/python3",
+    },
+    viewer: { panels: { operator: true, find: true, metadata: false } },
+    trusted: true,
+    exportHistory: { exporter: "mbext", models: [], directories: [] },
+  });
+  const inspection = messages.findLast(({ type }) => type === "inspect-python");
+  assert.ok(inspection);
+  assert.equal(byId("export-tool").value, "modelbuilder");
+  byId("settings-clear-export").click();
+  assert.equal(messages.at(-1).type, "export-history-edit");
+  assert.equal(messages.at(-1).historyAction, "clear");
+  send({ type: "export-history", history: { models: [], directories: [] } });
+  send({
+    ...inspection,
+    type: "python-info",
+    python: {
+      executable: inspection.pythonPath,
+      version: "3.12",
+      packages: [{ name: "modelbuilder", version: "0.2.1" }],
+    },
+  });
+  assert.equal(byId("mbext-repository").hidden, false);
+  assert.equal(
+    byId("export-tool").querySelector('[value="mbext"]').disabled,
+    false,
+  );
+  assert.equal(byId("export-tool").value, "modelbuilder");
+  assert.equal(byId("settings-exporter").textContent, "None");
+});
+
+for (const responseType of ["python-info", "settings-error"])
+  test(`Python path changes retry inspection after stale ${responseType}`, (t) => {
+    const { document, window, messages } = openViewer(t);
+    const byId = (id) => document.getElementById(id);
+    const send = (data) =>
+      window.dispatchEvent(new window.MessageEvent("message", { data }));
+    const settings = {
+      type: "settings-info",
+      application: {
+        downloadDirectory: "/downloads",
+        pythonPath: "/first/python",
+      },
+      viewer: { panels: { operator: true, find: true, metadata: false } },
+      trusted: true,
+    };
+    const inspections = () =>
+      messages.filter(({ type }) => type === "inspect-python");
+    const reply = (request) => ({
+      ...request,
+      type: responseType,
+      error: "Stale inspection failed",
+      python: {
+        executable: request.pythonPath,
+        version: "3.12",
+        packages: [{ name: "modelbuilder", version: "0.2.1" }],
+      },
+    });
+    send(settings);
+    const first = inspections().at(-1);
+    for (const pythonPath of ["/second/python", "/current/python"])
+      send({
+        ...settings,
+        application: { ...settings.application, pythonPath },
+      });
+    assert.equal(inspections().length, 1);
+    send(reply(first));
+    assert.equal(inspections().length, 2);
+    const current = inspections().at(-1);
+    assert.equal(current.pythonPath, "/current/python");
+    assert.notEqual(current.requestId, first.requestId);
+    assert.equal(byId("settings-inspect-python").disabled, true);
+    assert.equal(byId("mbext-repository").hidden, true);
+    assert.equal(
+      byId("settings-python-status").textContent,
+      "Checking Python packages…",
+    );
+    assert.doesNotMatch(
+      byId("settings-feedback").textContent,
+      /Stale inspection failed/,
+    );
+    send(reply(first));
+    assert.equal(inspections().length, 2);
+    send({
+      ...current,
+      type: "python-info",
+      python: reply(current).python,
+    });
+    assert.equal(byId("mbext-repository").hidden, false);
+    assert.equal(byId("settings-inspect-python").disabled, false);
+    byId("settings-inspect-python").click();
+    const pending = inspections().at(-1);
+    send({
+      ...settings,
+      trusted: false,
+      application: { ...settings.application, pythonPath: "/untrusted/python" },
+    });
+    send(reply(pending));
+    assert.equal(inspections().length, 3);
+    assert.equal(byId("settings-inspect-python").disabled, true);
+    assert.equal(byId("mbext-repository").hidden, true);
+  });
+
 test("Status exposes package versions and inspection failures without opening Settings or resetting the camera", async (t) => {
   const { document, window, messages, load } = openViewer(t);
   const byId = (id) => document.getElementById(id);
@@ -7164,8 +7368,8 @@ test("Settings edits saved paths and sidebar preferences while Status renders pa
   assert.equal(byId("settings-find").checked, false);
   byId("status-tab").click();
   byId("settings-inspect-python").click();
-  assert.equal(messages.at(-1).type, "inspect-python");
-  const inspection = messages.at(-1);
+  const inspection = messages.findLast(({ type }) => type === "inspect-python");
+  assert.ok(inspection);
   assert.equal(inspection.pythonPath, "/usr/bin/python3");
   assert.equal(byId("settings-inspect-python").disabled, true);
   send({
@@ -7233,7 +7437,10 @@ test("Settings edits saved paths and sidebar preferences while Status renders pa
     },
   });
   assert.equal(byId("settings-packages").children.length, 0);
-  assert.equal(byId("settings-python-status").textContent, "Not checked");
+  assert.equal(
+    byId("settings-python-status").textContent,
+    "Checking Python packages…",
+  );
   send({ ...info, trusted: false });
   assert.equal(byId("settings-inspect-python").disabled, true);
   send({ type: "settings-error", error: "Invalid path" });
@@ -7319,9 +7526,9 @@ test("Settings keeps inspections pending after save errors and rejects unrelated
   };
   send({ ...first, type: "python-info", python });
   assert.equal(byId("settings-packages").children.length, 0);
-  assert.equal(byId("settings-inspect-python").disabled, false);
-  byId("settings-inspect-python").click();
+  assert.equal(byId("settings-inspect-python").disabled, true);
   const second = messages.at(-1);
+  assert.equal(second.type, "inspect-python");
   assert.notEqual(second.requestId, first.requestId);
   assert.equal(second.pythonPath, "/second/python");
   send({ ...first, type: "settings-error", error: "Old inspection failed" });
@@ -7544,7 +7751,10 @@ for (const initialTab of ["model", "logs"]) {
       );
       assert.ok(documentationLink.querySelector("svg path"));
       documentationLink.focus();
-      assert.equal(document.activeElement, documentationLink);
+      assert.equal(card.hidden, name === "mbext");
+      if (card.hidden)
+        assert.notEqual(document.activeElement, documentationLink);
+      else assert.equal(document.activeElement, documentationLink);
       assert.ok(card.querySelector("p").textContent.trim().length > 20);
       if (name === "mbext") {
         assert.match(
@@ -7619,7 +7829,15 @@ for (const initialTab of ["model", "logs"]) {
     }
     assert.deepEqual(
       messages.map(({ type }) => type),
-      ["ready", "get-settings", "get-settings", "get-settings"],
+      [
+        "ready",
+        "get-settings",
+        "get-settings",
+        "get-settings",
+        "get-settings",
+        "get-settings",
+        "get-settings",
+      ],
     );
   });
 
@@ -7720,6 +7938,8 @@ for (const initialTab of ["model", "logs"]) {
       messages.map(({ type }) => type),
       [
         "ready",
+        "get-settings",
+        "get-settings",
         "get-settings",
         "get-settings",
         "get-status-info",
