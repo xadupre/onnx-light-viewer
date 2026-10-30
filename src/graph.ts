@@ -361,6 +361,10 @@ export interface TensorStatistics {
  * Methods do not execute the model or write files.
  */
 export interface NativeModel {
+  /** Common namespace prefix; null for static models, empty when none is shared. */
+  dimensionPrefix(): string | null;
+  /** Edits dimension labels on an independent snapshot, retaining edits through undo and Save. */
+  shortenDimensionNames(prefix?: string): DimensionRename;
   /** Inspects stored data without execution; optionally returns values instead of statistics below 32 elements. */
   tensorStatistics(
     name: string,
@@ -460,6 +464,13 @@ export interface NativeModel {
   metadata(path?: GraphPath): GraphMetadata;
   /** Checks the entire retained model, or every pipeline stage, without editing it. */
   verify(): void;
+}
+
+export interface DimensionRename<Model extends NativeModel = NativeModel> {
+  model: Model;
+  prefix: string;
+  /** Stored labels updated, including retained canonical and undo snapshots. */
+  count: number;
 }
 
 /** Stored ONNX metadata property, preserved as a key/value pair. */

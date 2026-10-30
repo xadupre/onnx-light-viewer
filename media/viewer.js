@@ -332,6 +332,7 @@ function setLoading(pending, message = "") {
     "refresh-metadata",
     "refresh-positions",
     "verify-model",
+    "shorten-dimensions",
   ])
     byId(id).disabled =
       pending || !hasModel || byId(id).getAttribute("aria-busy") === "true";
@@ -912,6 +913,18 @@ function verificationStatus(
   byId("verify-status").textContent = message;
   if (gesture) gesture.viewport = undefined;
   if (svg.hasAttribute("viewBox")) fit();
+}
+
+function dimensionStatus(
+  pending,
+  message = "",
+  status = pending ? RefreshStatus.PENDING : RefreshStatus.IDLE,
+) {
+  const button = byId("shorten-dimensions");
+  button.disabled = pending || replacementPending || !hasModel;
+  button.setAttribute("aria-busy", String(pending));
+  refreshButtonStatus("shorten-dimensions", status, message);
+  byId("dimension-status").textContent = message;
 }
 
 function updateReleases() {
@@ -1810,6 +1823,7 @@ function render(graph, metadata) {
   endGesture();
   refreshStatus(false);
   verificationStatus(false);
+  dimensionStatus(false);
   svg.setAttribute("aria-busy", "false");
   byId("navigation-status").textContent = "";
   const breadcrumbs = graph.breadcrumbs ?? [];
@@ -2367,6 +2381,10 @@ byId("refresh-shapes").addEventListener("click", () => {
   refreshStatus(true, "Inferring shapes/types…");
   requestAction("refresh-shapes", "Refresh shapes");
 });
+byId("shorten-dimensions").addEventListener("click", () => {
+  dimensionStatus(true, "Renaming dynamic dimensions...");
+  requestAction("shorten-dimensions", "Shorten dynamic dimension names");
+});
 byId("refresh-positions").addEventListener("click", () => {
   const entry = newAction("Refresh positions");
   try {
@@ -2606,6 +2624,35 @@ window.addEventListener("message", (event) => {
     metadataStatus(
       false,
       `Metadata analysis failed: ${event.data.error}`,
+      RefreshStatus.FAILED,
+    );
+  } else if (event.data?.type === "dimension-info") {
+    if (event.data.graph) {
+      displayedGraph = event.data.graph;
+      updateTensorInformation(displayedGraph.tensors);
+      for (const node of displayedGraph.nodes) {
+        const view = nodeViews.get(node.id);
+        if (view?.node.pipelineModel) view.node = node;
+      }
+      memoryPanel.setGraph(displayedGraph);
+      fusionPanel.invalidate();
+      fusionPanel.updateGraph(displayedGraph);
+      inspect(inspectedView);
+      refreshStatus(false);
+      verificationStatus(false);
+      metadataStatus(false);
+    }
+    dimensionStatus(
+      false,
+      event.data.count
+        ? `${event.data.count} dynamic dimension${event.data.count === 1 ? "" : "s"} renamed; removed prefix "${event.data.prefix}". Save to keep the changes.`
+        : "No common namespace prefix to remove.",
+      event.data.count ? RefreshStatus.UPDATED : RefreshStatus.UNCHANGED,
+    );
+  } else if (event.data?.type === "dimension-error") {
+    dimensionStatus(
+      false,
+      `Dimension renaming failed: ${event.data.error}`,
       RefreshStatus.FAILED,
     );
   } else if (event.data?.type === "shape-info") {

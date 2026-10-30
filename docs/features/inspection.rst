@@ -1,7 +1,7 @@
 Operator and tensor inspection
 ==============================
 
-The buttons **Op**, **Data**, **Find** and **Fuse** at the top of the right sidebar
+The buttons **Op**, **Data**, **Find**, **Symbolic** and **Fuse** at the top of the right sidebar
 show or hide their panels independently. Visible panels stack vertically,
 with **Find** above **Op**, each in a separate bordered box. **Op** contains
 operator and tensor details, **Data** contains metadata and lifetime analysis, **Find** searches nodes,
@@ -41,9 +41,13 @@ to inspect its initializers.
 Functions show their own imports; a pipeline overview combines the imports of
 its models, preserving different versions of the same domain.
 
-Use **Verify**, next to the refresh buttons, to run onnx-light's ``VerifyModel``
+Open **Symbolic** for **Refresh shapes**, **Refresh metadata**,
+**Refresh positions**, **Verify** and **Shorten dimension names**.
+The application logo links to the repository, immediately before the **Model** tab.
+
+Use **Verify** in **Symbolic** to run onnx-light's ``VerifyModel``
 on the entire model, including when viewing a subgraph or function. For pipelines,
-every contained model is checked. The toolbar displays success or the verification
+every contained model is checked. The panel displays success or the verification
 error, also recorded in **Logs**. Verification does not infer shapes, execute
 operators or change the model.
 
@@ -180,3 +184,25 @@ without fetching external resources. The renderer is bundled for offline use.
 labels and the inspector without resetting selection, positions or the camera.
 Unsupported operators or missing information can produce an error; the previous
 display remains available. Opening a model does not automatically infer shapes.
+
+Shortening symbolic dimensions
+------------------------------
+
+In **Symbolic**, choose **Shorten dimension names** to remove a shared namespace
+prefix: ``component.model.batch`` becomes ``batch``. This edits the retained
+model, not just its labels; use **Save** to keep the result. The source file
+is untouched until explicitly saved.
+
+The prefix must apply to every named dimension and end in ``.``, ``/``, ``:``
+or ``_``. Distinct names remain distinct; ordinary shared characters alone
+are not removed. With no common prefix, the panel reports that nothing changed.
+Dimensions in nested graphs, functions and container types are updated too.
+Pipelines use one prefix across their stages. Undoing a fusion retains these edits.
+Renaming reads metadata only, without loading weight payloads, and preserves
+selection, node positions and zoom.
+
+.. figure:: ../_static/feature-symbolic.png
+   :alt: Symbolic panel with Refresh and Verify controls and shortened dynamic dimensions.
+   :width: 100%
+
+   Shorten stored dimension names, then Save to keep the edit.

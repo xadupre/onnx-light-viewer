@@ -106,6 +106,179 @@ function memoryTestModel(
   );
 }
 
+test("shortens symbolic dimension prefixes throughout model metadata and saves the edit", async () => {
+  const bytes = modelBytes("prefixed-dimensions.onnx");
+  const original = loadModel(bytes, "prefixed");
+  const originalBytes = Buffer.from(await original.serialize());
+  const before = original.graph();
+  const edited = original.shortenDimensionNames();
+  assert.equal(edited.prefix, "component.model.");
+  assert.ok(edited.count > 10);
+  assert.equal(edited.model.dimensionPrefix(), "");
+  assert.deepEqual(
+    edited.model.graph().tensors.find(({ name }) => name === "x").shape,
+    ["batch", "past_sequence_len + sequence_len"],
+  );
+  assert.deepEqual(original.graph(), before);
+  assert.equal(original.dimensionPrefix(), "component.model.");
+  edited.model.verify();
+  const saved = Buffer.from(await edited.model.serialize());
+  assert.equal(saved.includes(Buffer.from("component.model.")), false);
+  const reloaded = loadModel(saved, "prefixed");
+  assert.deepEqual(reloaded.graph(), edited.model.graph());
+  assert.deepEqual(
+    await reloaded.tensorStatistics("weight"),
+    await original.tensorStatistics("weight"),
+  );
+  assert.deepEqual(Buffer.from(await original.serialize()), originalBytes);
+  const repeated = edited.model.shortenDimensionNames();
+  assert.equal(repeated.count, 0);
+  assert.deepEqual(repeated.model.graph(), edited.model.graph());
+});
+
+test("dimension prefix edits preserve distinct names and concrete or anonymous dimensions", () => {
+  for (const [shape, expectedPrefix, expected] of [
+    [
+      ["module.axis_a", "module.axis_b", 8, null],
+      "module.axis_",
+      ["a", "b", "8", "?"],
+    ],
+    [["batch", "batch_size", 0], "", ["batch", "batch_size", "0"]],
+    [["module.batch", "batch"], "", ["module.batch", "batch"]],
+    [[2, null], null, ["2", "?"]],
+  ]) {
+    const model = memoryTestModel(shape);
+    assert.equal(model.dimensionPrefix(), expectedPrefix);
+    const edited = model.shortenDimensionNames();
+    assert.equal(Boolean(edited.count), Boolean(expectedPrefix));
+    assert.deepEqual(edited.model.graph().tensors[0].shape, expected);
+  }
+  const model = memoryTestModel(["module.batch", "module.sequence"]);
+  for (const prefix of ["module.batch", "other.", 1, null])
+    assert.throws(() => model.shortenDimensionNames(prefix), /prefix/i);
+  assert.equal(model.dimensionPrefix(), "module.");
+});
+
+test("dimension prefix edits never read omitted initializer payloads", async (t) => {
+  const root = mkdtempSync(path.join(tmpdir(), "onnx-dimension-prefix-"));
+  t.after(() => rmSync(root, { force: true, recursive: true }));
+  const file = path.join(root, "large.onnx");
+  const source = memoryTestModel(["module.batch", 8], {
+    initializers: [
+      Buffer.concat([
+        bytesField(8, "weight"),
+        varintField(1, 1024 * 1024),
+        varintField(2, 1),
+        bytesField(9, Buffer.alloc(4 * 1024 * 1024)),
+      ]),
+    ],
+  });
+  writeFileSync(file, await source.serialize());
+  const model = await loadModelFile(file, "large.onnx");
+  rmSync(file);
+  const edited = model.shortenDimensionNames();
+  assert.equal(edited.prefix, "module.");
+  assert.deepEqual(
+    edited.model.graph().tensors.find(({ name }) => name === "x").shape,
+    ["batch", "8"],
+  );
+  assert.equal(edited.model.graph().initializerCount, 1);
+});
+
+test("dimension edits survive fusion undo and canonical rewriting serialization", async () => {
+  const source = loadModel(modelBytes("prefixed-dimensions.onnx"), "prefixed");
+  const preview = await source.previewFusion("TransposeTranspose");
+  const fused = await preview.model.applyFusion("TransposeTranspose", [0]);
+  const edited = fused.shortenDimensionNames().model;
+  assert.equal(edited.fusionCount(), 1);
+  const shape = (model) =>
+    model.graph().tensors.find(({ name }) => name === "x").shape;
+  assert.deepEqual(shape(edited.undoFusion()), [
+    "batch",
+    "past_sequence_len + sequence_len",
+  ]);
+  const saved = Buffer.from(await edited.serialize(undefined, undefined, true));
+  assert.equal(saved.includes(Buffer.from("component.model.")), false);
+  assert.deepEqual(shape(loadModel(saved, "prefixed")), [
+    "batch",
+    "past_sequence_len + sequence_len",
+  ]);
+  assert.deepEqual(shape(fused), [
+    "component.model.batch",
+    "component.model.past_sequence_len + sequence_len",
+  ]);
+});
+
+test("pipeline dimension edits use one prefix and preserve stage undo and Save", async () => {
+  const source = loadModel(
+    pipelineBytes({
+      embedding: modelBytes("prefixed-dimensions.onnx"),
+      prefill: modelBytes("prefixed-dimensions.onnx"),
+    }),
+    "dimensions.pipe-onnx",
+  );
+  const stage = [{ pipeline: "embedding" }];
+  const preview = await source.previewFusion(
+    "TransposeTranspose",
+    undefined,
+    stage,
+  );
+  const fused = await preview.model.applyFusion(
+    "TransposeTranspose",
+    [0],
+    stage,
+  );
+  const edited = fused.shortenDimensionNames();
+  assert.equal(edited.prefix, "component.model.");
+  for (const role of ["embedding", "prefill"]) {
+    const shape = (model) =>
+      model
+        .graph(false, [{ pipeline: role }])
+        .tensors.find(({ name }) => name === "x").shape;
+    assert.deepEqual(shape(edited.model), [
+      "batch",
+      "past_sequence_len + sequence_len",
+    ]);
+    assert.deepEqual(shape(edited.model.undoFusion()), shape(edited.model));
+    assert.match(shape(source)[0], /^component/);
+  }
+  const saved = Buffer.from(
+    await edited.model.serialize(undefined, undefined, true),
+  );
+  assert.equal(saved.includes(Buffer.from("component.model.")), false);
+  loadModel(saved, "dimensions.pipe-onnx").verify();
+  const prefill = [{ pipeline: "prefill" }];
+  const nextPreview = await edited.model.previewFusion(
+    "TransposeTranspose",
+    undefined,
+    prefill,
+  );
+  const next = await nextPreview.model.applyFusion(
+    "TransposeTranspose",
+    [0],
+    prefill,
+  );
+  const restored = next.clone().undoFusion().undoFusion();
+  const expected = source.shortenDimensionNames().model;
+  for (const role of ["embedding", "prefill"])
+    assert.deepEqual(
+      restored.graph(false, [{ pipeline: role }]),
+      expected.graph(false, [{ pipeline: role }]),
+    );
+  const mixed = loadModel(
+    pipelineBytes({
+      embedding: await memoryTestModel(["shared.embedding.batch"]).serialize(),
+      prefill: await memoryTestModel(["shared.prefill.batch"]).serialize(),
+    }),
+    "mixed.pipe-onnx",
+  ).shortenDimensionNames();
+  assert.equal(mixed.prefix, "shared.");
+  assert.deepEqual(
+    mixed.model.graph(false, [{ pipeline: "prefill" }]).tensors[0].shape,
+    ["prefill.batch"],
+  );
+});
+
 test("native CPU support supplies custom shapes and memory estimates before pattern selection", async () => {
   const source = memoryTestModel([2, 3], {
     outputDimensions: ["Rows", "Columns"],

@@ -507,7 +507,20 @@ body.resizing-tensor-column * {
 }
 #repository-link {
   display: flex;
+  align-items: center;
+  padding: 0 8px;
   border-radius: 4px;
+}
+.symbolic-actions {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 8px;
+  margin-bottom: 12px;
+}
+#symbolic-panel [role="status"] {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  max-width: none;
 }
 a:focus-visible {
   outline: 2px solid var(--mint);

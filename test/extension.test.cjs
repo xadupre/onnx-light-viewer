@@ -6058,6 +6058,53 @@ test("navigates retained subgraphs, scopes refreshes and reports invalid paths w
   assert.equal(extension.messages.at(-1).graph.breadcrumbs.length, 1);
 });
 
+test("dimension renaming edits the retained model, preserves navigation and saves the new names", async (t) => {
+  const extension = await openExtension("prefixed-dimensions.onnx");
+  t.after(() => extension.dispose());
+  await extension.receive({ type: "ready" });
+  const root = await mkdtemp(path.join(tmpdir(), "onnx-dimension-save-"));
+  t.after(() => rm(root, { force: true, recursive: true }));
+  const original = extension.nativeModels.at(-1);
+  await extension.receive({ type: "navigate", path: [{ function: 0 }] });
+  await extension.receive({
+    type: "shorten-dimensions",
+    actionId: "ui:dimensions",
+  });
+  const response = extension.messages.at(-1);
+  assert.equal(response.type, "dimension-info");
+  assert.equal(response.prefix, "component.model.");
+  assert.ok(response.count > 0);
+  assert.deepEqual(response.graph.breadcrumbs.at(-1).path, [{ function: 0 }]);
+  assert.deepEqual(
+    response.graph.tensors.find(({ name }) => name === "fx").shape,
+    ["batch", "past_sequence_len + sequence_len"],
+  );
+  assert.equal(original.dimensionPrefix(), "component.model.");
+  const saved = path.join(root, "renamed.onnx");
+  await extension.save(saved);
+  const bytes = await readFile(saved);
+  assert.equal(bytes.includes(Buffer.from("component.model.")), false);
+  require("../dist/graph").loadModel(bytes, "renamed.onnx").verify();
+  await extension.receive({ type: "shorten-dimensions" });
+  assert.equal(extension.messages.at(-1).count, 0);
+  assert.deepEqual(extension.errors, []);
+});
+
+test("reports dimension renaming errors without discarding the unchanged native handle", async (t) => {
+  const extension = await openExtension("prefixed-dimensions.onnx");
+  t.after(() => extension.dispose());
+  const original = extension.nativeModels.at(-1);
+  original.shortenDimensionNames = () => {
+    throw new Error("Cannot rename these dimensions");
+  };
+  await extension.receive({ type: "shorten-dimensions" });
+  assert.equal(extension.messages.at(-1).type, "dimension-error");
+  assert.match(extension.errors.at(-1), /Cannot rename/);
+  await extension.receive({ type: "verify" });
+  assert.equal(extension.messages.at(-1).type, "verify-info");
+  assert.equal(extension.nativeModels.at(-1), original);
+});
+
 test("refreshes the bundled demo and the currently opened model using its retained native model", async () => {
   const extension = await openExtension();
   await extension.receive({ type: "ready" });
@@ -6272,14 +6319,19 @@ test("keeps only the latest custom editor model when a panel is reused during lo
 });
 
 test("discards native responses from a previous custom editor session", async () => {
-  for (const type of ["navigate", "metadata", "refresh-shapes"]) {
+  for (const type of [
+    "navigate",
+    "metadata",
+    "refresh-shapes",
+    "shorten-dimensions",
+  ]) {
     const extension = await openExtension("analysis.onnx");
     const pending = extension.receive({ type, path: [] });
     const next = extension.resolveCustomEditor("inference.onnx");
     await extension.receive({ type: "ready" });
     await Promise.all([pending, next]);
     const results = extension.messages.filter(({ type }) =>
-      ["graph", "metadata-info", "shape-info"].includes(type),
+      ["graph", "metadata-info", "shape-info", "dimension-info"].includes(type),
     );
     assert.deepEqual(
       results.map(({ graph }) => graph?.name),

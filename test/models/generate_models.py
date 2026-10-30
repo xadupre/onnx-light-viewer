@@ -590,3 +590,71 @@ fusion_scaled = oh.make_model(
 )
 checker.check_model(fusion_scaled)
 save_model(fusion_scaled, Path(__file__).with_name("fusion-scaled.onnx"))
+
+prefixed_shape = [
+    "component.model.batch",
+    "component.model.past_sequence_len + sequence_len",
+]
+prefixed_branch = oh.make_graph(
+    [oh.make_node("Identity", ["x"], ["branch_y"])],
+    "Prefixed branch",
+    [],
+    [oh.make_tensor_value_info("branch_y", TensorProto.FLOAT, prefixed_shape)],
+)
+prefixed_model = oh.make_model(
+    oh.make_graph(
+        list(fusion_model.graph.node)[:4]
+        + [
+            oh.make_node(
+                "If",
+                ["condition"],
+                ["c"],
+                then_branch=prefixed_branch,
+                else_branch=prefixed_branch,
+            )
+        ],
+        "Prefixed dimensions",
+        [
+            oh.make_tensor_value_info("x", TensorProto.FLOAT, prefixed_shape),
+            oh.make_tensor_value_info("condition", TensorProto.BOOL, []),
+            oh.make_value_info(
+                "sequence",
+                oh.make_sequence_type_proto(
+                    oh.make_map_type_proto(
+                        TensorProto.INT64,
+                        oh.make_tensor_type_proto(TensorProto.FLOAT, prefixed_shape),
+                    )
+                ),
+            ),
+            oh.make_value_info(
+                "optional",
+                oh.make_optional_type_proto(
+                    oh.make_tensor_type_proto(TensorProto.FLOAT, prefixed_shape)
+                ),
+            ),
+        ],
+        [
+            oh.make_tensor_value_info(name, TensorProto.FLOAT, prefixed_shape)
+            for name in ["a", "b", "c"]
+        ],
+        initializer=list(fusion_model.graph.initializer),
+    ),
+    functions=[
+        oh.make_function(
+            "example",
+            "PrefixedIdentity",
+            ["fx"],
+            ["fy"],
+            [oh.make_node("Identity", ["fx"], ["fy"])],
+            [oh.make_opsetid("", 18)],
+            value_info=[
+                oh.make_tensor_value_info(name, TensorProto.FLOAT, prefixed_shape)
+                for name in ["fx", "fy"]
+            ],
+        )
+    ],
+    ir_version=10,
+    opset_imports=[oh.make_opsetid("", 18)],
+)
+checker.check_model(prefixed_model)
+save_model(prefixed_model, Path(__file__).with_name("prefixed-dimensions.onnx"))

@@ -135,6 +135,101 @@ function submitOpen(document, window) {
     .dispatchEvent(new window.Event("submit", { cancelable: true }));
 }
 
+test("Symbolic edits preserve graph view, fusion undo and pending rewritings", async (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const button = document.getElementById("shorten-dimensions");
+  const panel = document.getElementById("symbolic-panel");
+  const status = document.getElementById("dimension-status");
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  assert.equal(button.disabled, true);
+  assert.equal(panel.hidden, true);
+  document.getElementById("show-symbolic").click();
+  assert.equal(panel.hidden, false);
+  let fused = loadModel(
+    readFileSync(require.resolve("./models/prefixed-dimensions.onnx")),
+    "prefixed",
+  );
+  for (let index = 0; index < 2; index++) {
+    const preview = await fused.previewFusion("TransposeTranspose");
+    fused = await preview.model.applyFusion("TransposeTranspose", [
+      preview.matches[0].anchor,
+    ]);
+  }
+  const model = fused.undoFusion();
+  send({
+    type: "graph",
+    graph: model.graph(),
+    file: {
+      fusionCount: model.fusionCount(),
+      fusionHistory: model.fusionHistory(),
+      pendingRewritings: fused.fusionHistory().slice(model.fusionCount()),
+    },
+  });
+  const pending = document.getElementById("rewriting-count").textContent;
+  const history = document.getElementById("unfuse-history").textContent;
+  const refreshButtons = [
+    "refresh-shapes",
+    "refresh-metadata",
+    "verify-model",
+  ].map((id) => document.getElementById(id));
+  for (const refresh of refreshButtons) {
+    refresh.click();
+    assert.equal(refresh.getAttribute("aria-busy"), "true");
+  }
+  const node = document.querySelector(".graph-node");
+  node.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  document.getElementById("zoom-in").click();
+  const graph = document.getElementById("graph");
+  const camera = graph.getAttribute("viewBox");
+  const position = node.querySelector("rect").outerHTML;
+  button.click();
+  assert.equal(messages.at(-1).type, "shorten-dimensions");
+  assert.equal(button.disabled, true);
+  const edited = model.shortenDimensionNames();
+  send({
+    type: "dimension-info",
+    graph: edited.model.graph(),
+    prefix: edited.prefix,
+    count: edited.count,
+  });
+  assert.equal(button.disabled, false);
+  assert.equal(button.dataset.refreshStatus, "updated");
+  assert.match(status.textContent, /Save to keep/);
+  for (const refresh of refreshButtons) {
+    assert.equal(refresh.disabled, false);
+    assert.equal(refresh.getAttribute("aria-busy"), "false");
+  }
+  assert.equal(graph.getAttribute("viewBox"), camera);
+  assert.equal(node.querySelector("rect").outerHTML, position);
+  assert.equal(node.classList.contains("selected"), true);
+  assert.equal(document.getElementById("rewriting-count").textContent, pending);
+  assert.equal(document.getElementById("unfuse-history").textContent, history);
+  assert.equal(document.getElementById("replay-rewritings").disabled, false);
+  assert.equal(
+    document.getElementById("optimization-unfuse-last").disabled,
+    false,
+  );
+  assert.ok(
+    [...graph.querySelectorAll(".tensor-info")].every(
+      (label) =>
+        !label.getAttribute("aria-label")?.includes("component.model."),
+    ),
+  );
+  button.click();
+  send({ type: "dimension-info", prefix: "", count: 0 });
+  assert.equal(button.dataset.refreshStatus, "unchanged");
+  assert.match(status.textContent, /No common/);
+  button.click();
+  send({ type: "dimension-error", error: "<img src=x>" });
+  assert.equal(button.dataset.refreshStatus, "failed");
+  assert.equal(status.querySelector("img"), null);
+  assert.match(status.textContent, /<img src=x>/);
+  load(demoGraph);
+  assert.equal(status.textContent, "");
+  assert.equal(button.disabled, false);
+});
+
 test("Run Prompt recovers after a cancelled model replacement", (t) => {
   const { document, window, messages, load } = openViewer(t);
   document.getElementById("prompt-tab").click();
@@ -1795,7 +1890,7 @@ test("Verify reports success and errors, prevents duplicate requests and resets 
   const send = (data) =>
     window.dispatchEvent(new window.MessageEvent("message", { data }));
   assert.equal(button.disabled, true);
-  assert.ok(button.closest(".graph-toolbar"));
+  assert.equal(button.closest("section").id, "symbolic-panel");
   load(demoGraph);
   const graph = document.getElementById("nodes").innerHTML;
   button.click();
@@ -5959,6 +6054,7 @@ test("toggles separated, stacked sidebar panels independently from Op Data Find 
       "Find",
       "Op",
       "Data",
+      "Symbolic",
       "Convert",
       "Optimize",
       "Fuse",
@@ -5987,6 +6083,7 @@ test("toggles separated, stacked sidebar panels independently from Op Data Find 
           "save-options",
           "export-panel",
           "unfuse-panel",
+          "symbolic-panel",
         ].includes(panel.id),
     ),
     panels,
@@ -8210,7 +8307,7 @@ for (const [kind, panelOpen] of [
   });
 }
 
-test("refreshes whole-model metadata from the global toolbar with the inspector closed", (t) => {
+test("refreshes whole-model metadata from Symbolic with the inspector closed", (t) => {
   const { document, window, messages, load } = openViewer(t);
   const refresh = document.getElementById("refresh-metadata");
   assert.equal(refresh.disabled, true);
@@ -8219,9 +8316,10 @@ test("refreshes whole-model metadata from the global toolbar with the inspector 
     "analysis.onnx",
   );
   load(model.graph());
-  assert.ok(refresh.closest(".graph-toolbar"));
-  assert.ok(
-    document.getElementById("metadata-status").closest(".graph-toolbar"),
+  assert.equal(refresh.closest("section").id, "symbolic-panel");
+  assert.equal(
+    document.getElementById("metadata-status").closest("section").id,
+    "symbolic-panel",
   );
   assert.equal(refresh.disabled, false);
   refresh.click();

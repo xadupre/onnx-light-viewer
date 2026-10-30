@@ -127,6 +127,7 @@ interface LoadedModel {
   rewritingQueue?: { model: NativeModel; operations: FusionOperation[] };
   /** Materialized Python edits remain modified after undoing later native edits. */
   pythonOptimized?: boolean;
+  dimensionsRenamed?: boolean;
   source?: { uri: vscode.Uri };
   /** Original source ownership survives materializing or removing external data. */
   sourceWeightLocations?: readonly string[];
@@ -506,6 +507,7 @@ async function configurePanel(
   panel.iconPath = vscode.Uri.joinPath(mediaRoot, "logo.svg");
   let model: LoadedModel | undefined;
   let graphRevision = 0;
+  let dimensionRequest = 0;
   let navigationRequest = 0;
   let statisticsRequest = 0;
   let tensorStatisticsRequest = 0;
@@ -2272,7 +2274,7 @@ async function configurePanel(
                 };
                 graphRevision++;
                 navigationRequest++;
-                panel.title = `ONNX: ${current.fileName ?? graph.name}${model.pythonOptimized || model.fusionCount ? " (modified)" : ""}`;
+                panel.title = `ONNX: ${current.fileName ?? graph.name}${model.pythonOptimized || model.dimensionsRenamed || model.fusionCount ? " (modified)" : ""}`;
                 await sendGraph(undefined, message.requestId);
                 return;
               }
@@ -2392,7 +2394,7 @@ async function configurePanel(
                   model = replacement;
                   graphRevision++;
                   navigationRequest++;
-                  panel.title = `ONNX: ${current.fileName ?? replacement.graph.name}${replacement.pythonOptimized || replacement.fusionCount ? " (modified)" : ""}`;
+                  panel.title = `ONNX: ${current.fileName ?? replacement.graph.name}${replacement.pythonOptimized || replacement.dimensionsRenamed || replacement.fusionCount ? " (modified)" : ""}`;
                   await sendGraph(undefined, message.requestId);
                   if (
                     !active ||
@@ -2480,7 +2482,7 @@ async function configurePanel(
                 model = replacement;
                 graphRevision++;
                 navigationRequest++;
-                panel.title = `ONNX: ${current.fileName ?? graph.name}${replacement.pythonOptimized || replacement.fusionCount ? " (modified)" : ""}`;
+                panel.title = `ONNX: ${current.fileName ?? graph.name}${replacement.pythonOptimized || replacement.dimensionsRenamed || replacement.fusionCount ? " (modified)" : ""}`;
                 await sendGraph(undefined, message.requestId);
                 if (
                   !active ||
@@ -3185,6 +3187,81 @@ async function configurePanel(
         }
         if (!isCurrent()) return;
         await postMessage({ type: "verify-info" });
+      } else if (message?.type === "shorten-dimensions") {
+        const owner = model;
+        const revision = graphRevision;
+        const request = ++dimensionRequest;
+        const isCurrent = () =>
+          active &&
+          model === owner &&
+          graphRevision === revision &&
+          dimensionRequest === request;
+        try {
+          await log.run(
+            "Shorten dynamic dimension names",
+            async () => {
+              const current = requireModel();
+              const native = await nativeModel(
+                current,
+                log,
+                () => void sendStatus(),
+              );
+              if (!isCurrent()) return;
+              const edited = native.shortenDimensionNames();
+              if (!edited.count) {
+                await postMessage({
+                  type: "dimension-info",
+                  prefix: "",
+                  count: 0,
+                });
+                return;
+              }
+              const rewritingQueue = current.rewritingQueue
+                ? {
+                    ...current.rewritingQueue,
+                    model: current.rewritingQueue.model.shortenDimensionNames(
+                      edited.prefix,
+                    ).model,
+                  }
+                : undefined;
+              const graph = edited.model.graph(
+                false,
+                current.graph.breadcrumbs.at(-1)?.path,
+              );
+              const retained = edited.model.clone();
+              model = {
+                ...current,
+                native: edited.model,
+                nativeReload: undefined,
+                graph,
+                dimensionsRenamed: true,
+                rewritingQueue,
+                reload: () => retained.clone(),
+              };
+              graphRevision++;
+              navigationRequest++;
+              fusionRequest++;
+              diagnosticRequest++;
+              fusionPreview = undefined;
+              panel.title = `ONNX: ${current.fileName ?? graph.name} (modified)`;
+              void sendStatus();
+              await postMessage({
+                type: "dimension-info",
+                graph,
+                prefix: edited.prefix,
+                count: edited.count,
+              });
+            },
+            message.actionId,
+          );
+        } catch (error) {
+          if (!isCurrent()) return;
+          const detail = error instanceof Error ? error.message : String(error);
+          await postMessage({ type: "dimension-error", error: detail });
+          await vscode.window.showErrorMessage(
+            `Could not rename dynamic dimensions: ${detail}`,
+          );
+        }
       } else if (message?.type === "refresh-shapes") {
         const requestedModel = model;
         const requestedGraphRevision = graphRevision;
