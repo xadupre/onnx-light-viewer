@@ -90,6 +90,7 @@ const sidebar = createSidebar({
 const settingsPanel = createSettingsPanel({
   byId,
   postMessage: (message) => vscode.postMessage(message),
+  onPythonPackages: (packages) => exportPanel.setPythonPackages(packages),
   onViewerSettings: (settings) => {
     sidebar.restoreSettings(settings);
     vscode.postMessage({ type: "viewer-settings", settings });
@@ -218,7 +219,8 @@ function showTab(name, focus = false) {
     });
     if (selectedConnection) names.push(selectedConnection.name);
     tensorListPanel.open(names);
-  } else if (name === "settings") vscode.postMessage({ type: "get-settings" });
+  } else if (name === "settings" || name === "repositories")
+    vscode.postMessage({ type: "get-settings" });
   else if (name === "status") vscode.postMessage({ type: "get-status-info" });
   else if (name === "logs")
     byId("logs-view").scrollTop = byId("logs-view").scrollHeight;

@@ -103,7 +103,7 @@ export function webviewHtml(
               <fieldset id="export-fields">
                 <div class="export-field">
                   <label for="export-tool">Exporter</label>
-                  <select id="export-tool"><option value="modelbuilder">modelbuilder (ONNX Runtime GenAI)</option><option value="mobius">Mobius</option><option value="olive">Olive</option><option value="olive-recipes">Olive recipes (model export workflows)</option><option value="mbext">mbext (fast export)</option></select>
+                  <select id="export-tool"><option value="modelbuilder">modelbuilder (ONNX Runtime GenAI)</option><option value="mobius">Mobius</option><option value="olive">Olive</option><option value="olive-recipes">Olive recipes (model export workflows)</option><option value="mbext" hidden disabled>mbext (fast export)</option></select>
                 </div>
                 <div id="export-olive-options" class="export-option" hidden>
                   <div class="export-field">
@@ -857,7 +857,7 @@ export function webviewHtml(
         </li>
       </ul>
       <h3>Exporters</h3>
-      <p>Use Convert in the right panel to run an installed mbext, modelbuilder or Mobius exporter and open its ONNX output. Supported models and target runtimes vary by exporter.</p>
+      <p>Use Convert in the right panel to run an installed exporter and open its ONNX output. Supported models and target runtimes vary by exporter.</p>
       <ul class="repository-list">
         <li>
           <div class="repository-heading">
@@ -877,7 +877,7 @@ export function webviewHtml(
           <p>The ONNX Runtime GenAI model builder constructs optimized and quantized ONNX graphs for supported generative architectures.</p>
           <p class="repository-specialization"><strong>Specialized for:</strong> Hugging Face Transformers models targeting onnxruntime-genai.</p>
         </li>
-        <li>
+        <li id="mbext-repository" hidden>
           <div class="repository-heading">
           <a href="https://github.com/xadupre/mbext"><svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true"><path d="M14 3h7v7M21 3l-9 9M10 3H3v18h18v-7"/></svg>mbext</a>
           ${documentationLink("mbext", "https://xadupre.github.io/docs/mbext/index.html")}
