@@ -1073,8 +1073,8 @@ void AddFusionMethods(Napi::Env env, Napi::Object result, std::shared_ptr<Stored
                  item.Set("enabledByDefault", false);
                  item.Set("definition", FunctionPatternDefinition(call.Env(), name, function));
                  auto groups = Napi::Array::New(call.Env(), 2);
-                 groups.Set(uint32_t{0}, "all");
-                 groups.Set(uint32_t{1}, "Selection patterns");
+                 groups.Set(uint32_t{0}, "Selection patterns");
+                 groups.Set(uint32_t{1}, "all");
                  item.Set("groups", groups);
                  values.Set(values.Length(), item);
                }

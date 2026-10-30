@@ -2315,7 +2315,7 @@ test("selection FunctionPatterns retain exports and catalog across repeated matc
       priority: 1,
       device: "Undefined",
       enabledByDefault: false,
-      groups: ["all", "Selection patterns"],
+      groups: ["Selection patterns", "all"],
       definition,
     },
   );
@@ -2436,6 +2436,53 @@ test("selection FunctionPatterns retain exports and catalog across repeated matc
   assert.deepEqual(replayed.graph(), fused.graph());
   assert.deepEqual(Buffer.from(await source.serialize()), originalBytes);
 });
+
+test(
+  "selection FunctionPatterns execute exported Python CLI and apply_pattern with the published SDK",
+  { skip: !process.env.ONNX_PATTERN_PYTHON },
+  async (t) => {
+    const directory = mkdtempSync(
+      path.join(tmpdir(), "onnx-function-pattern-python-"),
+    );
+    t.after(() => rmSync(directory, { recursive: true, force: true }));
+    const source = loadModel(modelBytes("fusion.onnx"), "python-export");
+    const definition = source.createFunctionPattern([4], "PublishedWheelMatMul");
+    const script = path.join(directory, "pattern.py");
+    const input = path.join(__dirname, "models", "fusion.onnx");
+    const cliOutput = path.join(directory, "cli.onnx");
+    const importedOutput = path.join(directory, "imported.onnx");
+    writeFileSync(script, definition.python);
+    execFileSync(process.env.ONNX_PATTERN_PYTHON, [script, input, cliOutput]);
+    execFileSync(process.env.ONNX_PATTERN_PYTHON, [
+      "-c",
+      [
+        "import importlib.util, sys",
+        "from onnx_light.onnx import load, save",
+        "spec = importlib.util.spec_from_file_location('exported_pattern', sys.argv[1])",
+        "module = importlib.util.module_from_spec(spec)",
+        "spec.loader.exec_module(module)",
+        "save(module.apply_pattern(load(sys.argv[2])), sys.argv[3])",
+      ].join("\n"),
+      script,
+      input,
+      importedOutput,
+    ]);
+    for (const file of [cliOutput, importedOutput]) {
+      const result = loadModel(readFileSync(file), "python-result");
+      result.verify();
+      const calls = result
+        .graph()
+        .nodes.filter(({ opType }) => opType === definition.name);
+      assert.equal(calls.length, 1);
+      assert.deepEqual(
+        result
+          .graph(false, calls[0].function.path)
+          .nodes.map(({ opType }) => opType),
+        ["MatMul"],
+      );
+    }
+  },
+);
 
 test("selection FunctionPatterns preserve initializer inputs and every escaping output", async () => {
   const node = (op, inputs, output) =>
