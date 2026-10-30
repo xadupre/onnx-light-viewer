@@ -6780,6 +6780,46 @@ test("mbext stays hidden until its package is available and follows Python inspe
   assert.equal(byId("export-tool").value, "mobius");
 });
 
+test("clearing conversion history during Python inspection does not restore the forgotten exporter", (t) => {
+  const { document, window, messages } = openViewer(t);
+  const byId = (id) => document.getElementById(id);
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  send({
+    type: "settings-info",
+    application: {
+      downloadDirectory: "/downloads",
+      pythonPath: "/usr/bin/python3",
+    },
+    viewer: { panels: { operator: true, find: true, metadata: false } },
+    trusted: true,
+    exportHistory: { exporter: "mbext", models: [], directories: [] },
+  });
+  const inspection = messages.findLast(({ type }) => type === "inspect-python");
+  assert.ok(inspection);
+  assert.equal(byId("export-tool").value, "modelbuilder");
+  byId("settings-clear-export").click();
+  assert.equal(messages.at(-1).type, "export-history-edit");
+  assert.equal(messages.at(-1).historyAction, "clear");
+  send({ type: "export-history", history: { models: [], directories: [] } });
+  send({
+    ...inspection,
+    type: "python-info",
+    python: {
+      executable: inspection.pythonPath,
+      version: "3.12",
+      packages: [{ name: "modelbuilder", version: "0.2.1" }],
+    },
+  });
+  assert.equal(byId("mbext-repository").hidden, false);
+  assert.equal(
+    byId("export-tool").querySelector('[value="mbext"]').disabled,
+    false,
+  );
+  assert.equal(byId("export-tool").value, "modelbuilder");
+  assert.equal(byId("settings-exporter").textContent, "None");
+});
+
 for (const responseType of ["python-info", "settings-error"])
   test(`Python path changes retry inspection after stale ${responseType}`, (t) => {
     const { document, window, messages } = openViewer(t);

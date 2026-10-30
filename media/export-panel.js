@@ -369,6 +369,7 @@ function createExportPanel({ byId, postMessage, requestAction, revealPanel }) {
         return false;
       }
       if (data?.type === "export-history") {
+        rememberedExporter = data.history.exporter;
         historySuggestions(data.history);
         return true;
       }
