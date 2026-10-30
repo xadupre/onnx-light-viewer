@@ -30,7 +30,7 @@ jobs:
         run: |
           python -m pip install coverage==7.17.0 gcovr==8.7 -r docs/requirements.txt \
             -r test/requirements.txt \
-            "https://github.com/xadupre/onnx-light/releases/download/0.2.1/onnx_light-0.2.1-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl#sha256=3aa2fe0d0eb39a5fe380b5241997169edad466f99dc688eec97ef4091cefc2ae"
+            "https://github.com/xadupre/onnx-light/releases/download/0.2.3/onnx_light-0.2.3-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl#sha256=a3030b93b8359960e629beab064c1798468ae84a83d8fd1d0f295dcf5ff69407"
       - name: Collect Python coverage
         env:
           COVERAGE_FILE: build/coverage/.coverage

@@ -567,11 +567,10 @@ export function webviewHtml(
             <h3>onnx-light (CPU)</h3>
             <p>CPU kernels only. Automatic graph optimization is not exposed by Generate; use Optimize separately. The SDK recreates internal generation sessions, but reuses the loaded model, context and supported static preparations.</p>
             <label>CPU threads (inference and loading preparation; 0 = automatic)<input data-setting="threads" type="number" min="0" max="4096" placeholder="SDK default"></label>
-            <p id="prompt-pipeline-loading" hidden>For PipelineProto, CPU, memory and diagnostic settings remain available. Only the SDK owning-loader controls below are unavailable: that loader accepts ONNX ModelProto, not pipelines.</p>
+            <p id="prompt-pipeline-loading" hidden>For PipelineProto, CPU, memory and diagnostic settings remain available. Only the SDK owning-loader controls below are unavailable: the viewer does not yet expose the SDK's owning pipeline loader.</p>
             <h3>Parallel loading</h3>
             <label>Model loader<select data-setting="sdkLoader" data-boolean data-loading><option value="">Standard ONNX loading</option><option value="true">SDK owning loader (parallel preparation)</option></select></label>
             <p>The SDK overlaps one I/O worker with preparation on the CPU executor. CPU threads above also control parallel preparation; there is no separate I/O thread-count option.</p>
-            <p>The SDK owning loader currently requires explicit external-data lengths. Standard loading supports ONNX files without them; there is no automatic fallback.</p>
             <label>Overlap reads and preparation<select data-setting="loadOverlap" data-boolean data-loading data-sdk-loader disabled><option value="">SDK default (enabled)</option><option value="true">Enabled</option><option value="false">Disabled (sequential)</option></select></label>
             <label>Loading admission memory limit (MiB; 0 = unlimited, not process RSS)<input data-setting="loadMemoryMiB" data-loading data-sdk-loader type="number" min="0" max="1048576" placeholder="SDK default" disabled></label>
             <h3>Memory and diagnostics</h3>

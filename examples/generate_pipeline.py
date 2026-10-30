@@ -101,7 +101,7 @@ def make_pipeline():
         max_new_tokens=4,
         temperature=0.0,
         seed=42,
-        eos_token_id=2,
+        eos_token_ids=[2],
         pad_token_id=0,
         input_ids_name="input_ids",
         logits_name="logits",

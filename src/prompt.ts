@@ -413,7 +413,7 @@ export async function runPrompt(
       "loadMemoryMiB" in options.sessionSettings)
   )
     throw new Error(
-      "The SDK parallel loader accepts ModelProto, not pipelines.",
+      "The viewer does not yet expose SDK owning-loader options for pipelines.",
     );
   if (!info.engines.includes(options.engine))
     throw new Error(
@@ -437,7 +437,7 @@ export async function runPrompt(
     throw new Error(
       "No local tokenizer package with config.json, genai_config.json and tokenizer assets is available for this model.",
     );
-  let eosTokenId: number | undefined;
+  let eosTokenIds: number[] | undefined;
   if (options.engine === "onnx-light") {
     for (const name of ["generation_config.json", "config.json"]) {
       const path = join(source, name);
@@ -447,16 +447,20 @@ export async function runPrompt(
       };
       if (config.eos_token_id === undefined || config.eos_token_id === null)
         continue;
-      const eos = Array.isArray(config.eos_token_id)
-        ? config.eos_token_id.length === 1
-          ? config.eos_token_id[0]
-          : undefined
-        : config.eos_token_id;
-      if (!Number.isSafeInteger(eos) || (eos as number) < 0)
-        throw new Error(
-          "The onnx-light GenerationOptions SDK requires one integer eos_token_id; this model's EOS configuration cannot be represented.",
-        );
-      eosTokenId = eos as number;
+      const values: unknown[] = Array.isArray(config.eos_token_id)
+        ? config.eos_token_id
+        : [config.eos_token_id];
+      eosTokenIds = values.map((value) => {
+        if (
+          typeof value !== "number" ||
+          !Number.isSafeInteger(value) ||
+          value < 0
+        )
+          throw new Error(
+            "eos_token_id must be a non-negative integer or a list of non-negative integers.",
+          );
+        return value;
+      });
       break;
     }
   }
@@ -498,7 +502,7 @@ export async function runPrompt(
     assets,
     provenance,
     source,
-    eosTokenId,
+    eosTokenIds,
     engine: options.engine,
     sessionSettings: options.sessionSettings,
   };
@@ -571,7 +575,7 @@ export async function runPrompt(
         ...options,
         provenance,
         source,
-        eosTokenId,
+        eosTokenIds,
         capturePath: capture,
         captureBudget: retentionBudget,
         profileDirectory,

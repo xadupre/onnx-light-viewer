@@ -1,8 +1,9 @@
 # Full wheels for CI: reduced builds do not include the CPU runtime.
-onnx-light @ https://github.com/xadupre/onnx-light/releases/download/0.2.1/onnx_light-0.2.1-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl#sha256=3aa2fe0d0eb39a5fe380b5241997169edad466f99dc688eec97ef4091cefc2ae ; sys_platform == "linux" and platform_machine == "x86_64" and python_version == "3.12"
-onnx-light @ https://github.com/xadupre/onnx-light/releases/download/0.2.1/onnx_light-0.2.1-cp312-cp312-win_amd64.whl#sha256=e591bd417b96c77c8bc03b30633de4488c6052e3a6ee58c217b90a20696eee03 ; sys_platform == "win32" and platform_machine == "AMD64" and python_version == "3.12"
+onnx-light @ https://github.com/xadupre/onnx-light/releases/download/0.2.3/onnx_light-0.2.3-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl#sha256=a3030b93b8359960e629beab064c1798468ae84a83d8fd1d0f295dcf5ff69407 ; sys_platform == "linux" and platform_machine == "x86_64" and python_version == "3.12"
+onnx-light @ https://github.com/xadupre/onnx-light/releases/download/0.2.3/onnx_light-0.2.3-cp312-cp312-win_amd64.whl#sha256=308fc7cef584421c0117e7982c025583963edba62967d484f9be6b78909eff11 ; sys_platform == "win32" and platform_machine == "AMD64" and python_version == "3.12"
+onnx-light @ https://github.com/xadupre/onnx-light/releases/download/0.2.3/onnx_light-0.2.3-cp312-cp312-macosx_13_0_universal2.whl#sha256=e86c830884f965314d978302fdc6cfd38126cefafc048c041c104454f4e2150e ; sys_platform == "darwin" and platform_machine == "arm64" and python_version == "3.12"
 --find-links https://github.com/xadupre/onnx-light-cpu/releases/expanded_assets/0.2.1.1
-onnx-light==0.2.1
+onnx-light==0.2.3
 onnx-light-cpu==0.2.1.1
 huggingface-hub>=0.34,<2
 # Supply real native GenAI/ORT shared libraries for prompt integration tests.
