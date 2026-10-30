@@ -76,7 +76,7 @@ test("Python tooling uses full onnx-light 0.2.3 wheels", () => {
   assert.match(requirements, /^onnx-light==0\.2\.3$/m);
   assert.ok(
     requirements.includes(
-      `https://github.com/xadupre/onnx-light/releases/download/${version}/onnx_light-${version}-cp312-cp312-win_amd64.whl`,
+      `https://github.com/xadupre/onnx-light/releases/download/${version}/onnx_light-${version}-cp312-cp312-win_amd64.whl#sha256=308fc7cef584421c0117e7982c025583963edba62967d484f9be6b78909eff11`,
     ),
   );
   assert.match(requirements, /^onnx-light-cpu==0\.2\.1\.1$/m);
