@@ -325,6 +325,19 @@ export function webviewHtml(
           <section id="fusion-panel" class="inspector-panel" aria-labelledby="fusion-title" hidden>
             <h2 id="fusion-title" class="eyebrow panel-title">Fusion patterns</h2>
             <p>Select patterns, run matching, then fuse selected candidates. Run global passes one at a time.</p>
+            <details id="selection-pattern" class="fusion-picker" open>
+              <summary>Create a FunctionPattern from selection</summary>
+              <p>Select connected operators in the graph (Ctrl/Cmd-click to select several). Their inputs become function arguments; outputs used outside the selection remain outputs.</p>
+              <label for="selection-pattern-name">Function name</label>
+              <input id="selection-pattern-name" type="text" value="SelectedPattern" autocomplete="off">
+              <button id="create-function-pattern" disabled>Create pattern</button>
+              <p id="selection-pattern-status" role="status">Select one or more operators in the graph.</p>
+              <section id="selection-pattern-result" hidden>
+                <label for="selection-pattern-picker">Created patterns</label><select id="selection-pattern-picker"></select>
+                <details open><summary>Text representation</summary><pre id="selection-pattern-text" class="native-report"></pre></details>
+                <details><summary>Python for a local GraphBuilder</summary><p>Copy this code into a Python file. Requires onnx-light 0.2.2 or newer in Python; pattern definitions are session-local in the viewer.</p><textarea id="selection-pattern-python" rows="12" readonly aria-label="FunctionPattern Python code" spellcheck="false"></textarea></details>
+              </section>
+            </details>
             <details id="rewriting-scenarios" class="fusion-picker">
               <summary>Saved rewriting scenarios</summary>
               <label for="rewriting-scenario">Scenario</label><select id="rewriting-scenario" disabled></select>

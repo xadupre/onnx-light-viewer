@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <map>
 #include <memory>
 #include <set>
 #include <string>
@@ -65,6 +66,9 @@ struct StoredModel {
   std::shared_ptr<StoredModel> fusion_previous;
   std::vector<ol::RewritingProto> fusion_plans;
   std::vector<std::vector<FusionMatch>> fusion_history;
+  // Definitions belong to the loaded model lineage, not its undoable graph snapshots.
+  std::shared_ptr<std::map<std::string, ol::FunctionProto>> function_patterns =
+      std::make_shared<std::map<std::string, ol::FunctionProto>>();
   std::shared_ptr<const ol::core::builder::OptimizationReport> optimization_report;
   int64_t optimization_wall_time_ns = 0;
   std::shared_ptr<StoredModel> rewriting_base;

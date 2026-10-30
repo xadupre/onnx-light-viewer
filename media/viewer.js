@@ -177,6 +177,10 @@ const fusionPanel = createFusionPanel({
   },
   selectedNode: () =>
     selected.size === 1 ? nodeViews.get([...selected][0])?.node : undefined,
+  selectedNodes: () =>
+    [...selected]
+      .filter((id) => nodeViews.get(id)?.node)
+      .map((id) => Number(id.slice(5))),
   focusNodes,
 });
 

@@ -4402,6 +4402,150 @@ test("chooses saved rewriting scenarios, applies next or remaining steps and rec
   assert.equal(section.open, false);
 });
 
+test("creates a selection FunctionPattern, displays safe text and Python, and offers an opt-in optimization bucket", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const model = loadModel(
+    readFileSync(require.resolve("../examples/rewriting-scenarios.onnx")),
+    "Selection patterns",
+  );
+  load(model.graph());
+  const byId = (id) => document.getElementById(id);
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  byId("fuse-pattern").click();
+  send({
+    type: "fusion-patterns",
+    requestId: messages.at(-1).requestId,
+    patterns: [],
+    optimizationPatterns: [],
+  });
+  document
+    .querySelector('[data-id="input-0"]')
+    .dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  assert.equal(byId("create-function-pattern").disabled, true);
+  for (const index of [0, 1])
+    document
+      .querySelector(`[data-id="node-${index}"]`)
+      .dispatchEvent(
+        new window.MouseEvent("click", { bubbles: true, ctrlKey: true }),
+      );
+  assert.equal(byId("create-function-pattern").disabled, false);
+  byId("selection-pattern-name").value = "TransposePair";
+  byId("create-function-pattern").click();
+  const request = messages.at(-1);
+  assert.equal(request.type, "create-function-pattern");
+  assert.deepEqual([...request.nodes].sort(), [0, 1]);
+  assert.equal(request.name, "TransposePair");
+  assert.equal(byId("create-function-pattern").disabled, true);
+  assert.equal(byId("optimize-model").disabled, true);
+  byId("optimize-model").click();
+  assert.equal(messages.at(-1), request);
+  const pattern = {
+    name: "TransposePair",
+    text: "<script>not executable</script>\nTranspose → Transpose",
+    python: "def make_pattern():\n    return FunctionPattern(...)",
+  };
+  const catalog = {
+    patterns: [pattern.name],
+    optimizationPatterns: [
+      {
+        name: pattern.name,
+        priority: 1,
+        device: "Undefined",
+        enabledByDefault: false,
+        groups: ["Selection patterns"],
+      },
+    ],
+  };
+  send({
+    type: "function-pattern-created",
+    requestId: request.requestId - 1,
+    pattern,
+    ...catalog,
+  });
+  assert.equal(byId("selection-pattern-result").hidden, true);
+  send({
+    type: "function-pattern-created",
+    requestId: request.requestId,
+    pattern,
+    ...catalog,
+  });
+  assert.equal(byId("selection-pattern-result").hidden, false);
+  assert.equal(byId("selection-pattern-text").textContent, pattern.text);
+  assert.equal(byId("selection-pattern-text").querySelector("script"), null);
+  assert.equal(byId("selection-pattern-python").value, pattern.python);
+  assert.equal(byId("selection-pattern-python").readOnly, true);
+  assert.equal(byId("fusion-pattern").querySelector("input").checked, true);
+  const bucket = byId("optimization-patterns").querySelector("details");
+  assert.match(
+    bucket.querySelector("summary").textContent,
+    /Selection patterns/,
+  );
+  assert.equal(bucket.querySelector("input[data-pattern]").checked, false);
+  byId("optimize-model").click();
+  send({
+    type: "fusion-patterns",
+    requestId: messages.at(-1).requestId,
+    ...catalog,
+  });
+  assert.equal(byId("run-optimization").disabled, true);
+  byId("optimization-pattern-group")
+    .querySelector('input[value="Selection patterns"]')
+    .click();
+  assert.equal(byId("run-optimization").disabled, false);
+  byId("run-optimization").click();
+  assert.equal(messages.at(-1).type, "apply-optimization");
+  assert.deepEqual([...messages.at(-1).patterns], [pattern.name]);
+  load(demoGraph);
+  assert.equal(byId("selection-pattern-result").hidden, true);
+  byId("fuse-pattern").click();
+  send({
+    type: "fusion-patterns",
+    requestId: messages.at(-1).requestId,
+    ...catalog,
+    optimizationPatterns: [
+      { ...catalog.optimizationPatterns[0], definition: pattern },
+    ],
+  });
+  assert.equal(byId("selection-pattern-result").hidden, false);
+  assert.equal(byId("selection-pattern-python").value, pattern.python);
+});
+
+test("selection FunctionPattern errors recover controls and obsolete replies are ignored", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  load(demoGraph);
+  const byId = (id) => document.getElementById(id);
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  byId("selection-pattern-name").value = " ";
+  byId("selection-pattern-name").dispatchEvent(new window.Event("input"));
+  assert.equal(byId("create-function-pattern").disabled, true);
+  byId("selection-pattern-name").value = "SelectedPattern";
+  byId("selection-pattern-name").dispatchEvent(new window.Event("input"));
+  byId("create-function-pattern").click();
+  const requestId = messages.at(-1).requestId;
+  send({
+    type: "function-pattern-error",
+    requestId,
+    error: "Pattern name already exists.",
+  });
+  assert.equal(byId("create-function-pattern").disabled, false);
+  assert.match(byId("selection-pattern-status").textContent, /already exists/);
+  byId("create-function-pattern").click();
+  const stale = messages.at(-1).requestId;
+  load(demoGraph);
+  send({
+    type: "function-pattern-error",
+    requestId: stale,
+    error: "Obsolete error",
+  });
+  assert.doesNotMatch(
+    byId("selection-pattern-status").textContent,
+    /Obsolete error/,
+  );
+  assert.equal(byId("selection-pattern-result").hidden, true);
+});
+
 test("selects saved pattern nodes and automatically reveals the next pattern after applying a step", async (t) => {
   const { document, window, messages, load } = openViewer(t);
   const saved = loadModel(

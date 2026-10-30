@@ -2270,6 +2270,384 @@ test("saves complete streamed weights, inferred shapes and authenticated encrypt
   );
 });
 
+test("selection FunctionPatterns retain exports and catalog across repeated matches, undo and optimize", async () => {
+  const source = loadModel(modelBytes("fusion.onnx"), "selection");
+  const original = source.graph();
+  const originalBytes = Buffer.from(await source.serialize());
+  const definition = source.createFunctionPattern(
+    [1, 0],
+    "SelectedTransposePair",
+  );
+  assert.equal(definition.name, "SelectedTransposePair");
+  assert.match(definition.text, /SelectedTransposePair/);
+  assert.match(definition.text, /Transpose/);
+  assert.match(definition.python, /as_function=True/);
+  assert.match(definition.python, /GraphBuilder/);
+  execFileSync(
+    "python3",
+    [
+      "-c",
+      "import sys; compile(sys.stdin.read(), '<selection-pattern>', 'exec')",
+    ],
+    { input: definition.python },
+  );
+  const serializedFunction = definition.python.match(
+    /bytes\.fromhex\("([0-9a-f]+)"\)/,
+  )[1];
+  const pythonDefinition = loadModel(
+    Buffer.concat([
+      modelBytes("fusion.onnx"),
+      bytesField(25, Buffer.from(serializedFunction, "hex")),
+    ]),
+    "python-definition",
+  );
+  pythonDefinition.verify();
+  assert.deepEqual(
+    pythonDefinition
+      .graph(false, [{ function: 0 }])
+      .nodes.map(({ opType }) => opType),
+    ["Transpose", "Transpose"],
+  );
+  assert.deepEqual(
+    source.optimizationPatterns().find(({ name }) => name === definition.name),
+    {
+      name: definition.name,
+      priority: 1,
+      device: "Undefined",
+      enabledByDefault: false,
+      groups: ["all", "Selection patterns"],
+      definition,
+    },
+  );
+  assert.ok(
+    !loadModel(modelBytes("fusion.onnx"), "independent")
+      .fusionPatterns()
+      .includes(definition.name),
+  );
+  const preview = await source.clone().previewFusion(definition.name);
+  assert.deepEqual(
+    preview.matches.map(({ nodes }) => [...nodes].sort()),
+    [
+      [0, 1],
+      [2, 3],
+    ],
+  );
+  for (const match of preview.matches) {
+    assert.equal(match.replacement[0].opType, definition.name);
+    assert.equal(
+      (await source.explainFusion(definition.name, match.anchor)).status,
+      "matched",
+    );
+  }
+  const fused = await preview.model.applyFusion(
+    definition.name,
+    preview.matches.map(({ anchor }) => anchor),
+  );
+  fused.verify();
+  const calls = fused.graph().nodes.filter(({ function: fn }) => fn);
+  assert.equal(calls.length, 2);
+  assert.equal(
+    calls[0].function.path.at(-1).function,
+    calls[1].function.path.at(-1).function,
+  );
+  assert.deepEqual(
+    fused
+      .graph(false, calls[0].function.path)
+      .nodes.map(({ opType }) => opType),
+    ["Transpose", "Transpose"],
+  );
+  fused.createFunctionPattern(
+    [fused.graph().nodes.length - 1],
+    "SelectedMatMul",
+  );
+  const undone = fused.undoFusion();
+  assert.deepEqual(undone.graph(), original);
+  assert.ok(undone.fusionPatterns().includes("SelectedMatMul"));
+  assert.deepEqual(
+    undone.optimizationPatterns().find(({ name }) => name === definition.name)
+      .definition,
+    definition,
+  );
+  assert.equal(
+    (await undone.previewFusion("SelectedMatMul")).matches.length,
+    1,
+  );
+  const optimized = await source.optimize(["SelectedMatMul"], "Optimize");
+  optimized.verify();
+  assert.equal(
+    optimized.graph().nodes.filter(({ opType }) => opType === "SelectedMatMul")
+      .length,
+    1,
+  );
+  const optimizedAfterFusion = await fused.optimize(
+    ["SelectedMatMul"],
+    "Optimize",
+  );
+  optimizedAfterFusion.verify();
+  assert.equal(
+    optimizedAfterFusion
+      .graph()
+      .nodes.filter(({ opType }) => opType === "SelectedMatMul").length,
+    1,
+  );
+  const [optimizedPlan] = rewritingPlans(
+    Buffer.from(
+      await optimizedAfterFusion.serialize(undefined, undefined, true),
+    ),
+  );
+  const optimizedReplay = loadModel(optimizedPlan.bytes, "optimized-replay");
+  optimizedReplay.verify();
+  const callsByName = (model) =>
+    model
+      .graph()
+      .nodes.map(({ opType, domain, inputs, outputs, function: fn }) => ({
+        opType,
+        domain,
+        inputs,
+        outputs,
+        function: fn?.name,
+      }));
+  assert.deepEqual(
+    callsByName(optimizedReplay),
+    callsByName(optimizedAfterFusion),
+  );
+  for (const fn of optimizedAfterFusion.graph().localFunctions) {
+    const replayedFn = optimizedReplay
+      .graph()
+      .localFunctions.find(({ name }) => name === fn.name);
+    assert.ok(replayedFn);
+    assert.deepEqual(
+      optimizedReplay.graph(false, replayedFn.path).nodes,
+      optimizedAfterFusion.graph(false, fn.path).nodes,
+    );
+  }
+  const loaded = loadModel(await fused.serialize(), "exported");
+  loaded.verify();
+  assert.deepEqual(loaded.graph(), fused.graph());
+  assert.throws(
+    () => loaded.createFunctionPattern([0], definition.name),
+    /already exists/i,
+  );
+  const [plan] = rewritingPlans(
+    Buffer.from(await fused.serialize(undefined, undefined, true)),
+  );
+  const replayed = loadModel(plan.bytes, "replayed");
+  replayed.verify();
+  assert.deepEqual(replayed.graph(), fused.graph());
+  assert.deepEqual(Buffer.from(await source.serialize()), originalBytes);
+});
+
+test("selection FunctionPatterns preserve initializer inputs and every escaping output", async () => {
+  const node = (op, inputs, output) =>
+    Buffer.concat([
+      ...inputs.map((input) => bytesField(1, input)),
+      bytesField(2, output),
+      bytesField(4, op),
+    ]);
+  const source = memoryTestModel([2], {
+    nodes: [
+      node("Add", ["x", "bias"], "sum"),
+      node("Relu", ["sum"], "activated"),
+      node("Add", ["sum", "activated"], "y"),
+    ],
+    initializers: [
+      Buffer.concat([
+        varintField(1, 2),
+        varintField(2, 1),
+        bytesField(8, "bias"),
+        bytesField(9, Buffer.alloc(8)),
+      ]),
+    ],
+  });
+  source.createFunctionPattern([0, 1], "AddAndRelu");
+  const preview = await source.previewFusion("AddAndRelu");
+  assert.equal(preview.matches.length, 1);
+  assert.deepEqual(preview.matches[0].replacement[0].inputs, ["x", "bias"]);
+  assert.deepEqual(preview.matches[0].replacement[0].outputs, [
+    "sum",
+    "activated",
+  ]);
+  const fused = await preview.model.applyFusion("AddAndRelu", [
+    preview.matches[0].anchor,
+  ]);
+  fused.verify();
+  assert.equal(fused.graph().nodes.length, 2);
+});
+
+test("selection FunctionPatterns restore omitted and external Constant payloads before export", async (t) => {
+  const directory = mkdtempSync(path.join(__dirname, ".function-pattern-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const raw = Buffer.alloc(512);
+  for (let i = 0; i < 128; i++) raw.writeFloatLE(i + 0.25, i * 4);
+  writeFileSync(path.join(directory, "tensor.bin"), raw);
+  for (const external of [false, true]) {
+    const payload = external
+      ? Buffer.concat([
+          bytesField(
+            13,
+            Buffer.concat([
+              bytesField(1, "location"),
+              bytesField(2, "tensor.bin"),
+            ]),
+          ),
+          bytesField(
+            13,
+            Buffer.concat([
+              bytesField(1, "length"),
+              bytesField(2, String(raw.length)),
+            ]),
+          ),
+          varintField(14, 1),
+        ])
+      : bytesField(9, raw);
+    const nodes = [
+      Buffer.concat([
+        bytesField(2, "literal"),
+        bytesField(4, "Constant"),
+        bytesField(
+          5,
+          Buffer.concat([
+            bytesField(1, "value"),
+            bytesField(
+              5,
+              Buffer.concat([varintField(1, 128), varintField(2, 1), payload]),
+            ),
+            varintField(20, 4),
+          ]),
+        ),
+      ]),
+      Buffer.concat([
+        bytesField(1, "literal"),
+        bytesField(2, "y"),
+        bytesField(4, "Relu"),
+      ]),
+    ];
+    const port = (name) =>
+      Buffer.concat([
+        bytesField(1, name),
+        bytesField(
+          2,
+          bytesField(
+            1,
+            Buffer.concat([
+              varintField(1, 1),
+              bytesField(2, bytesField(1, varintField(1, 128))),
+            ]),
+          ),
+        ),
+      ]);
+    const file = path.join(
+      directory,
+      external ? "external.onnx" : "constant.onnx",
+    );
+    writeFileSync(
+      file,
+      Buffer.concat([
+        varintField(1, 9),
+        bytesField(8, varintField(2, 18)),
+        bytesField(
+          7,
+          Buffer.concat([
+            ...nodes.map((node) => bytesField(1, node)),
+            bytesField(2, "constant"),
+            bytesField(11, port("x")),
+            bytesField(12, port("y")),
+          ]),
+        ),
+      ]),
+    );
+    const local = await loadModelFile(file, "constant");
+    const definition = local.createFunctionPattern([0, 1], "SelectedConstant");
+    const encoded = definition.python.match(
+      /bytes\.fromhex\("([0-9a-f]+)"\)/,
+    )[1];
+    assert.ok(Buffer.from(encoded, "hex").includes(raw));
+    assert.deepEqual(
+      local.optimizationPatterns().find(({ name }) => name === definition.name)
+        .definition,
+      definition,
+    );
+    assert.equal(
+      (await local.previewFusion(definition.name)).matches.length,
+      1,
+    );
+  }
+});
+
+test("selection FunctionPatterns reject invalid transport and name collisions without registering", () => {
+  const source = loadModel(modelBytes("fusion.onnx"), "selection");
+  for (const nodes of [null, undefined, {}, "0"])
+    assert.throws(
+      () => source.createFunctionPattern(nodes, "InvalidSelection"),
+      /expected/i,
+    );
+  for (const name of [null, undefined, 1, {}])
+    assert.throws(() => source.createFunctionPattern([0], name), /expected/i);
+  for (const nodes of [
+    [],
+    [-1],
+    [0.5],
+    [NaN],
+    [Infinity],
+    [99],
+    ["0"],
+    [0, 0],
+  ]) {
+    assert.throws(
+      () => source.createFunctionPattern(nodes, "InvalidSelection"),
+      /select|index|duplicate/i,
+    );
+    assert.ok(!source.fusionPatterns().includes("InvalidSelection"));
+  }
+  for (const name of ["", "not a name", "bad-name", "1name", "a\0b"])
+    assert.throws(() => source.createFunctionPattern([0, 1], name), /name/i);
+  for (const name of ["TransposeTranspose", "IdentityRemoval"])
+    assert.throws(
+      () => source.createFunctionPattern([0, 1], name),
+      /already exists/i,
+    );
+  source.createFunctionPattern([0, 1], "UniqueSelection");
+  assert.throws(
+    () => source.createFunctionPattern([0, 1], "UniqueSelection"),
+    /already exists/i,
+  );
+});
+
+test("selection FunctionPatterns survive pipeline undo after another stage creates a pattern", async () => {
+  const source = loadModel(
+    pipelineBytes({
+      prefill: modelBytes("fusion.onnx"),
+      decode: modelBytes("fusion.onnx"),
+    }),
+    "selection.pipe-onnx",
+  );
+  const prefill = [{ pipeline: "prefill" }];
+  const decode = [{ pipeline: "decode" }];
+  source.createFunctionPattern([0, 1], "PrefillPair", prefill);
+  assert.ok(!source.fusionPatterns(decode).includes("PrefillPair"));
+  const preview = await source.previewFusion("PrefillPair", undefined, prefill);
+  const fused = await preview.model.applyFusion(
+    "PrefillPair",
+    [preview.matches[0].anchor],
+    prefill,
+  );
+  const definition = fused.createFunctionPattern([0, 1], "DecodePair", decode);
+  const undone = fused.undoFusion();
+  assert.deepEqual(undone.graph(false, prefill), source.graph(false, prefill));
+  assert.ok(undone.fusionPatterns(prefill).includes("PrefillPair"));
+  assert.deepEqual(
+    undone
+      .optimizationPatterns(decode)
+      .find(({ name }) => name === "DecodePair").definition,
+    definition,
+  );
+  assert.equal(
+    (await undone.previewFusion("DecodePair", undefined, decode)).matches
+      .length,
+    2,
+  );
+});
+
 test("previews native fusion matches and applies only selected disjoint matches without changing the source", async () => {
   const model = loadModel(modelBytes("fusion.onnx"), "fusion");
   const original = Buffer.from(await model.serialize());

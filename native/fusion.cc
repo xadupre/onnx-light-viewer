@@ -9,16 +9,149 @@
 #include <map>
 #include <onnx_core/builder/graph_graph.h>
 #include <onnx_core/builder/pattern_registry.h>
+#include <onnx_core/graph/graph_manipulations.h>
 #include <onnx_extensions/kernels/kernel_dispatch_table.h>
 #include <onnx_extensions/patterns/dispatch_table.h>
+#include <onnx_extensions/patterns/function_pattern.h>
 #include <onnx_extensions/shapes/dispatch_table.h>
+#include <onnx_lib/common/constants.h>
 #include <onnx_proto/onnx_verify.h>
+#include <regex>
+#include <sstream>
 #include <stdexcept>
 #include <tuple>
 #include <unordered_map>
 
 namespace onnx_light_viewer {
 namespace {
+
+using FunctionPatterns = std::map<std::string, ol::FunctionProto>;
+
+std::unique_ptr<ol::core::builder::PatternOptimization>
+ResolvePattern(const FunctionPatterns &patterns, const std::string &name) {
+  const auto found = patterns.find(name);
+  if (found != patterns.end())
+    return std::make_unique<ol::onnx_patterns::FunctionPattern>(
+        found->second, found->second, 1, name, ol::core::symbolic::Device::kUndefined, -1, true);
+  return ol::core::builder::CreateRegisteredPattern(name);
+}
+
+std::string FunctionPatternPython(const std::string &name, const std::string &encoded) {
+  return "from onnx_light.onnx import FunctionProto, load, save\n"
+         "from onnx_light.onnx_core.graph_builder import GraphBuilder\n"
+         "from onnx_light.onnx_core.optimization import FunctionPattern, GraphGraph\n\n"
+         "function = FunctionProto()\n"
+         "function.ParseFromString(bytes.fromhex(\"" +
+         encoded +
+         "\"))\n"
+         "pattern = FunctionPattern(function, function, name=\"" +
+         name +
+         "\", as_function=True)\n\n"
+         "def apply_pattern(model):\n"
+         "    builder = GraphBuilder(model)\n"
+         "    builder.register_pattern(pattern)\n"
+         "    GraphGraph(builder, patterns=[pattern]).optimize()\n"
+         "    return builder.to_onnx()\n\n"
+         "if __name__ == \"__main__\":\n"
+         "    import argparse\n"
+         "    parser = argparse.ArgumentParser(description=\"Apply " +
+         name +
+         "\")\n"
+         "    parser.add_argument(\"input\")\n"
+         "    parser.add_argument(\"output\")\n"
+         "    args = parser.parse_args()\n"
+         "    save(apply_pattern(load(args.input)), args.output)\n";
+}
+
+Napi::Object FunctionPatternDefinition(Napi::Env env, const std::string &name,
+                                       const ol::FunctionProto &function) {
+  std::string bytes;
+  if (!function.SerializeToString(bytes))
+    throw std::runtime_error("Could not serialize the selected function.");
+  static constexpr char hex[] = "0123456789abcdef";
+  std::string encoded;
+  encoded.reserve(bytes.size() * 2);
+  for (const unsigned char byte : bytes) {
+    encoded += hex[byte >> 4];
+    encoded += hex[byte & 15];
+  }
+  auto value = Napi::Object::New(env);
+  value.Set("name", name);
+  std::stringstream text;
+  ol::utils::PrintOptions print_options;
+  function.PrintToStringStream(text, print_options);
+  value.Set("text", text.str());
+  value.Set("python", FunctionPatternPython(name, encoded));
+  return value;
+}
+
+void RestoreFunctionExternalData(ol::FunctionProto &function, const std::string &path) {
+  ol::ModelProto container;
+  *container.add_functions() = function.SharedCopy();
+  std::vector<ol::EncodedValueProto *> encoded;
+  std::set<const ol::TensorProto *> layout_tensors;
+  const auto tensors = ModelSaveTensors(container, &encoded, &layout_tensors);
+  const auto restore = [&](auto &value) {
+    if (path.empty())
+      throw std::runtime_error(
+          "Function pattern export needs a local source path for external tensor attributes.");
+    LoadExternalTensor(value, ModelFilePath(path).parent_path());
+  };
+  for (auto *value : encoded)
+    if (value->has_data_location() && value->data_location() == ol::TensorProto::EXTERNAL)
+      restore(*value);
+  for (auto *tensor : tensors)
+    if ((!layout_tensors.contains(tensor) || tensor->has_data_location()) &&
+        tensor->data_location() == ol::TensorProto::EXTERNAL)
+      restore(*tensor);
+  function = container.functions(0).SharedCopy();
+}
+
+ol::FunctionProto SelectionFunction(const ol::ModelProto &model, const Napi::Array &selection,
+                                    const std::string &name) {
+  if (!selection.Length())
+    throw std::runtime_error("Select at least one node.");
+  const auto &graph = model.graph();
+  std::set<size_t> selected;
+  for (uint32_t i = 0; i < selection.Length(); ++i) {
+    const auto value = selection.Get(i);
+    if (!value.IsNumber())
+      throw std::runtime_error("Invalid selection node index.");
+    const auto index = value.As<Napi::Number>().DoubleValue();
+    if (!std::isfinite(index) || index < 0 || std::floor(index) != index ||
+        index >= graph.node().size())
+      throw std::runtime_error("Invalid selection node index.");
+    if (!selected.insert(static_cast<size_t>(index)).second)
+      throw std::runtime_error("Duplicate selection node index.");
+  }
+  ol::FunctionProto function;
+  function.set_name(name);
+  function.set_domain("onnx_light.viewer");
+  std::set<std::string> domains;
+  for (const auto index : selected)
+    domains.insert(ol::NormalizeDomain(graph.node(index).domain().value()));
+  for (const auto &opset : model.opset_import())
+    if (domains.contains(ol::NormalizeDomain(opset.domain().value())))
+      *function.add_opset_import() = opset.SharedCopy();
+  std::set<std::string> consumed_outside;
+  for (size_t i = 0; i < graph.node().size(); ++i)
+    if (!selected.contains(i)) {
+      const auto inputs = ol::core::graph::CollectNodeInputs(graph.node(i));
+      consumed_outside.insert(inputs.begin(), inputs.end());
+    }
+  for (const auto &output : graph.output())
+    consumed_outside.emplace(output.name().value());
+  for (const auto index : selected) {
+    const auto &node = graph.node(index);
+    *function.add_node() = node.SharedCopy();
+    for (const auto &output : node.output())
+      if (!output.empty() && consumed_outside.contains(output.value()))
+        function.add_output(output.value());
+  }
+  for (const auto &input : ol::core::graph::CollectExternalInputs(function.node()))
+    function.add_input(input);
+  return function;
+}
 
 std::vector<size_t> FinalizedNodeOrder(const ol::ModelProto &model,
                                        const std::vector<FusionNodeKey> &inserted_order) {
@@ -270,13 +403,13 @@ public:
         anchors_(std::move(anchors)), path_(std::move(path)),
         weights_(canonical_->external_weights), history_(source_->fusion_history),
         scenario_(std::move(scenario)), all_(all), operation_(std::move(operation)),
-        diagnostic_anchor_(diagnostic_anchor) {}
+        diagnostic_anchor_(diagnostic_anchor), function_patterns_(*source_->function_patterns) {}
   Napi::Promise Promise() const { return deferred_.Promise(); }
   void Execute() override {
     try {
       if (diagnostic_anchor_) {
         const auto &node = snapshot_.graph().node(*diagnostic_anchor_);
-        const auto pattern = ol::core::builder::CreateRegisteredPattern(patterns_[0]);
+        const auto pattern = ResolvePattern(function_patterns_, patterns_[0]);
         const auto fast = pattern->FastOpType();
         if (!fast.empty() && !fast.contains(node.op_type().value())) {
           diagnostic_status_ = "op-type-mismatch";
@@ -335,7 +468,7 @@ public:
       std::map<std::string, std::unique_ptr<builder::PatternOptimization>> patterns;
       for (const auto &name : patterns_)
         if (!patterns.contains(name))
-          patterns.emplace(name, builder::CreateRegisteredPattern(name));
+          patterns.emplace(name, ResolvePattern(function_patterns_, name));
       builder::GraphBuilder graph(snapshot_);
       if (graph.Nodes().size() != snapshot_.graph().node().size())
         throw std::runtime_error("The native builder changed node indices before fusion.");
@@ -524,6 +657,7 @@ public:
     stored->fusion_base = source_->fusion_base;
     stored->fusion_previous = source_->fusion_previous;
     stored->fusion_history = std::move(history_);
+    stored->function_patterns = source_->function_patterns;
     stored->optimization_report = std::move(optimization_report_);
     if (!scenario_.empty()) {
       stored->fusion_base = canonical_;
@@ -649,7 +783,7 @@ private:
       capture("Canonicalize");
       std::vector<std::unique_ptr<builder::PatternOptimization>> chosen;
       for (const auto &name : patterns_)
-        chosen.push_back(builder::CreateRegisteredPattern(name));
+        chosen.push_back(ResolvePattern(function_patterns_, name));
       builder::GraphGraph optimizer(graph, std::move(chosen));
       optimization_report_ = std::make_shared<builder::OptimizationReport>();
       auto rewrites = optimizer.Optimize(-1, optimization_report_.get());
@@ -671,12 +805,18 @@ private:
     }
     if (plan_.rewrites().empty())
       return;
+    auto expected_functions = snapshot_.functions().SharedCopy();
     if (!plan_.added_functions().empty()) {
       ol::ModelProto declarations;
       declarations.mutable_graph()->set_name("Optimization function declarations");
       declarations.ref_struct_types() = snapshot_.struct_types();
       declarations.ref_opset_import() = snapshot_.opset_import();
       declarations.ref_functions() = snapshot_.functions();
+      // Compare both sides after the same SDK model-import/export normalization.
+      expected_functions = builder::GraphBuilder(declarations)
+                               .ToModel(original.ir_version())
+                               .functions()
+                               .SharedCopy();
       for (const auto &function : plan_.added_functions()) {
         auto found = std::find_if(declarations.ref_functions().begin(),
                                   declarations.ref_functions().end(), [&](const auto &other) {
@@ -701,7 +841,7 @@ private:
         function = found->SharedCopy();
       }
     }
-    for (const auto &function : snapshot_.functions()) {
+    for (const auto &function : expected_functions) {
       const auto found = std::find_if(
           plan_.added_functions().begin(), plan_.added_functions().end(), [&](const auto &other) {
             return function.name() == other.name() && function.domain() == other.domain() &&
@@ -828,11 +968,43 @@ private:
   std::string diagnostic_reason_;
   std::string diagnostic_file_;
   uint_least32_t diagnostic_line_ = 0;
+  FunctionPatterns function_patterns_;
 };
 
 } // namespace
 
 void AddFusionMethods(Napi::Env env, Napi::Object result, std::shared_ptr<StoredModel> model) {
+  result.Set("createFunctionPattern",
+             Napi::Function::New(env, [model](const Napi::CallbackInfo &call) -> Napi::Value {
+               try {
+                 if (call.Length() != 2 || !call[0].IsArray() || !call[1].IsString())
+                   throw std::runtime_error(
+                       "Expected selected node indices and a function pattern name.");
+                 const auto name = call[1].As<Napi::String>().Utf8Value();
+                 if (!std::regex_match(name, std::regex("[A-Za-z_][A-Za-z0-9_]*")))
+                   throw std::runtime_error("Invalid function pattern name: use an identifier.");
+                 ol::onnx_patterns::RegisterPatterns();
+                 const auto registered = ol::core::builder::RegisteredPatternNames();
+                 if (IsGlobalPass(name) || model->function_patterns->contains(name) ||
+                     std::find(registered.begin(), registered.end(), name) != registered.end() ||
+                     std::any_of(model->model->functions().begin(), model->model->functions().end(),
+                                 [&](const auto &function) { return function.name() == name; }))
+                   throw std::runtime_error("Function pattern name already exists: " + name);
+                 auto snapshot = model->model->SharedCopy();
+                 RestoreModelPayloads(snapshot, *model, model->file_path);
+                 auto function = SelectionFunction(snapshot, call[0].As<Napi::Array>(), name);
+                 RestoreFunctionExternalData(function, model->file_path);
+                 // Construction delegates function-body validation to the SDK.
+                 ol::onnx_patterns::FunctionPattern pattern(
+                     function, function, 1, name, ol::core::symbolic::Device::kUndefined, -1, true);
+                 auto value = FunctionPatternDefinition(call.Env(), name, function);
+                 model->function_patterns->emplace(name, std::move(function));
+                 return value;
+               } catch (const std::exception &error) {
+                 Napi::Error::New(call.Env(), error.what()).ThrowAsJavaScriptException();
+                 return call.Env().Undefined();
+               }
+             }));
   result.Set("optimizationReport",
              Napi::Function::New(env, [model](const Napi::CallbackInfo &call) -> Napi::Value {
                if (!model->optimization_report)
@@ -854,7 +1026,7 @@ void AddFusionMethods(Napi::Env env, Napi::Object result, std::shared_ptr<Stored
                  ol::onnx_patterns::RegisterPatterns();
                  ol::onnx_shapes::RegisterShapeFunctions();
                  const auto pattern = call[0].As<Napi::String>().Utf8Value();
-                 ol::core::builder::CreateRegisteredPattern(pattern);
+                 ResolvePattern(*model->function_patterns, pattern);
                  const auto path =
                      call[2].IsString() ? call[2].As<Napi::String>().Utf8Value() : model->file_path;
                  if (path.find('\0') != std::string::npos)
@@ -871,7 +1043,8 @@ void AddFusionMethods(Napi::Env env, Napi::Object result, std::shared_ptr<Stored
                  return call.Env().Undefined();
                }
              }));
-  result.Set("optimizationPatterns", Napi::Function::New(env, [](const Napi::CallbackInfo &call) {
+  result.Set("optimizationPatterns",
+             Napi::Function::New(env, [model](const Napi::CallbackInfo &call) {
                ol::onnx_patterns::RegisterPatterns();
                const auto sets = ol::core::builder::RegisteredPatternSets();
                const auto defaults = ol::core::builder::RegisteredPatternNames(false);
@@ -888,6 +1061,20 @@ void AddFusionMethods(Napi::Env env, Napi::Object result, std::shared_ptr<Stored
                  for (const auto &[group, members] : sets)
                    if (std::find(members.begin(), members.end(), name) != members.end())
                      groups.Set(groups.Length(), group);
+                 item.Set("groups", groups);
+                 values.Set(values.Length(), item);
+               }
+               for (const auto &[name, function] : *model->function_patterns) {
+                 const auto pattern = ResolvePattern(*model->function_patterns, name);
+                 auto item = Napi::Object::New(call.Env());
+                 item.Set("name", name);
+                 item.Set("priority", pattern->priority);
+                 item.Set("device", ol::core::symbolic::DeviceName(pattern->device));
+                 item.Set("enabledByDefault", false);
+                 item.Set("definition", FunctionPatternDefinition(call.Env(), name, function));
+                 auto groups = Napi::Array::New(call.Env(), 2);
+                 groups.Set(uint32_t{0}, "all");
+                 groups.Set(uint32_t{1}, "Selection patterns");
                  item.Set("groups", groups);
                  values.Set(values.Length(), item);
                }
@@ -913,7 +1100,7 @@ void AddFusionMethods(Napi::Env env, Napi::Object result, std::shared_ptr<Stored
             if (!selected.Get(i).IsString())
               throw std::runtime_error("Invalid optimization pattern.");
             auto name = selected.Get(i).As<Napi::String>().Utf8Value();
-            ol::core::builder::CreateRegisteredPattern(name);
+            ResolvePattern(*model->function_patterns, name);
             if (!unique.insert(name).second)
               throw std::runtime_error("Duplicate optimization pattern.");
             patterns.push_back(std::move(name));
@@ -1055,7 +1242,9 @@ void AddFusionMethods(Napi::Env env, Napi::Object result, std::shared_ptr<Stored
                try {
                  if (!model->fusion_previous)
                    throw std::runtime_error("No fusion operation to undo.");
-                 return ModelHandle(call.Env(), CloneStoredModel(model->fusion_previous));
+                 auto restored = CloneStoredModel(model->fusion_previous);
+                 restored->function_patterns = model->function_patterns;
+                 return ModelHandle(call.Env(), restored);
                } catch (const std::exception &error) {
                  Napi::Error::New(call.Env(), error.what()).ThrowAsJavaScriptException();
                  return call.Env().Undefined();
@@ -1080,6 +1269,8 @@ void AddFusionMethods(Napi::Env env, Napi::Object result, std::shared_ptr<Stored
                  }
                  for (const auto *name :
                       {"IdentityRemoval", "ConstantFolding", "RemoveUnusedNodes"})
+                   values.Set(i++, name);
+                 for (const auto &[name, function] : *model->function_patterns)
                    values.Set(i++, name);
                  return values;
                } catch (const std::exception &error) {

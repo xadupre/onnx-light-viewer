@@ -1199,9 +1199,19 @@ button:disabled {
   cursor: pointer;
 }
 #rewriting-scenario,
-#diagnostic-pattern {
+#diagnostic-pattern,
+#selection-pattern-name,
+#selection-pattern-picker,
+#selection-pattern-python {
   width: 100%;
   margin-top: 4px;
+}
+#selection-pattern-python {
+  box-sizing: border-box;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  font-family: var(--vscode-editor-font-family, monospace);
 }
 .native-report {
   max-height: 24rem;

@@ -772,6 +772,7 @@ async function configurePanel(
         paths?: unknown;
         asPipeline?: unknown;
         nodeIndex?: unknown;
+        nodes?: unknown;
         actionId?: string;
         entry?: unknown;
         storage?: unknown;
@@ -2189,6 +2190,7 @@ async function configurePanel(
         message?.type === "undo-fusion" ||
         message?.type === "replay-rewritings" ||
         message?.type === "apply-rewriting" ||
+        message?.type === "create-function-pattern" ||
         message?.type === "fusion-patterns" ||
         message?.type === "preview-fusion" ||
         message?.type === "apply-optimization" ||
@@ -2197,12 +2199,15 @@ async function configurePanel(
         const owner = model;
         const revision = graphRevision;
         const generation = ++fusionRequest;
+        const navigation = navigationRequest;
         const undoGeneration =
           message.type === "undo-fusion" ? ++undoRequest : undoRequest;
         const isCurrent = () =>
           active &&
           model === owner &&
           graphRevision === revision &&
+          (message.type !== "create-function-pattern" ||
+            navigationRequest === navigation) &&
           (message.type === "undo-fusion"
             ? undoRequest === undoGeneration
             : fusionRequest === generation);
@@ -2220,7 +2225,9 @@ async function configurePanel(
                       ? "Apply fusion pattern"
                       : message.type === "preview-fusion"
                         ? "Preview fusion pattern"
-                        : "List fusion patterns",
+                        : message.type === "create-function-pattern"
+                          ? "Create function pattern"
+                          : "List fusion patterns",
             async (id) => {
               const current = requireModel();
               if (message.type === "undo-fusion") {
@@ -2283,6 +2290,50 @@ async function configurePanel(
                   "Return to a model's main graph to apply fusion patterns.",
                 );
               const path = current.graph.breadcrumbs.at(-1)?.path ?? [];
+              if (message.type === "create-function-pattern") {
+                if (
+                  typeof message.name !== "string" ||
+                  !Array.isArray(message.nodes) ||
+                  !message.nodes.length ||
+                  !Array.from(message.nodes).every(
+                    (node: unknown) =>
+                      typeof node === "number" &&
+                      Number.isSafeInteger(node) &&
+                      node >= 0 &&
+                      node < current.graph.nodes.length,
+                  ) ||
+                  new Set(message.nodes).size !== message.nodes.length
+                )
+                  throw new Error(
+                    "Choose distinct operator nodes and a pattern name.",
+                  );
+                const native = await nativeModel(
+                  current,
+                  log,
+                  () => void sendStatus(),
+                );
+                if (!isCurrent()) return;
+                fusionPreview = undefined;
+                const pattern = path.length
+                  ? native.createFunctionPattern(
+                      message.nodes,
+                      message.name,
+                      path,
+                    )
+                  : native.createFunctionPattern(message.nodes, message.name);
+                if (!isCurrent()) return;
+                const retained = native.clone();
+                current.reload = () => retained.clone();
+                await postMessage({
+                  type: "function-pattern-created",
+                  requestId: message.requestId,
+                  pattern,
+                  patterns: native.fusionPatterns(path),
+                  optimizationPatterns: native.optimizationPatterns(path),
+                  scenarios: native.rewritingScenarios(path),
+                });
+                return;
+              }
               if (message.type === "replay-rewritings") {
                 if (!current.rewritingQueue)
                   throw new Error("No pending rewritings to apply.");
@@ -2763,12 +2814,14 @@ async function configurePanel(
             type:
               message.type === "undo-fusion"
                 ? "undo-fusion-error"
-                : "fusion-error",
+                : message.type === "create-function-pattern"
+                  ? "function-pattern-error"
+                  : "fusion-error",
             requestId: message.requestId,
             error: detail,
           });
           await vscode.window.showErrorMessage(
-            `${message.type === "undo-fusion" ? "Could not undo fusion" : "Could not fuse ONNX model"}: ${detail}`,
+            `${message.type === "undo-fusion" ? "Could not undo fusion" : message.type === "create-function-pattern" ? "Could not create function pattern" : "Could not fuse ONNX model"}: ${detail}`,
           );
         }
       } else if (message?.type === "save") {

@@ -128,6 +128,7 @@ async function openExtension(
   const receivers = new Set();
   const disposals = new Set();
   const pendingReads = new Map();
+  const virtualFiles = new Map();
   let webviewPanelOptions;
   let customEditorOptions;
   const receive = (message) =>
@@ -269,7 +270,7 @@ async function openExtension(
           const pending = pendingReads.get(key);
           await (pending ?? Promise.resolve());
           pendingReads.delete(key);
-          return readFile(uri.path);
+          return virtualFiles.get(uri.path) ?? readFile(uri.path);
         },
         writeFile: async (uri, bytes) => {
           writes.push(uri.path);
@@ -583,6 +584,13 @@ async function openExtension(
     openFile: async (filePath) => {
       modelSource = "local";
       selection = [uri(filePath)];
+      await receive({ type: "open" });
+    },
+    openBytes: async (fileName, bytes) => {
+      modelSource = "local";
+      const location = uri(path.join(__dirname, "models", fileName), "virtual");
+      virtualFiles.set(location.path, bytes);
+      selection = [location];
       await receive({ type: "open" });
     },
     save: async (
@@ -3191,6 +3199,349 @@ test("previews global passes without editing, rejects stale previews and optimiz
   assert.deepEqual(latest().graph, original);
   await extension.receive({ type: "fusion-patterns", requestId: 9 });
   assert.equal(extension.messages.at(-1).optimizationReport, null);
+});
+
+test("creates a native function pattern and retains it through preview, undo, replay and recovery", async (t) => {
+  const extension = await openExtension("fusion.onnx", undefined, true);
+  t.after(() => extension.dispose());
+  await extension.receive({ type: "ready" });
+  const latest = () =>
+    extension.messages.findLast(({ type }) => type === "graph");
+  assert.ok(latest(), extension.errors.join("\n"));
+  const original = latest().graph;
+  const expect = (type) =>
+    assert.equal(
+      extension.messages.at(-1).type,
+      type,
+      extension.messages.at(-1).error,
+    );
+  await extension.receive({
+    type: "preview-fusion",
+    pattern: "TransposeTranspose",
+    requestId: 0,
+  });
+  expect("fusion-preview");
+  const stale = extension.messages.at(-1);
+  await extension.receive({
+    type: "create-function-pattern",
+    nodes: [0, 1],
+    name: "HostTransposePair",
+    requestId: 1,
+  });
+  expect("function-pattern-created");
+  const created = extension.messages.at(-1);
+  assert.equal(created.requestId, 1);
+  assert.equal(created.pattern.name, "HostTransposePair");
+  assert.ok(created.pattern.text.length > 0);
+  assert.match(created.pattern.text, /Transpose/);
+  assert.ok(created.pattern.python.length > 0);
+  assert.ok(created.patterns.includes(created.pattern.name));
+  assert.deepEqual(
+    created.optimizationPatterns.find(
+      ({ name }) => name === created.pattern.name,
+    ).definition,
+    created.pattern,
+  );
+  assert.ok(Array.isArray(created.scenarios));
+  assert.deepEqual(latest().graph, original);
+  assert.equal(latest().file.fusionCount, 0);
+  await extension.receive({
+    type: "apply-fusion",
+    previewId: stale.previewId,
+    candidates: [0],
+    requestId: 101,
+  });
+  expect("fusion-error");
+  await extension.receive({
+    type: "preview-fusion",
+    pattern: created.pattern.name,
+    requestId: 2,
+  });
+  expect("fusion-preview");
+  const preview = extension.messages.at(-1);
+  assert.ok(preview.matches.length > 0);
+  await extension.receive({
+    type: "apply-fusion",
+    previewId: preview.previewId,
+    candidates: [0],
+    requestId: 3,
+  });
+  expect("fusion-info");
+  await extension.receive({ type: "undo-fusion", requestId: 4 });
+  expect("graph");
+  assert.equal(latest().file.fusionCount, 0);
+  assert.ok(latest().file.pendingRewritings.length > 0);
+  await extension.receive({
+    type: "create-function-pattern",
+    nodes: [0, 1],
+    name: "HostQueuedTransposePair",
+    requestId: 5,
+  });
+  expect("function-pattern-created");
+  await extension.receive({ type: "replay-rewritings", requestId: 6 });
+  expect("optimization-info");
+  assert.ok(
+    extension.messages.at(-1).patterns.includes("HostQueuedTransposePair"),
+  );
+  await extension.receive({ type: "undo-fusion", all: true, requestId: 7 });
+  await extension.receive({ type: "fusion-patterns", requestId: 8 });
+  assert.ok(
+    extension.messages.at(-1).patterns.includes("HostQueuedTransposePair"),
+  );
+  await extension.open("fusion.onnx");
+  const native = extension.nativeModels.at(-1);
+  const graph = native.graph;
+  native.graph = (infer, ...args) => {
+    if (infer) throw new Error("Host test shape failure");
+    return graph(infer, ...args);
+  };
+  await extension.receive({
+    type: "create-function-pattern",
+    nodes: [4],
+    name: "HostRecoveryMatMul",
+    requestId: 9,
+  });
+  expect("function-pattern-created");
+  await extension.receive({ type: "refresh-shapes" });
+  expect("shape-error");
+  await extension.receive({ type: "fusion-patterns", requestId: 10 });
+  assert.ok(extension.messages.at(-1).patterns.includes("HostRecoveryMatMul"));
+  await extension.receive({
+    type: "apply-optimization",
+    operation: "Optimize",
+    patterns: ["HostRecoveryMatMul"],
+    requestId: 11,
+  });
+  expect("optimization-info");
+  assert.ok(latest().file.fusionCount > 0);
+});
+
+test("function pattern transport rejects malformed selections and delegates semantic names to native", async (t) => {
+  const extension = await openExtension("fusion.onnx", undefined, true);
+  t.after(() => extension.dispose());
+  const native = extension.nativeModels.at(-1);
+  const create = native.createFunctionPattern;
+  let calls = 0;
+  native.createFunctionPattern = (...args) => {
+    calls++;
+    return create(...args);
+  };
+  for (const nodes of [
+    undefined,
+    [],
+    Array(1),
+    [0, , 1],
+    [0, 0],
+    [-1],
+    [native.graph().nodes.length],
+    [0.5],
+    ["0"],
+    [NaN],
+    [Infinity],
+    [Number.MAX_SAFE_INTEGER + 1],
+  ]) {
+    await extension.receive({
+      type: "create-function-pattern",
+      nodes,
+      name: "HostInvalidSelection",
+      requestId: 11,
+    });
+    assert.equal(extension.messages.at(-1).type, "function-pattern-error");
+    assert.equal(extension.messages.at(-1).requestId, 11);
+  }
+  await extension.receive({
+    type: "create-function-pattern",
+    nodes: [0, 1],
+    name: 7,
+    requestId: 12,
+  });
+  assert.equal(extension.messages.at(-1).type, "function-pattern-error");
+  assert.equal(calls, 0);
+  await extension.receive({
+    type: "create-function-pattern",
+    nodes: [0, 1],
+    name: "HostCollision",
+    requestId: 13,
+  });
+  assert.equal(
+    extension.messages.at(-1).type,
+    "function-pattern-created",
+    extension.messages.at(-1).error,
+  );
+  await extension.receive({
+    type: "create-function-pattern",
+    nodes: [0, 1],
+    name: "HostCollision",
+    requestId: 14,
+  });
+  assert.equal(extension.messages.at(-1).type, "function-pattern-error");
+  assert.equal(calls, 2);
+});
+
+test("function pattern creation recovers native handles and suppresses stale recovery results and errors", async (t) => {
+  for (const invalidate of [
+    "cancel",
+    "navigate",
+    "replace",
+    "dispose",
+    "none",
+  ]) {
+    for (const fail of [false, true]) {
+      const extension = await openExtension("fusion.onnx", undefined, true);
+      t.after(() => extension.dispose());
+      const native = extension.nativeModels.at(-1);
+      const graph = native.graph;
+      native.graph = (infer, ...args) => {
+        if (infer) throw new Error("Host test invalidation");
+        return graph(infer, ...args);
+      };
+      await extension.receive({ type: "refresh-shapes" });
+      const release = extension.pauseNextFileLoad(
+        fail ? new Error("Host delayed recovery failure") : undefined,
+      );
+      const pending = extension.receive({
+        type: "create-function-pattern",
+        nodes: [0, 1],
+        name: "HostDelayedPair",
+        requestId: 91,
+      });
+      let navigation;
+      if (invalidate === "replace") await extension.open("relu.onnx");
+      else if (invalidate === "dispose") extension.dispose();
+      else if (invalidate === "navigate")
+        navigation = extension.receive({ type: "navigate", path: [] });
+      else if (invalidate !== "none")
+        await extension.receive({ type: "cancel-fusion" });
+      const errors = extension.errors.length;
+      release();
+      await pending;
+      await navigation;
+      const result = extension.messages.filter(
+        ({ type, requestId }) =>
+          requestId === 91 &&
+          ["function-pattern-created", "function-pattern-error"].includes(type),
+      );
+      if (invalidate === "none") {
+        assert.equal(result.length, 1);
+        assert.equal(
+          result[0].type,
+          fail ? "function-pattern-error" : "function-pattern-created",
+        );
+      } else {
+        assert.deepEqual(result, []);
+        assert.equal(
+          extension.errors
+            .slice(errors)
+            .some((error) =>
+              error.includes("Could not create function pattern"),
+            ),
+          false,
+        );
+      }
+    }
+  }
+});
+
+test("function pattern creation is stage-local and rejects pipeline overviews and nested graphs", async (t) => {
+  const field = (number, bytes) => {
+    let length = bytes.length;
+    const prefix = [number * 8 + 2];
+    do {
+      prefix.push((length % 128) | (length >= 128 ? 128 : 0));
+      length = Math.floor(length / 128);
+    } while (length);
+    return Buffer.concat([Buffer.from(prefix), bytes]);
+  };
+  const bytes = Buffer.concat([
+    field(1, Buffer.from("HostPatternPipeline")),
+    field(8, readFileSync(require.resolve("./models/fusion.onnx"))),
+    field(9, readFileSync(require.resolve("./models/fusion.onnx"))),
+  ]);
+  const extension = await openExtension();
+  t.after(() => extension.dispose());
+  const expect = (type) =>
+    assert.equal(
+      extension.messages.at(-1).type,
+      type,
+      extension.messages.at(-1).error,
+    );
+  await extension.openBytes("host-pattern.pipe-onnx", bytes);
+  const request = {
+    type: "create-function-pattern",
+    nodes: [0, 1],
+    name: "HostStagePair",
+    requestId: 21,
+  };
+  await extension.receive(request);
+  expect("function-pattern-error");
+  await extension.receive({
+    type: "navigate",
+    path: [{ pipeline: "prefill" }],
+  });
+  await extension.receive(request);
+  expect("function-pattern-created");
+  await extension.receive({
+    type: "preview-fusion",
+    pattern: request.name,
+    requestId: 22,
+  });
+  expect("fusion-preview");
+  const preview = extension.messages.at(-1);
+  await extension.receive({
+    type: "apply-fusion",
+    previewId: preview.previewId,
+    candidates: [0],
+    requestId: 23,
+  });
+  expect("fusion-info");
+  await extension.receive({ type: "undo-fusion", requestId: 24 });
+  expect("graph");
+  await extension.receive({
+    ...request,
+    name: "HostStageQueuedPair",
+    requestId: 25,
+  });
+  expect("function-pattern-created");
+  await extension.receive({ type: "replay-rewritings", requestId: 26 });
+  expect("optimization-info");
+  assert.ok(extension.messages.at(-1).patterns.includes("HostStageQueuedPair"));
+  await extension.receive({ type: "undo-fusion", all: true, requestId: 27 });
+  await extension.receive({ type: "fusion-patterns", requestId: 28 });
+  const definition = extension.messages
+    .at(-1)
+    .optimizationPatterns.find(
+      ({ name }) => name === "HostStageQueuedPair",
+    ).definition;
+  assert.equal(definition.name, "HostStageQueuedPair");
+  assert.ok(definition.text.length > 0);
+  assert.ok(definition.python.length > 0);
+  await extension.receive({ type: "navigate", path: [{ pipeline: "decode" }] });
+  await extension.receive({ type: "fusion-patterns", requestId: 29 });
+  for (const name of ["HostStagePair", "HostStageQueuedPair"])
+    assert.equal(extension.messages.at(-1).patterns.includes(name), false);
+  await extension.receive({
+    type: "navigate",
+    path: [{ pipeline: "prefill" }],
+  });
+  await extension.receive({ type: "fusion-patterns", requestId: 30 });
+  assert.deepEqual(
+    extension.messages
+      .at(-1)
+      .optimizationPatterns.find(({ name }) => name === "HostStageQueuedPair")
+      .definition,
+    definition,
+  );
+  await extension.open("subgraphs.onnx");
+  const graph = extension.messages.findLast(
+    ({ type }) => type === "graph",
+  ).graph;
+  const child = graph.nodes.flatMap((node) =>
+    node.attributes.flatMap((attribute) => attribute.graphs ?? []),
+  )[0];
+  assert.ok(child);
+  await extension.receive({ type: "navigate", path: child.path });
+  await extension.receive(request);
+  expect("function-pattern-error");
 });
 
 test("explains native pattern matches without invalidating a matching preview", async (t) => {

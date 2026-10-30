@@ -77,6 +77,46 @@ Graph replacement or navigation invalidates the preview.
 
    Run matching, inspect candidates, then fuse the selected matches.
 
+Create a pattern from selected nodes
+----------------------------------------
+
+**Fuse → Create a FunctionPattern from selection** turns selected operators into
+a reusable native pattern, without changing the graph.
+
+1. Select connected operators with Ctrl/Cmd-click, or a selection rectangle.
+2. Enter a unique **Function name** and click **Create pattern**.
+3. Inspect **Text representation**, or copy **Python for a local GraphBuilder**.
+4. Click **Run Matching** to find occurrences throughout the model, then
+   **Fuse selected**. Each occurrence becomes a call to a shared local function.
+   **Unfuse** reverses the operation.
+
+Boundary inputs, including weights, become function arguments; values used
+outside the selection remain function outputs. The SDK checks whether the
+selected function body is supported and performs matching and rewriting.
+Matching preserves literal attributes and imported opset versions.
+
+Created patterns are opt-in: **Optimize → Selection patterns** is a separate
+bucket and named group. Enable individual patterns or the group before running
+global optimization. Pattern definitions and their Python code are session-local;
+saving the fused model retains its local function, not the viewer's pattern catalog.
+The exported code provides the pattern and a helper for optimizing a local
+``GraphBuilder``; it does not execute Python in the viewer.
+With onnx-light 0.2.2 or newer installed in Python, save the copied code as
+``selection_pattern.py`` and apply it to a model:
+
+.. code-block:: bash
+
+   python selection_pattern.py input.onnx output.onnx
+
+This writes a separate optimized model. Import ``apply_pattern`` from that file
+to reuse the same pattern in Python.
+
+.. figure:: ../_static/feature-selection-pattern.png
+   :alt: Selected graph operators and the Create FunctionPattern controls, with text representation and reusable Python code.
+   :width: 100%
+
+   Select a body once, then match it elsewhere or reuse its Python definition.
+
 Why does a pattern not match?
 -----------------------------
 

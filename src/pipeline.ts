@@ -2,6 +2,7 @@ import type {
   FusionDiagnostic,
   FusionMatch,
   FusionOperation,
+  FunctionPatternDefinition,
   Graph,
   GraphMetadata,
   GraphPath,
@@ -293,6 +294,16 @@ export class PipelineModel implements NativeModel {
         "Return to a pipeline stage root to apply fusion patterns.",
       );
     return stage.model.fusionPatterns();
+  };
+
+  createFunctionPattern = (
+    nodes: number[],
+    name: string,
+    path: GraphPath = [],
+  ): FunctionPatternDefinition => {
+    const stage = this.select(path);
+    this.fusionPatterns(path);
+    return stage.model.createFunctionPattern(nodes, name);
   };
 
   optimizationPatterns = (path: GraphPath = []): OptimizationPattern[] => {
