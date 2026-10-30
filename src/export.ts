@@ -759,7 +759,7 @@ async function reserveExportDirectory(
     );
     if (
       excludedDirectory !== undefined &&
-      resolve(directory) === resolve(excludedDirectory)
+      resolve(directory).toLowerCase() === resolve(excludedDirectory).toLowerCase()
     )
       continue;
     try {
