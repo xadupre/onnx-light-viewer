@@ -2789,6 +2789,7 @@ window.addEventListener("message", (event) => {
       promptReloadPending = false;
       promptPanel.reset();
       if (!byId("prompt-view").hidden) promptPanel.activate();
+      tensorStatisticsPanel.reset();
       memoryPanel.setGraph(displayedGraph);
       const selection = new Set(selected);
       fusionPanel.invalidate();

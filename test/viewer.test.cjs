@@ -613,6 +613,75 @@ for (const visible of [false, true]) {
   });
 }
 
+test("dimension shortening resets cancelled tensor inspection and its cache only when the model changes", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const byId = (id) => document.getElementById(id);
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  const request = () =>
+    messages.findLast(({ type }) => type === "tensor-statistics");
+  const graph = weightsGraph();
+  load(graph);
+  byId("tensors-tab").click();
+  inspectTensor(document, "weight");
+  send({
+    type: "tensor-statistics-info",
+    requestId: request().requestId,
+    statistics: tensorStatistics(),
+  });
+  byId("close-tensor-statistics").click();
+  byId("shorten-dimensions").click();
+  inspectTensor(document, "other-weight");
+  const stale = request();
+  const dialog = byId("tensor-statistics-dialog");
+  assert.equal(dialog.getAttribute("aria-busy"), "true");
+
+  send({ type: "dimension-info", prefix: "", count: 0 });
+  assert.equal(dialog.open, true);
+  assert.equal(dialog.getAttribute("aria-busy"), "true");
+  byId("shorten-dimensions").click();
+  send({
+    type: "dimension-info",
+    graph: structuredClone(graph),
+    prefix: "module.",
+    count: 1,
+  });
+  assert.equal(dialog.open, false);
+  assert.equal(dialog.getAttribute("aria-busy"), "false");
+  assert.equal(byId("tensor-statistics-progress").hidden, true);
+  assert.equal(byId("tensor-statistics-content").children.length, 0);
+
+  inspectTensor(document, "weight");
+  const current = request();
+  assert.equal(current.name, "weight");
+  assert.ok(current.requestId > stale.requestId);
+  send({
+    type: "tensor-statistics-info",
+    requestId: stale.requestId,
+    statistics: tensorStatistics("other-weight"),
+  });
+  send({
+    type: "tensor-statistics-error",
+    requestId: stale.requestId,
+    error: "Obsolete error",
+  });
+  assert.equal(dialog.getAttribute("aria-busy"), "true");
+  assert.equal(byId("tensor-statistics-content").children.length, 0);
+  assert.match(byId("tensor-statistics-status").textContent, /Loading.*weight/);
+  assert.doesNotMatch(
+    byId("tensor-statistics-status").textContent,
+    /Obsolete error/,
+  );
+  send({
+    type: "tensor-statistics-info",
+    requestId: current.requestId,
+    statistics: tensorStatistics(),
+  });
+  assert.equal(dialog.open, true);
+  assert.equal(dialog.getAttribute("aria-busy"), "false");
+  assert.ok(byId("tensor-statistics-content").children.length > 0);
+});
+
 test("Run Prompt recovers after a cancelled model replacement", (t) => {
   const { document, window, messages, load } = openViewer(t);
   document.getElementById("prompt-tab").click();
