@@ -190,10 +190,9 @@ For **parallel loading**, select onnx-light's **SDK owning loader**, then
 configure read/preparation overlap and its admission memory limit. One SDK I/O
 worker overlaps preparation on the CPU executor; CPU threads also apply to
 preparation. Standard ONNX loading remains the default. Both loaders support
-external tensors without explicit lengths. The owning loader does not accept pipelines
-(`xadupre/onnx-light#5698 <https://github.com/xadupre/onnx-light/issues/5698>`_).
-Only these loading controls are disabled for pipelines; CPU, memory and diagnostic
-settings remain editable.
+external tensors without explicit lengths. SDK 0.2.3 also supports owning pipeline
+loading, but the viewer does not yet expose it. Only these loading controls are
+disabled for pipelines; CPU, memory and diagnostic settings remain editable.
 GenAI exposes initialization/prepacking and session-thread controls, not a
 separate parallel weight-reader thread count. Parallel graph execution is not
 parallel loading. Profiles add overhead and are written under
@@ -205,8 +204,9 @@ FLOAT, DOUBLE, FLOAT16 and BFLOAT16 outputs support raw scores and the same
 token-aligned HF vocabulary comparisons as GenAI. If the capture budget is
 exhausted, tokens and timings continue, while unavailable scores/comparisons are
 identified explicitly. No timings are estimated by dividing the total runtime.
-Multiple EOS IDs remain unsupported by the SDK
-(`xadupre/onnx-light#5694 <https://github.com/xadupre/onnx-light/issues/5694>`_).
+The onnx-light engine accepts ``eos_token_id`` as a non-negative integer or a list
+of non-negative integers in ``generation_config.json`` or ``config.json``.
+Generation stops on any listed EOS ID; an empty list disables EOS stopping.
 Native pipeline generation uses the SDK's ``PipelineProto`` overload; unsupported
 stages or inputs fail explicitly, without a viewer-side generation loop.
 

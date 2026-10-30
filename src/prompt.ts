@@ -413,7 +413,7 @@ export async function runPrompt(
       "loadMemoryMiB" in options.sessionSettings)
   )
     throw new Error(
-      "The SDK parallel loader accepts ModelProto, not pipelines.",
+      "The viewer does not yet expose SDK owning-loader options for pipelines.",
     );
   if (!info.engines.includes(options.engine))
     throw new Error(
