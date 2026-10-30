@@ -4354,6 +4354,56 @@ test("writes newly folded weights while reusing unchanged external payloads", as
     );
 });
 
+test("dimension edits and clones share cached external weight payloads", async (t) => {
+  const directory = mkdtempSync(
+    path.join(tmpdir(), "onnx-light-dimension-cache-"),
+  );
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const size = 16 * 1024 * 1024;
+  const columns = size / 4;
+  const weight = Buffer.concat([
+    varintField(1, columns),
+    varintField(2, 1),
+    bytesField(8, "weight"),
+    bytesField(9, Buffer.alloc(size)),
+  ]);
+  const source = memoryTestModel(["component.model.N", columns], {
+    initializers: [weight],
+    nodes: [
+      Buffer.concat([
+        bytesField(1, "x"),
+        bytesField(1, "weight"),
+        bytesField(2, "y"),
+        bytesField(4, "Add"),
+      ]),
+    ],
+  });
+  const file = path.join(directory, "source.onnx");
+  const files = await source.serializeFiles(size * 2, "weights.bin");
+  writeFileSync(file, files.model);
+  for (const weight of files.weights)
+    writeFileSync(path.join(directory, weight.name), weight.bytes);
+  const model = await loadModelFile(file, "external");
+  const cached = (await model.previewFusion("TransposeTranspose")).model;
+  const rss = process.memoryUsage().rss;
+  const clones = Array.from({ length: 8 }, () => cached.clone());
+  assert.equal(cached.dimensionPrefix(), "component.model.");
+  const edited = cached.shortenDimensionNames();
+  assert.ok(
+    process.memoryUsage().rss - rss < 32 * 1024 * 1024,
+    "Cloning cached weights must not allocate copies of their tensor payloads",
+  );
+  assert.equal(
+    edited.model.graph().tensors.find(({ name }) => name === "x").shape[0],
+    "N",
+  );
+  for (const clone of clones)
+    assert.equal(
+      clone.graph().tensors.find(({ name }) => name === "x").shape[0],
+      "component.model.N",
+    );
+});
+
 test("fused models reuse original external weights and detect changed backing data", async (t) => {
   const directory = mkdtempSync(path.join(tmpdir(), "onnx-light-fusion-"));
   t.after(() => rmSync(directory, { recursive: true, force: true }));

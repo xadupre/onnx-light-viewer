@@ -679,6 +679,49 @@ function bindGraphLink(link, activate) {
   });
 }
 
+function operatorParameters(node) {
+  const attributes = (node.attributes ?? []).filter(
+    (attribute) => !attribute.graphs?.length,
+  );
+  const initializers = node.parameters ?? [];
+  const parameters = [
+    ...attributes.map((attribute, index) => ({
+      description: `${attribute.name} = ${attribute.value}`,
+      className: "node-attribute",
+      index,
+    })),
+    ...initializers.map((parameter, index) => {
+      const suffix = `: ${parameter.type}${parameter.shape === undefined ? "" : ` [${parameter.shape?.join(", ") ?? "?"}]`}${parameter.value === undefined ? "" : ` = ${parameter.value}`}`;
+      return {
+        description: parameter.name + suffix,
+        shortDescription: shortName(parameter.name, 22, true) + suffix,
+        className: "node-initializer",
+        index: attributes.length + index,
+      };
+    }),
+  ];
+  return { attributes, initializers, parameters };
+}
+
+function updateOperatorParameters(view) {
+  const { parameters } = operatorParameters(view.node);
+  const labels = view.group?.querySelectorAll(".node-parameter");
+  // Keep the original bounds, row layout and font sizes; renamed dimensions only get shorter.
+  view.parameterRows.forEach((row, index) => {
+    if (row.index === undefined) return;
+    const parameter = parameters[row.index];
+    row.description = parameter.description;
+    if (row.displayDescription !== undefined)
+      row.displayDescription =
+        parameter.shortDescription ?? parameter.description;
+    const text = labels?.[index];
+    if (!text) return;
+    text.firstChild.nodeValue = row.displayDescription ?? row.description;
+    text.setAttribute("aria-label", row.description);
+    text.querySelector("title").textContent = row.description;
+  });
+}
+
 function operatorSizes(nodes) {
   const context = document.createElement("canvas").getContext("2d");
   const family = getComputedStyle(svg).fontFamily;
@@ -694,20 +737,7 @@ function operatorSizes(nodes) {
     nodes.map((node) => {
       const typeWidth = widths.get(node.opType);
       const nameWidth = context.measureText(node.name).width;
-      const attributes = (node.attributes ?? []).filter(
-        (attribute) => !attribute.graphs?.length,
-      );
-      const initializers = node.parameters ?? [];
-      const parameters = [
-        ...attributes.map((attribute) => ({
-          description: `${attribute.name} = ${attribute.value}`,
-          className: "node-attribute",
-        })),
-        ...initializers.map((parameter) => ({
-          description: `${parameter.name}: ${parameter.type}${parameter.shape === undefined ? "" : ` [${parameter.shape?.join(", ") ?? "?"}]`}${parameter.value === undefined ? "" : ` = ${parameter.value}`}`,
-          className: "node-initializer",
-        })),
-      ];
+      const { attributes, initializers, parameters } = operatorParameters(node);
       const compact =
         parameters.length <= 2 &&
         parameters.every(
@@ -782,10 +812,7 @@ function operatorSizes(nodes) {
         !compact && attributes.length === 1 && initializers.length === 1
           ? parameters.map((parameter, index) => {
               const displayDescription =
-                parameter.className === "node-initializer"
-                  ? shortName(initializers[0].name, 22, true) +
-                    parameter.description.slice(initializers[0].name.length)
-                  : parameter.description;
+                parameter.shortDescription ?? parameter.description;
               return {
                 ...parameter,
                 displayDescription,
@@ -2182,6 +2209,7 @@ function render(graph, metadata) {
       halfHeight: size.height / 2,
       typeFontSize: size.typeFontSize,
       subgraphs: size.subgraphs,
+      parameterRows: size.parameterRows,
     });
     if (!virtualized) nodes.append(nodeViews.get(node.id).group);
     for (const input of [...node.inputs, ...(node.captures ?? [])]) {
@@ -2646,8 +2674,14 @@ window.addEventListener("message", (event) => {
       tensorListPanel.setGraph(displayedGraph);
       for (const node of displayedGraph.nodes) {
         const view = nodeViews.get(node.id);
-        if (view?.node) view.node = node;
+        if (view?.node) {
+          view.node = node;
+          updateOperatorParameters(view);
+        }
       }
+      promptReloadPending = false;
+      promptPanel.reset();
+      if (!byId("prompt-view").hidden) promptPanel.activate();
       memoryPanel.setGraph(displayedGraph);
       const selection = new Set(selected);
       fusionPanel.invalidate();

@@ -241,7 +241,7 @@ test("Symbolic edits preserve graph view, fusion undo and pending rewritings", a
 test("dimension shortening refreshes node snapshots and encoded tensor shapes", (t) => {
   const { document, window, load } = openViewer(t);
   const source = weightsGraph();
-  const oldName = "component.model.N";
+  const oldName = "component.model.very_long_namespace.N";
   const graph = {
     ...source,
     encodedInitializers: [
@@ -276,6 +276,11 @@ test("dimension shortening refreshes node snapshots and encoded tensor shapes", 
       (row) => row.dataset.name === "encoded",
     );
   assert.equal(tensorRow().cells[3].textContent, `[${oldName}]`);
+  const node = document.querySelector('[data-id="node-0"]');
+  const bounds = node.querySelector("rect").outerHTML;
+  const position = node.getAttribute("transform");
+  const rows = [...node.querySelectorAll(".node-parameter")];
+  assert.ok(rows.every((row) => row.textContent.includes(oldName)));
 
   const edited = structuredClone(graph);
   edited.encodedInitializers[0].shape = ["N"];
@@ -284,7 +289,7 @@ test("dimension shortening refreshes node snapshots and encoded tensor shapes", 
   send({
     type: "dimension-info",
     graph: edited,
-    prefix: "component.model.",
+    prefix: "component.model.very_long_namespace.",
     count: 1,
   });
 
@@ -305,7 +310,103 @@ test("dimension shortening refreshes node snapshots and encoded tensor shapes", 
     document.getElementById("node-initializers").textContent.includes("N"),
   );
   assert.equal(tensorRow().cells[3].textContent, "[N]");
+  assert.equal(node.querySelector("rect").outerHTML, bounds);
+  assert.equal(node.getAttribute("transform"), position);
+  for (const row of rows) {
+    assert.ok(!row.textContent.includes(oldName));
+    assert.ok(row.textContent.includes("N"));
+    assert.ok(!row.getAttribute("aria-label").includes(oldName));
+    assert.ok(!row.querySelector("title").textContent.includes(oldName));
+  }
 });
+
+test("dimension shortening refreshes virtualized parameter rows before they are remounted", (t) => {
+  const { document, window, load } = openViewer(t);
+  const graph = chainGraph(300);
+  const node = graph.nodes[0];
+  node.attributes = [{ name: "shape", type: "STRING", value: "mod.N" }];
+  node.parameters = [{ name: "weight", type: "FLOAT", shape: ["mod.N"] }];
+  load(graph);
+  const operator = () => document.querySelector('[data-id="node-0"]');
+  const bounds = operator().querySelector("rect").outerHTML;
+  const edited = structuredClone(graph);
+  edited.nodes[0].attributes[0].value = "N";
+  edited.nodes[0].parameters[0].shape = ["N"];
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: { type: "dimension-info", graph: edited, prefix: "mod.", count: 1 },
+    }),
+  );
+  document.getElementById("zoom-fit").click();
+  assert.equal(operator(), null);
+  document.getElementById("zoom-readable").click();
+  assert.equal(operator().querySelector("rect").outerHTML, bounds);
+  for (const row of operator().querySelectorAll(".node-parameter")) {
+    assert.ok(!row.textContent.includes("mod.N"));
+    assert.ok(row.getAttribute("aria-label").includes("N"));
+    assert.ok(!row.querySelector("title").textContent.includes("mod.N"));
+  }
+});
+
+for (const generating of [false, true]) {
+  for (const visible of [false, true]) {
+    test(`dimension shortening resets ${generating ? "generation" : "pending Prompt information"} with Prompt ${visible ? "visible" : "hidden"}`, (t) => {
+      const { document, window, messages, load } = openViewer(t);
+      const send = (data) =>
+        window.dispatchEvent(new window.MessageEvent("message", { data }));
+      const promptRequest = () =>
+        messages.findLast(({ type }) => type === "prompt-info");
+      load(demoGraph);
+      document.getElementById("prompt-tab").click();
+      if (generating) {
+        send({
+          type: "prompt-info",
+          requestId: promptRequest().requestId,
+          info: { available: true, engines: ["onnx-light"] },
+        });
+        document
+          .getElementById("prompt-form")
+          .dispatchEvent(
+            new window.Event("submit", { bubbles: true, cancelable: true }),
+          );
+        assert.equal(messages.at(-1).type, "run-prompt");
+      }
+      const stale = messages.at(-1).requestId;
+      if (!visible) document.getElementById("model-tab").click();
+      const before = promptRequest();
+      send({
+        type: "dimension-info",
+        graph: structuredClone(demoGraph),
+        prefix: "component.model.",
+        count: 1,
+      });
+      if (!visible) {
+        assert.equal(promptRequest(), before);
+        document.getElementById("prompt-tab").click();
+      }
+      const current = promptRequest();
+      assert.notEqual(current, before);
+      assert.ok(current.requestId > stale);
+      if (generating)
+        assert.equal(
+          messages.filter(({ type }) => type === "prompt-cancel").length,
+          1,
+        );
+      send({
+        type: "prompt-info",
+        requestId: current.requestId,
+        info: { available: true, engines: ["onnx-light"] },
+      });
+      send({ type: "prompt-error", requestId: stale, error: "Obsolete error" });
+      assert.equal(document.getElementById("prompt-fields").disabled, false);
+      assert.equal(document.getElementById("prompt-cancel").hidden, true);
+      assert.match(
+        document.getElementById("prompt-status").textContent,
+        /^Ready/,
+      );
+    });
+  }
+}
 
 test("dimension shortening preserves graph selection while invalidating fusion matches", async (t) => {
   const { document, window, messages, load } = openViewer(t);

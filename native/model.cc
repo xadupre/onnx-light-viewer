@@ -16,7 +16,9 @@ std::shared_ptr<StoredModel> CloneStoredModel(const std::shared_ptr<StoredModel>
   copy->source_time = model->source_time;
   copy->skipped = model->skipped;
   copy->has_training_info = model->has_training_info;
-  copy->external_weights = model->external_weights;
+  copy->external_weights.reserve(model->external_weights.size());
+  for (const auto &weight : model->external_weights)
+    copy->external_weights.push_back({weight.reference.SharedCopy(), weight.value.SharedCopy()});
   copy->fusion_base = model->fusion_base;
   copy->fusion_previous = model->fusion_previous;
   copy->fusion_history = model->fusion_history;
