@@ -505,6 +505,114 @@ test("dimension shortening and graph navigation cannot overlap", (t) => {
   assert.equal(dimensions.disabled, false);
 });
 
+for (const all of [false, true]) {
+  test(`dimension shortening releases cancelled unfuse ${all ? "all" : "last"} controls but preserves live requests`, (t) => {
+    const { document, window, messages } = openViewer(t);
+    const byId = (id) => document.getElementById(id);
+    const send = (data) =>
+      window.dispatchEvent(new window.MessageEvent("message", { data }));
+    send({
+      type: "graph",
+      graph: demoGraph,
+      file: {
+        fusionCount: 1,
+        fusionHistory: [{ matches: [{ pattern: "Example", nodes: [0] }] }],
+      },
+    });
+    const rename = byId("shorten-dimensions");
+    const undo = byId("undo-fusion");
+    const last = byId("unfuse-last");
+    const everything = byId("unfuse-all");
+    const history = byId("unfuse-history").querySelector("button");
+    const start = () => {
+      rename.click();
+      assert.equal(messages.at(-1).type, "shorten-dimensions");
+      (all ? everything : last).click();
+      assert.equal(messages.at(-1).type, "undo-fusion");
+      assert.equal(messages.at(-1).all, all);
+      assert.equal(undo.getAttribute("aria-busy"), "true");
+      assert.ok(
+        [undo, last, everything, history].every((button) => button.disabled),
+      );
+    };
+    start();
+    send({ type: "dimension-info", prefix: "", count: 0 });
+    assert.equal(undo.getAttribute("aria-busy"), "true");
+    assert.ok(
+      [undo, last, everything, history].every((button) => button.disabled),
+    );
+    send({ type: "undo-fusion-error", error: "Cancelled by user" });
+    assert.ok(
+      [undo, last, everything, history].every((button) => !button.disabled),
+    );
+    start();
+    send({
+      type: "dimension-info",
+      graph: structuredClone(demoGraph),
+      prefix: "module.",
+      count: 1,
+    });
+    assert.equal(undo.getAttribute("aria-busy"), "false");
+    assert.ok(
+      [undo, last, everything, history].every((button) => !button.disabled),
+    );
+    (all ? everything : last).click();
+    assert.equal(messages.at(-1).type, "undo-fusion");
+  });
+}
+
+for (const visible of [false, true]) {
+  test(`dimension shortening refreshes statistics with Statistics ${visible ? "visible" : "hidden"}`, (t) => {
+    const { document, window, messages, load } = openViewer(t);
+    const byId = (id) => document.getElementById(id);
+    const send = (data) =>
+      window.dispatchEvent(new window.MessageEvent("message", { data }));
+    const request = () =>
+      messages.findLast(({ type }) => type === "get-statistics");
+    load(demoGraph);
+    byId("shorten-dimensions").click();
+    byId("statistics-tab").click();
+    const stale = request();
+    if (!visible) byId("model-tab").click();
+    send({
+      type: "dimension-info",
+      graph: structuredClone(demoGraph),
+      prefix: "module.",
+      count: 1,
+    });
+    if (!visible) {
+      assert.equal(request(), stale);
+      assert.equal(byId("statistics-view").getAttribute("aria-busy"), "false");
+      assert.match(byId("statistics-empty").textContent, /Open Statistics/);
+    } else {
+      assert.notEqual(request(), stale);
+      assert.equal(byId("statistics-view").getAttribute("aria-busy"), "true");
+    }
+    send({
+      type: "statistics-info",
+      requestId: stale.requestId,
+      statistics: demoGraph,
+    });
+    send({
+      type: "statistics-error",
+      requestId: stale.requestId,
+      error: "Obsolete error",
+    });
+    assert.equal(byId("statistics-content").hidden, true);
+    assert.doesNotMatch(byId("statistics-empty").textContent, /Obsolete error/);
+    if (!visible) byId("statistics-tab").click();
+    const current = request();
+    assert.ok(current.requestId > stale.requestId);
+    send({
+      type: "statistics-info",
+      requestId: current.requestId,
+      statistics: demoGraph,
+    });
+    assert.equal(byId("statistics-view").getAttribute("aria-busy"), "false");
+    assert.equal(byId("statistics-content").hidden, false);
+  });
+}
+
 test("Run Prompt recovers after a cancelled model replacement", (t) => {
   const { document, window, messages, load } = openViewer(t);
   document.getElementById("prompt-tab").click();

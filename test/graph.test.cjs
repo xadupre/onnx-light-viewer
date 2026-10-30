@@ -181,6 +181,56 @@ test("dimension prefix edits preserve distinct names and concrete or anonymous d
   assert.equal(model.dimensionPrefix(), "module.");
 });
 
+function dimensionInferenceModel(shape) {
+  return memoryTestModel(shape, {
+    nodes: [
+      ["x", "hidden"],
+      ["hidden", "y"],
+    ].map(([input, output]) =>
+      Buffer.concat([
+        bytesField(1, input),
+        bytesField(2, output),
+        bytesField(4, "Relu"),
+      ]),
+    ),
+  });
+}
+
+test("no-op dimension edits keep inference independent of the original snapshot", () => {
+  for (const [shape, prefix] of [
+    [[2, 3], undefined],
+    [["batch", 3], undefined],
+    [["module.batch", 3], ""],
+  ]) {
+    for (const method of ["graph", "summary"]) {
+      const original = dimensionInferenceModel(shape);
+      const before = original.graph();
+      const edited = original.shortenDimensionNames(prefix);
+      assert.equal(edited.count, 0);
+      edited.model[method](true);
+      assert.notDeepEqual(edited.model.graph(), before);
+      assert.deepEqual(original.graph(), before);
+    }
+  }
+});
+
+test("dimension edits isolate static pipeline stages during inference", async () => {
+  const original = loadModel(
+    pipelineBytes({
+      embedding: await dimensionInferenceModel([2, 3]).serialize(),
+      prefill: await memoryTestModel(["module.batch", 3]).serialize(),
+    }),
+    "mixed-dimensions.pipe-onnx",
+  );
+  const stage = [{ pipeline: "embedding" }];
+  const before = original.graph(false, stage);
+  const edited = original.shortenDimensionNames();
+  assert.ok(edited.count > 0);
+  edited.model.graph(true, stage);
+  assert.notDeepEqual(edited.model.graph(false, stage), before);
+  assert.deepEqual(original.graph(false, stage), before);
+});
+
 test("dimension prefix edits never read omitted initializer payloads", async (t) => {
   const root = mkdtempSync(path.join(tmpdir(), "onnx-dimension-prefix-"));
   t.after(() => rmSync(root, { force: true, recursive: true }));

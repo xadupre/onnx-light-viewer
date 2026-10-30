@@ -2799,6 +2799,13 @@ window.addEventListener("message", (event) => {
       refreshStatus(false);
       verificationStatus(false);
       metadataStatus(false);
+      byId("undo-fusion").setAttribute("aria-busy", "false");
+      setLoading(replacementPending);
+      if (!byId("statistics-view").hidden) requestStatistics();
+      else {
+        statisticsRequest++;
+        statisticsStatus("Open Statistics to update model statistics.");
+      }
     }
     dimensionStatus(
       false,

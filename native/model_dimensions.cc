@@ -194,7 +194,7 @@ void AddDimensionMethods(Napi::Env env, Napi::Object result, std::shared_ptr<Sto
             for (auto *value : edit.names.values)
               *value = std::string(value->sv().substr(prefix.size()));
           auto result = Napi::Object::New(call.Env());
-          result.Set("model", ModelHandle(call.Env(), count ? copy : model));
+          result.Set("model", ModelHandle(call.Env(), copy));
           result.Set("prefix", prefix);
           result.Set("count", Napi::Number::New(call.Env(), count));
           return result;
