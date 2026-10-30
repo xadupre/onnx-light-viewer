@@ -259,6 +259,55 @@ async function exists(file: string): Promise<boolean> {
   }
 }
 
+async function hasTokenizerPackage(directory: string): Promise<boolean> {
+  return (
+    (await exists(join(directory, "genai_config.json"))) &&
+    ((await exists(join(directory, "tokenizer.json"))) ||
+      (await exists(join(directory, "tokenizer_config.json"))))
+  );
+}
+
+async function lightSource(
+  directories: string[],
+  genai: boolean,
+): Promise<string | undefined> {
+  for (const directory of directories) {
+    const configPath = join(directory, "config.json");
+    if (!(await exists(configPath)) || !(await hasTokenizerPackage(directory)))
+      continue;
+    const contents = await readFile(configPath, "utf8");
+    let config: Record<string, unknown>;
+    try {
+      config = JSON.parse(contents);
+    } catch (error) {
+      if (!(error instanceof SyntaxError)) throw error;
+      console.warn(
+        `Skipping invalid model configuration at ${configPath}: ${error.message}`,
+      );
+      continue;
+    }
+    if (!config || typeof config !== "object" || Array.isArray(config)) {
+      console.warn(
+        `Skipping invalid model configuration at ${configPath}: expected a JSON object.`,
+      );
+      continue;
+    }
+    const causal =
+      genai ||
+      config.is_decoder === true ||
+      (Array.isArray(config.architectures) &&
+        config.architectures.some(
+          (architecture) =>
+            typeof architecture === "string" &&
+            /(?:CausalLM|LMHeadModel|ForConditionalGeneration)$/.test(
+              architecture,
+            ),
+        ));
+    if (causal && config.is_encoder_decoder !== true) return directory;
+  }
+  return undefined;
+}
+
 /** Availability describes model assets; missing native runtime errors surface at run time. */
 export async function promptInfo(
   modelPath: string,
@@ -280,44 +329,15 @@ export async function promptInfo(
   const genai =
     !/\.pipe-onnx$/i.test(modelPath) &&
     (await exists(join(dirname(modelPath), "genai_config.json")));
-  if (genai) engines.push("onnxruntime-genai");
+  if (genai && (await hasTokenizerPackage(dirname(modelPath))))
+    engines.push("onnxruntime-genai");
   const provenance = await readProvenance(modelPath);
   const directories = [
-    dirname(modelPath),
     ...(provenance?.source ? [provenance.source] : []),
+    dirname(modelPath),
     ...(packageDirectory ? [packageDirectory] : []),
   ];
-  for (const directory of directories) {
-    const configPath = join(directory, "config.json");
-    if (
-      !(await exists(configPath)) ||
-      !(
-        (await exists(join(directory, "tokenizer.json"))) ||
-        (await exists(join(directory, "tokenizer_config.json")))
-      )
-    )
-      continue;
-    const config = JSON.parse(await readFile(configPath, "utf8")) as {
-      architectures?: unknown;
-      is_decoder?: unknown;
-      is_encoder_decoder?: unknown;
-    };
-    const causal =
-      genai ||
-      config.is_decoder === true ||
-      (Array.isArray(config.architectures) &&
-        config.architectures.some(
-          (architecture) =>
-            typeof architecture === "string" &&
-            /(?:CausalLM|LMHeadModel|ForConditionalGeneration)$/.test(
-              architecture,
-            ),
-        ));
-    if (causal && config.is_encoder_decoder !== true) {
-      engines.unshift("onnx-light");
-      break;
-    }
-  }
+  if (await lightSource(directories, genai)) engines.unshift("onnx-light");
   const recordedReference = !!(
     provenance?.source ||
     (provenance?.model && !isAbsolute(provenance.model))
@@ -346,7 +366,7 @@ export async function promptInfo(
       ? {}
       : {
           reason:
-            "Prompt is disabled because no compatible local generation package was found. ONNX Runtime GenAI requires genai_config.json beside the model and tokenizer assets; onnx-light requires causal-model config.json and tokenizer assets. Integrated embeddings are supported. For Mobius, export with --runtime ort-genai to include the GenAI configuration and tokenizer.",
+            "Prompt is disabled because no compatible local generation package was found. ONNX Runtime GenAI requires genai_config.json and tokenizer assets beside the model; onnx-light requires causal-model config.json, genai_config.json and tokenizer assets together in a local source or export directory. Integrated embeddings are supported. For Mobius, export with --runtime ort-genai to include the GenAI configuration and tokenizer.",
         }),
   };
 }
@@ -396,24 +416,27 @@ export async function runPrompt(
       "The SDK parallel loader accepts ModelProto, not pipelines.",
     );
   if (!info.engines.includes(options.engine))
-    throw new Error(info.reason ?? "This model does not support that engine.");
+    throw new Error(
+      info.reason ??
+        "This model does not support that engine. Both engines require genai_config.json and tokenizer assets in the tokenizer directory; onnx-light also requires causal-model config.json.",
+    );
   const provenance = await readProvenance(modelPath);
   const directories = [
     ...(provenance?.source ? [provenance.source] : []),
     dirname(modelPath),
   ];
-  let source: string | undefined;
-  for (const directory of directories)
-    if (
-      (await exists(join(directory, "tokenizer.json"))) ||
-      (await exists(join(directory, "tokenizer_config.json")))
-    ) {
-      source = directory;
-      break;
-    }
-  if (options.engine === "onnxruntime-genai") source = dirname(modelPath);
+  const source =
+    options.engine === "onnxruntime-genai"
+      ? dirname(modelPath)
+      : await lightSource(
+          directories,
+          !info.pipeline &&
+            (await exists(join(dirname(modelPath), "genai_config.json"))),
+        );
   if (!source)
-    throw new Error("No local tokenizer is available for this model.");
+    throw new Error(
+      "No local tokenizer package with config.json, genai_config.json and tokenizer assets is available for this model.",
+    );
   let eosTokenId: number | undefined;
   if (options.engine === "onnx-light") {
     for (const name of ["generation_config.json", "config.json"]) {

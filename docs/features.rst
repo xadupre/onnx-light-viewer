@@ -127,6 +127,12 @@ Execution uses the saved model, not unsaved graph edits.
 
 The bundled onnx-light SDK supplies its CPU kernels. Native tokenization for both
 engines uses the ONNX Runtime GenAI C API (0.17.0 or newer), not its Python module.
+The tokenizer directory must contain ``genai_config.json`` and tokenizer assets
+(``tokenizer.json`` or ``tokenizer_config.json`` with its referenced files).
+For onnx-light, it must also contain a causal-model ``config.json``. Discovery
+prefers a complete recorded source package, then the export directory; a bare
+Hugging Face checkpoint without ``genai_config.json`` is not a native tokenizer
+package. ONNX Runtime GenAI requires its package beside the exported model.
 Install the matching C++ GenAI and ONNX Runtime libraries and set
 ``ONNX_LIGHT_VIEWER_GENAI_LIBRARY`` to the absolute GenAI shared-library path
 before starting VS Code. Set ``ORT_LIB_PATH`` to the absolute ONNX Runtime

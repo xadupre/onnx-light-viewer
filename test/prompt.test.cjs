@@ -99,17 +99,146 @@ test("prompt availability follows local causal metadata and supports native pipe
   await writeFile(path.join(root, "model.safetensors"), "checkpoint fixture");
   assert.equal((await promptInfo(model)).validationRequiresReference, false);
   await rm(path.join(root, "model.safetensors"));
+  const genaiConfig = await readFile(path.join(root, "genai_config.json"));
   await rm(path.join(root, "genai_config.json"));
-  assert.deepEqual((await promptInfo(model)).engines, ["onnx-light"]);
+  assert.equal((await promptInfo(model)).available, false);
   const pipeline = path.join(root, "model.pipe-onnx");
   await writeFile(pipeline, "");
+  assert.equal((await promptInfo(pipeline)).available, false);
+  await writeFile(path.join(root, "genai_config.json"), genaiConfig);
   assert.deepEqual((await promptInfo(pipeline)).engines, ["onnx-light"]);
+  await rm(path.join(root, "genai_config.json"));
   await writeFile(
     path.join(root, "config.json"),
     JSON.stringify({ architectures: ["BertForSequenceClassification"] }),
   );
   assert.equal((await promptInfo(model)).available, false);
   assert.equal((await promptInfo("relative.onnx")).available, false);
+});
+
+test("source discovery requires the GenAI configuration in the tokenizer directory before native loading", async (t) => {
+  const { root, model } = await fixture(t);
+  const source = path.join(root, "checkpoint");
+  await mkdir(source);
+  for (const name of ["config.json", "tokenizer.json", "tokenizer_config.json"])
+    await rename(path.join(root, name), path.join(source, name));
+  await writeFile(
+    provenancePath(model),
+    JSON.stringify({
+      version: 1,
+      exporter: "mobius",
+      model: "owner/model",
+      source,
+    }),
+  );
+  const phases = [];
+  const run = () =>
+    runPrompt(
+      model,
+      { ...options, engine: "onnx-light" },
+      "/no/python",
+      signal(),
+      () => {},
+      undefined,
+      undefined,
+      undefined,
+      (phase) => phases.push(phase),
+    );
+  const info = await promptInfo(model);
+  assert.equal(info.available, false);
+  assert.deepEqual(info.engines, []);
+  assert.match(info.reason, /config\.json, genai_config\.json and tokenizer/);
+  await assert.rejects(run(), /genai_config\.json/);
+  assert.deepEqual(phases, []);
+  assert.equal(
+    (await readdir(root)).some((name) => name.startsWith(".prompt-")),
+    false,
+  );
+  await writeFile(
+    path.join(source, "genai_config.json"),
+    await readFile(path.join(root, "genai_config.json")),
+  );
+  assert.deepEqual((await promptInfo(model)).engines, ["onnx-light"]);
+  assert.deepEqual(
+    (await run()).tokens.map((token) => token.id),
+    [1, 1, 1],
+  );
+});
+
+test("source discovery skips incomplete or malformed checkpoints and prefers complete source tokenizer packages", async (t) => {
+  const { root, model } = await fixture(t);
+  const source = path.join(root, "checkpoint");
+  await mkdir(source);
+  for (const name of ["config.json", "tokenizer.json", "tokenizer_config.json"])
+    await writeFile(
+      path.join(source, name),
+      await readFile(path.join(root, name)),
+    );
+  const file = path.join(source, "tokenizer.json");
+  const tokenizer = JSON.parse(await readFile(file, "utf8"));
+  tokenizer.model.vocab.a = tokenizer.model.vocab.o;
+  delete tokenizer.model.vocab.o;
+  await writeFile(file, JSON.stringify(tokenizer));
+  await writeFile(
+    provenancePath(model),
+    JSON.stringify({
+      version: 1,
+      exporter: "mobius",
+      model: "owner/model",
+      source,
+    }),
+  );
+  const run = () =>
+    runPrompt(
+      model,
+      { ...options, engine: "onnx-light" },
+      "/no/python",
+      signal(),
+      () => {},
+    );
+  assert.deepEqual((await promptInfo(model)).engines, [
+    "onnx-light",
+    "onnxruntime-genai",
+  ]);
+  assert.equal((await run()).tokens[0].text, "o");
+  await writeFile(
+    path.join(source, "genai_config.json"),
+    await readFile(path.join(root, "genai_config.json")),
+  );
+  assert.equal((await run()).tokens[0].text, "a");
+  for (const config of ['{"architectures":', "null", "[]"]) {
+    await writeFile(path.join(source, "config.json"), config);
+    assert.deepEqual((await promptInfo(model)).engines, [
+      "onnx-light",
+      "onnxruntime-genai",
+    ]);
+    assert.equal((await run()).tokens[0].text, "o");
+  }
+  await rm(path.join(root, "config.json"));
+  assert.deepEqual((await promptInfo(model)).engines, ["onnxruntime-genai"]);
+  const genai = await runPrompt(
+    model,
+    options,
+    "/no/python",
+    signal(),
+    () => {},
+  );
+  assert.deepEqual(
+    genai.tokens.map((token) => token.id),
+    [1, 1, 1],
+  );
+});
+
+test("GenAI configuration alone does not make a tokenizer package available", async (t) => {
+  const { root, model } = await fixture(t, false);
+  await rm(path.join(root, "tokenizer.json"));
+  assert.equal((await promptInfo(model)).available, true);
+  await rm(path.join(root, "tokenizer_config.json"));
+  assert.deepEqual((await promptInfo(model)).engines, []);
+  await assert.rejects(
+    runPrompt(model, options, "/no/python", signal(), () => {}),
+    /genai_config\.json and tokenizer assets/,
+  );
 });
 
 test("graph-only Mobius exports explain how to supply missing generation assets", async (t) => {
@@ -132,6 +261,7 @@ test("snapshot-style metadata symlinks remain available", async (t) => {
   await mkdir(blobs);
   for (const name of [
     "config.json",
+    "genai_config.json",
     "tokenizer.json",
     "tokenizer_config.json",
   ]) {
