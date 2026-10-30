@@ -474,7 +474,7 @@ test("loading and warmup appear before tokens, and unloading updates retained st
   assert.doesNotMatch(byId("prompt-lifecycle").textContent, /999/);
 });
 
-test("invalid settings stop generation and pipeline-only loading limitations are explicit", (t) => {
+test("invalid settings stop generation and pipelines expose SDK owning-loader controls", (t) => {
   const { dom, byId, api, messages } = panel(t);
   const threads = byId("prompt-settings-light").querySelector(
     '[data-setting="threads"]',
@@ -492,25 +492,34 @@ test("invalid settings stop generation and pipeline-only loading limitations are
     requestId: messages[0].requestId,
     info: { available: true, engines: ["onnx-light"], pipeline: true },
   });
-  const overlap = byId("prompt-settings-light").querySelector(
-    '[data-setting="loadOverlap"]',
-  );
+  const light = byId("prompt-settings-light");
+  const overlap = light.querySelector('[data-setting="loadOverlap"]');
+  const loader = light.querySelector('[data-setting="sdkLoader"]');
   assert.equal(overlap.disabled, true);
-  assert.equal(byId("prompt-pipeline-loading").hidden, false);
+  assert.equal(loader.disabled, false);
   assert.equal(byId("prompt-settings-light").hidden, false);
   assert.equal(byId("prompt-settings-genai").hidden, true);
-  for (const field of byId("prompt-settings-light").querySelectorAll(
-    "[data-setting]",
-  ))
-    assert.equal(
-      field.matches(":disabled"),
-      field.hasAttribute("data-loading"),
-      `${field.dataset.setting} should only be disabled for pipeline loading`,
-    );
+  loader.value = "true";
+  loader.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+  for (const field of light.querySelectorAll("[data-setting]"))
+    assert.equal(field.matches(":disabled"), false, field.dataset.setting);
   overlap.value = "false";
+  light.querySelector('[data-setting="loadMemoryMiB"]').value = "512";
   byId("prompt-settings-back").click();
   byId("prompt-form").dispatchEvent(new dom.window.Event("submit"));
-  assert.equal(messages.at(-1).options.sessionSettings.loadOverlap, undefined);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(messages.at(-1).options.sessionSettings)),
+    {
+      threads: 1,
+      sdkLoader: true,
+      loadOverlap: false,
+      loadMemoryMiB: 512,
+      profile: false,
+    },
+  );
+  loader.value = "false";
+  loader.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+  assert.equal(overlap.disabled, true);
 });
 
 test("a single prefill token has no decode mean and missing SDK timings are not fabricated", (t) => {
