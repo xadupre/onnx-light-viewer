@@ -2510,6 +2510,117 @@ function optimizationModel() {
   );
 }
 
+test("optimization shares large initializer and Constant payloads across snapshots", async (t) => {
+  const directory = mkdtempSync(path.join(tmpdir(), "optimization-payloads-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const size = 64 * 1024 * 1024;
+  for (const storage of ["initializer", "Constant", "external"]) {
+    const external = storage === "external";
+    const tensor = Buffer.concat([
+      varintField(1, size / 4),
+      varintField(2, 1),
+      bytesField(8, "weight"),
+      bytesField(9, Buffer.alloc(size, 63)),
+    ]);
+    const node = (op, inputs, output, attributes = []) =>
+      Buffer.concat([
+        ...inputs.map((name) => bytesField(1, name)),
+        bytesField(2, output),
+        bytesField(4, op),
+        ...attributes,
+      ]);
+    const perm = bytesField(
+      5,
+      Buffer.concat([
+        bytesField(1, "perm"),
+        varintField(8, 1),
+        varintField(8, 0),
+        varintField(20, 7),
+      ]),
+    );
+    const nodes = [
+      ...(storage === "Constant"
+        ? [
+            node("Constant", [], "weight", [
+              bytesField(
+                5,
+                Buffer.concat([
+                  bytesField(1, "value"),
+                  bytesField(5, tensor),
+                  varintField(20, 4),
+                ]),
+              ),
+            ]),
+          ]
+        : []),
+      node("Transpose", ["x"], "transposed", [perm]),
+      node("Transpose", ["transposed"], "restored", [perm]),
+      ...Array.from({ length: 2000 }, (_, i) =>
+        node("Relu", [i ? `r${i - 1}` : "restored"], `r${i}`),
+      ),
+      node("Add", ["r1999", "weight"], "y"),
+    ];
+    const file = path.join(directory, `${storage}.onnx`);
+    const model = memoryTestModel([1, size / 4], {
+      nodes,
+      initializers: storage === "Constant" ? [] : [tensor],
+    });
+    if (external) {
+      const files = await model.serializeFiles(size, "weight");
+      writeFileSync(file, files.model);
+      for (const weight of files.weights)
+        writeFileSync(path.join(directory, weight.name), weight.bytes);
+    } else {
+      writeFileSync(file, await model.serialize());
+    }
+    const measurement = JSON.parse(
+      execFileSync(
+        process.execPath,
+        [
+          "--expose-gc",
+          "-e",
+          `
+          const assert = require("node:assert/strict");
+          const { readFileSync } = require("node:fs");
+          const { loadModel } = require(${JSON.stringify(require.resolve("../dist/graph"))});
+          (async () => {
+            const source = loadModel(readFileSync(${JSON.stringify(file)}), "large");
+            const preview = await source.previewFusion("TransposeTranspose", ${JSON.stringify(file)});
+            assert.equal(preview.matches.length, 1);
+            global.gc();
+            const before = process.resourceUsage().maxRSS;
+            const clones = [preview.model.clone(), preview.model.clone()];
+            const started = process.hrtime.bigint();
+            const optimized = await clones[0].optimize(["TransposeTranspose"], "Optimize");
+            const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+            const matched = await clones[1].previewFusion("TransposeTranspose");
+            assert.equal(matched.matches.length, 1);
+            optimized.verify();
+            assert.equal(optimized.optimizationReport().rewrites, 1);
+            const increase = (process.resourceUsage().maxRSS - before) * 1024;
+            console.log(JSON.stringify({
+              increase,
+              elapsedMs,
+              matchingTimeNs: optimized.optimizationReport().matchingTimeNs,
+            }));
+          })().catch(error => { console.error(error); process.exitCode = 1; });
+          `,
+        ],
+        { encoding: "utf8" },
+      ),
+    );
+    t.diagnostic(`${storage}: ${JSON.stringify(measurement)}`);
+    assert.ok(
+      measurement.increase < (size * 3) / 4,
+      `${storage}: snapshots allocated ${measurement.increase} bytes`,
+    );
+    assert.ok(
+      measurement.matchingTimeNs < 3e9,
+      `${storage}: matching exceeded three seconds`,
+    );
+  }
+});
+
 test("explains one native pattern/node without changing matching, history or the source model", async () => {
   const source = loadModel(modelBytes("fusion.onnx"), "fusion");
   const original = source.graph();
