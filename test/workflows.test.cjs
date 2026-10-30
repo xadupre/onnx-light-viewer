@@ -79,14 +79,18 @@ test("Python tooling uses full onnx-light 0.2.3 wheels", () => {
       `https://github.com/xadupre/onnx-light/releases/download/${version}/onnx_light-${version}-cp312-cp312-win_amd64.whl#sha256=308fc7cef584421c0117e7982c025583963edba62967d484f9be6b78909eff11`,
     ),
   );
+  assert.ok(
+    requirements.includes(
+      `https://github.com/xadupre/onnx-light/releases/download/${version}/onnx_light-${version}-cp312-cp312-macosx_13_0_universal2.whl#sha256=e86c830884f965314d978302fdc6cfd38126cefafc048c041c104454f4e2150e ; sys_platform == "darwin" and platform_machine == "arm64" and python_version == "3.12"`,
+    ),
+  );
   assert.match(requirements, /^onnx-light-cpu==0\.2\.1\.1$/m);
 });
 
-test("CI runs unit tests on Linux and Windows without building documentation", () => {
+test("CI runs unit tests on Linux, Windows and macOS ARM64 without building documentation", () => {
   const source = workflow("tests.yml");
   assert.match(source, /runs-on: \$\{\{ matrix\.os \}\}/);
-  assert.match(source, /os: \[ubuntu-latest, windows-latest\]/);
-  assert.doesNotMatch(source, /macos-/);
+  assert.match(source, /os: \[ubuntu-latest, windows-latest, macos-15\]/);
   assert.match(source, /run: npm test/);
   assert.match(source, /if: runner\.os == 'Linux'\s+run: clang-format/);
   assert.doesNotMatch(source, /sphinx/);
