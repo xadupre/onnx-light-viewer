@@ -230,7 +230,15 @@ Napi::Array PipelineMetadata(Napi::Env env, const ol::PipelineProto &pipeline) {
   add_number("max_new_tokens", pipeline.ptr_max_new_tokens());
   add_number("temperature", pipeline.ptr_temperature());
   add_number("seed", pipeline.ptr_seed());
-  add_number("eos_token_id", pipeline.ptr_eos_token_id());
+  if (!pipeline.eos_token_ids().empty()) {
+    std::string ids;
+    for (const auto id : pipeline.eos_token_ids()) {
+      if (!ids.empty())
+        ids += ", ";
+      ids += std::to_string(id);
+    }
+    add("eos_token_ids", ids);
+  }
   add_number("pad_token_id", pipeline.ptr_pad_token_id());
   add_number("top_k", pipeline.ptr_top_k());
   add_number("top_p", pipeline.ptr_top_p());

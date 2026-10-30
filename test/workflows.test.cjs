@@ -12,34 +12,34 @@ function workflow(name) {
 
 const documentation = workflow("documentation.yml");
 
-test("native builds use onnx-light 0.2.2 with pinned checksums", () => {
+test("native builds use onnx-light 0.2.3 with pinned checksums", () => {
   const cmake = readFileSync(
     path.resolve(__dirname, "..", "CMakeLists.txt"),
     "utf8",
   );
   const version = cmake.match(/set\(ONNX_LIGHT_VERSION "([^"]+)"\)/)[1];
-  assert.equal(version, "0.2.2");
+  assert.equal(version, "0.2.3");
   assert.equal([...cmake.matchAll(/set\(_sha256 "[a-f0-9]{64}"\)/g)].length, 5);
   for (const [asset, sha256] of [
     [
       "onnx-light-cpp-linux-x86_64.tar.gz",
-      "00ac4f7e7638e2dd99dc41ca8a084b31a1432185ab8353bfd73220a20d0d617b",
+      "9fa0c3df5e7d12a0ccb138823a2c26267f94df97deb66c5401fffbf697f0fabb",
     ],
     [
       "onnx-light-cpp-linux-aarch64.tar.gz",
-      "a92bb0fd7cfb099facf986f4f664d0189e0069989a99cdfda9634d3622d4ac69",
+      "8d172f87a957bb5e95e90db19cca345198c738e6e97f01ae832545a71ab51e97",
     ],
     [
       "onnx-light-cpp-macos-universal2.tar.gz",
-      "abe970602fb9bcb5cea68deb55ef03ae9c255f90da7e17a154c9ee8ef5784989",
+      "c2bdaf16ef9e1918f98ce0bbf53ef6422fe2e4ec7be621f08aeb64337e554e6b",
     ],
     [
       "onnx-light-cpp-windows-AMD64.zip",
-      "afdb4e39172ee5789cc22f3d171a95460ad5bb7464fef4d531a8c7938c06ea77",
+      "b1e6e5bcf4f15364715a8ca2d6097cca15fc3770daa13ced636946eeaa272967",
     ],
     [
       "onnx-light-cpp-windows-ARM64.zip",
-      "492acad1768573d3e5b92228167ded53b618f4b07402cf59154d0dff5cc7f94c",
+      "8ce0f194ce7c28f3f904df69ddcb9991d44f776789632581492bab18bcc5b82f",
     ],
   ]) {
     assert.ok(
@@ -62,19 +62,23 @@ test("native builds use onnx-light 0.2.2 with pinned checksums", () => {
   );
 });
 
-test("Python tooling retains full onnx-light wheels with pinned checksums", () => {
-  // Keep 0.2.1 until full 0.2.2 Linux x64 and Windows wheels are published.
-  const version = "0.2.1";
+test("Python tooling uses full onnx-light 0.2.3 wheels", () => {
+  const version = "0.2.3";
   assert.ok(
     workflow("coverage.yml").includes(
-      `https://github.com/xadupre/onnx-light/releases/download/${version}/onnx_light-${version}-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl#sha256=3aa2fe0d0eb39a5fe380b5241997169edad466f99dc688eec97ef4091cefc2ae`,
+      `https://github.com/xadupre/onnx-light/releases/download/${version}/onnx_light-${version}-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl#sha256=a3030b93b8359960e629beab064c1798468ae84a83d8fd1d0f295dcf5ff69407`,
     ),
   );
   const requirements = readFileSync(
     path.resolve(__dirname, "requirements.txt"),
     "utf8",
   );
-  assert.match(requirements, /^onnx-light==0\.2\.1$/m);
+  assert.match(requirements, /^onnx-light==0\.2\.3$/m);
+  assert.ok(
+    requirements.includes(
+      `https://github.com/xadupre/onnx-light/releases/download/${version}/onnx_light-${version}-cp312-cp312-win_amd64.whl`,
+    ),
+  );
   assert.match(requirements, /^onnx-light-cpu==0\.2\.1\.1$/m);
 });
 
