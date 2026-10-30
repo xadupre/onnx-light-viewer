@@ -280,9 +280,10 @@ function createFilePanels({
     byId(`${target}-model`).setAttribute("aria-expanded", String(visible));
     if (visible) {
       revealPanel(panel);
+      fileError(target).textContent = "";
+      postMessage({ type: "get-path-history", target });
       if (target === "save" || openSource === "backend") browseFiles(target);
       else if (openSource === "huggingface") searchHub();
-      else checkPipelines();
     } else {
       if (target === "open") {
         closePathBrowser();
@@ -297,6 +298,9 @@ function createFilePanels({
     }
   }
   for (const target of ["open", "save"]) {
+    byId(`${target}-history`).addEventListener("toggle", (event) => {
+      if (event.target.open) postMessage({ type: "get-path-history", target });
+    });
     byId(`${target}-file-history`).addEventListener("change", (event) => {
       if (!event.target.value) return;
       byId(`${target}-file`).value = event.target.value;
@@ -571,6 +575,9 @@ function createFilePanels({
         renderHistory();
       }
       return true;
+    } else if (data?.type === "path-history-error") {
+      if (data.target === "open" || data.target === "save")
+        fileError(data.target).textContent = data.error;
     } else if (data?.type === "path-history") {
       pathHistory = data.history;
       pipelineInfo.clear();

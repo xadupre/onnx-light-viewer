@@ -91,6 +91,7 @@ target_include_directories(onnx_light_viewer PRIVATE ${CMAKE_JS_INC} "${_genai_h
 target_link_libraries(onnx_light_viewer PRIVATE
   onnx_light::lib_onnx_op onnx_light::lib_onnx_shape
   onnx_light::lib_onnx_patterns
+  onnx_light::lib_onnx_manipulations
   onnx_light::lib_onnx_kernels
   lib_onnx_light_cpu_kernels
   onnx_light::lib_onnx_backend_test ${CMAKE_JS_LIB} ${CMAKE_DL_LIBS}

@@ -564,6 +564,32 @@ a:focus-visible {
   stroke-linecap: round;
   stroke-linejoin: round;
 }
+.fusion-hourglass {
+  display: none;
+  flex-shrink: 0;
+  vertical-align: middle;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+[aria-busy="true"] > .fusion-hourglass,
+[aria-busy="true"] > .panel-title > .fusion-hourglass,
+#selection-pattern-dialog[aria-busy="true"] .fusion-hourglass {
+  display: inline-block;
+}
+#fusion-panel[aria-busy="true"],
+#optimization-panel[aria-busy="true"],
+#fusion-panel[aria-busy="true"] button,
+#optimization-panel[aria-busy="true"] button,
+#selection-pattern-dialog[aria-busy="true"],
+#selection-pattern-dialog[aria-busy="true"] button,
+#fuse-pattern[aria-busy="true"],
+#optimize-model[aria-busy="true"],
+#undo-fusion[aria-busy="true"] {
+  cursor: wait;
+}
 #shape-status,
 #metadata-status,
 #navigation-status {
@@ -697,7 +723,7 @@ body.resizing-sidebar {
 }
 .connection,
 .crossing-edge,
-#overview-edges {
+.overview-edge {
   cursor: pointer;
 }
 .edge-hit {
@@ -723,10 +749,20 @@ body.resizing-sidebar {
   stroke: #ffd166;
   stroke-width: 3;
 }
-#overview-edges {
+.overview-edge {
   fill: none;
   stroke: #536e83;
   stroke-width: 1.5;
+}
+.edge-weight {
+  stroke-width: 3;
+}
+.selected-edge.edge-weight,
+.connection:focus-visible .edge-weight {
+  stroke-width: 4.5;
+}
+.edge-shape {
+  stroke-dasharray: 4 3;
 }
 #overview-nodes {
   fill: #16212e;
@@ -1199,9 +1235,64 @@ button:disabled {
   cursor: pointer;
 }
 #rewriting-scenario,
-#diagnostic-pattern {
+#diagnostic-pattern,
+#selection-pattern-text,
+#selection-pattern-replacement,
+#selection-pattern-python {
   width: 100%;
   margin-top: 4px;
+}
+.selection-pattern-row {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  margin: 12px 0;
+}
+.selection-pattern-row input,
+.selection-pattern-row select {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+}
+.selection-pattern-editor {
+  margin: 12px 0;
+}
+.selection-pattern-editor > header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+.selection-pattern-copy svg {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+}
+#graph-context-menu {
+  position: fixed;
+  z-index: 1000;
+  padding: 4px;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px #0005;
+}
+#graph-context-menu button {
+  display: block;
+  width: 100%;
+  margin: 0;
+  text-align: left;
+}
+#selection-pattern-text,
+#selection-pattern-replacement,
+#selection-pattern-python {
+  box-sizing: border-box;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  font-family: var(--vscode-editor-font-family, monospace);
 }
 .native-report {
   max-height: 24rem;
@@ -1350,7 +1441,8 @@ button:disabled {
   margin-top: 12px;
 }
 #operator-doc,
-#optimization-report {
+#optimization-report,
+#selection-pattern-dialog {
   width: min(900px, 95vw);
   max-height: 90vh;
   overflow: auto;
@@ -1360,7 +1452,8 @@ button:disabled {
   border-radius: 8px;
 }
 #operator-doc::backdrop,
-#optimization-report::backdrop {
+#optimization-report::backdrop,
+#selection-pattern-dialog::backdrop {
   background: #0009;
 }
 #optimization-report {

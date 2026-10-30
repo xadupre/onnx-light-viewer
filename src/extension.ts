@@ -5,7 +5,7 @@
 import * as vscode from "vscode";
 import { randomBytes } from "node:crypto";
 import { mkdir, open, stat } from "node:fs/promises";
-import { dirname, isAbsolute, join, posix, relative } from "node:path";
+import { dirname, isAbsolute, join, posix, relative, resolve } from "node:path";
 import { homedir } from "node:os";
 import {
   listBackendTests,
@@ -623,8 +623,24 @@ async function configurePanel(
     type: "settings-info" | "status-info" = "settings-info",
   ) => {
     const application = getApplicationSettings();
-    if (type === "settings-info")
+    if (type === "settings-info") {
       await mkdir(application.downloadDirectory, { recursive: true });
+      await Promise.all([
+        prunePathHistory(),
+        exportHistory.prune(async (entry, target) => {
+          if (target === "models" && !isAbsolute(entry)) return true;
+          if (target === "directories" && /<(?:model_id|exporter)>/.test(entry))
+            return true;
+          const isUri =
+            /^[a-z][a-z\d+.-]*:/i.test(entry) && !/^[a-z]:/i.test(entry);
+          return historyPathExists(
+            target === "directories" && !isAbsolute(entry) && !isUri
+              ? resolve(application.downloadDirectory, entry)
+              : entry,
+          );
+        }),
+      ]);
+    }
     return postMessage({
       type,
       application,
@@ -697,6 +713,31 @@ async function configurePanel(
         ? vscode.Uri.file(value)
         : vscode.Uri.joinPath(directoryUri(), value);
   };
+  const historyPathExists = async (path: string) => {
+    const uri =
+      /^[a-z][a-z\d+.-]*:/i.test(path) && !/^[a-z]:/i.test(path)
+        ? vscode.Uri.parse(path)
+        : locationUri(path);
+    try {
+      await vscode.workspace.fs.stat(uri);
+      return true;
+    } catch (error) {
+      if (
+        (error instanceof vscode.FileSystemError &&
+          ["FileNotFound", "FileNotADirectory"].includes(error.code)) ||
+        (error instanceof Error &&
+          "code" in error &&
+          (error.code === "ENOENT" || error.code === "ENOTDIR"))
+      )
+        return false;
+      throw error;
+    }
+  };
+  const prunePathHistory = () =>
+    pathHistory.prune(
+      async (entry) =>
+        entry.source !== "local" || (await historyPathExists(entry.path)),
+    );
   const hubFileEntries = (files: (HuggingFaceSource & { path?: string })[]) =>
     files.map((file) => ({
       name: file.path ?? file.fileName,
@@ -772,6 +813,7 @@ async function configurePanel(
         paths?: unknown;
         asPipeline?: unknown;
         nodeIndex?: unknown;
+        nodes?: unknown;
         actionId?: string;
         entry?: unknown;
         storage?: unknown;
@@ -782,6 +824,9 @@ async function configurePanel(
         reuseResult?: unknown;
         options?: unknown;
         name?: unknown;
+        text?: unknown;
+        replacement?: unknown;
+        format?: unknown;
         dimensions?: unknown;
         previewId?: unknown;
         pattern?: unknown;
@@ -812,6 +857,31 @@ async function configurePanel(
       if (!active) return;
       if (message?.type === "show-logs") {
         showLogs();
+      } else if (message?.type === "copy-function-pattern") {
+        try {
+          if (
+            typeof message.name !== "string" ||
+            typeof message.text !== "string" ||
+            typeof message.format !== "string" ||
+            !["text", "replacement", "python"].includes(message.format)
+          )
+            throw new Error(
+              "Expected a pattern name, text and a supported copy format.",
+            );
+          await vscode.env.clipboard.writeText(message.text);
+          await postMessage({
+            type: "function-pattern-copied",
+            name: message.name,
+            format: message.format,
+          });
+        } catch (error) {
+          await postMessage({
+            type: "function-pattern-copy-error",
+            name: message.name,
+            format: message.format,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
       } else if (message?.type === "check-latest-versions") {
         const controller = new AbortController();
         const action = "Check latest package versions";
@@ -1573,6 +1643,24 @@ async function configurePanel(
             error: detail,
           });
         }
+      } else if (message?.type === "get-path-history") {
+        try {
+          if (message.target !== "open" && message.target !== "save")
+            throw new Error("Invalid history target.");
+          if (!(await prunePathHistory()))
+            await postMessage({
+              type: "path-history",
+              history: pathHistory.snapshot(),
+            });
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error);
+          log.record("FAILED", "Refresh path history", undefined, detail);
+          await postMessage({
+            type: "path-history-error",
+            target: message.target,
+            error: detail,
+          });
+        }
       } else if (message?.type === "path-history-edit") {
         if (
           (message.target === "open" || message.target === "save") &&
@@ -2189,6 +2277,8 @@ async function configurePanel(
         message?.type === "undo-fusion" ||
         message?.type === "replay-rewritings" ||
         message?.type === "apply-rewriting" ||
+        message?.type === "create-function-pattern" ||
+        message?.type === "update-function-pattern" ||
         message?.type === "fusion-patterns" ||
         message?.type === "preview-fusion" ||
         message?.type === "apply-optimization" ||
@@ -2197,12 +2287,17 @@ async function configurePanel(
         const owner = model;
         const revision = graphRevision;
         const generation = ++fusionRequest;
+        const navigation = navigationRequest;
+        const editsFunctionPattern =
+          message.type === "create-function-pattern" ||
+          message.type === "update-function-pattern";
         const undoGeneration =
           message.type === "undo-fusion" ? ++undoRequest : undoRequest;
         const isCurrent = () =>
           active &&
           model === owner &&
           graphRevision === revision &&
+          (!editsFunctionPattern || navigationRequest === navigation) &&
           (message.type === "undo-fusion"
             ? undoRequest === undoGeneration
             : fusionRequest === generation);
@@ -2220,7 +2315,11 @@ async function configurePanel(
                       ? "Apply fusion pattern"
                       : message.type === "preview-fusion"
                         ? "Preview fusion pattern"
-                        : "List fusion patterns",
+                        : message.type === "create-function-pattern"
+                          ? "Create function pattern"
+                          : message.type === "update-function-pattern"
+                            ? "Update function pattern"
+                            : "List fusion patterns",
             async (id) => {
               const current = requireModel();
               if (message.type === "undo-fusion") {
@@ -2283,6 +2382,72 @@ async function configurePanel(
                   "Return to a model's main graph to apply fusion patterns.",
                 );
               const path = current.graph.breadcrumbs.at(-1)?.path ?? [];
+              if (editsFunctionPattern) {
+                if (
+                  typeof message.name !== "string" ||
+                  (message.type === "create-function-pattern"
+                    ? !Array.isArray(message.nodes) ||
+                      !message.nodes.length ||
+                      !Array.from(message.nodes).every(
+                        (node: unknown) =>
+                          typeof node === "number" &&
+                          Number.isSafeInteger(node) &&
+                          node >= 0 &&
+                          node < current.graph.nodes.length,
+                      ) ||
+                      new Set(message.nodes).size !== message.nodes.length
+                    : typeof message.text !== "string" ||
+                      typeof message.replacement !== "string")
+                )
+                  throw new Error(
+                    message.type === "create-function-pattern"
+                      ? "Choose distinct operator nodes and a pattern name."
+                      : "Expected a pattern name, match text and replacement text.",
+                  );
+                const native = await nativeModel(
+                  current,
+                  log,
+                  () => void sendStatus(),
+                );
+                if (!isCurrent()) return;
+                fusionPreview = undefined;
+                const pattern =
+                  message.type === "update-function-pattern"
+                    ? path.length
+                      ? native.updateFunctionPattern(
+                          message.name,
+                          message.text as string,
+                          message.replacement as string,
+                          path,
+                        )
+                      : native.updateFunctionPattern(
+                          message.name,
+                          message.text as string,
+                          message.replacement as string,
+                        )
+                    : path.length
+                      ? native.createFunctionPattern(
+                          message.nodes as number[],
+                          message.name,
+                          path,
+                        )
+                      : native.createFunctionPattern(
+                          message.nodes as number[],
+                          message.name,
+                        );
+                if (!isCurrent()) return;
+                const retained = native.clone();
+                current.reload = () => retained.clone();
+                await postMessage({
+                  type: "function-pattern-created",
+                  requestId: message.requestId,
+                  pattern,
+                  patterns: native.fusionPatterns(path),
+                  optimizationPatterns: native.optimizationPatterns(path),
+                  scenarios: native.rewritingScenarios(path),
+                });
+                return;
+              }
               if (message.type === "replay-rewritings") {
                 if (!current.rewritingQueue)
                   throw new Error("No pending rewritings to apply.");
@@ -2763,12 +2928,14 @@ async function configurePanel(
             type:
               message.type === "undo-fusion"
                 ? "undo-fusion-error"
-                : "fusion-error",
+                : editsFunctionPattern
+                  ? "function-pattern-error"
+                  : "fusion-error",
             requestId: message.requestId,
             error: detail,
           });
           await vscode.window.showErrorMessage(
-            `${message.type === "undo-fusion" ? "Could not undo fusion" : "Could not fuse ONNX model"}: ${detail}`,
+            `${message.type === "undo-fusion" ? "Could not undo fusion" : editsFunctionPattern ? "Could not save function pattern" : "Could not fuse ONNX model"}: ${detail}`,
           );
         }
       } else if (message?.type === "save") {

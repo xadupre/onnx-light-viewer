@@ -11,6 +11,14 @@ const {
 } = require("../dist/graph");
 const { webviewHtml } = require("../dist/webview");
 
+function closeViewerAfterTest(t, window) {
+  t.after(() => {
+    window.close();
+    // Test hooks outlive their execution; do not retain the viewer's VM context.
+    window = undefined;
+  });
+}
+
 function openViewer(t, initialTab = "model", setup = () => {}) {
   const messages = [];
   const postedMessages = new EventEmitter();
@@ -25,7 +33,7 @@ function openViewer(t, initialTab = "model", setup = () => {}) {
     ),
     { runScripts: "outside-only", pretendToBeVisual: true },
   );
-  t.after(() => dom.window.close());
+  closeViewerAfterTest(t, dom.window);
   dom.window.structuredClone = structuredClone;
   dom.window.HTMLCanvasElement.prototype.getContext = () => ({
     font: "",
@@ -3832,6 +3840,60 @@ test("keeps the complete history selector after selecting and loading a remember
   );
 });
 
+test("refreshes path histories when their panel or recent-path list is shown and displays cleanup errors", async (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  load(demoGraph);
+  const existing = { source: "local", kind: "file", path: "/existing.onnx" };
+  const missing = { ...existing, path: "/missing.onnx" };
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  send({
+    type: "path-history",
+    history: { open: [missing, existing], save: [missing, existing] },
+  });
+  for (const target of ["open", "save"]) {
+    document.getElementById(`${target}-model`).click();
+    assert.equal(
+      messages.findLast(({ type }) => type === "get-path-history").target,
+      target,
+    );
+    const history = document.getElementById(`${target}-history`);
+    const before = messages.filter(
+      ({ type }) => type === "get-path-history",
+    ).length;
+    const toggled = once(history, "toggle");
+    history.open = true;
+    await toggled;
+    assert.equal(
+      messages.filter(({ type }) => type === "get-path-history").length,
+      before + 1,
+    );
+    send({
+      type: "path-history",
+      history: { open: [existing], save: [existing] },
+    });
+    assert.deepEqual(
+      [...document.getElementById(`${target}-file-history`).options]
+        .filter(({ value }) => value)
+        .map(({ value }) => value),
+      [existing.path],
+    );
+    assert.equal(
+      document
+        .getElementById(`${target}-history-entries`)
+        .textContent.includes(missing.path),
+      false,
+    );
+    send({ type: "path-history-error", target, error: "Permission denied" });
+    assert.equal(
+      document.getElementById(
+        target === "open" ? "open-error" : "save-options-error",
+      ).textContent,
+      "Permission denied",
+    );
+  }
+});
+
 test("suggests remembered paths without submitting forms and supports per-entry removal and clearing", (t) => {
   const { document, window, messages, load } = openViewer(t);
   load(demoGraph);
@@ -3968,6 +4030,11 @@ test("history checks generation assets without reopening or reordering and offer
     false,
   );
   document.getElementById("open-model").click();
+  assert.equal(
+    messages.some(({ type }) => type === "prompt-pipeline-history"),
+    false,
+  );
+  send({ type: "path-history", history });
   const first = messages.findLast(
     ({ type }) => type === "prompt-pipeline-history",
   );
@@ -4042,8 +4109,10 @@ test("history displays why a pipeline is unavailable and ignores inspection afte
     kind: "file",
     path: "/exports/embedding/model.onnx",
   };
-  send({ type: "path-history", history: { open: [entry], save: [] } });
+  const history = { open: [entry], save: [] };
+  send({ type: "path-history", history });
   document.getElementById("open-model").click();
+  send({ type: "path-history", history });
   const request = messages.findLast(
     ({ type }) => type === "prompt-pipeline-history",
   );
@@ -4400,6 +4469,401 @@ test("chooses saved rewriting scenarios, applies next or remaining steps and rec
   load(demoGraph);
   assert.equal(select.options.length, 0);
   assert.equal(section.open, false);
+});
+
+test("creates a selection FunctionPattern, displays safe text and Python, and offers an opt-in optimization bucket", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const model = loadModel(
+    readFileSync(require.resolve("../examples/rewriting-scenarios.onnx")),
+    "Selection patterns",
+  );
+  load(model.graph());
+  const byId = (id) => document.getElementById(id);
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  const dialog = byId("selection-pattern-dialog");
+  assert.equal(byId("fusion-panel").contains(dialog), false);
+  assert.equal(
+    byId("fusion-panel").querySelector("#create-function-pattern"),
+    null,
+  );
+  const rightClick = (id) => {
+    const event = new window.MouseEvent("contextmenu", {
+      bubbles: true,
+      cancelable: true,
+      button: 2,
+    });
+    document.querySelector(`[data-id="${id}"]`).dispatchEvent(event);
+    return event;
+  };
+  document
+    .querySelector('[data-id="input-0"]')
+    .dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  assert.equal(rightClick("input-0").defaultPrevented, false);
+  assert.equal(dialog.open, false);
+  assert.equal(byId("create-function-pattern").disabled, true);
+  for (const index of [0, 1])
+    document
+      .querySelector(`[data-id="node-${index}"]`)
+      .dispatchEvent(
+        new window.MouseEvent("click", { bubbles: true, ctrlKey: true }),
+      );
+  assert.equal(byId("create-function-pattern").disabled, false);
+  const beforeMenu = messages.length;
+  assert.equal(rightClick("node-0").defaultPrevented, true);
+  assert.equal(byId("graph-context-menu").hidden, false);
+  assert.equal(dialog.open, false);
+  assert.equal(messages.length, beforeMenu);
+  assert.equal(document.activeElement, byId("open-selection-pattern"));
+  byId("open-selection-pattern").click();
+  assert.equal(byId("graph-context-menu").hidden, true);
+  assert.equal(dialog.open, true);
+  assert.equal(
+    document.activeElement,
+    document.querySelector('[data-id="node-0"]'),
+  );
+  assert.equal(byId("fusion-panel").hidden, true);
+  assert.equal(messages.at(-1).type, "fusion-patterns");
+  assert.equal(byId("create-function-pattern").disabled, true);
+  assert.equal(document.querySelectorAll(".graph-node.selected").length, 2);
+  send({
+    type: "fusion-patterns",
+    requestId: messages.at(-1).requestId,
+    patterns: [],
+    optimizationPatterns: [],
+  });
+  assert.equal(byId("create-function-pattern").disabled, false);
+  for (const id of ["selection-pattern-name", "selection-pattern-picker"]) {
+    const control = byId(id);
+    assert.equal(control.previousElementSibling.htmlFor, id);
+    assert.equal(
+      window.getComputedStyle(control.parentElement).display,
+      "grid",
+    );
+    assert.match(
+      window.getComputedStyle(control.parentElement).gridTemplateColumns,
+      /max-content minmax\(0, 1fr\)/,
+    );
+  }
+  byId("selection-pattern-name").value = "TransposePair";
+  byId("create-function-pattern").click();
+  const request = messages.at(-1);
+  assert.equal(request.type, "create-function-pattern");
+  assert.deepEqual([...request.nodes].sort(), [0, 1]);
+  assert.equal(request.name, "TransposePair");
+  assert.equal(byId("create-function-pattern").disabled, true);
+  assert.equal(byId("optimize-model").disabled, true);
+  byId("optimize-model").click();
+  assert.equal(messages.at(-1), request);
+  const pattern = {
+    name: "TransposePair",
+    text: "<script>not executable</script>\nTranspose → Transpose",
+    replacement: "Transpose → Identity",
+    python: "def make_pattern():\n    return FunctionPattern(...)",
+  };
+  const catalog = {
+    patterns: [pattern.name],
+    optimizationPatterns: [
+      {
+        name: pattern.name,
+        priority: 1,
+        device: "Undefined",
+        enabledByDefault: false,
+        groups: ["Selection patterns"],
+      },
+    ],
+  };
+  send({
+    type: "function-pattern-created",
+    requestId: request.requestId - 1,
+    pattern,
+    ...catalog,
+  });
+  assert.equal(byId("selection-pattern-result").hidden, true);
+  send({
+    type: "function-pattern-created",
+    requestId: request.requestId,
+    pattern,
+    ...catalog,
+  });
+  assert.equal(byId("selection-pattern-result").hidden, false);
+  assert.equal(byId("selection-pattern-text").value, pattern.text);
+  assert.equal(byId("selection-pattern-text").querySelector("script"), null);
+  assert.equal(byId("selection-pattern-text").readOnly, false);
+  assert.equal(
+    byId("selection-pattern-replacement").value,
+    pattern.replacement,
+  );
+  assert.equal(byId("update-function-pattern").disabled, true);
+  assert.equal(byId("selection-pattern-python").value, pattern.python);
+  assert.equal(byId("selection-pattern-python").readOnly, true);
+  for (const format of ["text", "replacement", "python"]) {
+    const copy = byId(`copy-selection-pattern-${format}`);
+    assert.equal(copy.textContent.trim(), "");
+    assert.ok(copy.querySelector("svg[aria-hidden='true']"));
+    assert.match(copy.getAttribute("aria-label"), /^Copy /);
+    assert.equal(copy.parentElement.lastElementChild, copy);
+    assert.ok(
+      copy
+        .closest(".selection-pattern-editor")
+        .contains(byId(`selection-pattern-${format}`)),
+    );
+    assert.equal(
+      window.getComputedStyle(copy.parentElement).justifyContent,
+      "space-between",
+    );
+    copy.click();
+    assert.deepEqual(JSON.parse(JSON.stringify(messages.at(-1))), {
+      type: "copy-function-pattern",
+      name: pattern.name,
+      format,
+      text: pattern[format],
+    });
+  }
+  send({
+    type: "function-pattern-copied",
+    name: pattern.name,
+    format: "python",
+  });
+  assert.match(byId("selection-pattern-status").textContent, /Copied python/);
+  byId("selection-pattern-replacement").value = "edited replacement";
+  byId("selection-pattern-replacement").dispatchEvent(
+    new window.Event("input"),
+  );
+  assert.equal(byId("update-function-pattern").disabled, false);
+  byId("close-selection-pattern").click();
+  assert.equal(dialog.open, false);
+  const lastMessage = messages.at(-1);
+  rightClick("node-1");
+  assert.equal(dialog.open, false);
+  byId("open-selection-pattern").click();
+  assert.equal(dialog.open, true);
+  assert.equal(messages.at(-1), lastMessage);
+  assert.equal(
+    byId("selection-pattern-replacement").value,
+    "edited replacement",
+  );
+  byId("copy-selection-pattern-replacement").click();
+  assert.equal(messages.at(-1).text, "edited replacement");
+  byId("update-function-pattern").click();
+  const update = messages.at(-1);
+  assert.equal(update.type, "update-function-pattern");
+  assert.equal(update.name, pattern.name);
+  assert.equal(update.text, pattern.text);
+  assert.equal(update.replacement, "edited replacement");
+  assert.equal(byId("selection-pattern-text").disabled, true);
+  send({
+    type: "function-pattern-error",
+    requestId: update.requestId,
+    error: "Invalid replacement",
+  });
+  assert.equal(byId("selection-pattern-text").disabled, false);
+  assert.equal(
+    byId("selection-pattern-replacement").value,
+    "edited replacement",
+  );
+  assert.equal(byId("update-function-pattern").disabled, false);
+  byId("update-function-pattern").click();
+  pattern.python = "updated Python";
+  send({
+    type: "function-pattern-created",
+    requestId: messages.at(-1).requestId,
+    pattern,
+    ...catalog,
+  });
+  assert.equal(
+    byId("selection-pattern-replacement").value,
+    pattern.replacement,
+  );
+  assert.equal(byId("selection-pattern-python").value, "updated Python");
+  assert.equal(byId("update-function-pattern").disabled, true);
+  assert.equal(byId("fusion-pattern").querySelector("input").checked, true);
+  const bucket = byId("optimization-patterns").querySelector("details");
+  assert.match(
+    bucket.querySelector("summary").textContent,
+    /Selection patterns/,
+  );
+  assert.equal(bucket.querySelector("input[data-pattern]").checked, false);
+  byId("optimize-model").click();
+  send({
+    type: "fusion-patterns",
+    requestId: messages.at(-1).requestId,
+    ...catalog,
+  });
+  assert.equal(byId("run-optimization").disabled, true);
+  byId("optimization-pattern-group")
+    .querySelector('input[value="Selection patterns"]')
+    .click();
+  assert.equal(byId("run-optimization").disabled, false);
+  byId("run-optimization").click();
+  assert.equal(messages.at(-1).type, "apply-optimization");
+  assert.deepEqual([...messages.at(-1).patterns], [pattern.name]);
+  load(demoGraph);
+  assert.equal(dialog.open, false);
+  assert.equal(byId("selection-pattern-result").hidden, true);
+  byId("fuse-pattern").click();
+  send({
+    type: "fusion-patterns",
+    requestId: messages.at(-1).requestId,
+    ...catalog,
+    optimizationPatterns: [
+      { ...catalog.optimizationPatterns[0], definition: pattern },
+    ],
+  });
+  assert.equal(byId("selection-pattern-result").hidden, false);
+  assert.equal(byId("selection-pattern-python").value, pattern.python);
+});
+
+test("selection FunctionPattern errors recover controls and obsolete replies are ignored", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  load(demoGraph);
+  const byId = (id) => document.getElementById(id);
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  const openPattern = () => {
+    document.querySelector('[data-id="node-0"]').dispatchEvent(
+      new window.MouseEvent("contextmenu", {
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    if (!byId("graph-context-menu").hidden)
+      byId("open-selection-pattern").click();
+  };
+  document
+    .querySelector('[data-id="node-0"]')
+    .dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  openPattern();
+  const dialog = byId("selection-pattern-dialog");
+  assert.equal(dialog.open, true);
+  send({
+    type: "fusion-error",
+    requestId: messages.at(-1).requestId,
+    error: "Catalog unavailable",
+  });
+  assert.match(
+    byId("selection-pattern-status").textContent,
+    /Catalog unavailable/,
+  );
+  byId("close-selection-pattern").click();
+  openPattern();
+  send({
+    type: "fusion-patterns",
+    requestId: messages.at(-1).requestId,
+    patterns: [],
+    optimizationPatterns: [],
+  });
+  byId("selection-pattern-name").value = " ";
+  byId("selection-pattern-name").dispatchEvent(new window.Event("input"));
+  assert.equal(byId("create-function-pattern").disabled, true);
+  byId("selection-pattern-name").value = "SelectedPattern";
+  byId("selection-pattern-name").dispatchEvent(new window.Event("input"));
+  byId("create-function-pattern").click();
+  const requestId = messages.at(-1).requestId;
+  send({
+    type: "function-pattern-error",
+    requestId,
+    error: "Pattern name already exists.",
+  });
+  assert.equal(byId("create-function-pattern").disabled, false);
+  assert.match(byId("selection-pattern-status").textContent, /already exists/);
+  byId("create-function-pattern").click();
+  const stale = messages.at(-1).requestId;
+  load(demoGraph);
+  assert.equal(dialog.open, false);
+  send({
+    type: "function-pattern-error",
+    requestId: stale,
+    error: "Obsolete error",
+  });
+  assert.doesNotMatch(
+    byId("selection-pattern-status").textContent,
+    /Obsolete error/,
+  );
+  assert.equal(byId("selection-pattern-result").hidden, true);
+  load({ ...demoGraph, canFuse: false });
+  openPattern();
+  assert.equal(dialog.open, false);
+});
+
+test("graph context menu preserves selection, stays on screen and dismisses with keyboard or outside presses", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  load(
+    loadModel(
+      readFileSync(require.resolve("../examples/rewriting-scenarios.onnx")),
+      "Context menu",
+    ).graph(),
+  );
+  const byId = (id) => document.getElementById(id);
+  const node = (index) => document.querySelector(`[data-id="node-${index}"]`);
+  const select = (index, ctrlKey = false) =>
+    node(index).dispatchEvent(
+      new window.MouseEvent("click", { bubbles: true, ctrlKey }),
+    );
+  const rightClick = (index, clientX = 0, clientY = 0) =>
+    node(index).dispatchEvent(
+      new window.MouseEvent("contextmenu", {
+        bubbles: true,
+        cancelable: true,
+        clientX,
+        clientY,
+        button: 2,
+      }),
+    );
+  const menu = byId("graph-context-menu");
+  menu.getBoundingClientRect = () => new window.DOMRect(0, 0, 240, 40);
+  select(0);
+  select(1, true);
+  const count = messages.length;
+  rightClick(0, window.innerWidth - 1, window.innerHeight - 1);
+  assert.equal(menu.hidden, false);
+  assert.equal(menu.getAttribute("role"), "menu");
+  assert.equal(byId("open-selection-pattern").getAttribute("role"), "menuitem");
+  assert.equal(menu.style.left, `${window.innerWidth - 248}px`);
+  assert.equal(menu.style.top, `${window.innerHeight - 48}px`);
+  assert.equal(document.querySelectorAll(".graph-node.selected").length, 2);
+  assert.equal(messages.length, count);
+  const down = new window.KeyboardEvent("keydown", {
+    key: "ArrowDown",
+    bubbles: true,
+    cancelable: true,
+  });
+  menu.dispatchEvent(down);
+  assert.equal(down.defaultPrevented, true);
+  assert.equal(document.activeElement, byId("open-selection-pattern"));
+  menu.dispatchEvent(
+    new window.KeyboardEvent("keydown", {
+      key: "Escape",
+      bubbles: true,
+      cancelable: true,
+    }),
+  );
+  assert.equal(menu.hidden, true);
+  assert.equal(document.activeElement, node(0));
+  assert.equal(document.querySelectorAll(".graph-node.selected").length, 2);
+  node(0).getBoundingClientRect = () => new window.DOMRect(30, 40, 120, 60);
+  rightClick(0);
+  assert.equal(menu.style.left, "30px");
+  assert.equal(menu.style.top, "100px");
+  document.body.dispatchEvent(
+    new window.MouseEvent("pointerdown", { bubbles: true }),
+  );
+  assert.equal(menu.hidden, true);
+  assert.equal(byId("selection-pattern-dialog").open, false);
+  rightClick(0);
+  window.dispatchEvent(new window.Event("resize"));
+  assert.equal(menu.hidden, true);
+  select(0, true);
+  rightClick(0);
+  assert.equal(menu.hidden, false);
+  assert.deepEqual(
+    [...document.querySelectorAll(".graph-node.selected")].map(
+      (element) => element.dataset.id,
+    ),
+    ["node-0"],
+  );
+  load(demoGraph);
+  assert.equal(menu.hidden, true);
 });
 
 test("selects saved pattern nodes and automatically reveals the next pattern after applying a step", async (t) => {
@@ -4848,6 +5312,10 @@ test("chooses the optimizer backend without losing native pattern selection", (t
   const native = document.getElementById("optimizer-onnx-light");
   const script = document.getElementById("optimizer-onnxscript");
   const run = document.getElementById("run-optimization");
+  const hourglass = document.querySelector(
+    "#optimization-title .fusion-hourglass",
+  );
+  assert.equal(window.getComputedStyle(hourglass).display, "none");
   const patterns = document.getElementById("native-optimization-patterns");
   const output = document.getElementById("onnxscript-optimization-output");
   assert.equal(output.previousElementSibling, run);
@@ -4880,6 +5348,7 @@ test("chooses the optimizer backend without losing native pattern selection", (t
   assert.equal(run.disabled, false);
   run.click();
   const request = messages.at(-1);
+  assert.equal(window.getComputedStyle(hourglass).display, "inline-block");
   assert.equal(request.type, "apply-optimization");
   assert.equal(request.backend, "onnxscript");
   assert.deepEqual(Array.from(request.patterns), []);
@@ -4892,6 +5361,7 @@ test("chooses the optimizer backend without losing native pattern selection", (t
   });
   assert.equal(native.disabled, false);
   assert.equal(run.disabled, false);
+  assert.equal(window.getComputedStyle(hourglass).display, "none");
   assert.match(
     document.getElementById("optimization-status").textContent,
     /Install onnxscript/,
@@ -4899,6 +5369,7 @@ test("chooses the optimizer backend without losing native pattern selection", (t
   assert.equal(output.hidden, false);
   assert.match(output.textContent, /Install onnxscript/);
   run.click();
+  assert.equal(window.getComputedStyle(hourglass).display, "inline-block");
   assert.equal(output.hidden, true);
   assert.equal(output.textContent, "");
   const completion = messages.at(-1);
@@ -4916,6 +5387,7 @@ test("chooses the optimizer backend without losing native pattern selection", (t
     optimizationPatterns: source.optimizationPatterns(),
   });
   assert.equal(document.getElementById("optimization-panel").hidden, false);
+  assert.equal(window.getComputedStyle(hourglass).display, "none");
   assert.equal(patterns.hidden, true);
   assert.equal(
     document.getElementById("optimization-report-section").hidden,
@@ -5311,6 +5783,8 @@ test("offers last and all Unfuse actions beside Fuse and preserves repeated undo
       },
     });
   const undo = document.getElementById("undo-fusion");
+  const hourglass = undo.querySelector(".fusion-hourglass");
+  assert.equal(window.getComputedStyle(hourglass).display, "none");
   const last = document.getElementById("unfuse-last");
   const all = document.getElementById("unfuse-all");
   const options = document.getElementById("unfuse-panel");
@@ -5403,6 +5877,8 @@ test("offers last and all Unfuse actions beside Fuse and preserves repeated undo
   assert.equal(messages.filter(({ type }) => type === "undo-fusion").length, 1);
   assert.equal(messages.at(-1).all, false);
   assert.equal(undo.getAttribute("aria-busy"), "true");
+  assert.equal(window.getComputedStyle(hourglass).display, "inline-block");
+  assert.equal(window.getComputedStyle(undo).cursor, "wait");
   assert.equal(all.disabled, true);
   assert.ok(
     [...historyList.querySelectorAll("button")].every(
@@ -5410,6 +5886,7 @@ test("offers last and all Unfuse actions beside Fuse and preserves repeated undo
     ),
   );
   graph(1);
+  assert.equal(window.getComputedStyle(hourglass).display, "none");
   assert.equal(historyList.children.length, 1);
   assert.equal(historyList.start, 1);
   assert.equal(
@@ -5426,6 +5903,7 @@ test("offers last and all Unfuse actions beside Fuse and preserves repeated undo
   );
   last.click();
   send({ type: "undo-fusion-error", error: "Reload failed" });
+  assert.equal(window.getComputedStyle(hourglass).display, "none");
   assert.equal(historyList.children.length, 1);
   assert.equal(undo.disabled, false);
   assert.equal(last.disabled, false);
@@ -5952,7 +6430,7 @@ test("toggles separated, stacked sidebar panels independently from Op Data Find 
   assert.equal(sidebar.firstElementChild, controls);
   const allButtons = [...controls.querySelectorAll("button")];
   assert.deepEqual(
-    allButtons.map((button) => button.lastChild.textContent.trim()),
+    allButtons.map((button) => button.textContent.trim()),
     [
       "Open",
       "Save",
@@ -6075,6 +6553,23 @@ test("runs matching explicitly, highlights candidates and fuses only checked mat
   const send = (data) =>
     window.dispatchEvent(new window.MessageEvent("message", { data }));
   const button = document.getElementById("fuse-pattern");
+  const assertBusy = (busy) => {
+    for (const id of [
+      "fuse-pattern",
+      "optimize-model",
+      "fusion-title",
+      "optimization-title",
+    ])
+      assert.equal(
+        window.getComputedStyle(
+          document.getElementById(id).querySelector(".fusion-hourglass"),
+        ).display,
+        busy ? "inline-block" : "none",
+        id,
+      );
+    if (busy) assert.equal(window.getComputedStyle(button).cursor, "wait");
+  };
+  assertBusy(false);
   assert.equal(
     button.closest("nav"),
     document.getElementById("sidebar-controls"),
@@ -6088,6 +6583,7 @@ test("runs matching explicitly, highlights candidates and fuses only checked mat
   load(native.graph());
   document.querySelector("aside").scrollTop = 500;
   button.click();
+  assertBusy(true);
   assert.equal(document.querySelector("aside").scrollTop, 0);
   assert.equal(document.getElementById("fusion-panel").hidden, false);
   assert.equal(
@@ -6099,11 +6595,13 @@ test("runs matching explicitly, highlights candidates and fuses only checked mat
     requestId: messages.at(-1).requestId,
     patterns: ["TransposeTranspose"],
   });
+  assertBusy(false);
   assert.equal(document.getElementById("preview-fusion").disabled, true);
   const pattern = document.getElementById("fusion-pattern");
   pattern.querySelector("label").click();
   assert.equal(messages.at(-1).type, "cancel-fusion");
   document.getElementById("preview-fusion").click();
+  assertBusy(true);
   const requestId = messages.at(-1).requestId;
   assert.deepEqual(Array.from(messages.at(-1).patterns), [
     "TransposeTranspose",
@@ -6114,6 +6612,7 @@ test("runs matching explicitly, highlights candidates and fuses only checked mat
     previewId: 42,
     matches: preview.matches,
   });
+  assertBusy(false);
   const matches = document.getElementById("fusion-matches");
   assert.equal(matches.closest("details").open, true);
   assert.equal(
@@ -6157,6 +6656,7 @@ test("runs matching explicitly, highlights candidates and fuses only checked mat
   assert.equal(matches.querySelector(".approve-fusion, .reject-fusion"), null);
   first.click();
   document.getElementById("apply-fusion").click();
+  assertBusy(true);
   assert.deepEqual(Array.from(messages.at(-1).candidates), [0]);
   assert.equal(messages.at(-1).previewId, 42);
   send({
@@ -6164,6 +6664,7 @@ test("runs matching explicitly, highlights candidates and fuses only checked mat
     requestId: messages.at(-1).requestId,
     error: "Please retry.",
   });
+  assertBusy(false);
   assert.match(
     document.getElementById("fusion-feedback").textContent,
     /Please retry/,
@@ -6175,8 +6676,10 @@ test("runs matching explicitly, highlights candidates and fuses only checked mat
   assert.equal(document.getElementById("apply-fusion").disabled, true);
   document.getElementById("select-fusions").click();
   document.getElementById("apply-fusion").click();
+  assertBusy(true);
   assert.deepEqual(Array.from(messages.at(-1).candidates), [0, 1]);
   load(native.graph());
+  assertBusy(false);
   send({
     type: "fusion-preview",
     requestId,
@@ -8342,6 +8845,83 @@ test("counts metadata changes and replaces cached analysis and graph markers on 
   assert.deepEqual(errors, []);
 });
 
+test("styles result arcs from native weight and shape tags and replaces styles on metadata refresh", (t) => {
+  const { document, window, load } = openViewer(t);
+  const model = loadModel(
+    readFileSync(require.resolve("./models/analysis.onnx")),
+    "analysis.onnx",
+  );
+  const graph = model.graph();
+  graph.outputs.push("dimensions");
+  load(graph);
+  const weights = [
+    ...document.querySelectorAll(
+      '.connection[aria-label="Connection: shared;activation"] .edge',
+    ),
+  ];
+  const shape = document.querySelector(
+    '.connection[aria-label="Connection: dimensions"] .edge',
+  );
+  assert.ok(weights.length > 1);
+  assert.ok(shape);
+  const originalWidth = parseFloat(
+    window.getComputedStyle(weights[0]).strokeWidth,
+  );
+  const send = (metadata) =>
+    window.dispatchEvent(
+      new window.MessageEvent("message", {
+        data: { type: "metadata-info", metadata },
+      }),
+    );
+  const metadata = model.metadata();
+  send(metadata);
+  assert.equal(document.getElementById("metadata-panel").hidden, true);
+  for (const weight of weights) {
+    assert.ok(weight.classList.contains("edge-weight"));
+    assert.ok(
+      parseFloat(window.getComputedStyle(weight).strokeWidth) > originalWidth,
+    );
+    assert.equal(weight.classList.contains("edge-shape"), false);
+  }
+  assert.equal(window.getComputedStyle(shape).strokeDasharray, "4 3");
+  weights[0].parentElement.dispatchEvent(
+    new window.MouseEvent("click", { bubbles: true }),
+  );
+  assert.ok(document.querySelector(".selected-edge.edge-weight"));
+  const changed = structuredClone(metadata);
+  changed.values.find(({ name }) => name === "shared;activation").tag = "shape";
+  changed.values.find(({ name }) => name === "dimensions").tag = "weight";
+  send(changed);
+  for (const weight of weights) {
+    assert.equal(weight.classList.contains("edge-weight"), false);
+    assert.equal(window.getComputedStyle(weight).strokeDasharray, "4 3");
+  }
+  assert.ok(shape.classList.contains("edge-weight"));
+  assert.equal(shape.classList.contains("edge-shape"), false);
+  assert.ok(document.querySelector(".selected-edge.edge-shape"));
+  const cleared = structuredClone(metadata);
+  for (const value of cleared.values) value.tag = null;
+  send(cleared);
+  assert.equal(
+    document.querySelectorAll(".edge.edge-weight, .edge.edge-shape").length,
+    0,
+  );
+  assert.equal(
+    document.querySelector(".selected-edge").getAttribute("class"),
+    "selected-edge",
+  );
+  assert.equal(
+    parseFloat(window.getComputedStyle(weights[0]).strokeWidth),
+    originalWidth,
+  );
+  send(metadata);
+  load(graph);
+  assert.equal(
+    document.querySelectorAll(".edge.edge-weight, .edge.edge-shape").length,
+    0,
+  );
+});
+
 test("styles Data like the other panel toggles independently of metadata refresh status", (t) => {
   const { document, window, load } = openViewer(t);
   const style = document.createElement("style");
@@ -9073,6 +9653,19 @@ test("advanced export options stay folded and omit hidden, unsupported or confli
   assert.equal(byId("export-exclude-embeds").disabled, true);
   assert.equal(byId("export-no-weights").disabled, false);
   assert.equal(byId("export-max-sequence-length").disabled, true);
+  assert.deepEqual(
+    [...byId("export-runtime").options].map((option) => [
+      option.value,
+      option.textContent,
+    ]),
+    [
+      ["ort-genai", "onnxruntime-genai"],
+      ["", "None"],
+    ],
+  );
+  assert.equal((await preview()).advancedOptions.runtime, "ort-genai");
+  change("export-runtime", "");
+  assert.equal((await preview()).advancedOptions.runtime, undefined);
   change("export-no-weights", true);
   change("export-optimize", "all");
   change("export-external-data", "safetensors");
@@ -9683,7 +10276,7 @@ test("shows actual attributes, connected initializer parameters and versioned de
   }
 });
 
-test("shows at most two short attributes and initializers inside operators", (t) => {
+test("shows attribute values above a separate initializer count and small values", (t) => {
   const { document, load } = openViewer(t);
   const attribute = { name: "axis", type: "INT", value: "-1" };
   const parameter = {
@@ -9694,8 +10287,12 @@ test("shows at most two short attributes and initializers inside operators", (t)
   };
   for (const [attributes, parameters, expected] of [
     [[attribute], [], ["axis = -1"]],
-    [[], [parameter], ["bias: FLOAT [] = [0.5]"]],
-    [[attribute], [parameter], ["axis = -1", "bias: FLOAT [] = [0.5]"]],
+    [[], [parameter], ["1 initializer", "bias: FLOAT [] = [0.5]"]],
+    [
+      [attribute],
+      [parameter],
+      ["axis = -1", "1 initializer", "bias: FLOAT [] = [0.5]"],
+    ],
     [
       [attribute, { ...attribute, name: "other" }],
       [],
@@ -9704,7 +10301,7 @@ test("shows at most two short attributes and initializers inside operators", (t)
     [
       [],
       [parameter, parameter],
-      ["bias: FLOAT [] = [0.5]", "bias: FLOAT [] = [0.5]"],
+      ["2 initializers", "bias: FLOAT [] = [0.5]", "bias: FLOAT [] = [0.5]"],
     ],
     [
       [{ ...attribute, value: "x".repeat(31) }],
@@ -9722,14 +10319,15 @@ test("shows at most two short attributes and initializers inside operators", (t)
     graph.nodes[0].parameters = parameters;
     load(graph);
     const group = document.querySelector(".graph-node");
-    const rows = Array.from(
-      group.querySelectorAll(".node-attribute, .node-initializer"),
-    );
+    const rows = Array.from(group.querySelectorAll(".node-parameter"));
     assert.deepEqual(
       rows.map((row) => row.firstChild.textContent),
       expected,
     );
-    assert.equal(group.querySelector(".node-parameter-summary"), null);
+    assert.equal(
+      group.querySelectorAll(".node-parameter-summary").length,
+      parameters.length ? 1 : 0,
+    );
     assert.equal(group.querySelector("img, b"), null);
     const body = group.querySelector("rect");
     assert.equal(
@@ -9764,7 +10362,7 @@ test("shows at most two short attributes and initializers inside operators", (t)
   );
 });
 
-test("stacks an explicit attribute above a long initializer without resizing the operator", (t) => {
+test("stacks an explicit attribute above the initializer count without a large-weight preview", (t) => {
   const { document, load } = openViewer(t);
   const parameter = {
     name: "/modelbuilder/external/model.layers.0.attn.qkv_proj.MatMul.weight",
@@ -9781,15 +10379,15 @@ test("stacks an explicit attribute above a long initializer without resizing the
   load(graph);
   const group = document.querySelector(".graph-node");
   const body = group.querySelector("rect");
-  assert.equal(body.getAttribute("width"), "276");
-  assert.equal(body.getAttribute("height"), "104");
-  assert.equal(group.querySelector(".node-parameter-summary"), null);
+  assert.equal(body.getAttribute("width"), "140");
+  assert.equal(body.getAttribute("height"), "120");
   const attribute = group.querySelector(".node-attribute");
-  const initializer = group.querySelector(".node-initializer");
+  const initializer = group.querySelector(".node-parameter-summary");
   assert.ok(attribute);
   assert.ok(initializer);
   assert.equal(attribute.firstChild.textContent, "to = FLOAT");
-  assert.match(initializer.firstChild.textContent, /BFLOAT16 \[2048, 1024\]/);
+  assert.equal(initializer.firstChild.textContent, "1 initializer");
+  assert.equal(group.querySelector(".node-initializer"), null);
   assert.ok(
     Number(attribute.getAttribute("y")) < Number(initializer.getAttribute("y")),
   );
@@ -9803,9 +10401,8 @@ test("stacks an explicit attribute above a long initializer without resizing the
       Number(initializer.getAttribute("y")) >=
       12,
   );
-  const fullDescription = `${parameter.name}: BFLOAT16 [2048, 1024]`;
-  assert.equal(initializer.getAttribute("aria-label"), fullDescription);
-  assert.equal(initializer.querySelector("title").textContent, fullDescription);
+  assert.equal(initializer.getAttribute("aria-label"), "1 initializer");
+  assert.equal(initializer.querySelector("title").textContent, "1 initializer");
   assert.equal(initializer.style.fontSize, "9px");
   assert.ok(
     document
@@ -9838,35 +10435,51 @@ test("distinguishes a Concat attribute from its three initializer inputs", (t) =
   });
   assert.equal(
     document.querySelector(".node-parameter-summary").firstChild.textContent,
-    "1 attribute, 3 initializers (see inspector)",
+    "3 initializers",
   );
+  const attribute = document.querySelector(".node-attribute");
+  const summary = document.querySelector(".node-parameter-summary");
+  assert.equal(attribute.firstChild.textContent, "axis = 0");
+  assert.ok(
+    Number(attribute.getAttribute("y")) < Number(summary.getAttribute("y")),
+  );
+  assert.equal(document.querySelector(".node-initializer"), null);
   assert.equal(document.getElementById("attribute-count").textContent, "1");
   assert.equal(document.getElementById("parameter-count").textContent, "3");
   assert.equal(document.getElementById("input-count").textContent, "3");
   assert.equal(document.getElementById("scope-initializers").hidden, true);
 });
 
-test("summarizes numerous or long parameters while preserving inspector details", (t) => {
+test("keeps long and multiline attribute values visible while preserving inspector details", (t) => {
   const { document, load } = openViewer(t);
   const parameter = { name: "bias", type: "FLOAT", shape: [], value: "[0.5]" };
   for (const [attributes, parameters, expected] of [
     [
       [{ name: "axis", type: "INT", value: "-1" }],
       [parameter, parameter],
-      "1 attribute, 2 initializers",
+      [
+        "axis = -1",
+        "2 initializers",
+        "bias: FLOAT [] = [0.5]",
+        "bias: FLOAT [] = [0.5]",
+      ],
     ],
-    [[], Array(12).fill(parameter), "12 initializers"],
+    [[], Array(12).fill(parameter), ["12 initializers"]],
     [
       [{ name: "text", type: "STRING", value: "x".repeat(32) }],
       [],
-      "1 attribute",
+      [`text = ${"x".repeat(32)}`],
     ],
     [
       [{ name: "text", type: "STRING", value: "line\nbreak" }],
       [],
-      "1 attribute",
+      ["text = line break"],
     ],
-    [[], [{ ...parameter, value: "x".repeat(80) }], "1 initializer"],
+    [
+      [],
+      [{ ...parameter, value: "x".repeat(80) }],
+      ["1 initializer", `bias: FLOAT [] = ${"x".repeat(80)}`],
+    ],
     [
       [
         {
@@ -9876,7 +10489,7 @@ test("summarizes numerous or long parameters while preserving inspector details"
         },
       ],
       [],
-      "1 attribute",
+      [`<img> = ${"<script>alert(1)</script>".repeat(2)}`],
     ],
   ]) {
     const graph = structuredClone(demoGraph);
@@ -9884,13 +10497,26 @@ test("summarizes numerous or long parameters while preserving inspector details"
     graph.nodes[0].parameters = parameters;
     load(graph);
     const group = document.querySelector(".graph-node");
-    const summary = group.querySelector(".node-parameter-summary");
-    assert.equal(summary.firstChild.textContent, `${expected} (see inspector)`);
-    assert.equal(
-      group.querySelectorAll(".node-attribute, .node-initializer").length,
-      0,
+    const rows = [...group.querySelectorAll(".node-parameter")];
+    assert.deepEqual(
+      rows.map((row) => row.firstChild.textContent),
+      expected,
     );
-    assert.equal(group.querySelector("rect").getAttribute("height"), "104");
+    for (let index = 0; index < attributes.length; index++) {
+      const { name, value } = attributes[index];
+      assert.equal(
+        rows[index].getAttribute("aria-label"),
+        `${name} = ${value}`,
+      );
+      assert.equal(
+        rows[index].querySelector("title").textContent,
+        `${name} = ${value}`,
+      );
+    }
+    assert.equal(
+      group.querySelector("rect").getAttribute("height"),
+      String(88 + expected.length * 16),
+    );
     assert.equal(
       document.querySelectorAll("#node-initializers li").length,
       parameters.length,
@@ -9907,6 +10533,47 @@ test("summarizes numerous or long parameters while preserving inspector details"
       );
     }
     assert.equal(group.querySelector("img, script"), null);
+  }
+});
+
+test("previews fewer than four initializers only when every tensor has at most ten elements", (t) => {
+  const { document, load } = openViewer(t);
+  const tiny = {
+    name: "weights",
+    type: "FLOAT",
+    shape: ["2", "5"],
+    value: "[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]",
+  };
+  for (const [parameters, previews] of [
+    [[tiny, tiny, tiny], 3],
+    [[tiny, tiny, tiny, tiny], 0],
+    [[{ ...tiny, shape: ["11"] }], 0],
+    [[tiny, { ...tiny, shape: ["11"] }], 0],
+    [[{ ...tiny, shape: ["unknown"] }], 0],
+    [[{ ...tiny, value: undefined }], 1],
+    [[{ ...tiny, shape: null, distribution: { elementCount: "10" } }], 1],
+    [[{ ...tiny, shape: null, distribution: { elementCount: "11" } }], 0],
+    [[{ ...tiny, shape: [], value: "[0.5]" }], 1],
+    [[{ ...tiny, shape: ["0"], value: "[]" }], 1],
+  ]) {
+    load({ ...demoGraph, nodes: [{ ...demoGraph.nodes[0], parameters }] });
+    const group = document.querySelector(".graph-node");
+    assert.equal(group.querySelectorAll(".node-initializer").length, previews);
+    assert.equal(
+      group.querySelector(".node-parameter-summary").firstChild.textContent,
+      `${parameters.length} initializer${parameters.length === 1 ? "" : "s"}`,
+    );
+    const rows = [...group.querySelectorAll(".node-parameter")];
+    assert.equal(
+      group.querySelector("rect").getAttribute("height"),
+      String(88 + rows.length * 16),
+    );
+    for (let index = 1; index < rows.length; index++)
+      assert.equal(
+        Number(rows[index].getAttribute("y")) -
+          Number(rows[index - 1].getAttribute("y")),
+        16,
+      );
   }
 });
 
@@ -9937,7 +10604,7 @@ test("shows tiny initializer values as safe text and omits large and external pa
   assert.equal(document.querySelector(".node-initializer"), null);
   assert.match(
     document.querySelector(".node-parameter-summary").firstChild.textContent,
-    /^\d+ initializers \(see inspector\)$/,
+    /^\d+ initializers$/,
   );
 });
 
@@ -9957,7 +10624,7 @@ test("fits initializer previews safely above subgraph links and preserves layout
   const group = document.querySelector('[data-id="node-0"]');
   const body = group.querySelector("rect");
   const row = group.querySelector(".node-parameter-summary");
-  assert.equal(row.firstChild.textContent, "1 initializer (see inspector)");
+  assert.equal(row.firstChild.textContent, "1 initializer");
   assert.ok(
     document
       .getElementById("node-initializers")
@@ -11296,6 +11963,109 @@ test("clicking an arc highlights its full route and both endpoints without start
   assert.equal(document.getElementById("connection-highlight"), null);
 });
 
+test("double-clicking an arc alternates its endpoints independently and centers the selected node", (t) => {
+  const { document, load, pointer } = openViewer(t);
+  const model = chainGraph(8);
+  load(model);
+  const graph = document.getElementById("graph");
+  const visit = (name, id, selector) => {
+    const connection = [...document.querySelectorAll(".connection")].find(
+      (group) => group.querySelector(".tensor-label").textContent === name,
+    );
+    const label = connection.querySelector(".tensor-label");
+    const x = Number(label.getAttribute("x"));
+    const y = Number(label.getAttribute("y"));
+    const target = connection.querySelector(selector);
+    for (let click = 0; click < 2; click++) {
+      pointer(target, "pointerdown", x, y);
+      pointer(target, "pointerup", x, y);
+    }
+    pointer(target, "dblclick", x, y, { detail: 2 });
+    const selected = document.querySelector(".graph-node.selected");
+    assert.equal(selected.dataset.id, id);
+    assert.equal(document.activeElement, selected);
+    assert.equal(connection.getAttribute("aria-pressed"), "true");
+    assert.ok(document.getElementById("connection-highlight"));
+    const [left, top, width, height] = graph
+      .getAttribute("viewBox")
+      .split(" ")
+      .map(Number);
+    const position = nodePositions(document, `[data-id="${id}"] > rect`)[0];
+    assert.ok(Math.abs(left + width / 2 - position.x) < 1e-8);
+    assert.ok(Math.abs(top + height / 2 - position.y) < 1e-8);
+    assert.equal(graph.classList.contains("dragging"), false);
+  };
+  visit("tensor_2", "node-2", ".edge-hit");
+  visit("tensor_4", "node-4", ".tensor-label");
+  visit("tensor_2", "node-3", ".edge");
+  visit("tensor_4", "node-5", ".edge-hit");
+  visit("tensor_2", "node-2", ".tensor-label");
+  load(model);
+  visit("tensor_2", "node-2", ".edge");
+});
+
+test("double-clicking input and output arcs also visits graph ports", (t) => {
+  const { document, load, pointer } = openViewer(t);
+  load(chainGraph(2));
+  const graph = document.getElementById("graph");
+  for (const [name, ids] of [
+    ["input", ["input-0", "node-0", "input-0"]],
+    ["output", ["node-1", "output-0", "node-1"]],
+  ]) {
+    const connection = [...document.querySelectorAll(".connection")].find(
+      (group) => group.querySelector(".tensor-label").textContent === name,
+    );
+    for (const id of ids) {
+      pointer(connection.querySelector(".edge"), "dblclick", 0, 0, {
+        detail: 2,
+      });
+      const selected = document.querySelector(
+        ".graph-node.selected, .port.selected",
+      );
+      assert.equal(selected.dataset.id, id);
+      assert.equal(document.activeElement, selected);
+      const [left, top, width, height] = graph
+        .getAttribute("viewBox")
+        .split(" ")
+        .map(Number);
+      const position = nodePositions(document, `[data-id="${id}"] > rect`)[0];
+      assert.ok(Math.abs(left + width / 2 - position.x) < 1e-8);
+      assert.ok(Math.abs(top + height / 2 - position.y) < 1e-8);
+    }
+  }
+});
+
+test("double-clicking an overview arc alternates endpoints after virtualized remounts and respects zoom gestures", (t) => {
+  const { document, load, pointer } = openViewer(t);
+  load(chainGraph(600));
+  const graph = document.getElementById("graph");
+  const positions = nodePositions(document);
+  const step = positions[1].y - positions[0].y;
+  const x = positions[0].x;
+  const y = positions[0].y + 300.5 * step;
+  for (const id of ["node-300", "node-301", "node-300"]) {
+    document.getElementById("zoom-fit").click();
+    assert.equal(document.querySelectorAll(".connection").length, 0);
+    const before = graph.getAttribute("viewBox");
+    pointer(graph, "dblclick", x, y, { detail: 2, altKey: true });
+    assert.equal(graph.getAttribute("viewBox"), before);
+    pointer(graph, "dblclick", x, y, { detail: 2 });
+    assert.equal(document.querySelector(".graph-node.selected").dataset.id, id);
+    assert.equal(
+      document.querySelector('.connection[aria-pressed="true"] .tensor-label')
+        .textContent,
+      "tensor_300",
+    );
+    const [left, top, width, height] = graph
+      .getAttribute("viewBox")
+      .split(" ")
+      .map(Number);
+    const position = nodePositions(document, `[data-id="${id}"] > rect`)[0];
+    assert.ok(Math.abs(left + width / 2 - position.x) < 1e-8);
+    assert.ok(Math.abs(top + height / 2 - position.y) < 1e-8);
+  }
+});
+
 test("arc selection preserves area zoom gestures and works on virtualized connections", (t) => {
   const { document, window, load, pointer } = openViewer(t);
   load(chainGraph(600));
@@ -11330,6 +12100,93 @@ test("arc selection preserves area zoom gestures and works on virtualized connec
     new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
   );
   assert.equal(document.getElementById("connection-highlight"), null);
+});
+
+test("preserves result arc tags in crossing batches, released paths, overview and newly mounted connections", (t) => {
+  const { document, window, load } = openViewer(t);
+  const model = chainGraph(600);
+  model.nodes[599].inputs.push("tensor_0", "tensor_1");
+  load(model);
+  assert.equal(
+    document.querySelector('.connection[aria-label="Connection: tensor_300"]'),
+    null,
+  );
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: {
+        type: "metadata-info",
+        metadata: {
+          model: [],
+          graph: [],
+          nodes: model.nodes.map(({ id }) => ({
+            id,
+            entries: [],
+            constant: false,
+            tag: null,
+            releaseAfter: id === "node-0" ? ["tensor_0", "tensor_1"] : [],
+            lastUse: [],
+            unusedOutputs: [],
+          })),
+          values: [
+            { name: "tensor_0", entries: [], constant: false, tag: "weight" },
+            { name: "tensor_1", entries: [], constant: false, tag: "shape" },
+            { name: "tensor_300", entries: [], constant: false, tag: "shape" },
+          ],
+        },
+      },
+    }),
+  );
+  for (const [tag, property, expected] of [
+    ["weight", "strokeWidth", "3"],
+    ["shape", "strokeDasharray", "4 3"],
+  ]) {
+    const crossing = document.getElementById(`crossing-edges-${tag}`);
+    assert.ok(crossing.getAttribute("d"));
+    assert.equal(window.getComputedStyle(crossing)[property], expected);
+  }
+  document.getElementById("show-metadata").click();
+  for (const tag of ["weight", "shape"]) {
+    assert.equal(
+      document.getElementById(`crossing-edges-${tag}`).getAttribute("d"),
+      "",
+    );
+    assert.ok(
+      document
+        .getElementById(`released-crossing-edges-${tag}`)
+        .getAttribute("d"),
+    );
+  }
+  document.getElementById("zoom-fit").click();
+  assert.equal(document.querySelectorAll(".connection").length, 0);
+  assert.ok(document.getElementById("overview-edges-weight").getAttribute("d"));
+  assert.ok(document.getElementById("overview-edges-shape").getAttribute("d"));
+  assert.equal(
+    window.getComputedStyle(document.getElementById("overview-edges-weight"))
+      .strokeWidth,
+    "3",
+  );
+  assert.equal(
+    window.getComputedStyle(document.getElementById("overview-edges-shape"))
+      .strokeDasharray,
+    "4 3",
+  );
+  document.getElementById("node-search").value = "activation_300";
+  document
+    .getElementById("find-node")
+    .dispatchEvent(new window.Event("submit", { cancelable: true }));
+  const mounted = document.querySelector(
+    '.connection[aria-label="Connection: tensor_300"] .edge',
+  );
+  assert.ok(mounted);
+  assert.equal(window.getComputedStyle(mounted).strokeDasharray, "4 3");
+  load(chainGraph(600));
+  for (const id of [
+    "crossing-edges",
+    "released-crossing-edges",
+    "overview-edges",
+  ])
+    for (const tag of ["weight", "shape"])
+      assert.ok(!document.getElementById(`${id}-${tag}`).getAttribute("d"));
 });
 
 test("refreshes highlighted geometry for a never-mounted overview connection", (t) => {
@@ -12525,7 +13382,7 @@ test("virtualizes 20,000 nodes, finds distant operators and uses a batched overv
   const { document, window, load } = openViewer(t);
   const model = chainGraph(20_000);
   model.nodes[19_998].parameters = [
-    { name: "weight", type: "FLOAT", shape: ["3", "4"] },
+    { name: "weight", type: "FLOAT", shape: ["3", "3"] },
   ];
   model.nodes[19_998].attributes = [
     { name: "body", graphs: [{ name: "child", path: [], nodeCount: 0 }] },
@@ -12578,7 +13435,7 @@ test("virtualizes 20,000 nodes, finds distant operators and uses a batched overv
   );
   const selected = document.querySelector(".graph-node.selected");
   const initializer = selected.querySelector(".node-initializer");
-  assert.equal(initializer.getAttribute("aria-label"), "weight: FLOAT [3, 4]");
+  assert.equal(initializer.getAttribute("aria-label"), "weight: FLOAT [3, 3]");
   assert.ok(
     Number(initializer.getAttribute("y")) <
       Number(selected.querySelector(".subgraph-link rect").getAttribute("y")),

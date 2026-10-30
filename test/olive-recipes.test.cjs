@@ -1,6 +1,5 @@
 const assert = require("node:assert/strict");
 const { execFile } = require("node:child_process");
-const { watch } = require("node:fs");
 const {
   mkdtemp,
   mkdir,
@@ -283,17 +282,17 @@ test("cancels the recipe snapshot copy before traversing the entire repository",
   await mkdir(plan.directory);
   const controller = new AbortController();
   const reason = new Error("Cancelled during recipe snapshot copying");
-  const watcher = watch(plan.directory, (_event, filename) => {
-    if (filename?.toString() === "olive-recipe") controller.abort(reason);
-  });
-  try {
-    await assert.rejects(
-      runExport(plan, controller.signal, () => {}),
-      (error) => error === reason,
-    );
-  } finally {
-    watcher.close();
-  }
+  let checkpoints = 0;
+  // Filesystem watch events can arrive after the entire copy on macOS.
+  controller.signal.throwIfAborted = () => {
+    if (++checkpoints === 8) controller.abort(reason);
+    AbortSignal.prototype.throwIfAborted.call(controller.signal);
+  };
+  await assert.rejects(
+    runExport(plan, controller.signal, () => {}),
+    (error) => error === reason,
+  );
+  assert.equal(checkpoints, 8);
   assert.equal(controller.signal.aborted, true);
   const copied = await readdir(path.join(plan.directory, "olive-recipe"), {
     recursive: true,

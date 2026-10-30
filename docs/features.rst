@@ -417,6 +417,24 @@ Previewing does not modify the graph. See :doc:`features/fusion_patterns`.
 
    Inspect and select native matches before applying them.
 
+Patterns from node selections
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Select connected operators, right-click the selection and choose
+**Create / edit FunctionPattern...** to create a ``FunctionPattern`` in a popup.
+Inspect its text and copy reusable Python code for a local
+``GraphBuilder``. Match and fuse occurrences across the model, undo with
+**Unfuse**, or opt into the new **Selection patterns** optimization bucket.
+Edit the match and replacement functions in SDK textparser syntax, then
+**Apply edits**. Copy buttons export either function or the Python code.
+Pattern definitions are session-local. See :doc:`features/fusion_patterns`.
+
+.. figure:: _static/feature-selection-pattern.png
+   :alt: Create FunctionPattern with editable textparser match and replacement functions and copy controls.
+   :width: 100%
+
+   Turn selected operators into a reusable local-function fusion.
+
 Unfuse (undo native edits)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
