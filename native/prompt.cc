@@ -276,10 +276,22 @@ public:
       auto extension = ModelFilePath(path).extension().string();
       std::transform(extension.begin(), extension.end(), extension.begin(),
                      [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
-      if (extension == ".pipe-onnx") {
-        if (settings.Has("loadOverlap") || settings.Has("loadMemoryMiB") ||
-            (settings.Has("sdkLoader") && settings.Get("sdkLoader").As<Napi::Boolean>()))
-          throw std::runtime_error("The SDK parallel loader accepts ModelProto, not pipelines.");
+      if (settings.Has("sdkLoader") && settings.Get("sdkLoader").As<Napi::Boolean>()) {
+        rt::RuntimeLoadOptions loading;
+        if (settings.Has("loadOverlap"))
+          loading.overlap_preparation = settings.Get("loadOverlap").As<Napi::Boolean>();
+        if (settings.Has("loadMemoryMiB")) {
+          const auto memory = Integer(settings.Get("loadMemoryMiB"), 0, 1'048'576);
+          if (memory)
+            loading.memory_limit = static_cast<size_t>(memory) * 1024 * 1024;
+        }
+        if (extension == ".pipe-onnx")
+          loaded_pipeline =
+              std::make_unique<rt::LoadedRuntimePipeline>(path, *context, session_options, loading);
+        else
+          loaded =
+              std::make_unique<rt::LoadedRuntimeSession>(path, *context, session_options, loading);
+      } else if (extension == ".pipe-onnx") {
         FileDescriptor file(OpenModelFile(path));
         if (file.get() < 0)
           throw std::runtime_error("Could not open the prompt pipeline: " + path);
@@ -292,17 +304,6 @@ public:
               &pipeline->ref_prefill(), pipeline->has_decode() ? &pipeline->ref_decode() : nullptr})
           if (stage)
             ol::LoadExternalDataForModel(*stage, ModelFilePath(path).parent_path().string());
-      } else if (settings.Has("sdkLoader") && settings.Get("sdkLoader").As<Napi::Boolean>()) {
-        rt::RuntimeLoadOptions loading;
-        if (settings.Has("loadOverlap"))
-          loading.overlap_preparation = settings.Get("loadOverlap").As<Napi::Boolean>();
-        if (settings.Has("loadMemoryMiB")) {
-          const auto memory = Integer(settings.Get("loadMemoryMiB"), 0, 1'048'576);
-          if (memory)
-            loading.memory_limit = static_cast<size_t>(memory) * 1024 * 1024;
-        }
-        loaded =
-            std::make_unique<rt::LoadedRuntimeSession>(path, *context, session_options, loading);
       } else {
         FileDescriptor file(OpenModelFile(path));
         if (file.get() < 0)
@@ -312,18 +313,20 @@ public:
         ReadModel(*plain_model, stream, {});
         ol::LoadExternalDataForModel(*plain_model, ModelFilePath(path).parent_path().string());
       }
-      if (pipeline) {
+      const auto *descriptor = loaded_pipeline ? &loaded_pipeline->pipeline() : pipeline.get();
+      if (descriptor) {
         std::set<std::string> persistent_inputs;
-        for (const auto &binding : pipeline->prefill().graph().persistent_bindings())
+        for (const auto &binding : descriptor->prefill().graph().persistent_bindings())
           persistent_inputs.emplace(binding.input_name());
-        for (const auto &initializer : pipeline->prefill().graph().initializer())
+        for (const auto &initializer : descriptor->prefill().graph().initializer())
           if (persistent_inputs.contains(std::string(initializer.name())))
             initial_feeds.emplace(initializer.name(), rt::TensorFromProto(initializer));
       }
-      if (!loaded)
+      if (!loaded && !loaded_pipeline)
         prepared = std::make_unique<rt::RuntimeSession>(
             pipeline ? pipeline->prefill() : *plain_model, initial_feeds, session_options);
-      auto &base = loaded ? loaded->session() : *prepared;
+      auto &base = loaded_pipeline ? loaded_pipeline->prefill_session()
+                                   : (loaded ? loaded->session() : *prepared);
       session_options.value_store = base.value_store_owner();
       executor = base.cpu_executor();
       context->set_cpu_executor(executor.get());
@@ -339,22 +342,25 @@ public:
     options.temperature = 0;
     if (eos)
       options.eos_token_ids = *eos;
-    if (pipeline) {
-      if (pipeline->has_input_ids_name())
-        options.input_ids_name = pipeline->input_ids_name();
-      if (pipeline->has_logits_name())
-        options.logits_name = pipeline->logits_name();
-      if (pipeline->has_attention_mask_name())
-        options.attention_mask_name = pipeline->attention_mask_name();
-      if (pipeline->has_position_ids_name())
-        options.position_ids_name = pipeline->position_ids_name();
-      if (pipeline->has_seed())
-        options.seed = static_cast<uint64_t>(pipeline->seed());
-      if (pipeline->has_pad_token_id())
-        options.pad_token_id = pipeline->pad_token_id();
+    const auto *descriptor = loaded_pipeline ? &loaded_pipeline->pipeline() : pipeline.get();
+    if (descriptor) {
+      if (descriptor->has_input_ids_name())
+        options.input_ids_name = descriptor->input_ids_name();
+      if (descriptor->has_logits_name())
+        options.logits_name = descriptor->logits_name();
+      if (descriptor->has_attention_mask_name())
+        options.attention_mask_name = descriptor->attention_mask_name();
+      if (descriptor->has_position_ids_name())
+        options.position_ids_name = descriptor->position_ids_name();
+      if (descriptor->has_seed())
+        options.seed = static_cast<uint64_t>(descriptor->seed());
+      if (descriptor->has_pad_token_id())
+        options.pad_token_id = descriptor->pad_token_id();
       if (!eos)
-        options.eos_token_ids.assign(pipeline->eos_token_ids().begin(),
-                                     pipeline->eos_token_ids().end());
+        options.eos_token_ids.assign(descriptor->eos_token_ids().begin(),
+                                     descriptor->eos_token_ids().end());
+    }
+    if (pipeline) {
       pipeline->set_max_new_tokens(maximum);
       pipeline->set_temperature(0);
       if (eos) {
@@ -370,15 +376,16 @@ public:
     feeds.emplace(
         options.input_ids_name,
         rt::Tensor::FromInt64(options.input_ids_name, {1, static_cast<int64_t>(ids.size())}, ids));
-    // Warmup validates descriptor settings through the SDK; explicit options attach observation.
+    // Plain-pipeline warmup validates stored settings; owning pipelines use explicit options.
     const bool observe = static_cast<bool>(on_step);
     options.on_step = std::move(on_step);
     options.max_logit_bytes = logit_budget;
     const auto generated =
-        pipeline ? (observe ? rt::Generate(*pipeline, *context, feeds, options, session_options)
-                            : rt::Generate(*pipeline, *context, feeds, session_options))
-                 : rt::Generate(loaded ? loaded->model() : *plain_model, *context, feeds, options,
-                                session_options);
+        loaded_pipeline ? rt::Generate(*loaded_pipeline, *context, feeds, options)
+        : pipeline ? (observe ? rt::Generate(*pipeline, *context, feeds, options, session_options)
+                              : rt::Generate(*pipeline, *context, feeds, session_options))
+                   : rt::Generate(loaded ? loaded->model() : *plain_model, *context, feeds, options,
+                                  session_options);
     if (generated.data_type != ol::TensorProto::INT64 || generated.shape.size() != 2 ||
         generated.shape[0] != 1 || generated.shape[1] < static_cast<int64_t>(prompt.size()) ||
         generated.shape[1] - static_cast<int64_t>(prompt.size()) > maximum)
@@ -448,6 +455,7 @@ public:
   rt::RuntimeSessionOptions session_options;
   rt::RuntimeValueMap initial_feeds;
   std::unique_ptr<rt::LoadedRuntimeSession> loaded;
+  std::unique_ptr<rt::LoadedRuntimePipeline> loaded_pipeline;
   std::unique_ptr<ol::PipelineProto> pipeline;
   std::unique_ptr<ol::ModelProto> plain_model;
   std::unique_ptr<rt::RuntimeSession> prepared;
