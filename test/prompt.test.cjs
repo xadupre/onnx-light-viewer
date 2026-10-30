@@ -317,6 +317,30 @@ test("snapshot-style metadata symlinks remain available", async (t) => {
 });
 
 for (const engine of ["onnx-light", "onnxruntime-genai"]) {
+  test(`native ${engine} selects the first-token argmax despite model sampling defaults`, async (t) => {
+    const { root, model } = await fixture(t);
+    const configPath = path.join(root, "genai_config.json");
+    const config = JSON.parse(await readFile(configPath, "utf8"));
+    config.search = {
+      ...config.search,
+      do_sample: true,
+      temperature: 100,
+      top_k: 4,
+      top_p: 1,
+    };
+    await writeFile(configPath, JSON.stringify(config));
+    const result = await runPrompt(
+      model,
+      { ...options, engine, maxTokens: 1 },
+      "/no/python",
+      signal(),
+      () => {},
+    );
+    assert.equal(result.tokens.length, 1);
+    assert.equal(result.tokens[0].id, 1);
+    assert.equal(result.tokens[0].score, 4);
+  });
+
   test(`native ${engine} streams real tokens and measures prefill and each decode step without Python`, async (t) => {
     const { root, model } = await fixture(t);
     const streamed = [];

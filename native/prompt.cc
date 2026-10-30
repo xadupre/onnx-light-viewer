@@ -400,6 +400,7 @@ public:
         api.OgaGeneratorParamsSetSearchNumber(params.get(), "max_length", prompt.size() + maximum));
     api.Check(api.OgaGeneratorParamsSetSearchNumber(params.get(), "num_beams", 1));
     api.Check(api.OgaGeneratorParamsSetSearchNumber(params.get(), "num_return_sequences", 1));
+    api.Check(api.OgaGeneratorParamsSetSearchNumber(params.get(), "temperature", 0));
     api.Check(api.OgaGeneratorParamsSetSearchBool(params.get(), "do_sample", false));
     OgaGenerator *raw_generator = nullptr;
     api.Check(api.OgaCreateGenerator(model.get(), params.get(), &raw_generator));
