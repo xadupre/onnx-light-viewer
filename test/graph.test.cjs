@@ -38,6 +38,25 @@ function modelBytes(name) {
   return readFileSync(path.join(__dirname, "models", name));
 }
 
+function functionPatternTexts(python) {
+  return JSON.parse(
+    execFileSync(
+      "python3",
+      [
+        "-c",
+        [
+          "import ast, json, sys",
+          "tree = ast.parse(sys.stdin.read())",
+          "names = {'match_text', 'replacement_text'}",
+          "texts = {node.targets[0].id: ast.literal_eval(node.value) for node in tree.body if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name) and node.targets[0].id in names}",
+          "print(json.dumps(texts))",
+        ].join("\n"),
+      ],
+      { input: python, encoding: "utf8" },
+    ),
+  );
+}
+
 function memoryTestModel(
   dimensions,
   {
@@ -2285,34 +2304,20 @@ test("selection FunctionPatterns retain exports and catalog across repeated matc
   assert.match(definition.text, /Transpose/);
   assert.equal(definition.replacement, definition.text);
   assert.match(definition.text, /opset_import: \["" : 13\]/);
-  assert.match(definition.text, /SelectedTransposePair \(x\) => \(a\)/);
+  assert.match(definition.text, /^# A=x\n/);
+  assert.match(definition.text, /SelectedTransposePair \(A\) => \(C\)/);
+  assert.match(definition.text, /^\s+B = Transpose/m);
+  assert.match(definition.text, /^\s+C = Transpose/m);
+  assert.doesNotMatch(definition.python, /\[first\]|\[second\]/);
   assert.match(definition.python, /as_function=True/);
   assert.match(definition.python, /GraphBuilder/);
-  execFileSync(
-    "python3",
-    [
-      "-c",
-      "import sys; compile(sys.stdin.read(), '<selection-pattern>', 'exec')",
-    ],
-    { input: definition.python },
-  );
-  const serializedFunction = definition.python.match(
-    /bytes\.fromhex\("([0-9a-f]+)"\)/,
-  )[1];
-  const pythonDefinition = loadModel(
-    Buffer.concat([
-      modelBytes("fusion.onnx"),
-      bytesField(25, Buffer.from(serializedFunction, "hex")),
-    ]),
-    "python-definition",
-  );
-  pythonDefinition.verify();
-  assert.deepEqual(
-    pythonDefinition
-      .graph(false, [{ function: 0 }])
-      .nodes.map(({ opType }) => opType),
-    ["Transpose", "Transpose"],
-  );
+  assert.match(definition.python, /parse_function\(match_text\)/);
+  assert.match(definition.python, /parse_function\(replacement_text\)/);
+  assert.doesNotMatch(definition.python, /ParseFromString|fromhex/);
+  assert.deepEqual(functionPatternTexts(definition.python), {
+    match_text: definition.text,
+    replacement_text: definition.replacement,
+  });
   assert.deepEqual(
     source.optimizationPatterns().find(({ name }) => name === definition.name),
     {
@@ -2360,6 +2365,12 @@ test("selection FunctionPatterns retain exports and catalog across repeated matc
       .graph(false, calls[0].function.path)
       .nodes.map(({ opType }) => opType),
     ["Transpose", "Transpose"],
+  );
+  assert.deepEqual(
+    fused
+      .graph(false, calls[0].function.path)
+      .nodes.map(({ outputs }) => outputs),
+    [["B"], ["C"]],
   );
   fused.createFunctionPattern(
     [fused.graph().nodes.length - 1],
@@ -2442,6 +2453,60 @@ test("selection FunctionPatterns retain exports and catalog across repeated matc
   assert.deepEqual(Buffer.from(await source.serialize()), originalBytes);
 });
 
+test("selection FunctionPatterns omit original operator names without changing the source model", async () => {
+  const source = memoryTestModel([2, 3, 4], {
+    nodes: [
+      Buffer.concat([
+        bytesField(1, "x"),
+        bytesField(2, "y"),
+        bytesField(3, "model/Shape_node_9"),
+        bytesField(4, "Shape"),
+        ...[
+          ["end", 2],
+          ["start", 1],
+        ].map(([name, value]) =>
+          bytesField(
+            5,
+            Buffer.concat([
+              bytesField(1, name),
+              varintField(3, value),
+              varintField(20, 2),
+            ]),
+          ),
+        ),
+      ]),
+    ],
+    outputType: 7,
+    outputDimensions: [1],
+  });
+  const original = Buffer.from(await source.serialize());
+  const definition = source.createFunctionPattern([0], "ShortShape");
+  assert.match(
+    definition.text,
+    /^\s+B = Shape <end: int = 2, start: int = 1> \(A\)$/m,
+  );
+  for (const text of [
+    definition.text,
+    definition.replacement,
+    definition.python,
+  ])
+    assert.doesNotMatch(text, /model\/Shape_node_9/);
+  assert.equal(source.graph().nodes[0].name, "model/Shape_node_9");
+  assert.deepEqual(Buffer.from(await source.serialize()), original);
+  const texts = functionPatternTexts(definition.python);
+  source.updateFunctionPattern(
+    definition.name,
+    texts.match_text,
+    texts.replacement_text,
+  );
+  const preview = await source.previewFusion(definition.name);
+  assert.equal(preview.matches.length, 1);
+  const fused = await preview.model.applyFusion(definition.name, [
+    preview.matches[0].anchor,
+  ]);
+  fused.verify();
+});
+
 test("selection FunctionPatterns update SDK text atomically and use both edited bodies everywhere", async () => {
   const source = loadModel(modelBytes("fusion.onnx"), "editable-selection");
   const original = source.graph();
@@ -2502,31 +2567,16 @@ test("selection FunctionPatterns update SDK text atomically and use both edited 
     updated.python,
     /FunctionPattern\(match_function, replacement_function,/,
   );
-  const encoded = Array.from(
-    updated.python.matchAll(/bytes\.fromhex\("([0-9a-f]+)"\)/g),
-    (match) => match[1],
-  );
-  assert.equal(encoded.length, 2);
-  assert.notEqual(encoded[0], encoded[1]);
-  const pythonDefinitions = loadModel(
-    Buffer.concat([
-      modelBytes("fusion.onnx"),
-      ...encoded.map((value) => bytesField(25, Buffer.from(value, "hex"))),
-    ]),
-    "edited-python-definitions",
-  );
-  pythonDefinitions.verify();
+  const texts = functionPatternTexts(updated.python);
+  assert.equal(texts.match_text, updated.text);
+  assert.equal(texts.replacement_text, updated.replacement);
   assert.deepEqual(
-    pythonDefinitions
-      .graph(false, [{ function: 0 }])
-      .nodes.map(({ opType }) => opType),
-    ["Transpose", "Transpose"],
-  );
-  assert.deepEqual(
-    pythonDefinitions
-      .graph(false, [{ function: 1 }])
-      .nodes.map(({ opType }) => opType),
-    ["Identity"],
+    source.updateFunctionPattern(
+      definition.name,
+      texts.match_text,
+      texts.replacement_text,
+    ),
+    updated,
   );
   const preview = await clone.previewFusion(definition.name);
   assert.equal(preview.matches.length, 2);
@@ -2670,7 +2720,9 @@ test("selection FunctionPatterns preserve initializer inputs and every escaping 
       ]),
     ],
   });
-  source.createFunctionPattern([0, 1], "AddAndRelu");
+  const definition = source.createFunctionPattern([0, 1], "AddAndRelu");
+  assert.match(definition.text, /^# A=x\n# B=bias\n# C=sum\n# D=activated\n/);
+  assert.match(definition.text, /AddAndRelu \(A, B\) => \(C, D\)/);
   const preview = await source.previewFusion("AddAndRelu");
   assert.equal(preview.matches.length, 1);
   assert.deepEqual(preview.matches[0].replacement[0].inputs, ["x", "bias"]);
@@ -2683,6 +2735,99 @@ test("selection FunctionPatterns preserve initializer inputs and every escaping 
   ]);
   fused.verify();
   assert.equal(fused.graph().nodes.length, 2);
+});
+
+test("selection FunctionPattern aliases cover inputs, keep standalone original-name comments and continue past Z", async () => {
+  const weight = "/modelbuilder/checkpoint/lm_head.weight";
+  const nodes = Array.from({ length: 28 }, (_, index) =>
+    Buffer.concat([
+      bytesField(1, index ? `result_${index - 1}` : weight),
+      ...(index ? [] : [bytesField(1, "x")]),
+      bytesField(2, index === 27 ? "y" : `result_${index}`),
+      bytesField(4, index ? "Relu" : "Add"),
+    ]),
+  );
+  const source = memoryTestModel([2], {
+    nodes,
+    initializers: [
+      Buffer.concat([
+        varintField(1, 2),
+        varintField(2, 1),
+        bytesField(8, weight),
+        bytesField(9, Buffer.alloc(8)),
+      ]),
+    ],
+  });
+  const original = Buffer.from(await source.serialize());
+  const definition = source.createFunctionPattern(
+    nodes.map((_, index) => index),
+    "ReadableResults",
+  );
+  assert.match(
+    definition.text,
+    /^# A=\/modelbuilder\/checkpoint\/lm_head.weight\n# B=x\n/,
+  );
+  assert.match(definition.text, /ReadableResults \(A, B\) => \(AD\)/);
+  assert.match(definition.text, /C = Add \(A, B\)/);
+  assert.match(definition.text, /AA = Relu \(Z\)/);
+  assert.match(definition.text, /AD = Relu \(AC\)/);
+  const body = definition.text
+    .split("\n")
+    .filter((line) => !line.startsWith("#"))
+    .join("\n");
+  assert.doesNotMatch(body, /result_|modelbuilder|lm_head/);
+  assert.deepEqual(Buffer.from(await source.serialize()), original);
+  const annotated = "# note: ''' \\\\ and \"quotes\"\r\n" + definition.text;
+  const roundTrip = source.updateFunctionPattern(
+    definition.name,
+    annotated,
+    definition.replacement,
+  );
+  assert.equal(roundTrip.text, annotated);
+  assert.equal(roundTrip.replacement, definition.replacement);
+  assert.deepEqual(functionPatternTexts(roundTrip.python), {
+    match_text: annotated,
+    replacement_text: definition.replacement,
+  });
+  const preview = await source.previewFusion(definition.name);
+  assert.equal(preview.matches.length, 1);
+  const fused = await preview.model.applyFusion(definition.name, [
+    preview.matches[0].anchor,
+  ]);
+  fused.verify();
+  assert.deepEqual(fused.graph().nodes[0].inputs, [weight, "x"]);
+  assert.deepEqual(fused.graph().nodes[0].outputs, ["y"]);
+});
+
+test("selection FunctionPatterns keep weight arguments lazy without reopening their source", async (t) => {
+  const directory = mkdtempSync(path.join(__dirname, ".function-pattern-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const file = path.join(directory, "weights.onnx");
+  const count = 1024 * 1024;
+  const source = memoryTestModel([count], {
+    nodes: [
+      Buffer.concat([
+        bytesField(1, "x"),
+        bytesField(1, "weights"),
+        bytesField(2, "y"),
+        bytesField(4, "Add"),
+      ]),
+    ],
+    initializers: [
+      Buffer.concat([
+        varintField(1, count),
+        varintField(2, 1),
+        bytesField(8, "weights"),
+        bytesField(9, Buffer.alloc(count * 4)),
+      ]),
+    ],
+  });
+  writeFileSync(file, Buffer.from(await source.serialize()));
+  const local = await loadModelFile(file, "weights.onnx");
+  rmSync(file);
+  const definition = local.createFunctionPattern([0], "LazyWeights");
+  assert.match(definition.text, /^# A=x\n# B=weights\n/);
+  assert.match(definition.text, /C = Add \(A, B\)/);
 });
 
 test("selection FunctionPatterns restore omitted and external Constant payloads before export", async (t) => {
@@ -2780,10 +2925,10 @@ test("selection FunctionPatterns restore omitted and external Constant payloads 
     );
     assert.equal(roundTrip.text, definition.text);
     assert.equal(roundTrip.replacement, definition.replacement);
-    const encoded = definition.python.match(
-      /bytes\.fromhex\("([0-9a-f]+)"\)/,
-    )[1];
-    assert.ok(Buffer.from(encoded, "hex").includes(raw));
+    const texts = functionPatternTexts(definition.python);
+    assert.equal(texts.match_text, definition.text);
+    assert.equal(texts.replacement_text, definition.replacement);
+    assert.match(texts.match_text, /float\[128\][^\n]*\{0\.25,.*127\.25\}/);
     assert.deepEqual(
       local.optimizationPatterns().find(({ name }) => name === definition.name)
         .definition,

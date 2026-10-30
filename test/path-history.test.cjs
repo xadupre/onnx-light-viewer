@@ -67,6 +67,66 @@ test("serializes recent path edits, deduplicates, bounds and persists separate a
   assert.deepEqual(reopened.snapshot().save, first);
 });
 
+test("prunes missing entries in order, persists once, and serializes cleanup with new paths", async () => {
+  const missing = historyEntries("local", "/missing.onnx")[0];
+  const existing = historyEntries("local", "/existing.onnx")[0];
+  const added = historyEntries("local", "/added.onnx")[0];
+  let stored = { open: [missing, existing], save: [existing, missing] };
+  const writes = [];
+  const published = [];
+  const history = new PathHistory({
+    get: () => stored,
+    update: async (_key, value) => {
+      writes.push(value);
+      stored = value;
+    },
+  });
+  history.subscribe((value) => published.push(value));
+  const [changed] = await Promise.all([
+    history.prune(async (entry) => entry.path !== missing.path),
+    history.update("open", { action: "remember", entries: [added] }),
+  ]);
+  assert.equal(changed, true);
+  assert.deepEqual(stored, { open: [added, existing], save: [existing] });
+  assert.deepEqual(published, writes);
+  assert.equal(writes.length, 2);
+  assert.equal(await history.prune(async () => true), false);
+  assert.equal(writes.length, 2);
+});
+
+test("does not prune or publish paths when checking or persisting history fails", async () => {
+  const entry = historyEntries("local", "/existing.onnx")[0];
+  let stored = { open: [entry], save: [] };
+  let fail = false;
+  const history = new PathHistory({
+    get: () => stored,
+    update: async (_key, value) => {
+      if (fail) throw new Error("Storage unavailable");
+      stored = value;
+    },
+  });
+  const published = [];
+  history.subscribe((value) => published.push(value));
+  const expected = structuredClone(stored);
+  await assert.rejects(
+    history.prune(async () => {
+      throw new Error("Permission denied");
+    }),
+    /Permission denied/,
+  );
+  fail = true;
+  await assert.rejects(
+    history.prune(async () => false),
+    /Storage unavailable/,
+  );
+  assert.deepEqual(stored, expected);
+  assert.deepEqual(published, []);
+  fail = false;
+  assert.equal(await history.prune(async () => false), true);
+  assert.deepEqual(stored, { open: [], save: [] });
+  assert.equal(published.length, 1);
+});
+
 test("removes URL credentials and does not publish failed persistence as saved history", async () => {
   const entries = historyEntries(
     "local",

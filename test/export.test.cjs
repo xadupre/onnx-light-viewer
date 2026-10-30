@@ -717,6 +717,46 @@ test("serializes conversion history removals and clears with queued additions", 
   assert.equal(updates.length, count);
 });
 
+test("prunes conversion history in order without losing queued changes or hiding inspection failures", async () => {
+  let stored = {
+    models: ["owner/model", "/missing", "/existing"],
+    directories: ["/existing", "/missing"],
+    exporter: "mobius",
+  };
+  const writes = [];
+  const history = new ExportHistory({
+    get: () => stored,
+    update: async (_key, value) => {
+      writes.push(value);
+      stored = value;
+    },
+  });
+  const published = [];
+  history.subscribe((value) => published.push(value));
+  await Promise.all([
+    history.prune(async (entry) => entry !== "/missing"),
+    history.remove("models", "/existing"),
+  ]);
+  assert.deepEqual(stored, {
+    models: ["owner/model"],
+    directories: ["/existing"],
+    exporter: "mobius",
+  });
+  assert.equal(writes.length, 2);
+  assert.deepEqual(published, writes);
+  await history.prune(async () => true);
+  assert.equal(writes.length, 2);
+  await assert.rejects(
+    history.prune(async () => {
+      throw new Error("Permission denied");
+    }),
+    /Permission denied/,
+  );
+  assert.equal(writes.length, 2);
+  await history.prune(async () => false);
+  assert.deepEqual(stored, { models: [], directories: [], exporter: "mobius" });
+});
+
 test("preserves the mbext layer limit through download, output retries and reproduction scripts", async (t) => {
   const root = await directory(t);
   const hub = await exportHub(t);
@@ -896,6 +936,7 @@ test("validates advanced option types, exporter compatibility and dependencies",
     ["mobius", { optimize: "--model" }],
     ["mobius", { externalData: "unknown" }],
     ["mobius", { runtime: "unknown" }],
+    ["mobius", { runtime: "onnx-genai" }],
     ["mobius", { maxSequenceLength: 128 }],
     ["mobius", { staticCache: true, maxSequenceLength: -1 }],
   ])
@@ -1241,16 +1282,33 @@ test("builds the three documented exporter CLIs without interpreting model IDs a
     );
 });
 
-test("retries in fresh subfolders and preserves prior conversion files for all three exporters", async (t) => {
+test("retries in dated, numbered subfolders and preserves prior conversion files for all exporters", async (t) => {
   const root = await directory(t);
-  for (const exporter of ["mbext", "modelbuilder", "mobius"]) {
+  for (const exporter of [
+    "mbext",
+    "modelbuilder",
+    "mobius",
+    "olive",
+    "olive-recipes",
+  ]) {
     const signal = new AbortController().signal;
+    const recipe =
+      exporter === "olive-recipes"
+        ? { id: "recipe.json", revision: "a".repeat(40), snapshot: root }
+        : undefined;
     const original = exportPlan(
       options(path.join(root, exporter), exporter),
       python,
+      undefined,
+      recipe,
     );
     const empty = await prepareExportPlan(original, signal);
     assert.equal(empty.directory, original.directory);
+    if (exporter === "mobius")
+      assert.match(
+        path.basename(path.dirname(empty.script)),
+        /^mobius-\d{4}-\d{2}-\d{2}$/,
+      );
     await writeFile(empty.script, "Previous conversion script");
     if (exporter === "mobius") await mkdir(original.directory);
     await writeFile(
@@ -1262,6 +1320,20 @@ test("retries in fresh subfolders and preserves prior conversion files for all t
       prepareExportPlan(original, signal),
     ]);
     assert.notEqual(first.directory, second.directory);
+    const attemptNames = [first, second]
+      .map((prepared) =>
+        path.basename(
+          exporter === "mobius"
+            ? path.dirname(prepared.directory)
+            : prepared.directory,
+        ),
+      )
+      .sort();
+    assert.match(
+      attemptNames[0],
+      new RegExp(`^${exporter}-\\d{4}-\\d{2}-\\d{2}$`),
+    );
+    assert.equal(attemptNames[1], `${attemptNames[0]}-2`);
     for (const prepared of [first, second]) {
       if (exporter === "mobius") {
         assert.ok(
@@ -1283,7 +1355,12 @@ test("retries in fresh subfolders and preserves prior conversion files for all t
         assert.equal(path.dirname(prepared.directory), original.directory);
         assert.deepEqual(await readdir(prepared.directory), []);
       }
-      const flag = exporter === "mobius" ? "--output" : "-o";
+      const flag =
+        exporter === "mobius"
+          ? "--output"
+          : exporter.startsWith("olive")
+            ? "--output_path"
+            : "-o";
       assert.equal(
         prepared.args[prepared.args.indexOf(flag) + 1],
         prepared.directory,
@@ -1296,8 +1373,12 @@ test("retries in fresh subfolders and preserves prior conversion files for all t
       }
       assert.equal(
         prepared.command,
-        exportPlan({ ...options(prepared.directory, exporter) }, python)
-          .command,
+        exportPlan(
+          { ...options(prepared.directory, exporter) },
+          python,
+          undefined,
+          recipe,
+        ).command,
       );
     }
     assert.equal(

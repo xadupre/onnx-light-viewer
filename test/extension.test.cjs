@@ -2066,6 +2066,117 @@ test("remembers only successful Open and Save paths and supports persistent remo
   reopened.dispose();
 });
 
+test("displaying histories removes missing local paths but preserves references, templates and surviving order", async (t) => {
+  const { pathToFileURL } = require("node:url");
+  const directory = await mkdtemp(path.join(tmpdir(), "viewer-prune-history-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const file = path.join(directory, "keep.onnx");
+  await writeFile(file, "keep");
+  const missing = path.join(directory, "missing.onnx");
+  const missingDirectory = path.join(directory, "missing");
+  const entry = (location, kind = "file", source = "local") => ({
+    source,
+    kind,
+    path: location,
+  });
+  const remote = entry(
+    "https://huggingface.co/owner/model/resolve/main/model.onnx",
+    "file",
+    "huggingface",
+  );
+  const backend = entry("test_cc_relu", "file", "backend");
+  const retained = [
+    remote,
+    entry(file),
+    backend,
+    entry(directory, "directory"),
+    entry(pathToFileURL(file).href),
+  ];
+  const template = path.join(directory, "<model_id>", "<exporter>");
+  const preferences = new Map([
+    [
+      "applicationSettings",
+      { downloadDirectory: directory, pythonPath: "python3" },
+    ],
+    [
+      "pathHistory",
+      {
+        open: [
+          entry(missing),
+          ...retained,
+          entry(missingDirectory, "directory"),
+          entry(path.join(file, "missing.onnx")),
+        ],
+        save: [entry(missing), entry(file), entry(directory, "directory")],
+      },
+    ],
+    [
+      "exportHistory",
+      {
+        models: [missingDirectory, "Qwen/Qwen3-0.6B", directory],
+        directories: [missingDirectory, directory, template],
+        exporter: "mobius",
+      },
+    ],
+  ]);
+  const extension = await openExtension(
+    undefined,
+    undefined,
+    true,
+    undefined,
+    undefined,
+    preferences,
+  );
+  t.after(() => extension.dispose());
+  await extension.receive({ type: "ready" });
+  await extension.receive({ type: "get-path-history", target: "open" });
+  assert.deepEqual(preferences.get("pathHistory"), {
+    open: retained,
+    save: [entry(file), entry(directory, "directory")],
+  });
+  assert.deepEqual(
+    extension.events.findLast(({ type }) => type === "path-history").history,
+    preferences.get("pathHistory"),
+  );
+  assert.equal(await readFile(file, "utf8"), "keep");
+  await extension.receive({ type: "get-settings" });
+  const settings = extension.messages.findLast(
+    ({ type }) => type === "settings-info",
+  );
+  assert.deepEqual(settings.exportHistory, {
+    models: ["Qwen/Qwen3-0.6B", directory],
+    directories: [directory, template],
+    exporter: "mobius",
+  });
+  assert.deepEqual(settings.pathHistory, preferences.get("pathHistory"));
+  const paths = preferences.get("pathHistory");
+  const exports = preferences.get("exportHistory");
+  await extension.receive({ type: "get-settings" });
+  assert.equal(preferences.get("pathHistory"), paths);
+  assert.equal(preferences.get("exportHistory"), exports);
+  await rm(file);
+  await extension.receive({ type: "get-path-history", target: "save" });
+  assert.deepEqual(preferences.get("pathHistory"), {
+    open: [remote, backend, entry(directory, "directory")],
+    save: [entry(directory, "directory")],
+  });
+  const reopened = await openExtension(
+    undefined,
+    undefined,
+    true,
+    undefined,
+    undefined,
+    preferences,
+  );
+  t.after(() => reopened.dispose());
+  await reopened.receive({ type: "ready" });
+  assert.deepEqual(
+    reopened.events.findLast(({ type }) => type === "path-history").history,
+    preferences.get("pathHistory"),
+  );
+  assert.deepEqual(extension.errors, []);
+});
+
 test("loading an existing history file preserves the complete stored history and its order", async (t) => {
   const source = require.resolve("./models/relu.onnx");
   const history = {
@@ -6366,7 +6477,7 @@ test("shows missing-graph loading errors in the canvas even before the webview i
   assert.equal(document.getElementById("nodes").innerHTML, graph);
 });
 
-test("reports a deleted history file as soon as opening fails and allows retry", async (t) => {
+test("reports a file deleted after history display as soon as opening fails and allows retry", async (t) => {
   const directory = await mkdtemp(path.join(tmpdir(), "onnx-viewer-missing-"));
   t.after(() => rm(directory, { recursive: true }));
   const source = require.resolve("./models/relu.onnx");
@@ -6384,7 +6495,6 @@ test("reports a deleted history file as soon as opening fails and allows retry",
   t.after(() => extension.dispose());
   await extension.openFile(deleted);
   const history = structuredClone(preferences.get("pathHistory"));
-  await rm(deleted);
   const dom = new JSDOM(extension.webview.html, { runScripts: "outside-only" });
   t.after(() => dom.window.close());
   const { window } = dom;
@@ -6419,6 +6529,8 @@ test("reports a deleted history file as soon as opening fails and allows retry",
   while (requests.length) await Promise.all(requests.splice(0));
   const graph = byId("nodes").innerHTML;
   byId("open-model").click();
+  while (requests.length) await Promise.all(requests.splice(0));
+  await rm(deleted);
   [...byId("open-history-entries").querySelectorAll("button")]
     .find((button) => button.textContent === deleted)
     .click();

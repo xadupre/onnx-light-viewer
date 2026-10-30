@@ -623,8 +623,19 @@ async function configurePanel(
     type: "settings-info" | "status-info" = "settings-info",
   ) => {
     const application = getApplicationSettings();
-    if (type === "settings-info")
+    if (type === "settings-info") {
       await mkdir(application.downloadDirectory, { recursive: true });
+      await Promise.all([
+        prunePathHistory(),
+        exportHistory.prune(
+          async (entry, target) =>
+            (target === "models" && !isAbsolute(entry)) ||
+            (target === "directories" &&
+              /<(?:model_id|exporter)>/.test(entry)) ||
+            (await historyPathExists(entry)),
+        ),
+      ]);
+    }
     return postMessage({
       type,
       application,
@@ -697,6 +708,31 @@ async function configurePanel(
         ? vscode.Uri.file(value)
         : vscode.Uri.joinPath(directoryUri(), value);
   };
+  const historyPathExists = async (path: string) => {
+    const uri =
+      /^[a-z][a-z\d+.-]*:/i.test(path) && !/^[a-z]:/i.test(path)
+        ? vscode.Uri.parse(path)
+        : locationUri(path);
+    try {
+      await vscode.workspace.fs.stat(uri);
+      return true;
+    } catch (error) {
+      if (
+        (error instanceof vscode.FileSystemError &&
+          error.code === "FileNotFound") ||
+        (error instanceof Error &&
+          "code" in error &&
+          (error.code === "ENOENT" || error.code === "ENOTDIR"))
+      )
+        return false;
+      throw error;
+    }
+  };
+  const prunePathHistory = () =>
+    pathHistory.prune(
+      async (entry) =>
+        entry.source !== "local" || (await historyPathExists(entry.path)),
+    );
   const hubFileEntries = (files: (HuggingFaceSource & { path?: string })[]) =>
     files.map((file) => ({
       name: file.path ?? file.fileName,
@@ -1599,6 +1635,24 @@ async function configurePanel(
           await postMessage({
             type: "prompt-pipeline-history",
             requestId: message.requestId,
+            error: detail,
+          });
+        }
+      } else if (message?.type === "get-path-history") {
+        try {
+          if (message.target !== "open" && message.target !== "save")
+            throw new Error("Invalid history target.");
+          if (!(await prunePathHistory()))
+            await postMessage({
+              type: "path-history",
+              history: pathHistory.snapshot(),
+            });
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error);
+          log.record("FAILED", "Refresh path history", undefined, detail);
+          await postMessage({
+            type: "path-history-error",
+            target: message.target,
             error: detail,
           });
         }

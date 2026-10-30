@@ -45,6 +45,8 @@ struct StoredModel {
   struct FunctionPatternFunctions {
     ol::FunctionProto pattern;
     ol::FunctionProto replacement;
+    std::string pattern_text;
+    std::string replacement_text;
   };
   struct ExternalWeight {
     ol::TensorProto reference;

@@ -15,6 +15,7 @@ let viewsByPosition = new WeakMap();
 let searchQuery;
 let searchMatches = [];
 let selected = new Set();
+let contextMenuNode;
 let renderedSelection = new Set();
 let connectionsByPosition = new Map();
 let connections = [];
@@ -184,6 +185,51 @@ const fusionPanel = createFusionPanel({
       .map((id) => Number(id.slice(5))),
   focusNodes,
 });
+
+function closeGraphContextMenu(restoreFocus = false) {
+  const menu = byId("graph-context-menu");
+  if (menu.hidden) return;
+  menu.hidden = true;
+  const id = contextMenuNode;
+  contextMenuNode = undefined;
+  if (restoreFocus) nodeViews.get(id)?.group?.focus({ preventScroll: true });
+}
+
+function showGraphContextMenu(event, id) {
+  const menu = byId("graph-context-menu");
+  contextMenuNode = id;
+  menu.hidden = false;
+  const anchor = nodeViews.get(id).group.getBoundingClientRect();
+  const keyboard = event.clientX === 0 && event.clientY === 0;
+  const x = keyboard ? anchor.left : event.clientX;
+  const y = keyboard ? anchor.bottom : event.clientY;
+  const { width, height } = menu.getBoundingClientRect();
+  menu.style.left = `${Math.max(0, Math.min(x, window.innerWidth - width - 8))}px`;
+  menu.style.top = `${Math.max(0, Math.min(y, window.innerHeight - height - 8))}px`;
+  byId("open-selection-pattern").focus({ preventScroll: true });
+}
+
+byId("open-selection-pattern").addEventListener("click", () => {
+  closeGraphContextMenu();
+  fusionPanel.openSelectionPattern();
+});
+byId("graph-context-menu").addEventListener("keydown", (event) => {
+  if (event.key === "Escape" || event.key === "Tab") {
+    if (event.key === "Escape") event.preventDefault();
+    event.stopPropagation();
+    closeGraphContextMenu(true);
+  } else if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+    event.preventDefault();
+    byId("open-selection-pattern").focus();
+  }
+});
+document.addEventListener("pointerdown", (event) => {
+  if (!byId("graph-context-menu").contains(event.target))
+    closeGraphContextMenu();
+});
+window.addEventListener("resize", () => closeGraphContextMenu());
+window.addEventListener("blur", () => closeGraphContextMenu());
+svg.addEventListener("wheel", () => closeGraphContextMenu(), { passive: true });
 
 function focusNodes(nodes) {
   const visible = nodes
@@ -682,6 +728,17 @@ function bindGraphLink(link, activate) {
   });
 }
 
+function isSmallInitializer(parameter) {
+  const count = parameter.distribution?.elementCount;
+  if (count != null) return BigInt(count) <= 10n;
+  return (
+    Array.isArray(parameter.shape) &&
+    parameter.shape.every((dimension) => /^\d+$/.test(dimension)) &&
+    parameter.shape.reduce((size, dimension) => size * BigInt(dimension), 1n) <=
+      10n
+  );
+}
+
 function operatorSizes(nodes) {
   const context = document.createElement("canvas").getContext("2d");
   const family = getComputedStyle(svg).fontFamily;
@@ -701,44 +758,39 @@ function operatorSizes(nodes) {
         (attribute) => !attribute.graphs?.length,
       );
       const initializers = node.parameters ?? [];
-      const parameters = [
-        ...attributes.map((attribute) => ({
-          description: `${attribute.name} = ${attribute.value}`,
-          className: "node-attribute",
-        })),
-        ...initializers.map((parameter) => ({
-          description: `${parameter.name}: ${parameter.type}${parameter.shape === undefined ? "" : ` [${parameter.shape?.join(", ") ?? "?"}]`}${parameter.value === undefined ? "" : ` = ${parameter.value}`}`,
-          className: "node-initializer",
-        })),
-      ];
-      const compact =
-        parameters.length <= 2 &&
-        parameters.every(
-          ({ description }) =>
-            description.length <= 38 && !/[\r\n]/.test(description),
-        );
-      const parameterRows = (
-        compact
-          ? parameters
-          : [
-              {
-                description:
-                  [
-                    attributes.length &&
-                      `${attributes.length} attribute${attributes.length === 1 ? "" : "s"}`,
-                    initializers.length &&
-                      `${initializers.length} initializer${initializers.length === 1 ? "" : "s"}`,
-                  ]
-                    .filter(Boolean)
-                    .join(", ") + " (see inspector)",
-                className: "node-parameter-summary",
-              },
-            ]
-      ).map((parameter, index) => ({
-        ...parameter,
-        textWidth: context.measureText(parameter.description).width,
-        y: 68 + index * 16,
+      const showInitializers =
+        initializers.length < 4 && initializers.every(isSmallInitializer);
+      const parameters = attributes.map((attribute) => ({
+        description: `${attribute.name} = ${attribute.value}`,
+        className: "node-attribute",
       }));
+      if (initializers.length)
+        parameters.push({
+          description: `${initializers.length} initializer${initializers.length === 1 ? "" : "s"}`,
+          className: "node-parameter-summary",
+        });
+      if (showInitializers)
+        parameters.push(
+          ...initializers.map((parameter) => {
+            const suffix = `: ${parameter.type}${parameter.shape === undefined ? "" : ` [${parameter.shape?.join(", ") ?? "?"}]`}${parameter.value === undefined ? "" : ` = ${parameter.value}`}`;
+            return {
+              description: `${parameter.name}${suffix}`,
+              displayDescription: `${shortName(parameter.name, 22, true)}${suffix}`,
+              className: "node-initializer",
+            };
+          }),
+        );
+      const parameterRows = parameters.map((parameter, index) => {
+        const displayDescription = (
+          parameter.displayDescription ?? parameter.description
+        ).replace(/[\r\n]+/g, " ");
+        return {
+          ...parameter,
+          displayDescription,
+          textWidth: context.measureText(displayDescription).width,
+          y: 68 + index * 16,
+        };
+      });
       const subgraphs = (node.attributes ?? []).flatMap((attribute) =>
         (attribute.graphs ?? []).map((graph, index) => {
           const text = subgraphLabel(attribute, index);
@@ -780,30 +832,13 @@ function operatorSizes(nodes) {
         }
         nameLength = low;
       }
-      // Expand a mixed summary without changing its layout footprint.
-      const displayRows =
-        !compact && attributes.length === 1 && initializers.length === 1
-          ? parameters.map((parameter, index) => {
-              const displayDescription =
-                parameter.className === "node-initializer"
-                  ? shortName(initializers[0].name, 22, true) +
-                    parameter.description.slice(initializers[0].name.length)
-                  : parameter.description;
-              return {
-                ...parameter,
-                displayDescription,
-                textWidth: context.measureText(displayDescription).width,
-                y: 66 + index * 12,
-              };
-            })
-          : parameterRows;
       return [
         node.id,
         {
           width,
           height: 88 + parameterRows.length * 16 + subgraphs.length * 20,
           parameterHeight: parameterRows.length * 16,
-          parameterRows: displayRows,
+          parameterRows,
           subgraphs,
           displayName: shortName(node.name, nameLength, true),
           typeFontSize: Math.min(16, (16 * (width - 24)) / (typeWidth || 1)),
@@ -944,6 +979,18 @@ function markReleased({ path, text, name }, released) {
   );
 }
 
+function connectionTag({ name }) {
+  const tag = valueMetadata.get(name)?.tag;
+  return tag === "weight" || tag === "shape" ? tag : "";
+}
+
+function markConnectionTag(connection) {
+  if (!connection.path) return;
+  const tag = connectionTag(connection);
+  connection.path.classList.toggle("edge-weight", tag === "weight");
+  connection.path.classList.toggle("edge-shape", tag === "shape");
+}
+
 function inspectMetadata() {
   updateReleases();
   metadataPanel.render(inspectedView, {
@@ -980,6 +1027,9 @@ function acceptMetadata(metadata) {
   graphMetadata = metadata;
   nodeMetadata = new Map(metadata.nodes.map((node) => [node.id, node]));
   valueMetadata = new Map(metadata.values.map((value) => [value.name, value]));
+  for (const connection of connections) markConnectionTag(connection);
+  overviewDirty = true;
+  updateConnectionHighlight();
   metadataStatus(
     false,
     `Metadata refreshed: ${updates} update${updates === 1 ? "" : "s"}`,
@@ -1071,6 +1121,7 @@ function inspect(view) {
 }
 
 function updateSelection(activeId, forceInspect = false) {
+  closeGraphContextMenu();
   for (const id of new Set([...renderedSelection, ...selected])) {
     const isSelected = selected.has(id);
     if (isSelected === renderedSelection.has(id)) continue;
@@ -1121,6 +1172,15 @@ function mountNode(view) {
     if (event.detail === 0) {
       selectNode(id, event.ctrlKey || event.metaKey || event.shiftKey);
     }
+  });
+  group.addEventListener("contextmenu", (event) => {
+    if (!view.node || svg.getAttribute("aria-busy") === "true") return;
+    if (!selected.has(id)) selectNode(id, false);
+    if (!fusionPanel.canOpenSelectionPattern()) return;
+    event.preventDefault();
+    event.stopPropagation();
+    endGesture();
+    showGraphContextMenu(event, id);
   });
   group.addEventListener("keydown", (event) => {
     if (event.key === "Enter" || event.key === " ") {
@@ -1179,9 +1239,10 @@ function updateConnectionHighlight() {
     svg.append(highlight);
   }
   const { from, to } = selectedConnection;
+  const tag = connectionTag(selectedConnection);
   highlight.replaceChildren(
     element("path", {
-      class: "selected-edge",
+      class: `selected-edge${tag ? ` edge-${tag}` : ""}`,
       d: connectionPath(selectedConnection),
     }),
     ...[...new Set([from, to])].map((position) => {
@@ -1300,21 +1361,28 @@ function updateConnectionVisibility(connection) {
   setVisible(connection, connection.group, visible && labelsVisible);
 }
 
+function drawTaggedConnections(id, connections) {
+  const groups = new Map([
+    ["", []],
+    ["weight", []],
+    ["shape", []],
+  ]);
+  for (const connection of connections)
+    groups.get(connectionTag(connection)).push(connectionPath(connection));
+  for (const [tag, segments] of groups) {
+    const path = byId(tag ? `${id}-${tag}` : id);
+    const data = segments.join(" ");
+    if (path.getAttribute("d") !== data) path.setAttribute("d", data);
+  }
+}
+
 function drawCrossingConnections() {
   const normal = [];
   const released = [];
   for (const connection of crossingConnections)
-    (releasedValues.has(connection.name) ? released : normal).push(
-      connectionPath(connection),
-    );
-  for (const [id, segments] of [
-    ["crossing-edges", normal],
-    ["released-crossing-edges", released],
-  ]) {
-    const path = byId(id);
-    const data = segments.join(" ");
-    if (path.getAttribute("d") !== data) path.setAttribute("d", data);
-  }
+    (releasedValues.has(connection.name) ? released : normal).push(connection);
+  drawTaggedConnections("crossing-edges", normal);
+  drawTaggedConnections("released-crossing-edges", released);
 }
 
 function moveNodes(origins, dx, dy) {
@@ -1595,10 +1663,7 @@ function connectionPath(connection) {
 }
 
 function drawOverview() {
-  byId("overview-edges").setAttribute(
-    "d",
-    connections.map(connectionPath).join(" "),
-  );
+  drawTaggedConnections("overview-edges", connections);
   byId("overview-nodes").setAttribute(
     "d",
     [...nodeViews.values()]
@@ -1854,7 +1919,12 @@ function render(graph, metadata) {
   crossingConnections = new Set();
   readablePending = false;
   byId("graph-overview").setAttribute("display", "none");
-  byId("overview-edges").removeAttribute("d");
+  for (const id of [
+    "overview-edges",
+    "overview-edges-weight",
+    "overview-edges-shape",
+  ])
+    byId(id).removeAttribute("d");
   byId("overview-nodes").removeAttribute("d");
   byId("overview-labels").replaceChildren();
   graphMetadata = undefined;
@@ -1934,6 +2004,7 @@ function render(graph, metadata) {
     const connection = {
       from,
       to,
+      nextEndpoint: from,
       name,
       fromHeight,
       toHeight,
@@ -1996,6 +2067,7 @@ function render(graph, metadata) {
           information,
         });
         updateConnection(connection);
+        markConnectionTag(connection);
         markReleased(connection, releasedValues.has(name));
       },
     };
@@ -2267,6 +2339,38 @@ svg.addEventListener("pointerdown", (event) => {
     pointerId: event.pointerId,
   });
   svg.setPointerCapture(event.pointerId);
+});
+svg.addEventListener("dblclick", (event) => {
+  if (
+    event.button !== 0 ||
+    !svg.hasAttribute("viewBox") ||
+    zoomAreaMode ||
+    event.altKey ||
+    event.ctrlKey ||
+    event.metaKey ||
+    event.shiftKey ||
+    svg.getAttribute("aria-busy") === "true" ||
+    event.target.closest(".graph-node, .port")
+  )
+    return;
+  const viewport = byId("canvas").getBoundingClientRect();
+  const point = graphPoint(event, viewport);
+  if (!point) return;
+  const group = event.target.closest(".connection");
+  const connection = group
+    ? connections.find((connection) => connection.group === group)
+    : findConnectionAt(point, connections, viewport);
+  if (!connection) return;
+  event.preventDefault();
+  const position = connection.nextEndpoint;
+  connection.nextEndpoint =
+    position === connection.from ? connection.to : connection.from;
+  const view = viewsByPosition.get(position);
+  selected = new Set([view.id]);
+  updateSelection(view.id);
+  readableZoom();
+  selectConnection(connection);
+  view.group?.focus({ preventScroll: true });
 });
 svg.addEventListener("pointermove", moveGesture);
 svg.addEventListener("pointerup", (event) => {

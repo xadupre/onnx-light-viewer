@@ -80,18 +80,20 @@ Graph replacement or navigation invalidates the preview.
 Create a pattern from selected nodes
 ----------------------------------------
 
-**Fuse → Create a FunctionPattern from selection** turns selected operators into
-a reusable native pattern, without changing the graph.
+The selection context menu's **Create / edit FunctionPattern...** opens a popup
+for creating a reusable native pattern without changing the graph.
 
 1. Select connected operators with Ctrl/Cmd-click, or a selection rectangle.
-2. Enter a unique **Function name** and click **Create pattern**.
+2. Right-click a selected operator and choose **Create / edit FunctionPattern...**.
+   Enter a unique **Function name** and click **Create pattern**.
 3. Inspect **Text representation (textparser)**: the **Match pattern** and
    **Replacement** fields use the SDK textparser's function syntax. Edit either
    function, then click **Apply edits**. Invalid text leaves the saved definition
    unchanged and keeps your edits available to correct.
-4. Use **Copy pattern**, **Copy replacement**, or **Copy Python** to copy the
-   corresponding text. Python reflects the last successfully applied definition.
-5. Click **Run Matching** to find occurrences throughout the model, then
+4. Use each editor's top-right copy icon to copy its text. Python parses the
+   displayed function text and reflects the last successfully applied definition.
+5. Close the popup, open **Fuse**, select the pattern and click **Run Matching**
+   to find occurrences throughout the model, then
    **Fuse selected**. Each occurrence becomes a call to a shared local function.
    **Unfuse** reverses the operation.
 
@@ -102,9 +104,10 @@ Matching preserves literal attributes and imported opset versions.
 
 .. note::
 
-   In SDK 0.2.2, textparser can change Constant tensors from raw-data to typed-data
+   In SDK 0.2.3, textparser can change Constant tensors from raw-data to typed-data
    storage. After applying such text, SDK matching may no longer recognize the
    original raw-data Constant. This SDK limitation is not normalized by the viewer.
+   Tracked upstream in `xadupre/onnx-light#5735 <https://github.com/xadupre/onnx-light/issues/5735>`_.
 
 Created patterns are opt-in: **Optimize → Selection patterns** is a separate
 bucket and named group. Enable individual patterns or the group before running
@@ -112,7 +115,7 @@ global optimization. Pattern definitions and their Python code are session-local
 saving the fused model retains its local function, not the viewer's pattern catalog.
 The exported code provides the pattern and a helper for optimizing a local
 ``GraphBuilder``; it does not execute Python in the viewer.
-With onnx-light 0.2.2 or newer installed in Python, save the copied code as
+With onnx-light 0.2.3 or newer installed in Python, save the copied code as
 ``selection_pattern.py`` and apply it to a model:
 
 .. code-block:: bash

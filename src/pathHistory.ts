@@ -102,14 +102,13 @@ export class PathHistory {
   }
 
   update(target: HistoryTarget, change: HistoryChange): Promise<void> {
-    const operation = this.pending.then(async () => {
-      const history = this.snapshot();
+    return this.edit((history) => {
       const previous = history[target];
       if (change.action === "remember") {
         const added = change.entries.filter(
           (entry) => !previous.some((existing) => sameEntry(entry, existing)),
         );
-        if (!added.length) return;
+        if (!added.length) return false;
         history[target] = [...added, ...previous].slice(0, 50);
       } else {
         history[target] =
@@ -117,8 +116,33 @@ export class PathHistory {
             ? []
             : previous.filter((entry) => !sameEntry(entry, change.entry));
       }
+      return true;
+    }).then(() => undefined);
+  }
+
+  prune(keep: (entry: HistoryEntry) => Promise<boolean>): Promise<boolean> {
+    return this.edit(async (history) => {
+      const changes = await Promise.all(
+        (["open", "save"] as const).map(async (target) => {
+          const previous = history[target];
+          const retained = await Promise.all(previous.map(keep));
+          history[target] = previous.filter((_, index) => retained[index]);
+          return history[target].length !== previous.length;
+        }),
+      );
+      return changes.some(Boolean);
+    });
+  }
+
+  private edit(
+    change: (history: HistorySnapshot) => boolean | Promise<boolean>,
+  ): Promise<boolean> {
+    const operation = this.pending.then(async () => {
+      const history = this.snapshot();
+      if (!(await change(history))) return false;
       await this.storage.update("pathHistory", history);
       for (const listener of this.listeners) listener(history);
+      return true;
     });
     this.pending = operation.then(
       () => undefined,

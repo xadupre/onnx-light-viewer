@@ -23,9 +23,12 @@ export function webviewHtml(
   appVersion: string = "",
 ): string {
   const historyControls = (target: "open" | "save"): string =>
-    `<details id="${target}-history" class="path-history" hidden><summary>Recent paths</summary><p>Suggestions are history, not a guarantee that a path still exists or is writable. Selecting one only fills the field.</p><button id="${target}-clear-history" type="button">Clear ${target === "open" ? "Open" : "Save"} history</button><ul id="${target}-history-entries" aria-label="Recent ${target} paths"></ul></details>`;
+    `<details id="${target}-history" class="path-history" hidden><summary>Recent paths</summary><p>Missing local paths are removed automatically. Selecting a path only fills the field.</p><button id="${target}-clear-history" type="button">Clear ${target === "open" ? "Open" : "Save"} history</button><ul id="${target}-history-entries" aria-label="Recent ${target} paths"></ul></details>`;
   const documentationLink = (name: string, url: string): string =>
     `<a class="repository-documentation" href="${url}" aria-label="${name} documentation" title="${name} documentation"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path d="M12 5v16M12 5C9 3 5 3 2 4v15c3-1 7-1 10 2 3-3 7-3 10-2V4c-3-1-7-1-10 1Z"/></svg></a>`;
+  const fusionHourglass = `<svg class="fusion-hourglass" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M6 3h12M6 21h12M7 3v4l10 10v4M17 3v4L7 17v4M8 7h8M8 17h8"/></svg>`;
+  const copyPatternButton = (format: string, label: string): string =>
+    `<button id="copy-selection-pattern-${format}" class="icon-button selection-pattern-copy" type="button" aria-label="${label}" title="${label}"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>`;
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -72,7 +75,7 @@ export function webviewHtml(
       <div class="graph-body">
         <div class="canvas" id="canvas">
           <section id="model-error" role="alert" hidden><h2>Could not open model</h2><p id="model-error-details"></p><p>Use Open to choose another model. Details are available in Logs.</p></section>
-          <svg id="graph" role="group" aria-label="Interactive ONNX graph" tabindex="0"><defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs><g id="graph-overview" aria-hidden="true" display="none"><path id="overview-edges"/><path id="overview-nodes"/><g id="overview-labels"/></g><path id="crossing-edges" class="crossing-edge"/><path id="released-crossing-edges" class="crossing-edge released"/><g id="edges"></g><g id="nodes"></g></svg>
+          <svg id="graph" role="group" aria-label="Interactive ONNX graph" tabindex="0"><defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs><g id="graph-overview" aria-hidden="true" display="none"><path id="overview-edges" class="overview-edge"/><path id="overview-edges-weight" class="overview-edge edge-weight"/><path id="overview-edges-shape" class="overview-edge edge-shape"/><path id="overview-nodes"/><g id="overview-labels"/></g><path id="crossing-edges" class="crossing-edge"/><path id="crossing-edges-weight" class="crossing-edge edge-weight"/><path id="crossing-edges-shape" class="crossing-edge edge-shape"/><path id="released-crossing-edges" class="crossing-edge released"/><path id="released-crossing-edges-weight" class="crossing-edge released edge-weight"/><path id="released-crossing-edges-shape" class="crossing-edge released edge-shape"/><g id="edges"></g><g id="nodes"></g></svg>
           <div class="zoom-controls" aria-label="Graph zoom and navigation"><button id="go-top" disabled title="Go to the top of the model (Ctrl/Cmd+Home)" aria-keyshortcuts="Control+Home Meta+Home">Top</button><button id="go-bottom" disabled title="Go to the bottom of the model (Ctrl/Cmd+End)" aria-keyshortcuts="Control+End Meta+End">Bottom</button><button id="zoom-in" title="Zoom in (+)" aria-label="Zoom in" aria-keyshortcuts="+">+</button><button id="zoom-out" title="Zoom out (-)" aria-label="Zoom out" aria-keyshortcuts="-">−</button><button id="zoom-fit" title="Fit graph (F)" aria-keyshortcuts="F">Fit</button><button id="zoom-readable" title="Zoom to readable size (100%), centered on the inspected node (R)" aria-label="Zoom to readable size" aria-keyshortcuts="R"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="m8 17 4-10 4 10M10 13h4M4 8V4h4M16 4h4v4M20 16v4h-4M8 20H4v-4"/></svg></button><button id="zoom-area" title="Drag a rectangle to zoom into an area; Alt+drag also works. Escape cancels." aria-pressed="false"><span class="toggle-indicator" aria-hidden="true">&#10003;</span> Zoom area</button></div>
         </div>
         <div id="sidebar-resizer" role="separator" tabindex="0" aria-label="Resize side panel" aria-orientation="vertical" aria-controls="graph-panels" title="Drag to resize the side panel, or use Left and Right arrow keys"></div>
@@ -84,9 +87,9 @@ export function webviewHtml(
             <button id="show-operator" class="icon-button" aria-expanded="true" aria-controls="operator-panel" title="Show or hide operator and tensor details">Op</button>
             <button id="show-metadata" class="icon-button" aria-expanded="false" aria-controls="metadata-panel" title="Show or hide native constants, tags, lifetimes and stored metadata">Data</button>
             <button id="export-model" class="icon-button" title="Convert a model to ONNX with Python" aria-expanded="false" aria-controls="export-panel">Convert</button>
-            <button id="optimize-model" class="icon-button" disabled title="Show or hide full native model optimization" aria-expanded="false" aria-controls="optimization-panel">Optimize</button>
-            <button id="fuse-pattern" class="icon-button" disabled title="Show or hide fusion patterns and select candidates to fuse on the main graph" aria-expanded="false" aria-controls="fusion-panel">Fuse</button>
-            <button id="undo-fusion" class="icon-button" disabled title="Choose whether to unfuse the last operation or all operations" aria-expanded="false" aria-controls="unfuse-panel" aria-describedby="fusion-status">Unfuse</button>
+            <button id="optimize-model" class="icon-button" disabled title="Show or hide full native model optimization" aria-expanded="false" aria-controls="optimization-panel">Optimize${fusionHourglass}</button>
+            <button id="fuse-pattern" class="icon-button" disabled title="Show or hide fusion patterns and select candidates to fuse on the main graph" aria-expanded="false" aria-controls="fusion-panel">Fuse${fusionHourglass}</button>
+            <button id="undo-fusion" class="icon-button" disabled title="Choose whether to unfuse the last operation or all operations" aria-expanded="false" aria-controls="unfuse-panel" aria-describedby="fusion-status">Unfuse${fusionHourglass}</button>
           </nav>
           <section id="export-panel" class="inspector-panel file-panel" aria-labelledby="export-title" hidden>
             <h2 id="export-title" class="eyebrow panel-title">Convert to ONNX</h2>
@@ -220,7 +223,7 @@ export function webviewHtml(
                     </div>
                     <div class="export-field">
                       <label for="export-runtime">Runtime configuration</label>
-                      <select id="export-runtime" data-export-option="runtime" disabled><option value="">None</option><option value="ort-genai">ONNX Runtime GenAI</option><option value="onnx-genai">ONNX GenAI</option></select>
+                      <select id="export-runtime" data-export-option="runtime" disabled><option value="ort-genai">onnxruntime-genai</option><option value="">None</option></select>
                     </div>
                     <label><input id="export-static-cache" type="checkbox" data-export-option="staticCache" disabled> Static KV cache</label>
                   </div>
@@ -289,7 +292,7 @@ export function webviewHtml(
             </div>
           </section>
           <section id="optimization-panel" class="inspector-panel" aria-labelledby="optimization-title" hidden>
-            <h2 id="optimization-title" class="eyebrow panel-title">Global optimization</h2>
+            <h2 id="optimization-title" class="eyebrow panel-title">Global optimization${fusionHourglass}</h2>
             <div class="fusion-selection-controls optimizer-backends" role="group" aria-label="Optimizer backend">
               <button id="optimizer-onnx-light" aria-pressed="true">onnx-light</button>
               <button id="optimizer-onnxscript" aria-pressed="false">onnxscript</button>
@@ -323,28 +326,8 @@ export function webviewHtml(
             </div>
           </section>
           <section id="fusion-panel" class="inspector-panel" aria-labelledby="fusion-title" hidden>
-            <h2 id="fusion-title" class="eyebrow panel-title">Fusion patterns</h2>
+            <h2 id="fusion-title" class="eyebrow panel-title">Fusion patterns${fusionHourglass}</h2>
             <p>Select patterns, run matching, then fuse selected candidates. Run global passes one at a time.</p>
-            <details id="selection-pattern" class="fusion-picker" open>
-              <summary>Create a FunctionPattern from selection</summary>
-              <p>Select connected operators in the graph (Ctrl/Cmd-click to select several). Their inputs become function arguments; outputs used outside the selection remain outputs.</p>
-              <label for="selection-pattern-name">Function name</label>
-              <input id="selection-pattern-name" type="text" value="SelectedPattern" autocomplete="off">
-              <button id="create-function-pattern" disabled>Create pattern</button>
-              <p id="selection-pattern-status" role="status">Select one or more operators in the graph.</p>
-              <section id="selection-pattern-result" hidden>
-                <label for="selection-pattern-picker">Created patterns</label><select id="selection-pattern-picker"></select>
-                <details open><summary>Text representation (textparser)</summary>
-                  <p>Edit the match and replacement functions using onnx-light textparser syntax, then apply the definition before matching or optimizing.</p>
-                  <label for="selection-pattern-text">Match pattern</label><button id="copy-selection-pattern-text">Copy pattern</button>
-                  <textarea id="selection-pattern-text" rows="10" spellcheck="false"></textarea>
-                  <label for="selection-pattern-replacement">Replacement</label><button id="copy-selection-pattern-replacement">Copy replacement</button>
-                  <textarea id="selection-pattern-replacement" rows="10" spellcheck="false"></textarea>
-                  <button id="update-function-pattern" disabled>Apply edits</button>
-                </details>
-                <details><summary>Python for a local GraphBuilder</summary><p>Copy this code into a Python file. Requires onnx-light 0.2.2 or newer in Python; pattern definitions are session-local in the viewer. Python reflects the last applied definition.</p><button id="copy-selection-pattern-python">Copy Python</button><textarea id="selection-pattern-python" rows="12" readonly aria-label="FunctionPattern Python code" spellcheck="false"></textarea></details>
-              </section>
-            </details>
             <details id="rewriting-scenarios" class="fusion-picker">
               <summary>Saved rewriting scenarios</summary>
               <label for="rewriting-scenario">Scenario</label><select id="rewriting-scenario" disabled></select>
@@ -369,7 +352,6 @@ export function webviewHtml(
             </details>
             <details id="fusion-diagnostics" class="fusion-picker" open>
               <summary>Why did matching fail?</summary>
-              <p>Expected a fusion candidate but found none? Select the operator where you expected a match, choose one of the native patterns checked above, then click Explain failed match to see the rejection reason. This does not apply a rewrite. Global passes use whole-graph previews instead.</p>
               <label for="diagnostic-pattern">Pattern</label><select id="diagnostic-pattern" disabled></select>
               <p id="diagnostic-node">Select exactly one operator in the graph.</p>
               <button id="explain-fusion" disabled>Explain failed match</button>
@@ -944,6 +926,42 @@ export function webviewHtml(
       </ul>
     </section>
   </main>
+  <div id="graph-context-menu" role="menu" aria-label="Selected operators" hidden>
+    <button id="open-selection-pattern" role="menuitem" aria-haspopup="dialog" aria-controls="selection-pattern-dialog">Create / edit FunctionPattern...</button>
+  </div>
+  <dialog id="selection-pattern-dialog" aria-labelledby="selection-pattern-title">
+    <header class="inspector-heading"><h2 id="selection-pattern-title" class="panel-title">FunctionPattern from selection${fusionHourglass}</h2><button id="close-selection-pattern">Close</button></header>
+    <p>The selected operators' inputs become function arguments; outputs used outside the selection remain outputs. Use the selected operators' context menu to reopen this window.</p>
+    <div class="selection-pattern-row">
+      <label for="selection-pattern-name">Function name</label>
+      <input id="selection-pattern-name" type="text" value="SelectedPattern" autocomplete="off" autofocus>
+    </div>
+    <button id="create-function-pattern" disabled>Create pattern</button>
+    <p id="selection-pattern-status" role="status">Select one or more operators in the graph.</p>
+    <section id="selection-pattern-result" hidden>
+      <div class="selection-pattern-row">
+        <label for="selection-pattern-picker">Created patterns</label><select id="selection-pattern-picker"></select>
+      </div>
+      <details open><summary>Text representation (textparser)</summary>
+        <p>Edit the match and replacement functions using onnx-light textparser syntax, then apply the definition before matching or optimizing.</p>
+        <div class="selection-pattern-editor">
+          <header><label for="selection-pattern-text">Match pattern</label>${copyPatternButton("text", "Copy pattern")}</header>
+          <textarea id="selection-pattern-text" rows="10" spellcheck="false"></textarea>
+        </div>
+        <div class="selection-pattern-editor">
+          <header><label for="selection-pattern-replacement">Replacement</label>${copyPatternButton("replacement", "Copy replacement")}</header>
+          <textarea id="selection-pattern-replacement" rows="10" spellcheck="false"></textarea>
+        </div>
+        <button id="update-function-pattern" disabled>Apply edits</button>
+      </details>
+      <details><summary>Python for a local GraphBuilder</summary><p>Copy this code into a Python file. Requires onnx-light 0.2.3 or newer in Python; pattern definitions are session-local in the viewer. Python reflects the last applied definition.</p>
+        <div class="selection-pattern-editor">
+          <header><label for="selection-pattern-python">Python</label>${copyPatternButton("python", "Copy Python")}</header>
+          <textarea id="selection-pattern-python" rows="12" readonly spellcheck="false"></textarea>
+        </div>
+      </details>
+    </section>
+  </dialog>
   <dialog id="operator-doc" aria-labelledby="doc-title">
     <header class="inspector-heading"><h2 id="doc-title"></h2><button id="close-doc" autofocus>Close</button></header>
     <p id="doc-version"></p><div id="doc-body"></div>

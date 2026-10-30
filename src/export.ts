@@ -155,9 +155,32 @@ export class ExportHistory {
     return this.update(() => ({ models: [], directories: [] }));
   }
 
-  private update(change: () => ExportHistorySnapshot): Promise<void> {
+  prune(
+    keep: (entry: string, target: "models" | "directories") => Promise<boolean>,
+  ): Promise<void> {
+    return this.update(async () => {
+      const history = this.snapshot();
+      const changes = await Promise.all(
+        (["models", "directories"] as const).map(async (target) => {
+          const previous = history[target];
+          const retained = await Promise.all(
+            previous.map((entry) => keep(entry, target)),
+          );
+          history[target] = previous.filter((_, index) => retained[index]);
+          return history[target].length !== previous.length;
+        }),
+      );
+      return changes.some(Boolean) ? history : undefined;
+    });
+  }
+
+  private update(
+    change: () =>
+      ExportHistorySnapshot | Promise<ExportHistorySnapshot | undefined>,
+  ): Promise<void> {
     const operation = this.pending.then(async () => {
-      const history = change();
+      const history = await change();
+      if (history === undefined) return;
       await this.storage.update("exportHistory", history);
       for (const listener of this.listeners) listener(history);
     });
@@ -348,7 +371,7 @@ function exportAdvancedOptions(
         options.externalData = entry;
         break;
       case "runtime":
-        if (!mobius || (entry !== "ort-genai" && entry !== "onnx-genai"))
+        if (!mobius || entry !== "ort-genai")
           throw new Error("Choose a supported Mobius runtime.");
         options.runtime = entry;
         break;
@@ -715,7 +738,39 @@ export function exportPlan(
   };
 }
 
-/** Keeps existing output intact, reserving a fresh subfolder for another attempt. */
+async function reserveExportDirectory(
+  parent: string,
+  exporter: Exporter,
+  signal: AbortSignal,
+): Promise<string> {
+  const now = new Date();
+  const date = [
+    now.getFullYear(),
+    String(now.getMonth() + 1).padStart(2, "0"),
+    String(now.getDate()).padStart(2, "0"),
+  ].join("-");
+  const prefix = `${exporter}-${date}`;
+  for (let attempt = 1; ; attempt++) {
+    signal.throwIfAborted();
+    const directory = join(
+      parent,
+      attempt === 1 ? prefix : `${prefix}-${attempt}`,
+    );
+    try {
+      await mkdir(directory);
+      return directory;
+    } catch (error) {
+      if (!(
+        error instanceof Error &&
+        "code" in error &&
+        error.code === "EEXIST"
+      ))
+        throw error;
+    }
+  }
+}
+
+/** Keeps existing output intact, reserving a dated subfolder for another attempt. */
 export async function prepareExportPlan(
   plan: ExportPlan,
   signal: AbortSignal,
@@ -726,9 +781,11 @@ export async function prepareExportPlan(
     await mkdir(parent, { recursive: true });
     const occupied = await pathExists(plan.directory);
     signal.throwIfAborted();
-    const staging = occupied
-      ? await mkdtemp(join(plan.directory, `${plan.exporter}-`))
-      : await mkdtemp(join(parent, `${plan.exporter}-`));
+    const staging = await reserveExportDirectory(
+      occupied ? plan.directory : parent,
+      plan.exporter,
+      signal,
+    );
     signal.throwIfAborted();
     const directory = occupied
       ? join(staging, basename(plan.directory))
@@ -746,7 +803,11 @@ export async function prepareExportPlan(
   const entries = await readdir(plan.directory);
   signal.throwIfAborted();
   if (!entries.length) return plan;
-  const directory = await mkdtemp(join(plan.directory, `${plan.exporter}-`));
+  const directory = await reserveExportDirectory(
+    plan.directory,
+    plan.exporter,
+    signal,
+  );
   signal.throwIfAborted();
   return {
     ...exportPlan(
