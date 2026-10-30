@@ -6780,6 +6780,78 @@ test("mbext stays hidden until its package is available and follows Python inspe
   assert.equal(byId("export-tool").value, "mobius");
 });
 
+for (const responseType of ["python-info", "settings-error"])
+  test(`Python path changes retry inspection after stale ${responseType}`, (t) => {
+    const { document, window, messages } = openViewer(t);
+    const byId = (id) => document.getElementById(id);
+    const send = (data) =>
+      window.dispatchEvent(new window.MessageEvent("message", { data }));
+    const settings = {
+      type: "settings-info",
+      application: {
+        downloadDirectory: "/downloads",
+        pythonPath: "/first/python",
+      },
+      viewer: { panels: { operator: true, find: true, metadata: false } },
+      trusted: true,
+    };
+    const inspections = () =>
+      messages.filter(({ type }) => type === "inspect-python");
+    const reply = (request) => ({
+      ...request,
+      type: responseType,
+      error: "Stale inspection failed",
+      python: {
+        executable: request.pythonPath,
+        version: "3.12",
+        packages: [{ name: "modelbuilder", version: "0.2.1" }],
+      },
+    });
+    send(settings);
+    const first = inspections().at(-1);
+    for (const pythonPath of ["/second/python", "/current/python"])
+      send({
+        ...settings,
+        application: { ...settings.application, pythonPath },
+      });
+    assert.equal(inspections().length, 1);
+    send(reply(first));
+    assert.equal(inspections().length, 2);
+    const current = inspections().at(-1);
+    assert.equal(current.pythonPath, "/current/python");
+    assert.notEqual(current.requestId, first.requestId);
+    assert.equal(byId("settings-inspect-python").disabled, true);
+    assert.equal(byId("mbext-repository").hidden, true);
+    assert.equal(
+      byId("settings-python-status").textContent,
+      "Checking Python packages…",
+    );
+    assert.doesNotMatch(
+      byId("settings-feedback").textContent,
+      /Stale inspection failed/,
+    );
+    send(reply(first));
+    assert.equal(inspections().length, 2);
+    send({
+      ...current,
+      type: "python-info",
+      python: reply(current).python,
+    });
+    assert.equal(byId("mbext-repository").hidden, false);
+    assert.equal(byId("settings-inspect-python").disabled, false);
+    byId("settings-inspect-python").click();
+    const pending = inspections().at(-1);
+    send({
+      ...settings,
+      trusted: false,
+      application: { ...settings.application, pythonPath: "/untrusted/python" },
+    });
+    send(reply(pending));
+    assert.equal(inspections().length, 3);
+    assert.equal(byId("settings-inspect-python").disabled, true);
+    assert.equal(byId("mbext-repository").hidden, true);
+  });
+
 test("Status exposes package versions and inspection failures without opening Settings or resetting the camera", async (t) => {
   const { document, window, messages, load } = openViewer(t);
   const byId = (id) => document.getElementById(id);
@@ -7120,7 +7192,10 @@ test("Settings edits saved paths and sidebar preferences while Status renders pa
     },
   });
   assert.equal(byId("settings-packages").children.length, 0);
-  assert.equal(byId("settings-python-status").textContent, "Not checked");
+  assert.equal(
+    byId("settings-python-status").textContent,
+    "Checking Python packages…",
+  );
   send({ ...info, trusted: false });
   assert.equal(byId("settings-inspect-python").disabled, true);
   send({ type: "settings-error", error: "Invalid path" });
@@ -7206,9 +7281,9 @@ test("Settings keeps inspections pending after save errors and rejects unrelated
   };
   send({ ...first, type: "python-info", python });
   assert.equal(byId("settings-packages").children.length, 0);
-  assert.equal(byId("settings-inspect-python").disabled, false);
-  byId("settings-inspect-python").click();
+  assert.equal(byId("settings-inspect-python").disabled, true);
   const second = messages.at(-1);
+  assert.equal(second.type, "inspect-python");
   assert.notEqual(second.requestId, first.requestId);
   assert.equal(second.pythonPath, "/second/python");
   send({ ...first, type: "settings-error", error: "Old inspection failed" });

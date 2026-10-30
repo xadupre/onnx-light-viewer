@@ -314,7 +314,10 @@ function createSettingsPanel({
         return;
       inspecting = undefined;
       byId("settings-inspect-python").disabled = !trusted;
-      if (message.pythonPath !== pythonPath) return;
+      if (message.pythonPath !== pythonPath) {
+        if (trusted) byId("settings-inspect-python").click();
+        return;
+      }
       if (message.type === "settings-error") {
         byId("settings-feedback").textContent = message.error;
         byId("settings-python-status").textContent = message.error;
