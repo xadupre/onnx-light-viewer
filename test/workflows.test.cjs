@@ -90,7 +90,7 @@ test("Python tooling uses full onnx-light 0.2.3 wheels", () => {
 test("CI runs unit tests on Linux, Windows and macOS ARM64 without building documentation", () => {
   const source = workflow("tests.yml");
   assert.match(source, /runs-on: \$\{\{ matrix\.os \}\}/);
-  assert.match(source, /os: \[ubuntu-latest, windows-latest, macos-15\]/);
+  assert.match(source, /os: \[ubuntu-latest, windows-latest, macos-latest\]/);
   assert.match(source, /run: npm test/);
   assert.match(source, /if: runner\.os == 'Linux'\s+run: clang-format/);
   assert.doesNotMatch(source, /sphinx/);
