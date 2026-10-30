@@ -334,8 +334,15 @@ export function webviewHtml(
               <p id="selection-pattern-status" role="status">Select one or more operators in the graph.</p>
               <section id="selection-pattern-result" hidden>
                 <label for="selection-pattern-picker">Created patterns</label><select id="selection-pattern-picker"></select>
-                <details open><summary>Text representation</summary><pre id="selection-pattern-text" class="native-report"></pre></details>
-                <details><summary>Python for a local GraphBuilder</summary><p>Copy this code into a Python file. Requires onnx-light 0.2.2 or newer in Python; pattern definitions are session-local in the viewer.</p><textarea id="selection-pattern-python" rows="12" readonly aria-label="FunctionPattern Python code" spellcheck="false"></textarea></details>
+                <details open><summary>Text representation (textparser)</summary>
+                  <p>Edit the match and replacement functions using onnx-light textparser syntax, then apply the definition before matching or optimizing.</p>
+                  <label for="selection-pattern-text">Match pattern</label><button id="copy-selection-pattern-text">Copy pattern</button>
+                  <textarea id="selection-pattern-text" rows="10" spellcheck="false"></textarea>
+                  <label for="selection-pattern-replacement">Replacement</label><button id="copy-selection-pattern-replacement">Copy replacement</button>
+                  <textarea id="selection-pattern-replacement" rows="10" spellcheck="false"></textarea>
+                  <button id="update-function-pattern" disabled>Apply edits</button>
+                </details>
+                <details><summary>Python for a local GraphBuilder</summary><p>Copy this code into a Python file. Requires onnx-light 0.2.2 or newer in Python; pattern definitions are session-local in the viewer. Python reflects the last applied definition.</p><button id="copy-selection-pattern-python">Copy Python</button><textarea id="selection-pattern-python" rows="12" readonly aria-label="FunctionPattern Python code" spellcheck="false"></textarea></details>
               </section>
             </details>
             <details id="rewriting-scenarios" class="fusion-picker">

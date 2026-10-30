@@ -306,6 +306,17 @@ export class PipelineModel implements NativeModel {
     return stage.model.createFunctionPattern(nodes, name);
   };
 
+  updateFunctionPattern = (
+    name: string,
+    text: string,
+    replacement: string,
+    path: GraphPath = [],
+  ): FunctionPatternDefinition => {
+    const stage = this.select(path);
+    this.fusionPatterns(path);
+    return stage.model.updateFunctionPattern(name, text, replacement);
+  };
+
   optimizationPatterns = (path: GraphPath = []): OptimizationPattern[] => {
     const stage = this.select(path);
     this.fusionPatterns(path);

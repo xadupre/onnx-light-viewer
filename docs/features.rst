@@ -423,10 +423,12 @@ Select connected operators and choose **Fuse → Create pattern** to create a
 ``FunctionPattern``. Inspect its text and copy reusable Python code for a local
 ``GraphBuilder``. Match and fuse occurrences across the model, undo with
 **Unfuse**, or opt into the new **Selection patterns** optimization bucket.
+Edit the match and replacement functions in SDK textparser syntax, then
+**Apply edits**. Copy buttons export either function or the Python code.
 Pattern definitions are session-local. See :doc:`features/fusion_patterns`.
 
 .. figure:: _static/feature-selection-pattern.png
-   :alt: Create FunctionPattern from selected operators, showing its text and Python views.
+   :alt: Create FunctionPattern with editable textparser match and replacement functions and copy controls.
    :width: 100%
 
    Turn selected operators into a reusable local-function fusion.

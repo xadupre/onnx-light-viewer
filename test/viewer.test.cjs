@@ -4443,6 +4443,7 @@ test("creates a selection FunctionPattern, displays safe text and Python, and of
   const pattern = {
     name: "TransposePair",
     text: "<script>not executable</script>\nTranspose → Transpose",
+    replacement: "Transpose → Identity",
     python: "def make_pattern():\n    return FunctionPattern(...)",
   };
   const catalog = {
@@ -4471,10 +4472,70 @@ test("creates a selection FunctionPattern, displays safe text and Python, and of
     ...catalog,
   });
   assert.equal(byId("selection-pattern-result").hidden, false);
-  assert.equal(byId("selection-pattern-text").textContent, pattern.text);
+  assert.equal(byId("selection-pattern-text").value, pattern.text);
   assert.equal(byId("selection-pattern-text").querySelector("script"), null);
+  assert.equal(byId("selection-pattern-text").readOnly, false);
+  assert.equal(
+    byId("selection-pattern-replacement").value,
+    pattern.replacement,
+  );
+  assert.equal(byId("update-function-pattern").disabled, true);
   assert.equal(byId("selection-pattern-python").value, pattern.python);
   assert.equal(byId("selection-pattern-python").readOnly, true);
+  for (const format of ["text", "replacement", "python"]) {
+    byId(`copy-selection-pattern-${format}`).click();
+    assert.deepEqual(JSON.parse(JSON.stringify(messages.at(-1))), {
+      type: "copy-function-pattern",
+      name: pattern.name,
+      format,
+      text: pattern[format],
+    });
+  }
+  send({
+    type: "function-pattern-copied",
+    name: pattern.name,
+    format: "python",
+  });
+  assert.match(byId("selection-pattern-status").textContent, /Copied python/);
+  byId("selection-pattern-replacement").value = "edited replacement";
+  byId("selection-pattern-replacement").dispatchEvent(
+    new window.Event("input"),
+  );
+  assert.equal(byId("update-function-pattern").disabled, false);
+  byId("copy-selection-pattern-replacement").click();
+  assert.equal(messages.at(-1).text, "edited replacement");
+  byId("update-function-pattern").click();
+  const update = messages.at(-1);
+  assert.equal(update.type, "update-function-pattern");
+  assert.equal(update.name, pattern.name);
+  assert.equal(update.text, pattern.text);
+  assert.equal(update.replacement, "edited replacement");
+  assert.equal(byId("selection-pattern-text").disabled, true);
+  send({
+    type: "function-pattern-error",
+    requestId: update.requestId,
+    error: "Invalid replacement",
+  });
+  assert.equal(byId("selection-pattern-text").disabled, false);
+  assert.equal(
+    byId("selection-pattern-replacement").value,
+    "edited replacement",
+  );
+  assert.equal(byId("update-function-pattern").disabled, false);
+  byId("update-function-pattern").click();
+  pattern.python = "updated Python";
+  send({
+    type: "function-pattern-created",
+    requestId: messages.at(-1).requestId,
+    pattern,
+    ...catalog,
+  });
+  assert.equal(
+    byId("selection-pattern-replacement").value,
+    pattern.replacement,
+  );
+  assert.equal(byId("selection-pattern-python").value, "updated Python");
+  assert.equal(byId("update-function-pattern").disabled, true);
   assert.equal(byId("fusion-pattern").querySelector("input").checked, true);
   const bucket = byId("optimization-patterns").querySelector("details");
   assert.match(

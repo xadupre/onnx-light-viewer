@@ -41,14 +41,31 @@ function createFusionPanel({
       !count ||
       !byId("selection-pattern-name").value.trim();
     byId("selection-pattern-name").disabled = fusionBusy || !canFuse();
+    const pattern = selectionPatterns.get(
+      byId("selection-pattern-picker").value,
+    );
+    for (const id of [
+      "selection-pattern-text",
+      "selection-pattern-replacement",
+    ])
+      byId(id).disabled = fusionBusy || !canFuse();
+    byId("selection-pattern-picker").disabled = fusionBusy;
+    byId("update-function-pattern").disabled =
+      fusionBusy ||
+      !canFuse() ||
+      !pattern ||
+      (byId("selection-pattern-text").value === pattern.text &&
+        byId("selection-pattern-replacement").value === pattern.replacement);
   }
   function showSelectionPattern() {
     const pattern = selectionPatterns.get(
       byId("selection-pattern-picker").value,
     );
     byId("selection-pattern-result").hidden = !pattern;
-    byId("selection-pattern-text").textContent = pattern?.text ?? "";
+    byId("selection-pattern-text").value = pattern?.text ?? "";
+    byId("selection-pattern-replacement").value = pattern?.replacement ?? "";
     byId("selection-pattern-python").value = pattern?.python ?? "";
+    selectionPatternControls();
   }
   function diagnosticControls() {
     const picker = byId("diagnostic-pattern");
@@ -895,6 +912,37 @@ function createFusionPanel({
     "change",
     showSelectionPattern,
   );
+  for (const field of ["text", "replacement"]) {
+    byId(`selection-pattern-${field}`).addEventListener(
+      "input",
+      selectionPatternControls,
+    );
+  }
+  for (const format of ["text", "replacement", "python"]) {
+    byId(`copy-selection-pattern-${format}`).addEventListener("click", () => {
+      postMessage({
+        type: "copy-function-pattern",
+        name: byId("selection-pattern-picker").value,
+        format,
+        text: byId(`selection-pattern-${format}`).value,
+      });
+    });
+  }
+  byId("update-function-pattern").addEventListener("click", () => {
+    if (byId("update-function-pattern").disabled) return;
+    creatingPattern = true;
+    fusionPreview = undefined;
+    byId("fusion-matches").replaceChildren();
+    fusionControls(true);
+    byId("selection-pattern-status").textContent =
+      "Applying FunctionPattern edits…";
+    requestAction("update-function-pattern", "Update FunctionPattern", {
+      requestId: ++fusionRequest,
+      name: byId("selection-pattern-picker").value,
+      text: byId("selection-pattern-text").value,
+      replacement: byId("selection-pattern-replacement").value,
+    });
+  });
   byId("create-function-pattern").addEventListener("click", () => {
     if (byId("create-function-pattern").disabled) return;
     const nodes = selectedNodes();
@@ -1015,6 +1063,17 @@ function createFusionPanel({
 
   function handleMessage(data) {
     if (
+      data?.type === "function-pattern-copied" ||
+      data?.type === "function-pattern-copy-error"
+    ) {
+      if (data.name === byId("selection-pattern-picker").value)
+        byId("selection-pattern-status").textContent =
+          data.type === "function-pattern-copied"
+            ? `Copied ${data.format === "text" ? "pattern" : data.format}.`
+            : `Copy failed: ${data.error}`;
+      return true;
+    }
+    if (
       data?.type === "function-pattern-created" ||
       data?.type === "function-pattern-error"
     ) {
@@ -1039,7 +1098,7 @@ function createFusionPanel({
         "Run Matching to find this pattern throughout the model.",
       );
       byId("selection-pattern-status").textContent =
-        `Created ${data.pattern.name}. Use Run Matching and Fuse selected, or enable Selection patterns in Global optimization.`;
+        `Ready: ${data.pattern.name}. Use Run Matching and Fuse selected, or enable Selection patterns in Global optimization.`;
       return true;
     }
     if (

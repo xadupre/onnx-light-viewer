@@ -219,6 +219,7 @@ export interface OptimizationPattern {
 export interface FunctionPatternDefinition {
   name: string;
   text: string;
+  replacement: string;
   python: string;
 }
 
@@ -403,6 +404,13 @@ export interface NativeModel {
   createFunctionPattern(
     nodes: number[],
     name: string,
+    path?: GraphPath,
+  ): FunctionPatternDefinition;
+  /** Replaces an existing custom pattern using SDK ONNX function text syntax. */
+  updateFunctionPattern(
+    name: string,
+    text: string,
+    replacement: string,
     path?: GraphPath,
   ): FunctionPatternDefinition;
   optimizationPatterns(path?: GraphPath): OptimizationPattern[];

@@ -137,6 +137,7 @@ async function openExtension(
   let openDialogFailure;
   let clipboardText = "";
   let clipboardFailure;
+  const clipboardWrites = [];
   let editor;
   let backendSelection;
   let client;
@@ -218,6 +219,11 @@ async function openExtension(
         readText: async () => {
           if (clipboardFailure) throw clipboardFailure;
           return clipboardText;
+        },
+        writeText: async (text) => {
+          if (clipboardFailure) throw clipboardFailure;
+          clipboardText = text;
+          clipboardWrites.push(text);
         },
       },
     },
@@ -520,6 +526,7 @@ async function openExtension(
       clipboardText = text;
       clipboardFailure = error ? new Error(error) : undefined;
     },
+    clipboardWrites,
     writes,
     webview,
     openFromExplorer: (name) =>
@@ -3316,6 +3323,186 @@ test("creates a native function pattern and retains it through preview, undo, re
   assert.ok(latest().file.fusionCount > 0);
 });
 
+test("function pattern copy uses the VS Code clipboard for current edits and reports validation and clipboard errors", async (t) => {
+  const extension = await openExtension();
+  t.after(() => extension.dispose());
+  for (const [format, text] of [
+    ["text", "UnsavedMatch (x) => (y) {\n y = Relu(x)\n}"],
+    ["replacement", "UnsavedReplacement (x) => (y) {\n y = Identity(x)\n}"],
+    ["python", 'print("unsaved Python 🐍")\n'],
+    ["text", ""],
+  ]) {
+    await extension.receive({
+      type: "copy-function-pattern",
+      name: "UnsavedPattern",
+      format,
+      text,
+    });
+    assert.equal(extension.clipboardWrites.at(-1), text);
+    assert.deepEqual(extension.messages.at(-1), {
+      type: "function-pattern-copied",
+      name: "UnsavedPattern",
+      format,
+    });
+  }
+  const writes = extension.clipboardWrites.length;
+  const request = {
+    type: "copy-function-pattern",
+    name: "UnsavedPattern",
+    format: "text",
+    text: "current edits",
+  };
+  for (const fields of [
+    { name: undefined },
+    { name: 7 },
+    { text: undefined },
+    { text: {} },
+    { format: "unsupported" },
+    { format: undefined },
+    { format: ["text"] },
+  ]) {
+    await extension.receive({ ...request, ...fields });
+    const response = extension.messages.at(-1);
+    assert.equal(response.type, "function-pattern-copy-error");
+    assert.match(response.error, /Expected/);
+    assert.equal(extension.clipboardWrites.length, writes);
+  }
+  extension.setClipboard("", "Clipboard permission denied");
+  await extension.receive(request);
+  assert.deepEqual(extension.messages.at(-1), {
+    type: "function-pattern-copy-error",
+    name: request.name,
+    format: request.format,
+    error: "Clipboard permission denied",
+  });
+  assert.equal(extension.clipboardWrites.length, writes);
+});
+
+test("function pattern updates apply edited SDK bodies and invalidate stale previews", async (t) => {
+  const extension = await openExtension("fusion.onnx", undefined, true);
+  t.after(() => extension.dispose());
+  const expect = (type) =>
+    assert.equal(
+      extension.messages.at(-1).type,
+      type,
+      extension.messages.at(-1).error,
+    );
+  await extension.receive({
+    type: "create-function-pattern",
+    nodes: [0, 1],
+    name: "HostEditablePair",
+    requestId: 1,
+  });
+  expect("function-pattern-created");
+  const definition = extension.messages.at(-1).pattern;
+  assert.equal(definition.replacement, definition.text);
+  await extension.receive({
+    type: "preview-fusion",
+    pattern: definition.name,
+    requestId: 2,
+  });
+  expect("fusion-preview");
+  const stale = extension.messages.at(-1);
+  await extension.receive({
+    type: "update-function-pattern",
+    name: definition.name,
+    text: definition.text,
+    replacement:
+      '<domain: "onnx_light.viewer", opset_import: ["" : 13]> HostEditedReplacement(x) => (a) { a = Identity(x) }',
+    requestId: 3,
+  });
+  expect("function-pattern-created");
+  const updated = extension.messages.at(-1);
+  assert.equal(updated.requestId, 3);
+  assert.match(updated.pattern.replacement, /Identity/);
+  assert.deepEqual(
+    updated.optimizationPatterns.find(({ name }) => name === definition.name)
+      .definition,
+    updated.pattern,
+  );
+  await extension.receive({
+    type: "apply-fusion",
+    previewId: stale.previewId,
+    candidates: [0],
+    requestId: 4,
+  });
+  expect("fusion-error");
+  await extension.receive({
+    type: "preview-fusion",
+    pattern: definition.name,
+    requestId: 5,
+  });
+  expect("fusion-preview");
+  const preview = extension.messages.at(-1);
+  assert.equal(
+    preview.matches[0].replacement[0].opType,
+    "HostEditedReplacement",
+  );
+  await extension.receive({
+    type: "apply-fusion",
+    previewId: preview.previewId,
+    candidates: [0],
+    requestId: 6,
+  });
+  expect("fusion-info");
+  await extension.receive({ type: "undo-fusion", requestId: 7 });
+  expect("graph");
+  await extension.receive({ type: "fusion-patterns", requestId: 8 });
+  assert.deepEqual(
+    extension.messages
+      .at(-1)
+      .optimizationPatterns.find(({ name }) => name === definition.name)
+      .definition,
+    updated.pattern,
+  );
+});
+
+test("function pattern update transport rejects malformed fields and preserves definitions on SDK errors", async (t) => {
+  const extension = await openExtension("fusion.onnx", undefined, true);
+  t.after(() => extension.dispose());
+  const native = extension.nativeModels.at(-1);
+  const definition = native.createFunctionPattern([0, 1], "HostEditablePair");
+  const update = native.updateFunctionPattern;
+  let calls = 0;
+  native.updateFunctionPattern = (...args) => {
+    calls++;
+    return update(...args);
+  };
+  const request = {
+    type: "update-function-pattern",
+    name: definition.name,
+    text: definition.text,
+    replacement: definition.replacement,
+    requestId: 41,
+  };
+  for (const fields of [
+    { name: 7 },
+    { text: undefined },
+    { text: [] },
+    { replacement: null },
+    { replacement: {} },
+  ]) {
+    await extension.receive({ ...request, ...fields });
+    assert.equal(extension.messages.at(-1).type, "function-pattern-error");
+    assert.equal(extension.messages.at(-1).requestId, 41);
+  }
+  assert.equal(calls, 0);
+  for (const fields of [
+    { name: "TransposeTranspose" },
+    { text: "invalid function text" },
+    { replacement: "invalid replacement text" },
+  ]) {
+    await extension.receive({ ...request, ...fields });
+    assert.equal(extension.messages.at(-1).type, "function-pattern-error");
+    assert.deepEqual(
+      native.optimizationPatterns().find(({ name }) => name === definition.name)
+        .definition,
+      definition,
+    );
+  }
+  assert.equal(calls, 3);
+});
+
 test("function pattern transport rejects malformed selections and delegates semantic names to native", async (t) => {
   const extension = await openExtension("fusion.onnx", undefined, true);
   t.after(() => extension.dispose());
@@ -3378,65 +3565,101 @@ test("function pattern transport rejects malformed selections and delegates sema
   assert.equal(calls, 2);
 });
 
-test("function pattern creation recovers native handles and suppresses stale recovery results and errors", async (t) => {
-  for (const invalidate of [
-    "cancel",
-    "navigate",
-    "replace",
-    "dispose",
-    "none",
-  ]) {
-    for (const fail of [false, true]) {
-      const extension = await openExtension("fusion.onnx", undefined, true);
-      t.after(() => extension.dispose());
-      const native = extension.nativeModels.at(-1);
-      const graph = native.graph;
-      native.graph = (infer, ...args) => {
-        if (infer) throw new Error("Host test invalidation");
-        return graph(infer, ...args);
-      };
-      await extension.receive({ type: "refresh-shapes" });
-      const release = extension.pauseNextFileLoad(
-        fail ? new Error("Host delayed recovery failure") : undefined,
-      );
-      const pending = extension.receive({
-        type: "create-function-pattern",
-        nodes: [0, 1],
-        name: "HostDelayedPair",
-        requestId: 91,
-      });
-      let navigation;
-      if (invalidate === "replace") await extension.open("relu.onnx");
-      else if (invalidate === "dispose") extension.dispose();
-      else if (invalidate === "navigate")
-        navigation = extension.receive({ type: "navigate", path: [] });
-      else if (invalidate !== "none")
-        await extension.receive({ type: "cancel-fusion" });
-      const errors = extension.errors.length;
-      release();
-      await pending;
-      await navigation;
-      const result = extension.messages.filter(
-        ({ type, requestId }) =>
-          requestId === 91 &&
-          ["function-pattern-created", "function-pattern-error"].includes(type),
-      );
-      if (invalidate === "none") {
-        assert.equal(result.length, 1);
-        assert.equal(
-          result[0].type,
-          fail ? "function-pattern-error" : "function-pattern-created",
-        );
-      } else {
-        assert.deepEqual(result, []);
-        assert.equal(
-          extension.errors
-            .slice(errors)
-            .some((error) =>
-              error.includes("Could not create function pattern"),
+test("function pattern creation and updates recover native handles and suppress stale recovery results and errors", async (t) => {
+  for (const updating of [false, true]) {
+    for (const invalidate of [
+      "cancel",
+      "navigate",
+      "replace",
+      "dispose",
+      "none",
+    ]) {
+      for (const fail of [false, true]) {
+        const extension = await openExtension("fusion.onnx", undefined, true);
+        t.after(() => extension.dispose());
+        const native = extension.nativeModels.at(-1);
+        let resumeReload;
+        if (updating) {
+          const clone = native.clone;
+          const gate = new Promise((resolve) => {
+            resumeReload = resolve;
+          });
+          native.clone = () => {
+            const retained = clone();
+            retained.clone = () =>
+              gate.then(() => {
+                if (fail) throw new Error("Host delayed recovery failure");
+                return clone();
+              });
+            return retained;
+          };
+        }
+        if (updating)
+          await extension.receive({
+            type: "create-function-pattern",
+            nodes: [0, 1],
+            name: "HostDelayedPair",
+          });
+        const definition = updating
+          ? extension.messages.at(-1).pattern
+          : undefined;
+        const graph = native.graph;
+        native.graph = (infer, ...args) => {
+          if (infer) throw new Error("Host test invalidation");
+          return graph(infer, ...args);
+        };
+        await extension.receive({ type: "refresh-shapes" });
+        const release = updating
+          ? resumeReload
+          : extension.pauseNextFileLoad(
+              fail ? new Error("Host delayed recovery failure") : undefined,
+            );
+        const pending = extension.receive({
+          type: updating
+            ? "update-function-pattern"
+            : "create-function-pattern",
+          nodes: [0, 1],
+          name: "HostDelayedPair",
+          text: definition?.text,
+          replacement: definition?.replacement,
+          requestId: 91,
+        });
+        let navigation;
+        if (invalidate === "replace") await extension.open("relu.onnx");
+        else if (invalidate === "dispose") extension.dispose();
+        else if (invalidate === "navigate")
+          navigation = extension.receive({ type: "navigate", path: [] });
+        else if (invalidate !== "none")
+          await extension.receive({ type: "cancel-fusion" });
+        const errors = extension.errors.length;
+        release();
+        await pending;
+        await navigation;
+        const result = extension.messages.filter(
+          ({ type, requestId }) =>
+            requestId === 91 &&
+            ["function-pattern-created", "function-pattern-error"].includes(
+              type,
             ),
-          false,
         );
+        if (invalidate === "none") {
+          assert.equal(result.length, 1);
+          assert.equal(
+            result[0].type,
+            fail ? "function-pattern-error" : "function-pattern-created",
+            result[0].error,
+          );
+        } else {
+          assert.deepEqual(result, []);
+          assert.equal(
+            extension.errors
+              .slice(errors)
+              .some((error) =>
+                error.includes("Could not save function pattern"),
+              ),
+            false,
+          );
+        }
       }
     }
   }
@@ -3480,6 +3703,19 @@ test("function pattern creation is stage-local and rejects pipeline overviews an
   });
   await extension.receive(request);
   expect("function-pattern-created");
+  const initialDefinition = extension.messages.at(-1).pattern;
+  const update = {
+    type: "update-function-pattern",
+    name: request.name,
+    text: initialDefinition.text,
+    replacement:
+      '<domain: "onnx_light.viewer", opset_import: ["" : 13]> HostStageReplacement(x) => (a) { a = Identity(x) }',
+    requestId: 31,
+  };
+  await extension.receive(update);
+  expect("function-pattern-created");
+  const stageDefinition = extension.messages.at(-1).pattern;
+  assert.match(stageDefinition.replacement, /HostStageReplacement/);
   await extension.receive({
     type: "preview-fusion",
     pattern: request.name,
@@ -3516,6 +3752,8 @@ test("function pattern creation is stage-local and rejects pipeline overviews an
   assert.ok(definition.text.length > 0);
   assert.ok(definition.python.length > 0);
   await extension.receive({ type: "navigate", path: [{ pipeline: "decode" }] });
+  await extension.receive(update);
+  expect("function-pattern-error");
   await extension.receive({ type: "fusion-patterns", requestId: 29 });
   for (const name of ["HostStagePair", "HostStageQueuedPair"])
     assert.equal(extension.messages.at(-1).patterns.includes(name), false);
@@ -3524,6 +3762,13 @@ test("function pattern creation is stage-local and rejects pipeline overviews an
     path: [{ pipeline: "prefill" }],
   });
   await extension.receive({ type: "fusion-patterns", requestId: 30 });
+  assert.deepEqual(
+    extension.messages
+      .at(-1)
+      .optimizationPatterns.find(({ name }) => name === request.name)
+      .definition,
+    stageDefinition,
+  );
   assert.deepEqual(
     extension.messages
       .at(-1)
@@ -3541,6 +3786,8 @@ test("function pattern creation is stage-local and rejects pipeline overviews an
   assert.ok(child);
   await extension.receive({ type: "navigate", path: child.path });
   await extension.receive(request);
+  expect("function-pattern-error");
+  await extension.receive(update);
   expect("function-pattern-error");
 });
 

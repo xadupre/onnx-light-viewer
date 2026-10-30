@@ -15,6 +15,7 @@
 #include <onnx_extensions/patterns/function_pattern.h>
 #include <onnx_extensions/shapes/dispatch_table.h>
 #include <onnx_lib/common/constants.h>
+#include <onnx_manipulations/printer.h>
 #include <onnx_proto/onnx_verify.h>
 #include <regex>
 #include <sstream>
@@ -25,26 +26,46 @@
 namespace onnx_light_viewer {
 namespace {
 
-using FunctionPatterns = std::map<std::string, ol::FunctionProto>;
+using FunctionPatterns = std::map<std::string, StoredModel::FunctionPatternFunctions>;
 
 std::unique_ptr<ol::core::builder::PatternOptimization>
 ResolvePattern(const FunctionPatterns &patterns, const std::string &name) {
   const auto found = patterns.find(name);
   if (found != patterns.end())
     return std::make_unique<ol::onnx_patterns::FunctionPattern>(
-        found->second, found->second, 1, name, ol::core::symbolic::Device::kUndefined, -1, true);
+        found->second.pattern, found->second.replacement, 1, name,
+        ol::core::symbolic::Device::kUndefined, -1, true);
   return ol::core::builder::CreateRegisteredPattern(name);
 }
 
-std::string FunctionPatternPython(const std::string &name, const std::string &encoded) {
+std::string FunctionHex(const ol::FunctionProto &function) {
+  std::string bytes;
+  if (!function.SerializeToString(bytes))
+    throw std::runtime_error("Could not serialize the selected function.");
+  static constexpr char hex[] = "0123456789abcdef";
+  std::string encoded;
+  encoded.reserve(bytes.size() * 2);
+  for (const unsigned char byte : bytes) {
+    encoded += hex[byte >> 4];
+    encoded += hex[byte & 15];
+  }
+  return encoded;
+}
+
+std::string FunctionPatternPython(const std::string &name,
+                                  const StoredModel::FunctionPatternFunctions &functions) {
   return "from onnx_light.onnx import FunctionProto, load, save\n"
          "from onnx_light.onnx_core.graph_builder import GraphBuilder\n"
          "from onnx_light.onnx_core.optimization import FunctionPattern, GraphGraph\n\n"
-         "function = FunctionProto()\n"
-         "function.ParseFromString(bytes.fromhex(\"" +
-         encoded +
+         "match_function = FunctionProto()\n"
+         "match_function.ParseFromString(bytes.fromhex(\"" +
+         FunctionHex(functions.pattern) +
          "\"))\n"
-         "pattern = FunctionPattern(function, function, name=\"" +
+         "replacement_function = FunctionProto()\n"
+         "replacement_function.ParseFromString(bytes.fromhex(\"" +
+         FunctionHex(functions.replacement) +
+         "\"))\n"
+         "pattern = FunctionPattern(match_function, replacement_function, name=\"" +
          name +
          "\", as_function=True)\n\n"
          "def apply_pattern(model):\n"
@@ -64,25 +85,25 @@ std::string FunctionPatternPython(const std::string &name, const std::string &en
 }
 
 Napi::Object FunctionPatternDefinition(Napi::Env env, const std::string &name,
-                                       const ol::FunctionProto &function) {
-  std::string bytes;
-  if (!function.SerializeToString(bytes))
-    throw std::runtime_error("Could not serialize the selected function.");
-  static constexpr char hex[] = "0123456789abcdef";
-  std::string encoded;
-  encoded.reserve(bytes.size() * 2);
-  for (const unsigned char byte : bytes) {
-    encoded += hex[byte >> 4];
-    encoded += hex[byte & 15];
-  }
+                                       const StoredModel::FunctionPatternFunctions &functions) {
   auto value = Napi::Object::New(env);
   value.Set("name", name);
-  std::stringstream text;
-  ol::utils::PrintOptions print_options;
-  function.PrintToStringStream(text, print_options);
-  value.Set("text", text.str());
-  value.Set("python", FunctionPatternPython(name, encoded));
+  value.Set("text", ol::ProtoToString(functions.pattern));
+  value.Set("replacement", ol::ProtoToString(functions.replacement));
+  value.Set("python", FunctionPatternPython(name, functions));
   return value;
+}
+
+ol::FunctionProto ParseFunctionText(const std::string &text) {
+  ol::FunctionProto function;
+  ol::OnnxParser parser(text);
+  const auto status = parser.Parse(function);
+  if (!status.IsOK())
+    throw std::runtime_error(status.ErrorMessage());
+  if (!parser.EndOfInput())
+    throw std::runtime_error("Unexpected text after the function definition: " +
+                             parser.GetErrorContext());
+  return function;
 }
 
 void RestoreFunctionExternalData(ol::FunctionProto &function, const std::string &path) {
@@ -997,8 +1018,35 @@ void AddFusionMethods(Napi::Env env, Napi::Object result, std::shared_ptr<Stored
                  // Construction delegates function-body validation to the SDK.
                  ol::onnx_patterns::FunctionPattern pattern(
                      function, function, 1, name, ol::core::symbolic::Device::kUndefined, -1, true);
-                 auto value = FunctionPatternDefinition(call.Env(), name, function);
-                 model->function_patterns->emplace(name, std::move(function));
+                 StoredModel::FunctionPatternFunctions functions{function.SharedCopy(),
+                                                                 std::move(function)};
+                 auto value = FunctionPatternDefinition(call.Env(), name, functions);
+                 model->function_patterns->emplace(name, std::move(functions));
+                 return value;
+               } catch (const std::exception &error) {
+                 Napi::Error::New(call.Env(), error.what()).ThrowAsJavaScriptException();
+                 return call.Env().Undefined();
+               }
+             }));
+  result.Set("updateFunctionPattern",
+             Napi::Function::New(env, [model](const Napi::CallbackInfo &call) -> Napi::Value {
+               try {
+                 if (call.Length() != 3 || !call[0].IsString() || !call[1].IsString() ||
+                     !call[2].IsString())
+                   throw std::runtime_error(
+                       "Expected a function pattern name, match text and replacement text.");
+                 const auto name = call[0].As<Napi::String>().Utf8Value();
+                 const auto found = model->function_patterns->find(name);
+                 if (found == model->function_patterns->end())
+                   throw std::runtime_error("Unknown custom function pattern: " + name);
+                 StoredModel::FunctionPatternFunctions functions{
+                     ParseFunctionText(call[1].As<Napi::String>().Utf8Value()),
+                     ParseFunctionText(call[2].As<Napi::String>().Utf8Value())};
+                 ol::onnx_patterns::FunctionPattern pattern(
+                     functions.pattern, functions.replacement, 1, name,
+                     ol::core::symbolic::Device::kUndefined, -1, true);
+                 auto value = FunctionPatternDefinition(call.Env(), name, functions);
+                 found->second = std::move(functions);
                  return value;
                } catch (const std::exception &error) {
                  Napi::Error::New(call.Env(), error.what()).ThrowAsJavaScriptException();

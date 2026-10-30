@@ -85,8 +85,13 @@ a reusable native pattern, without changing the graph.
 
 1. Select connected operators with Ctrl/Cmd-click, or a selection rectangle.
 2. Enter a unique **Function name** and click **Create pattern**.
-3. Inspect **Text representation**, or copy **Python for a local GraphBuilder**.
-4. Click **Run Matching** to find occurrences throughout the model, then
+3. Inspect **Text representation (textparser)**: the **Match pattern** and
+   **Replacement** fields use the SDK textparser's function syntax. Edit either
+   function, then click **Apply edits**. Invalid text leaves the saved definition
+   unchanged and keeps your edits available to correct.
+4. Use **Copy pattern**, **Copy replacement**, or **Copy Python** to copy the
+   corresponding text. Python reflects the last successfully applied definition.
+5. Click **Run Matching** to find occurrences throughout the model, then
    **Fuse selected**. Each occurrence becomes a call to a shared local function.
    **Unfuse** reverses the operation.
 
@@ -94,6 +99,12 @@ Boundary inputs, including weights, become function arguments; values used
 outside the selection remain function outputs. The SDK checks whether the
 selected function body is supported and performs matching and rewriting.
 Matching preserves literal attributes and imported opset versions.
+
+.. note::
+
+   In SDK 0.2.2, textparser can change Constant tensors from raw-data to typed-data
+   storage. After applying such text, SDK matching may no longer recognize the
+   original raw-data Constant. This SDK limitation is not normalized by the viewer.
 
 Created patterns are opt-in: **Optimize → Selection patterns** is a separate
 bucket and named group. Enable individual patterns or the group before running
@@ -112,10 +123,10 @@ This writes a separate optimized model. Import ``apply_pattern`` from that file
 to reuse the same pattern in Python.
 
 .. figure:: ../_static/feature-selection-pattern.png
-   :alt: Selected graph operators and the Create FunctionPattern controls, with text representation and reusable Python code.
+   :alt: Selected operators with editable textparser match and replacement functions, Apply edits and copy buttons.
    :width: 100%
 
-   Select a body once, then match it elsewhere or reuse its Python definition.
+   Edit both functions in textparser syntax, apply the definition, or copy it for reuse.
 
 Why does a pattern not match?
 -----------------------------
