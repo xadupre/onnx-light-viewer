@@ -172,18 +172,6 @@ p {
   width: 100%;
   box-sizing: border-box;
 }
-#settings-packages {
-  grid-template-columns: minmax(0, max-content) minmax(0, 1fr);
-  gap: 3px 12px;
-  line-height: 1.4;
-}
-#settings-packages dt {
-  margin: 0;
-  font-size: 12px;
-  letter-spacing: 0;
-  color: var(--text);
-  overflow-wrap: anywhere;
-}
 .repository-list {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
@@ -243,31 +231,50 @@ p {
 #controls-view h3 {
   margin: 24px 0 8px;
 }
-.controls-table {
+.controls-table,
+.package-versions {
   width: 100%;
   max-width: 960px;
   table-layout: fixed;
   border-collapse: collapse;
 }
 .controls-table th,
-.controls-table td {
+.controls-table td,
+.package-versions th,
+.package-versions td {
   padding: 10px 12px;
   border: 1px solid var(--border);
   text-align: left;
   vertical-align: top;
   overflow-wrap: anywhere;
 }
-.controls-table th:first-child {
+.controls-table th:first-child,
+.package-versions th:first-child {
   width: 34%;
 }
-.controls-table thead {
+.controls-table thead,
+.package-versions thead {
   background: var(--border);
 }
-.controls-table tbody th {
+.controls-table tbody th,
+.package-versions tbody th {
   font-weight: 500;
 }
-.controls-table tbody tr:nth-child(even) {
+.controls-table tbody tr:nth-child(even),
+.package-versions tbody tr:nth-child(even) {
   background: var(--bg);
+}
+.package-versions {
+  margin: 12px 0;
+  line-height: 1.4;
+}
+.package-versions a {
+  color: var(--mint);
+  font-weight: 600;
+}
+.package-release-comparison {
+  display: block;
+  margin-top: 4px;
 }
 .controls-table kbd {
   font-family: var(--vscode-editor-font-family, monospace);

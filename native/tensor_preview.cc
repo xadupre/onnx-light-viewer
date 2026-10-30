@@ -103,14 +103,24 @@ bool IsPayloadOmitted(const ol::TensorProto &tensor) {
                      });
 }
 
-std::string AttributePreview(const ol::AttributeProto &attribute) {
+std::string IntegerAttributePreview(std::string_view name, int64_t value, std::string_view domain) {
+  if ((domain.empty() || domain == "ai.onnx") &&
+      (name == "to" || name == "dtype" || name == "stash_type" || name == "output_dtype" ||
+       name == "output_datatype") &&
+      value >= 0 && value <= std::numeric_limits<int>::max() &&
+      ol::TensorProto::DataType_IsValid(static_cast<int>(value)))
+    return ol::TensorProto::DataType_Name(static_cast<int>(value));
+  return std::to_string(value);
+}
+
+std::string AttributePreview(const ol::AttributeProto &attribute, std::string_view domain) {
   if (!attribute.ref_attr_name().empty())
     return Preview(attribute, 512);
   switch (attribute.type()) {
   case ol::AttributeProto::FLOAT:
     return ol::core::schema::AttributeDefaultRepr(static_cast<double>(attribute.f()));
   case ol::AttributeProto::INT:
-    return std::to_string(attribute.i());
+    return IntegerAttributePreview(attribute.name(), attribute.i(), domain);
   case ol::AttributeProto::STRING:
     return std::string(attribute.s().substr(0, 512)) + (attribute.s().size() > 512 ? "..." : "");
   case ol::AttributeProto::GRAPH:

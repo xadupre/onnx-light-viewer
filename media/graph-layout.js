@@ -470,12 +470,16 @@ function layeredGraphLayout(graph, sizes) {
   const parents = Array.from({ length: count }, () => []);
   const children = Array.from({ length: count }, () => []);
   const remaining = new Uint32Array(count);
+  const inputDependent = new Uint8Array(count);
+  const initializerDependent = new Uint8Array(count);
   graph.nodes.forEach((node, index) => {
+    inputDependent[index] = node.port === "input" ? 1 : 0;
     const dependencies = new Set();
     for (const input of [...node.inputs, ...(node.captures ?? [])]) {
       if (!input) continue;
       const parent = indices.get(producers.get(input));
       if (parent !== undefined) dependencies.add(parent);
+      else initializerDependent[index] = 1;
     }
     for (const parent of dependencies) {
       parents[index].push(parent);
@@ -502,8 +506,26 @@ function layeredGraphLayout(graph, sizes) {
     const index = queue[head];
     for (const child of children[index]) {
       if (!remaining[child]) continue;
+      inputDependent[child] |= inputDependent[index];
+      initializerDependent[child] |= initializerDependent[index];
       ranks[child] = Math.max(ranks[child], ranks[index] + 1);
       if (--remaining[child] === 0) queue.push(child);
+    }
+  }
+
+  // Place initializer-only branches just before their earliest consumer.
+  if (!cyclic) {
+    for (let head = queue.length - 1; head >= 0; head--) {
+      const index = queue[head];
+      if (
+        inputDependent[index] ||
+        !initializerDependent[index] ||
+        !children[index].length
+      )
+        continue;
+      let rank = Infinity;
+      for (const child of children[index]) rank = Math.min(rank, ranks[child]);
+      ranks[index] = rank - 1;
     }
   }
 

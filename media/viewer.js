@@ -219,6 +219,7 @@ function showTab(name, focus = false) {
     if (selectedConnection) names.push(selectedConnection.name);
     tensorListPanel.open(names);
   } else if (name === "settings") vscode.postMessage({ type: "get-settings" });
+  else if (name === "status") vscode.postMessage({ type: "get-status-info" });
   else if (name === "logs")
     byId("logs-view").scrollTop = byId("logs-view").scrollHeight;
 }
@@ -690,14 +691,16 @@ function operatorSizes(nodes) {
     nodes.map((node) => {
       const typeWidth = widths.get(node.opType);
       const nameWidth = context.measureText(node.name).width;
+      const attributes = (node.attributes ?? []).filter(
+        (attribute) => !attribute.graphs?.length,
+      );
+      const initializers = node.parameters ?? [];
       const parameters = [
-        ...(node.attributes ?? [])
-          .filter((attribute) => !attribute.graphs?.length)
-          .map((attribute) => ({
-            description: `${attribute.name} = ${attribute.value}`,
-            className: "node-attribute",
-          })),
-        ...(node.parameters ?? []).map((parameter) => ({
+        ...attributes.map((attribute) => ({
+          description: `${attribute.name} = ${attribute.value}`,
+          className: "node-attribute",
+        })),
+        ...initializers.map((parameter) => ({
           description: `${parameter.name}: ${parameter.type}${parameter.shape === undefined ? "" : ` [${parameter.shape?.join(", ") ?? "?"}]`}${parameter.value === undefined ? "" : ` = ${parameter.value}`}`,
           className: "node-initializer",
         })),
@@ -713,13 +716,22 @@ function operatorSizes(nodes) {
           ? parameters
           : [
               {
-                description: `${parameters.length} parameter${parameters.length === 1 ? "" : "s"} (see inspector)`,
+                description:
+                  [
+                    attributes.length &&
+                      `${attributes.length} attribute${attributes.length === 1 ? "" : "s"}`,
+                    initializers.length &&
+                      `${initializers.length} initializer${initializers.length === 1 ? "" : "s"}`,
+                  ]
+                    .filter(Boolean)
+                    .join(", ") + " (see inspector)",
                 className: "node-parameter-summary",
               },
             ]
-      ).map((parameter) => ({
+      ).map((parameter, index) => ({
         ...parameter,
         textWidth: context.measureText(parameter.description).width,
+        y: 68 + index * 16,
       }));
       const subgraphs = (node.attributes ?? []).flatMap((attribute) =>
         (attribute.graphs ?? []).map((graph, index) => {
@@ -762,12 +774,30 @@ function operatorSizes(nodes) {
         }
         nameLength = low;
       }
+      // Expand a mixed summary without changing its layout footprint.
+      const displayRows =
+        !compact && attributes.length === 1 && initializers.length === 1
+          ? parameters.map((parameter, index) => {
+              const displayDescription =
+                parameter.className === "node-initializer"
+                  ? shortName(initializers[0].name, 22, true) +
+                    parameter.description.slice(initializers[0].name.length)
+                  : parameter.description;
+              return {
+                ...parameter,
+                displayDescription,
+                textWidth: context.measureText(displayDescription).width,
+                y: 66 + index * 12,
+              };
+            })
+          : parameterRows;
       return [
         node.id,
         {
           width,
           height: 88 + parameterRows.length * 16 + subgraphs.length * 20,
-          parameterRows,
+          parameterHeight: parameterRows.length * 16,
+          parameterRows: displayRows,
           subgraphs,
           displayName: shortName(node.name, nameLength, true),
           typeFontSize: Math.min(16, (16 * (width - 24)) / (typeWidth || 1)),
@@ -2044,18 +2074,18 @@ function render(graph, metadata) {
         const information = tensorLabel(
           group,
           position.x,
-          top + 78 + size.parameterRows.length * 16,
+          top + 78 + size.parameterHeight,
           node.outputs,
           26,
         );
         information.classList.add("node-tensor-info");
       }
-      size.parameterRows.forEach((parameter, index) => {
+      size.parameterRows.forEach((parameter) => {
         const text = label(
           group,
           position.x,
-          top + 68 + index * 16,
-          parameter.description,
+          top + parameter.y,
+          parameter.displayDescription ?? parameter.description,
           `tensor-info node-parameter ${parameter.className}`,
         );
         text.style.fontSize = `${Math.min(9, (10 * (size.width - 24)) / (parameter.textWidth || 1))}px`;
@@ -2063,7 +2093,7 @@ function render(graph, metadata) {
         text.append(element("title", {}, parameter.description));
       });
       size.subgraphs.forEach((graph, index) => {
-        const y = top + 88 + size.parameterRows.length * 16 + index * 20;
+        const y = top + 88 + size.parameterHeight + index * 20;
         const link = element("g", {
           class: "subgraph-link",
           role: "button",
@@ -2432,7 +2462,7 @@ window.addEventListener("message", (event) => {
     sidebar.restoreSettings(event.data.settings);
     settingsPanel.restoreViewer(event.data.settings);
   } else if (
-    ["settings-info", "python-info", "settings-error"].includes(
+    ["settings-info", "status-info", "python-info", "settings-error"].includes(
       event.data?.type,
     )
   ) {

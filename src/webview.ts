@@ -628,14 +628,37 @@ export function webviewHtml(
         <dt>Current operations</dt><dd id="status-running">Waiting for extension host</dd>
         <dt>Recovery</dt><dd id="status-recovery">Waiting for extension host</dd>
       </dl>
-      <h3>What happens after an exception?</h3>
-      <p>A caught C++ exception becomes a JavaScript error and is recorded in Logs. It does not unload onnx-light. A failed shape or metadata refresh discards only the native model handle; the next native action recreates it. The displayed graph is kept.</p>
       <section id="status-failure" hidden>
         <h3>Last failed action</h3>
         <strong id="status-failure-action"></strong>
         <p id="status-failure-time"></p>
         <pre id="status-failure-details"></pre>
       </section>
+      <h3>Application and native build</h3>
+      <table class="package-versions" aria-label="Application package versions">
+        <thead><tr><th scope="col">Package</th><th scope="col">Installed</th><th scope="col">Latest published</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">ONNX Light Viewer</th><td id="settings-app-version">Waiting for extension host</td><td id="status-app-latest">Not checked</td></tr>
+          <tr><th scope="row">onnx-light C++</th><td id="settings-native-version">Waiting for extension host</td><td id="status-native-latest">Not checked</td></tr>
+        </tbody>
+      </table>
+      <dl class="status-details">
+        <dt>Extension host platform</dt><dd id="settings-platform">Waiting for extension host</dd>
+      </dl>
+      <p>The bundled native addon uses the onnx-light C++ release above, independently of any Python installation.</p>
+      <button id="status-check-releases" type="button" disabled>Check latest versions (online)</button>
+      <p>Checks published releases on GitHub and PyPI when requested. Nothing is installed. Development and source builds may differ from the latest published release.</p>
+      <p id="status-release-status" role="status">Published versions not checked</p>
+      <h3>Optional Python packages</h3>
+      <p>Checks distribution metadata and source versions on PYTHONPATH without importing model libraries or running startup hooks. Nothing is installed. Requires a trusted workspace.</p>
+      <button id="settings-inspect-python" type="button" disabled>Refresh package versions</button>
+      <p id="settings-python-status" role="status">Not checked</p>
+      <table class="package-versions" aria-label="Python package versions">
+        <thead><tr><th scope="col">Package</th><th scope="col">Installed</th><th scope="col">Latest published</th></tr></thead>
+        <tbody id="settings-packages"></tbody>
+      </table>
+      <h3>What happens after an exception?</h3>
+      <p>A caught C++ exception becomes a JavaScript error and is recorded in Logs. It does not unload onnx-light. A failed shape or metadata refresh discards only the native model handle; the next native action recreates it. The displayed graph is kept.</p>
     </section>
     <section id="settings-view" role="tabpanel" aria-labelledby="settings-tab" tabindex="0" hidden>
       <h2>Settings</h2>
@@ -645,7 +668,7 @@ export function webviewHtml(
         <input id="settings-download" type="text" required autocomplete="off">
         <label for="settings-python">Python executable</label>
         <input id="settings-python" type="text" required autocomplete="off">
-        <p>Python is not needed to view models. Save an executable name or absolute path to inspect optional packages on the extension host.</p>
+        <p>Python is not needed to view models. Save an executable name or absolute path to inspect optional packages on the Status page.</p>
         <button type="submit">Save paths</button>
       </form>
       <p id="settings-feedback" role="status"></p>
@@ -680,18 +703,6 @@ export function webviewHtml(
         <label><span>Find panel</span><input id="settings-find" type="checkbox" checked></label>
         <label><span>Data panel</span><input id="settings-metadata" type="checkbox"></label>
       </div>
-      <h3>Application and native build</h3>
-      <dl class="status-details">
-        <dt>ONNX Light Viewer</dt><dd id="settings-app-version">Waiting for extension host</dd>
-        <dt>Compiled with onnx-light C++</dt><dd id="settings-native-version">Waiting for extension host</dd>
-        <dt>Extension host platform</dt><dd id="settings-platform">Waiting for extension host</dd>
-      </dl>
-      <p>The bundled native addon uses the onnx-light C++ release above, independently of any Python installation.</p>
-      <h3>Optional Python packages</h3>
-      <p>Checks distribution metadata and source versions on PYTHONPATH without importing model libraries or running startup hooks. Nothing is installed. Requires a trusted workspace.</p>
-      <button id="settings-inspect-python" type="button" disabled>Refresh package versions</button>
-      <p id="settings-python-status" role="status">Not checked</p>
-      <dl id="settings-packages" class="status-details"></dl>
     </section>
     <section id="controls-view" role="tabpanel" aria-labelledby="controls-tab" tabindex="0" hidden>
       <h2>Keyboard and mouse controls</h2>

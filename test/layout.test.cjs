@@ -259,6 +259,41 @@ test("places graph ports beside their consumers and producers in both layout eng
   }
 });
 
+test("places initializer-only branches near their consumers without moving input-dependent operators", () => {
+  for (const count of [8, 600, 2100]) {
+    const nodes = Array.from({ length: count }, (_, index) =>
+      node(`node${index}`, index ? [`node${index - 1}`] : ["input"]),
+    );
+    nodes[2].inputs.push("shared");
+    nodes[count - 1].inputs.push("reshaped", "shared", "shape");
+    nodes[count - 1].captures = ["captured-weight"];
+    nodes.unshift(
+      node("reshaped", ["transposed"]),
+      node("transposed", ["weight"], {
+        parameters: [{ name: "weight" }],
+      }),
+      node("shared", ["shared-weight"], {
+        parameters: [{ name: "shared-weight" }],
+      }),
+      node("shape", [], { captures: ["input"] }),
+      node("captured-weight", ["captured-initializer"], {
+        parameters: [{ name: "captured-initializer" }],
+      }),
+      node("unused", ["unused-weight"]),
+    );
+    const result = layout(nodes, ["input"], [`node${count - 1}`]);
+    const at = (id) => result.positions.get(id);
+    assertContained(result, nodes);
+    assert.equal(at("transposed").y, at(`node${count - 3}`).y);
+    assert.equal(at("reshaped").y, at(`node${count - 2}`).y);
+    assert.equal(at("captured-weight").y, at(`node${count - 2}`).y);
+    assert.equal(at("shared").y, at("node1").y);
+    assert.equal(at("shape").y, at("node0").y);
+    assert.ok(at("unused").y < at("node0").y);
+    assertRouteAvoidsNodes(result, nodes, "shared", `node${count - 1}`, false);
+  }
+});
+
 test("shortens exterior routes through free interior corridors after placement", () => {
   for (const blocked of [false, true]) {
     const nodes = [node("source"), node("target", ["source"])];

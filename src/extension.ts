@@ -22,7 +22,11 @@ import {
   FusionOperation,
 } from "./graph";
 import { webviewHtml } from "./webview";
-import { applicationSettings, inspectPythonPackages } from "./settings";
+import {
+  applicationSettings,
+  inspectPythonPackages,
+  latestPackageVersions,
+} from "./settings";
 import {
   defaultExportDirectory,
   ExportHistory,
@@ -506,6 +510,7 @@ async function configurePanel(
   let statisticsRequest = 0;
   let tensorStatisticsRequest = 0;
   let promptController: AbortController | undefined;
+  let releaseController: AbortController | undefined;
   let promptResult: { owner: LoadedModel; result: PromptResult } | undefined;
   let memoryRequest = 0;
   let fusionRequest = 0;
@@ -614,11 +619,14 @@ async function configurePanel(
         pythonPath: process.platform === "win32" ? "python" : "python3",
       },
     );
-  const sendSettings = async () => {
+  const sendSettings = async (
+    type: "settings-info" | "status-info" = "settings-info",
+  ) => {
     const application = getApplicationSettings();
-    await mkdir(application.downloadDirectory, { recursive: true });
+    if (type === "settings-info")
+      await mkdir(application.downloadDirectory, { recursive: true });
     return postMessage({
-      type: "settings-info",
+      type,
       application,
       exportHistory: exportHistory.snapshot(),
       pathHistory: pathHistory.snapshot(),
@@ -804,8 +812,52 @@ async function configurePanel(
       if (!active) return;
       if (message?.type === "show-logs") {
         showLogs();
+      } else if (message?.type === "check-latest-versions") {
+        const controller = new AbortController();
+        const action = "Check latest package versions";
+        let entry: LogEntry | undefined;
+        try {
+          if (
+            typeof message.requestId !== "number" ||
+            !Number.isSafeInteger(message.requestId) ||
+            message.requestId <= 0
+          )
+            throw new Error("Invalid release lookup request.");
+          if (releaseController)
+            throw new Error("A package release lookup is already running.");
+          releaseController = controller;
+          entry = log.record("RUNNING", action);
+          const releases = await latestPackageVersions(controller.signal);
+          if (!active) return;
+          const errors = releases
+            .filter((release) => release.error !== undefined)
+            .map((release) => `${release.name}: ${release.error}`);
+          log.record(
+            errors.length ? "FAILED" : "SUCCEEDED",
+            action,
+            entry.id,
+            errors.join("\n"),
+          );
+          await postMessage({
+            type: "latest-versions-info",
+            requestId: message.requestId,
+            releases,
+          });
+        } catch (error) {
+          if (!active) return;
+          const detail = error instanceof Error ? error.message : String(error);
+          log.record("FAILED", action, entry?.id, detail);
+          await postMessage({
+            type: "latest-versions-error",
+            requestId: message.requestId,
+            error: detail,
+          });
+        } finally {
+          if (releaseController === controller) releaseController = undefined;
+        }
       } else if (
         message?.type === "get-settings" ||
+        message?.type === "get-status-info" ||
         message?.type === "application-settings" ||
         message?.type === "export-history-edit" ||
         message?.type === "reset-viewer-settings" ||
@@ -862,7 +914,11 @@ async function configurePanel(
               inspectingPackages = false;
             }
           } else if (message.type !== "export-history-edit")
-            await sendSettings();
+            await sendSettings(
+              message.type === "get-status-info"
+                ? "status-info"
+                : "settings-info",
+            );
         } catch (error) {
           const detail = error instanceof Error ? error.message : String(error);
           log.record("FAILED", `Settings: ${detail}`);
@@ -3179,6 +3235,7 @@ async function configurePanel(
   );
   const dispose = () => {
     active = false;
+    releaseController?.abort();
     promptController?.abort();
     void promptSession
       .close()
