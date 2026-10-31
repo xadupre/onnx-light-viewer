@@ -451,6 +451,54 @@ test("appends tokens and updates decode mean before completion without replacing
   assert.doesNotMatch(table.textContent, /stale/);
 });
 
+test("section headings stay aligned across the 1000-column boundary", (t) => {
+  const { dom, byId, api, messages } = panel(t);
+  const tokens = Array.from({ length: 1000 }, (_, index) => ({
+    text: ` token${index}`,
+    id: index,
+    score: 1,
+    timeMs: 1,
+  }));
+  api.handleMessage({
+    type: "prompt-result",
+    requestId: messages.at(-1).requestId,
+    result: { prompt: "Hello", engine: "onnx-light", tokens },
+  });
+  const renderedTable = byId("prompt-results").querySelector("table");
+  const renderedHeading = renderedTable.querySelector(".prompt-token-section");
+  assert.deepEqual(
+    [...renderedHeading.cells].map((cell) => cell.colSpan),
+    [1000, 1],
+  );
+  for (const row of renderedTable.querySelectorAll(
+    "tr:not(.prompt-token-section)",
+  ))
+    assert.equal(row.cells.length, tokens.length + 1);
+
+  byId("prompt-form").dispatchEvent(new dom.window.Event("submit"));
+  const requestId = messages.at(-1).requestId;
+  const streamingTable = byId("prompt-results").querySelector("table");
+  for (let index = 0; index <= 1000; index++)
+    api.handleMessage({
+      type: "prompt-token",
+      requestId,
+      index,
+      token: tokens[index % tokens.length],
+    });
+  const streamingHeading = streamingTable.querySelector(
+    ".prompt-token-section",
+  );
+  assert.deepEqual(
+    [...streamingHeading.cells].map((cell) => cell.colSpan),
+    [1000, 2],
+  );
+  assert.equal(streamingHeading.cells[0].textContent, "ONNX · onnx-light");
+  for (const row of streamingTable.querySelectorAll(
+    "tr:not(.prompt-token-section)",
+  ))
+    assert.equal(row.cells.length, 1002);
+});
+
 test("engine settings pages retain independent controls, including parallel loading", (t) => {
   const { dom, byId, api, messages } = panel(t);
   const field = (page, name) =>

@@ -172,6 +172,23 @@ function createPromptPanel({ byId, postMessage }) {
       missingDecode,
     );
   };
+  const updateSectionHeading = (row, label, columnCount) => {
+    row.replaceChildren();
+    let remaining = columnCount;
+    const heading = document.createElement("th");
+    heading.colSpan = Math.min(remaining, 1000);
+    heading.scope = "rowgroup";
+    heading.textContent = label;
+    row.append(heading);
+    remaining -= heading.colSpan;
+    while (remaining > 0) {
+      const cell = document.createElement("td");
+      cell.colSpan = Math.min(remaining, 1000);
+      cell.setAttribute("aria-hidden", "true");
+      row.append(cell);
+      remaining -= cell.colSpan;
+    }
+  };
   const render = () => {
     liveRows = [];
     prefill = undefined;
@@ -188,12 +205,8 @@ function createPromptPanel({ byId, postMessage }) {
     const section = (label) => {
       group = document.createElement("tbody");
       const tr = document.createElement("tr");
-      const th = document.createElement("th");
-      th.colSpan = columnCount + 1;
-      th.scope = "rowgroup";
-      th.textContent = label;
       tr.className = "prompt-token-section";
-      tr.append(th);
+      updateSectionHeading(tr, label, columnCount + 1);
       group.append(tr);
       table.append(group);
     };
@@ -428,8 +441,12 @@ function createPromptPanel({ byId, postMessage }) {
         if (!busy || !streaming || message.index !== result.tokens.length)
           return true;
         result.tokens.push(message.token);
-        content.querySelector(".prompt-token-section th").colSpan =
-          result.tokens.length + 1;
+        const section = content.querySelector(".prompt-token-section");
+        updateSectionHeading(
+          section,
+          section.cells[0].textContent,
+          result.tokens.length + 1,
+        );
         for (const { row, value } of liveRows) {
           const cell = document.createElement("td");
           cell.textContent = String(value(message.token, message.index));
