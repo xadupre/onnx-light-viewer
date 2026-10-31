@@ -18,7 +18,36 @@ function createSettingsPanel({
   let pathHistory = { open: [], save: [] };
   let exportHistory = { models: [], directories: [] };
 
-  const categories = ["app", "history"];
+  const sessionPage = byId("prompt-session-page");
+  byId("settings-engine-view").append(sessionPage);
+  sessionPage.hidden = false;
+  const engines = ["onnxruntime", "pytorch", "onnx-light"];
+  const engineViews = {
+    onnxruntime: "prompt-settings-genai",
+    pytorch: "settings-pytorch-view",
+    "onnx-light": "prompt-settings-light",
+  };
+  function selectEngine(selected) {
+    for (const engine of engines) {
+      const active = engine === selected;
+      const tab = byId(`settings-${engine}-tab`);
+      const view = byId(engineViews[engine]);
+      tab.setAttribute("aria-selected", String(active));
+      tab.tabIndex = active ? 0 : -1;
+      view.setAttribute("role", "tabpanel");
+      view.setAttribute("aria-labelledby", tab.id);
+      view.tabIndex = 0;
+      view.hidden = !active;
+    }
+    sessionPage.hidden = selected === "pytorch";
+    byId("prompt-settings-title").textContent =
+      selected === "onnx-light"
+        ? "onnx-light session settings"
+        : "ONNX Runtime GenAI session settings";
+  }
+  selectEngine("onnxruntime");
+
+  const categories = ["app", "history", "engine"];
   function selectCategory(selected) {
     for (const category of categories) {
       const active = category === selected;
@@ -28,23 +57,27 @@ function createSettingsPanel({
       byId(`settings-${category}-view`).hidden = !active;
     }
   }
-  for (const category of categories) {
-    const tab = byId(`settings-${category}-tab`);
-    tab.addEventListener("click", () => selectCategory(category));
-    tab.addEventListener("keydown", (event) => {
-      let index = categories.indexOf(category);
-      if (event.key === "Home") index = 0;
-      else if (event.key === "End") index = categories.length - 1;
-      else if (event.key === "ArrowLeft")
-        index = (index + categories.length - 1) % categories.length;
-      else if (event.key === "ArrowRight")
-        index = (index + 1) % categories.length;
-      else return;
-      event.preventDefault();
-      selectCategory(categories[index]);
-      byId(`settings-${categories[index]}-tab`).focus();
-    });
-  }
+  for (const [names, select] of [
+    [categories, selectCategory],
+    [engines, selectEngine],
+  ])
+    for (const name of names) {
+      const tab = byId(`settings-${name}-tab`);
+      tab.addEventListener("click", () => select(name));
+      tab.addEventListener("keydown", (event) => {
+        let index = names.indexOf(name);
+        if (event.key === "Home") index = 0;
+        else if (event.key === "End") index = names.length - 1;
+        else if (event.key === "ArrowLeft")
+          index = (index + names.length - 1) % names.length;
+        else if (event.key === "ArrowRight") index = (index + 1) % names.length;
+        else return;
+        event.preventDefault();
+        event.stopPropagation();
+        select(names[index]);
+        byId(`settings-${names[index]}-tab`).focus();
+      });
+    }
 
   function sanitizeReleaseUrl(url) {
     if (typeof url !== "string" || !url) return undefined;

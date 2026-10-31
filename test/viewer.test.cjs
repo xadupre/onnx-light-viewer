@@ -7658,7 +7658,7 @@ test("Settings categories support mouse and keyboard navigation without changing
   const messageCount = messages.length;
   const eventCount = events.length;
   const assertCategory = (selected) => {
-    for (const category of ["app", "history"]) {
+    for (const category of ["app", "history", "engine"]) {
       const active = category === selected;
       const tab = byId(`settings-${category}-tab`);
       const panel = byId(`settings-${category}-view`);
@@ -7682,15 +7682,14 @@ test("Settings categories support mouse and keyboard navigation without changing
   );
   byId("settings-history-tab").click();
   assertCategory("history");
-  for (const [key, category] of [
-    ["ArrowRight", "app"],
-    ["ArrowLeft", "history"],
-    ["Home", "app"],
-    ["End", "history"],
+  for (const [from, key, category] of [
+    ["history", "ArrowRight", "engine"],
+    ["engine", "ArrowRight", "app"],
+    ["app", "ArrowLeft", "engine"],
+    ["engine", "Home", "app"],
+    ["app", "End", "engine"],
   ]) {
-    byId(
-      `settings-${key === "ArrowRight" || key === "Home" ? "history" : "app"}-tab`,
-    ).dispatchEvent(
+    byId(`settings-${from}-tab`).dispatchEvent(
       new window.KeyboardEvent("keydown", {
         key,
         bubbles: true,
@@ -7700,6 +7699,7 @@ test("Settings categories support mouse and keyboard navigation without changing
     assertCategory(category);
     assert.equal(document.activeElement.id, `settings-${category}-tab`);
   }
+  byId("settings-history-tab").click();
   byId("settings-history-tab").dispatchEvent(
     new window.KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
   );
@@ -7714,6 +7714,125 @@ test("Settings categories support mouse and keyboard navigation without changing
   assert.equal(byId("settings-python").value, "/unsaved/python");
   assert.equal(byId("graph").getAttribute("viewBox"), camera);
   assert.equal(byId("nodes").innerHTML, graph);
+});
+
+test("Engine settings subtabs reuse prompt controls without changing the execution engine", (t) => {
+  const { document, window, messages } = openViewer(t);
+  const byId = (id) => document.getElementById(id);
+  const views = {
+    onnxruntime: "prompt-settings-genai",
+    pytorch: "settings-pytorch-view",
+    "onnx-light": "prompt-settings-light",
+  };
+  byId("settings-tab").click();
+  byId("settings-engine-tab").click();
+  assert.equal(byId("settings-engine-view").parentElement.id, "settings-view");
+  assert.ok(
+    byId("settings-engine-view").contains(byId("prompt-session-fields")),
+  );
+  const executionEngine = byId("prompt-engine").value;
+  const assertEngine = (selected) => {
+    for (const [engine, id] of Object.entries(views)) {
+      const tab = byId(`settings-${engine}-tab`);
+      const view = byId(id);
+      const active = selected === engine;
+      assert.equal(tab.getAttribute("aria-selected"), String(active));
+      assert.equal(tab.tabIndex, active ? 0 : -1);
+      assert.equal(tab.getAttribute("aria-controls"), view.id);
+      assert.equal(view.getAttribute("aria-labelledby"), tab.id);
+      assert.equal(view.getAttribute("role"), "tabpanel");
+      assert.equal(view.hidden, !active);
+    }
+    assert.equal(byId("settings-engine-view").hidden, false);
+    assert.equal(byId("prompt-engine").value, executionEngine);
+  };
+  assertEngine("onnxruntime");
+  const threads = byId("prompt-settings-genai").querySelector(
+    '[data-setting="intraOpThreads"]',
+  );
+  threads.value = "4";
+  const count = messages.length;
+  byId("settings-pytorch-tab").click();
+  assertEngine("pytorch");
+  assert.match(byId("settings-pytorch-view").textContent, /validation/);
+  assert.match(byId("settings-pytorch-view").textContent, /CPU/);
+  assert.equal(byId("prompt-session-page").hidden, true);
+  for (const [from, key, selected] of [
+    ["pytorch", "ArrowRight", "onnx-light"],
+    ["onnx-light", "ArrowRight", "onnxruntime"],
+    ["onnxruntime", "ArrowLeft", "onnx-light"],
+    ["onnx-light", "Home", "onnxruntime"],
+    ["onnxruntime", "End", "onnx-light"],
+  ]) {
+    byId(`settings-${from}-tab`).dispatchEvent(
+      new window.KeyboardEvent("keydown", {
+        key,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    assertEngine(selected);
+    assert.equal(document.activeElement.id, `settings-${selected}-tab`);
+  }
+  assert.equal(messages.length, count);
+  byId("settings-onnxruntime-tab").click();
+  assert.equal(threads.value, "4");
+  byId("model-tab").click();
+  byId("settings-tab").click();
+  assertEngine("onnxruntime");
+  byId("prompt-settings-back").click();
+  assert.equal(byId("prompt-view").hidden, false);
+  assert.equal(byId("prompt-run-page").hidden, false);
+  byId("prompt-settings-open").click();
+  assert.equal(byId("settings-view").hidden, false);
+  assertEngine(executionEngine === "onnx-light" ? "onnx-light" : "onnxruntime");
+});
+
+test("Prompt applies Engine settings and opens the correct subtab for invalid values", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const byId = (id) => document.getElementById(id);
+  load(demoGraph);
+  byId("prompt-tab").click();
+  const request = messages.findLast(({ type }) => type === "prompt-info");
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: {
+        type: "prompt-info",
+        requestId: request.requestId,
+        info: { available: true, engines: ["onnx-light", "onnxruntime-genai"] },
+      },
+    }),
+  );
+  byId("prompt-engine").value = "onnx-light";
+  byId("prompt-engine").dispatchEvent(new window.Event("change"));
+  byId("prompt-settings-open").click();
+  const threads = byId("prompt-settings-light").querySelector(
+    '[data-setting="threads"]',
+  );
+  threads.value = "-1";
+  byId("prompt-settings-back").click();
+  byId("prompt-form").dispatchEvent(new window.Event("submit"));
+  assert.equal(
+    messages.some(({ type }) => type === "run-prompt"),
+    false,
+  );
+  assert.equal(byId("settings-view").hidden, false);
+  assert.equal(byId("settings-engine-view").hidden, false);
+  assert.equal(
+    byId("settings-onnx-light-tab").getAttribute("aria-selected"),
+    "true",
+  );
+  threads.value = "3";
+  threads.dispatchEvent(new window.Event("change", { bubbles: true }));
+  assert.equal(messages.at(-1).type, "prompt-release");
+  byId("prompt-settings-back").click();
+  byId("prompt-form").dispatchEvent(new window.Event("submit"));
+  const run = messages.at(-1);
+  assert.equal(run.type, "run-prompt");
+  assert.equal(run.options.engine, "onnx-light");
+  assert.equal(run.options.sessionSettings.threads, 3);
+  assert.equal(run.options.sessionSettings.intraOpThreads, undefined);
+  assert.equal(byId("prompt-session-fields").disabled, true);
 });
 
 test("Settings exposes histories, removes selected entries, clears categories and resets viewer preferences", (t) => {

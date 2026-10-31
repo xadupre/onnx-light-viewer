@@ -682,6 +682,7 @@ export function webviewHtml(
       <nav class="settings-tabs" role="tablist" aria-label="Settings categories">
         <button id="settings-app-tab" type="button" role="tab" aria-controls="settings-app-view" aria-selected="true">App</button>
         <button id="settings-history-tab" type="button" role="tab" aria-controls="settings-history-view" aria-selected="false" tabindex="-1">History</button>
+        <button id="settings-engine-tab" type="button" role="tab" aria-controls="settings-engine-view" aria-selected="false" tabindex="-1">Engine</button>
       </nav>
       <section id="settings-app-view" role="tabpanel" aria-labelledby="settings-app-tab" tabindex="0">
         <h3>Application paths</h3>
@@ -728,6 +729,23 @@ export function webviewHtml(
           <ul id="settings-export-history" aria-label="Conversion history"></ul>
           <p id="settings-history-feedback" role="status"></p>
         </section>
+      </section>
+        <section id="settings-engine-view" role="tabpanel" aria-labelledby="settings-engine-tab" tabindex="0" hidden>
+          <nav class="settings-tabs" role="tablist" aria-label="Engine settings">
+            <button id="settings-onnxruntime-tab" type="button" role="tab" aria-controls="prompt-settings-genai" aria-selected="true">onnxruntime</button>
+            <button id="settings-pytorch-tab" type="button" role="tab" aria-controls="settings-pytorch-view" aria-selected="false" tabindex="-1">pytorch</button>
+            <button id="settings-onnx-light-tab" type="button" role="tab" aria-controls="prompt-settings-light" aria-selected="false" tabindex="-1">onnx-light</button>
+          </nav>
+          <section id="settings-pytorch-view" role="tabpanel" aria-labelledby="settings-pytorch-tab" tabindex="0" hidden>
+            <h3>PyTorch / Hugging Face reference</h3>
+            <p>PyTorch is used only for validation, not as a standalone prompt engine. No configurable PyTorch session options are currently exposed. Select the reference model ID or local checkpoint and enable validation on Prompt.</p>
+            <dl class="status-details">
+              <dt>Device</dt><dd>CPU</dd>
+              <dt>Model mode</dt><dd>Evaluation with torch.inference_mode()</dd>
+              <dt>Model loading</dt><dd>Local files only; remote code disabled</dd>
+              <dt>Decode cache</dt><dd>Enabled</dd>
+            </dl>
+          </section>
       </section>
     </section>
     <section id="controls-view" role="tabpanel" aria-labelledby="controls-tab" tabindex="0" hidden>
