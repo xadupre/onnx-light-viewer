@@ -51,6 +51,7 @@ for (const initialTab of ["model", "logs"]) {
           "status-tab",
           "controls-tab",
           "repositories-tab",
+          "patterns-tab",
           "settings-tab",
         ],
       ],
