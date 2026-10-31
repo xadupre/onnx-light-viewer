@@ -17,9 +17,18 @@ Hover over the curve to inspect memory **before**, **during** or **after** a nod
 The readout shows exact bytes, scratch, tensor shapes and SDK allocation buckets:
 weights (initializers), inputs, live intermediates and newly allocated outputs,
 split by tensor tag. In-place outputs do not allocate another buffer.
+After estimating memory for the displayed graph, **Model** shows these reuse
+pairs as faint yellow input-to-output lines behind the operator contents.
+Changing dimensions, stage or model clears these links until a fresh estimate.
 Symbolic expressions retain named dimensions; unnamed dimensions use the values
 entered above. Symbolic tensor totals exclude scratch and may choose different
 in-place reuse than the concrete estimate.
+
+.. figure:: ../_static/feature-inplace-links.png
+   :alt: Reshape operator with a faint yellow input-to-output reuse line behind its contents and the histogram button before the node index.
+   :width: 240px
+
+   Follow the SDK's reported reuse pair without obscuring operator text.
 
 Use **+** / **−** or **Ctrl+wheel** to zoom, then scroll horizontally.
 More node graduations and operator types appear as space becomes available.

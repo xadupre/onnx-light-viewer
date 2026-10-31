@@ -1,4 +1,10 @@
-function createMemoryPanel({ byId, postMessage, formatFileSize, selectNode }) {
+function createMemoryPanel({
+  byId,
+  postMessage,
+  formatFileSize,
+  selectNode,
+  onProfile,
+}) {
   let hasModel = false;
   let requestId = 0;
   let path;
@@ -18,6 +24,11 @@ function createMemoryPanel({ byId, postMessage, formatFileSize, selectNode }) {
   const scroll = byId("memory-chart-scroll");
   const inspection = byId("memory-inspection");
 
+  function clearProfile() {
+    profile = undefined;
+    onProfile?.();
+  }
+
   function busy(pending) {
     view.setAttribute("aria-busy", String(pending));
     byId("memory-run").disabled = pending || !configured;
@@ -27,6 +38,7 @@ function createMemoryPanel({ byId, postMessage, formatFileSize, selectNode }) {
   }
 
   function open() {
+    clearProfile();
     results.hidden = true;
     inspection.hidden = true;
     configured = false;
@@ -437,6 +449,7 @@ function createMemoryPanel({ byId, postMessage, formatFileSize, selectNode }) {
     results.hidden = true;
     inspection.hidden = true;
     status.textContent = "Estimating memory without executing the model…";
+    clearProfile();
     busy(true);
     postMessage({
       type: "memory-profile",
@@ -446,6 +459,7 @@ function createMemoryPanel({ byId, postMessage, formatFileSize, selectNode }) {
     });
   });
   fields.addEventListener("input", () => {
+    clearProfile();
     results.hidden = true;
     status.textContent =
       "Dimensions changed. Estimate again to update the profile.";
@@ -490,6 +504,7 @@ function createMemoryPanel({ byId, postMessage, formatFileSize, selectNode }) {
       byId("memory-stage-field").hidden = message.stages.length === 0;
     }
     if (message.type === "memory-error") {
+      clearProfile();
       status.textContent = `Memory estimate unavailable: ${message.error}`;
       results.hidden = true;
     } else if (message.type === "memory-inputs") {
@@ -522,6 +537,7 @@ function createMemoryPanel({ byId, postMessage, formatFileSize, selectNode }) {
         "Set dynamic dimensions, then choose Estimate memory.";
     } else {
       profile = message.profile;
+      onProfile?.(profile, path);
       zoom = 1;
       inspectedIndex = 0;
       results.hidden = false;
@@ -568,7 +584,7 @@ function createMemoryPanel({ byId, postMessage, formatFileSize, selectNode }) {
     setGraph(graph) {
       hasModel = true;
       configured = false;
-      profile = undefined;
+      clearProfile();
       path = graph.pipeline
         ? graph.breadcrumbs?.[1]?.path?.slice(0, 1)
         : undefined;

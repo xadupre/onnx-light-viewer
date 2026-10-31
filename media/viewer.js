@@ -1,7 +1,7 @@
 /* global acquireVsCodeApi, createSidebar, createFilePanels, createInspector,
           createMetadataPanel, createFusionPanel, createSettingsPanel, createExportPanel,
           createMemoryPanel, createTensorListPanel, createTensorStatisticsPanel, sugiyamaLayout, graphPathSegments,
-          flattenGraphPath, graphPointDistance, graphPortOffset */
+          flattenGraphPath, graphPointDistance, graphPortOffset, graphSpatialIndex */
 const vscode = acquireVsCodeApi();
 const svgNS = "http://www.w3.org/2000/svg";
 const byId = (id) => document.getElementById(id);
@@ -40,6 +40,7 @@ let valueMetadata = new Map();
 let connectionsByName = new Map();
 let releasedValues = new Set();
 let unusedLabels = [];
+let inPlaceDecisions = new Map();
 let hasModel = false;
 let fusionUndoCount = 0;
 let displayedGraph;
@@ -141,6 +142,7 @@ const memoryPanel = createMemoryPanel({
   byId,
   postMessage: (message) => vscode.postMessage(message),
   formatFileSize,
+  onProfile: updateInPlaceProfile,
   selectNode: (path, index) => {
     if (replacementPending || svg.getAttribute("aria-busy") === "true") return;
     showTab("model", true);
@@ -937,7 +939,8 @@ function countUpdates(previous, current, key) {
   ).length;
 }
 
-function updateTensorInformation(tensors) {
+function updateTensorInformation(tensors, preserveView = true) {
+  const previousCamera = preserveView ? camera : undefined;
   const updates = countUpdates(
     [...tensorInformation.values()],
     tensors,
@@ -946,6 +949,29 @@ function updateTensorInformation(tensors) {
   tensorInformation = new Map(tensors.map((tensor) => [tensor.name, tensor]));
   tensorListPanel.updateTypes(tensors);
   for (const entry of tensorLabels) updateTensorLabel(entry);
+  for (const connection of connections)
+    if (connection.title)
+      connection.title.textContent = `${connection.name}: ${tensorDescription(connection.name)}`;
+  arrangeConnectionLabels();
+  reframe();
+  if (previousCamera) {
+    zoom = Math.max(
+      bounds.width / previousCamera.width,
+      bounds.height / previousCamera.height,
+    );
+    pan = {
+      x:
+        previousCamera.x +
+        previousCamera.width / 2 -
+        bounds.x -
+        bounds.width / 2,
+      y:
+        previousCamera.y +
+        previousCamera.height / 2 -
+        bounds.y -
+        bounds.height / 2,
+    };
+  }
   return updates;
 }
 
@@ -956,7 +982,7 @@ function refreshPositions() {
     positions.set(id, { ...view.initial });
   }
   moveNodes(positions, 0, 0);
-  bounds = { ...layoutBounds };
+  reframe();
   zoom = 1;
   pan = { x: 0, y: 0 };
   fit();
@@ -1132,6 +1158,54 @@ function addUnusedLabel(view, unusedOutputs = []) {
   unusedLabels.push(text);
 }
 
+function updateInPlaceProfile(profile, path) {
+  inPlaceDecisions = new Map();
+  if (
+    profile &&
+    JSON.stringify(path ?? []) ===
+      JSON.stringify(displayedGraph?.breadcrumbs?.at(-1)?.path ?? [])
+  )
+    for (const event of profile.events)
+      inPlaceDecisions.set(
+        `node-${event.index}`,
+        (event.decisions ?? []).filter(({ action }) => action === "inplace"),
+      );
+  for (const view of nodeViews.values()) addInPlaceLinks(view);
+}
+
+function addInPlaceLinks(view) {
+  if (!view.group || !view.node) return;
+  view.group.querySelector(".node-inplace-links")?.remove();
+  const decisions = inPlaceDecisions.get(view.id);
+  if (!decisions?.length) return;
+  const { node, initial, halfWidth, halfHeight, group } = view;
+  const links = element("g", {
+    class: "node-inplace-links",
+    "aria-hidden": "true",
+  });
+  for (const { input, output } of decisions) {
+    const inputIndex = node.inputs.indexOf(input);
+    const outputIndex = node.outputs.indexOf(output);
+    if (!input || !output || inputIndex < 0 || outputIndex < 0) continue;
+    const x =
+      initial.x +
+      graphPortOffset(
+        halfWidth * 2,
+        inputIndex,
+        node.inputs.length + (node.captures?.length ?? 0),
+      );
+    const outputX =
+      initial.x +
+      graphPortOffset(halfWidth * 2, outputIndex, node.outputs.length);
+    links.append(
+      element("path", {
+        d: `M${x},${initial.y - halfHeight} C${x},${initial.y} ${outputX},${initial.y} ${outputX},${initial.y + halfHeight}`,
+      }),
+    );
+  }
+  group.insertBefore(links, group.querySelector("rect").nextSibling);
+}
+
 function setMetadataVisible(visible) {
   metadataVisible = visible;
   for (const label of unusedLabels)
@@ -1261,6 +1335,7 @@ function mountNode(view) {
     }
   });
   addUnusedLabel(view, nodeMetadata.get(id)?.unusedOutputs);
+  addInPlaceLinks(view);
 }
 
 function selectNode(id, additive) {
@@ -1590,10 +1665,10 @@ function moveGesture(event) {
 }
 
 function reframe() {
-  let x = 0;
-  let y = 0;
-  let right = layoutBounds.width;
-  let bottom = layoutBounds.height;
+  let x = layoutBounds.x;
+  let y = layoutBounds.y;
+  let right = layoutBounds.x + layoutBounds.width;
+  let bottom = layoutBounds.y + layoutBounds.height;
   for (const { position, halfWidth, halfHeight } of nodeViews.values()) {
     x = Math.min(x, position.x - halfWidth - 20);
     y = Math.min(y, position.y - halfHeight - 20);
@@ -1601,6 +1676,13 @@ function reframe() {
     bottom = Math.max(bottom, position.y + halfHeight + 20);
   }
   for (const connection of connections) {
+    if (connection.labelWidth !== undefined) {
+      const point = connectionLabelPosition(connection);
+      x = Math.min(x, point.x);
+      y = Math.min(y, point.y - 20);
+      right = Math.max(right, point.x + connection.labelWidth + 20);
+      bottom = Math.max(bottom, point.y + 28);
+    }
     if (!connection.route) continue;
     for (const point of connectionPoints(connection)) {
       x = Math.min(x, point.x - 20);
@@ -1704,7 +1786,7 @@ function connectionLabelPosition(connection) {
       points[i].x - points[i - 1].x,
       points[i].y - points[i - 1].y,
     );
-  let remaining = length / 2;
+  let remaining = length * (connection.labelFraction ?? 0.5);
   for (let i = 1; i < points.length; i++) {
     const start = points[i - 1],
       end = points[i];
@@ -1712,13 +1794,83 @@ function connectionLabelPosition(connection) {
     if (remaining <= segment && segment) {
       const fraction = remaining / segment;
       return {
-        x: start.x + (end.x - start.x) * fraction,
+        x:
+          start.x +
+          (end.x - start.x) * fraction +
+          (connection.labelOffset ?? 0),
         y: start.y + (end.y - start.y) * fraction,
       };
     }
     remaining -= segment;
   }
   return points[0];
+}
+
+function arrangeConnectionLabels() {
+  const context = document.createElement("canvas").getContext("2d");
+  context.font = `10px ${getComputedStyle(svg).fontFamily}`;
+  const labelBounds = (connection) => {
+    const { x, y } = connectionLabelPosition(connection);
+    return {
+      left: x + 8,
+      top: y - 12,
+      right: x + 12 + connection.labelWidth,
+      bottom: y + 18,
+    };
+  };
+  const entries = connections.map((connection) => {
+    connection.labelFraction = 0.5;
+    connection.labelOffset = 0;
+    connection.labelWidth = Math.max(
+      context.measureText(shortName(connection.name, 36)).width,
+      context.measureText(shortName(tensorDescription(connection.name), 68))
+        .width,
+    );
+    return { connection, bounds: labelBounds(connection), placed: false };
+  });
+  const labels = graphSpatialIndex(entries);
+  const nodes = graphSpatialIndex(
+    [...nodeViews.values()].map(({ position, halfWidth, halfHeight }) => ({
+      bounds: {
+        left: position.x - halfWidth,
+        top: position.y - halfHeight,
+        right: position.x + halfWidth,
+        bottom: position.y + halfHeight,
+      },
+    })),
+  );
+  for (const entry of entries) {
+    const { connection } = entry;
+    const budget = { remaining: 256 };
+    let placed = false;
+    for (const fraction of [0.5, 0.25, 0.75, 0.125, 0.875]) {
+      if (budget.remaining <= 0) break;
+      for (const offset of [0, -connection.labelWidth - 20]) {
+        if (budget.remaining <= 0) break;
+        connection.labelFraction = fraction;
+        connection.labelOffset = offset;
+        const bounds = labelBounds(connection);
+        if (
+          labels.find(bounds, (other) => other.placed, budget) ||
+          nodes.find(bounds, () => true, budget)
+        )
+          continue;
+        entry.bounds = bounds;
+        placed = true;
+        break;
+      }
+      if (placed) break;
+    }
+    if (!placed) {
+      connection.labelFraction = 0.5;
+      connection.labelOffset = 0;
+    }
+    entry.placed = true;
+    labels.update(entry);
+    updateConnection(connection);
+    if (camera) updateConnectionVisibility(connection);
+  }
+  if (camera && virtualized) drawCrossingConnections();
 }
 
 function connectionPath(connection) {
@@ -2115,7 +2267,12 @@ function render(graph, metadata) {
         });
         const hit = element("path", { class: "edge-hit" });
         const path = element("path", { class: "edge" });
-        group.append(hit, path);
+        const title = element(
+          "title",
+          {},
+          `${name}: ${tensorDescription(name)}`,
+        );
+        group.append(title, hit, path);
         group.addEventListener("pointerdown", (event) => {
           if (
             event.button !== 0 ||
@@ -2144,10 +2301,11 @@ function render(graph, metadata) {
           group,
           0,
           0,
-          shortName(name, 15),
+          shortName(name, 36),
           "tensor-label",
           "start",
         );
+        text.setAttribute("aria-label", name);
         const information = tensorLabel(group, 0, 0, name, 68, "start");
         Object.assign(connection, {
           group,
@@ -2157,6 +2315,7 @@ function render(graph, metadata) {
           toHeight,
           path,
           hit,
+          title,
           text,
           information,
         });
@@ -2237,7 +2396,7 @@ function render(graph, metadata) {
       if (size.indexLabel) {
         const index = label(
           group,
-          position.x - size.width / 2 + 8,
+          position.x - size.width / 2 + 8 + (storedInputs.length ? 26 : 0),
           top + 14,
           size.indexLabel,
           "operator-index",
@@ -2255,11 +2414,7 @@ function render(graph, metadata) {
           tabindex: "0",
           "aria-label": `Inspect stored tensors for ${node.opType}: ${node.name}`,
         });
-        const x =
-          position.x -
-          size.width / 2 +
-          8 +
-          (size.indexLabel ? size.indexWidth + 6 : 0);
+        const x = position.x - size.width / 2 + 8;
         const y = top + 3;
         link.append(
           element("title", {}, "Browse tensors and weight statistics"),
@@ -2399,7 +2554,7 @@ function render(graph, metadata) {
   zoom = 1;
   pan = { x: 0, y: 0 };
   if (graph.nodes.length) selected.add(graph.nodes[0].id);
-  updateTensorInformation(graph.tensors ?? []);
+  updateTensorInformation(graph.tensors ?? [], false);
   updateSelection(undefined, true);
   if (virtualized) readableZoom();
   else fit();

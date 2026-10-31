@@ -119,6 +119,15 @@ a short, unlabeled line below the rectangle.
 
    Tensor slots determine connection points, even when connections cross.
 
+Carried-result names are longer, with complete hover information. Nearby edge
+labels stagger when space permits.
+
+.. figure:: _static/feature-edge-labels.png
+   :alt: Longer carried-result names with staggered labels around repeated input ports.
+   :width: 480px
+
+   Read edge labels without lining them all up on the same horizontal line.
+
 .. figure:: _static/feature-navigation.png
    :alt: Selected Reshape node at readable zoom with graph navigation controls.
    :width: 100%
@@ -384,6 +393,13 @@ Set dynamic dimensions and view the estimated CPU memory curve with paginated
 per-node allocation/scratch events. Zoom for more operator labels and hover for
 numerical and symbolic allocation details. See :doc:`features/memory_profiling`.
 Native estimation, not model execution or measured RAM/GPU usage.
+The matching Model graph shows reported in-place reuse as background port links.
+
+.. figure:: _static/feature-inplace-links.png
+   :alt: Reshape operator showing its in-place input-to-output reuse line behind the text.
+   :width: 240px
+
+   Trace in-place reuse inside an operator after estimating memory.
 
 .. figure:: _static/feature-memory.png
    :alt: Memory tab with zoom controls, CPU peak curve, and numerical and symbolic tensor allocation inspection.
