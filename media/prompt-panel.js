@@ -415,7 +415,6 @@ function createPromptPanel({ byId, postMessage }) {
         engine.value = message.info.engines.includes("onnxruntime-genai")
           ? "onnxruntime-genai"
           : (message.info.engines[0] ?? "onnx-light");
-        showSettingsEngine();
         const light = byId("prompt-settings-light");
         const sdkLoader =
           light.querySelector('[data-setting="sdkLoader"]').value === "true";

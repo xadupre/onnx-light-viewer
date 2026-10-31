@@ -7788,6 +7788,59 @@ test("Engine settings subtabs reuse prompt controls without changing the executi
   assertEngine(executionEngine === "onnx-light" ? "onnx-light" : "onnxruntime");
 });
 
+test("async Prompt discovery preserves the user's selected Settings engine subtab", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const byId = (id) => document.getElementById(id);
+  load(demoGraph);
+  byId("prompt-tab").click();
+  const request = messages.findLast(({ type }) => type === "prompt-info");
+  byId("settings-tab").click();
+  byId("settings-engine-tab").click();
+  const views = {
+    onnxruntime: "prompt-settings-genai",
+    pytorch: "settings-pytorch-view",
+    "onnx-light": "prompt-settings-light",
+  };
+  for (const selected of ["pytorch", "onnx-light", "onnxruntime"]) {
+    byId(`settings-${selected}-tab`).click();
+    const engines =
+      selected === "onnxruntime"
+        ? ["onnx-light"]
+        : ["onnx-light", "onnxruntime-genai"];
+    window.dispatchEvent(
+      new window.MessageEvent("message", {
+        data: {
+          type: "prompt-info",
+          requestId: request.requestId,
+          info: { available: true, engines },
+        },
+      }),
+    );
+    assert.equal(
+      byId("prompt-engine").value,
+      engines.includes("onnxruntime-genai")
+        ? "onnxruntime-genai"
+        : "onnx-light",
+    );
+    assert.equal(byId("settings-view").hidden, false);
+    assert.equal(byId("settings-engine-view").hidden, false);
+    assert.equal(byId("prompt-session-page").hidden, selected === "pytorch");
+    for (const [engine, view] of Object.entries(views)) {
+      assert.equal(
+        byId(`settings-${engine}-tab`).getAttribute("aria-selected"),
+        String(engine === selected),
+      );
+      assert.equal(byId(view).hidden, engine !== selected);
+    }
+  }
+  byId("prompt-settings-open").click();
+  assert.equal(
+    byId("settings-onnx-light-tab").getAttribute("aria-selected"),
+    "true",
+  );
+  assert.equal(byId("prompt-settings-light").hidden, false);
+});
+
 test("Prompt applies Engine settings and opens the correct subtab for invalid values", (t) => {
   const { document, window, messages, load } = openViewer(t);
   const byId = (id) => document.getElementById(id);
