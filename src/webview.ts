@@ -549,14 +549,13 @@ export function webviewHtml(
       <p>Run a converted causal language model with native C++ engines. Both engines display tokens as they arrive, with prefill and decode timings and raw scores. Python in Settings can locate native SDK libraries and is used for Hugging Face validation; inference runs in C++. The saved model on disk is used, not unsaved graph edits.</p>
       <div id="prompt-run-page">
       <button id="prompt-settings-open" type="button">Session settings</button>
+      <button id="prompt-generation-open" type="button">Generation settings</button>
       <form id="prompt-form">
         <fieldset id="prompt-fields" class="form-grid" disabled>
           <label for="prompt-engine">Engine</label>
           <select id="prompt-engine"><option value="onnx-light">onnx-light</option><option value="onnxruntime-genai" selected disabled>onnxruntime-genai</option></select>
           <label for="prompt-text">Prompt</label>
           <textarea id="prompt-text" rows="3" required>The capital of France is</textarea>
-          <label for="prompt-max-tokens">Maximum new tokens</label>
-          <input id="prompt-max-tokens" type="number" min="1" max="4096" value="32" required>
           <label for="prompt-keep-loaded">Keep the current model loaded between prompts</label>
           <input id="prompt-keep-loaded" type="checkbox">
           <p>Off by default to limit memory use and swapping. Changing engines, models or settings releases the previous session. Keeping a native model loaded during HF validation can hold two models in memory.</p>
@@ -690,6 +689,7 @@ export function webviewHtml(
         <button id="settings-app-tab" type="button" role="tab" aria-controls="settings-app-view" aria-selected="true">App</button>
         <button id="settings-history-tab" type="button" role="tab" aria-controls="settings-history-view" aria-selected="false" tabindex="-1">History</button>
         <button id="settings-engine-tab" type="button" role="tab" aria-controls="settings-engine-view" aria-selected="false" tabindex="-1">Engine</button>
+        <button id="settings-generation-tab" type="button" role="tab" aria-controls="settings-generation-view" aria-selected="false" tabindex="-1">Generation</button>
       </nav>
       <section id="settings-app-view" role="tabpanel" aria-labelledby="settings-app-tab" tabindex="0">
         <h3>Application paths</h3>
@@ -737,6 +737,18 @@ export function webviewHtml(
           <p id="settings-history-feedback" role="status"></p>
         </section>
       </section>
+       <section id="settings-generation-view" role="tabpanel" aria-labelledby="settings-generation-tab" tabindex="0" hidden>
+        <h3>Token generation</h3>
+        <p>Applied to the next prompt run in either engine, without changing the exported model. Values are kept for this viewer until it is closed.</p>
+        <fieldset id="prompt-generation-fields" class="form-grid">
+          <label for="prompt-temperature">Temperature (0 = greedy decoding)</label>
+          <input id="prompt-temperature" type="number" min="0" step="any" value="0" required>
+          <label for="prompt-max-tokens">Maximum new tokens</label>
+          <input id="prompt-max-tokens" type="number" min="1" max="4096" step="1" value="32" required>
+          <p>Positive temperatures enable sampling. The token limit excludes the input prompt; generation can stop earlier at an end-of-sequence token. HF validation still compares argmax predictions and logits at the generated prefixes.</p>
+        </fieldset>
+        <button id="prompt-generation-back" type="button">Back to Prompt</button>
+       </section>
         <section id="settings-engine-view" role="tabpanel" aria-labelledby="settings-engine-tab" tabindex="0" hidden>
           <nav class="settings-tabs" role="tablist" aria-label="Engine settings">
             <button id="settings-onnxruntime-tab" type="button" role="tab" aria-controls="prompt-settings-genai" aria-selected="true">onnxruntime</button>

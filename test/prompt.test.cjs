@@ -317,6 +317,81 @@ test("snapshot-style metadata symlinks remain available", async (t) => {
 });
 
 for (const engine of ["onnx-light", "onnxruntime-genai"]) {
+  test(`native ${engine} applies temperature sampling and restores greedy decoding on a retained session`, async (t) => {
+    const { root, model } = await fixture(t);
+    await writeFile(
+      path.join(root, "generation_config.json"),
+      JSON.stringify({ eos_token_id: [] }),
+    );
+    const configPath = path.join(root, "genai_config.json");
+    const config = JSON.parse(await readFile(configPath, "utf8"));
+    config.search = { ...config.search, top_k: 4, top_p: 1, random_seed: 7 };
+    await writeFile(configPath, JSON.stringify(config));
+    const session = new PromptSession();
+    t.after(() => session.close());
+    const targets =
+      engine === "onnx-light"
+        ? [
+            [model, {}],
+            [model, { sdkLoader: true }],
+            [path.join(root, "model.pipe-onnx"), {}],
+            [path.join(root, "model.pipe-onnx"), { sdkLoader: true }],
+          ]
+        : [[model, {}]];
+    for (const [file, sessionSettings] of targets) {
+      const run = (temperature, maxTokens) =>
+        runPrompt(
+          file,
+          {
+            ...options,
+            engine,
+            temperature,
+            maxTokens,
+            keepLoaded: true,
+            sessionSettings,
+          },
+          "/no/python",
+          signal(),
+          () => {},
+          undefined,
+          undefined,
+          session,
+        );
+      const sampled = await run(100, 64);
+      assert.ok(sampled.tokens.length > 0 && sampled.tokens.length <= 64);
+      assert.ok(sampled.tokens.some((token) => token.id !== 1));
+      assert.ok(
+        sampled.tokens.every(
+          (token) => token.score === (token.id === 1 ? 4 : 0),
+        ),
+      );
+      const greedy = await run(0, 3);
+      assert.equal(greedy.lifecycle.reused, true);
+      assert.deepEqual(
+        greedy.tokens.map((token) => token.id),
+        [1, 1, 1],
+      );
+      await assert.rejects(
+        runPrompt(
+          file,
+          {
+            ...options,
+            engine,
+            temperature: 1,
+            maxTokens: 3,
+            validate: true,
+            sessionSettings,
+          },
+          "/no/python",
+          signal(),
+          () => {},
+          greedy,
+        ),
+        /previous prompt result does not match/,
+      );
+    }
+  });
+
   test(`native ${engine} selects the first-token argmax despite model sampling defaults`, async (t) => {
     const { root, model } = await fixture(t);
     const configPath = path.join(root, "genai_config.json");
@@ -1153,6 +1228,11 @@ test("rejects malformed options, tampering, changed assets and cancellation", as
     null,
     { ...options, maxTokens: 0 },
     { ...options, maxTokens: 1.5 },
+    { ...options, temperature: -1 },
+    { ...options, temperature: NaN },
+    { ...options, temperature: Infinity },
+    { ...options, temperature: "1" },
+    { ...options, temperature: null },
     { ...options, engine: "shell" },
     { ...options, validate: "yes" },
     { ...options, prompt: "" },

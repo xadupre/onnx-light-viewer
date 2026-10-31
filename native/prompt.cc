@@ -335,11 +335,11 @@ public:
 
   std::vector<int64_t> LightTokens(const std::vector<int32_t> &prompt, int64_t maximum,
                                    const std::optional<std::vector<int64_t>> &eos,
-                                   rt::GenerationStepCallback on_step = {},
-                                   size_t logit_budget = 0) {
+                                   rt::GenerationStepCallback on_step = {}, size_t logit_budget = 0,
+                                   double temperature = 0) {
     rt::GenerationOptions options;
     options.max_new_tokens = maximum;
-    options.temperature = 0;
+    options.temperature = temperature;
     if (eos)
       options.eos_token_ids = *eos;
     const auto *descriptor = loaded_pipeline ? &loaded_pipeline->pipeline() : pipeline.get();
@@ -362,7 +362,7 @@ public:
     }
     if (pipeline) {
       pipeline->set_max_new_tokens(maximum);
-      pipeline->set_temperature(0);
+      pipeline->set_temperature(temperature);
       if (eos) {
         pipeline->clear_eos_token_ids();
         for (const auto id : *eos)
@@ -399,7 +399,8 @@ public:
   }
 
   template <typename Append>
-  void GenaiTokens(const std::vector<int32_t> &prompt, int64_t maximum, Append append) {
+  void GenaiTokens(const std::vector<int32_t> &prompt, int64_t maximum, Append append,
+                   double temperature = 0) {
     OgaGeneratorParams *raw_params = nullptr;
     api.Check(api.OgaCreateGeneratorParams(model.get(), &raw_params));
     auto params = Own(raw_params, api.OgaDestroyGeneratorParams);
@@ -407,8 +408,8 @@ public:
         api.OgaGeneratorParamsSetSearchNumber(params.get(), "max_length", prompt.size() + maximum));
     api.Check(api.OgaGeneratorParamsSetSearchNumber(params.get(), "num_beams", 1));
     api.Check(api.OgaGeneratorParamsSetSearchNumber(params.get(), "num_return_sequences", 1));
-    api.Check(api.OgaGeneratorParamsSetSearchNumber(params.get(), "temperature", 0));
-    api.Check(api.OgaGeneratorParamsSetSearchBool(params.get(), "do_sample", false));
+    api.Check(api.OgaGeneratorParamsSetSearchNumber(params.get(), "temperature", temperature));
+    api.Check(api.OgaGeneratorParamsSetSearchBool(params.get(), "do_sample", temperature > 0));
     OgaGenerator *raw_generator = nullptr;
     api.Check(api.OgaCreateGenerator(model.get(), params.get(), &raw_generator));
     auto generator = Own(raw_generator, api.OgaDestroyGenerator);
@@ -488,6 +489,14 @@ Napi::Value RunNativePrompt(const Napi::CallbackInfo &info) {
     if (engine != "onnx-light" && engine != "onnxruntime-genai")
       throw std::runtime_error("Unknown native prompt engine.");
     const auto maximum = Integer(request.Get("maxTokens"), 1, 4096);
+    const auto temperature_value = request.Get("temperature");
+    if (!temperature_value.IsUndefined() &&
+        (!temperature_value.IsNumber() ||
+         !std::isfinite(temperature_value.As<Napi::Number>().DoubleValue()) ||
+         temperature_value.As<Napi::Number>().DoubleValue() < 0))
+      throw std::runtime_error("Temperature must be a finite non-negative number.");
+    const double temperature =
+        temperature_value.IsUndefined() ? 0 : temperature_value.As<Napi::Number>().DoubleValue();
     const auto budget = Integer(request.Get("captureBudget"), 0, 256 * 1024 * 1024);
     const bool reused =
         session && session->key == request.Get("sessionKey").As<Napi::String>().Utf8Value();
@@ -623,7 +632,7 @@ Napi::Value RunNativePrompt(const Napi::CallbackInfo &info) {
               throw std::runtime_error("The SDK returned an unsupported generation logit dtype.");
             return true;
           },
-          static_cast<size_t>(budget));
+          static_cast<size_t>(budget), temperature);
       auto events = Napi::Array::New(env);
       for (const auto &event : owner->context->TakeEvents()) {
         if (event.action != rt::RuntimeEventAction::kRunNode)
@@ -636,7 +645,7 @@ Napi::Value RunNativePrompt(const Napi::CallbackInfo &info) {
       }
       result.Set("profileEvents", events);
     } else {
-      owner->GenaiTokens(prompt, maximum, append);
+      owner->GenaiTokens(prompt, maximum, append, temperature);
     }
     result.Set("logits", capture ? Napi::Value(logits) : env.Null());
     result.Set("tokens", tokens);

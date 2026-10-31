@@ -205,6 +205,20 @@ CPU/CUDA/DirectML providers and GPU limits, graph optimization, memory options,
 prepacking, graph execution mode, logging and ORT profiling. Unsupported
 providers/options raise runtime errors, without switching engines.
 
+Open **Generation settings** from Prompt, or **Settings → Generation**, to set
+**Temperature** (default **0**, greedy decoding) and **Maximum new tokens**
+(default **32**, range **1–4096**, excluding input tokens). Positive temperatures
+enable SDK sampling in either engine; EOS can stop generation before the limit.
+These viewer-local values apply on the next run without changing exported files
+or unloading a retained session. HF validation remains an argmax/logit comparison
+at the generated prefixes, not a second sampled sequence.
+
+.. figure:: _static/feature-generation-settings.png
+   :alt: Settings Generation tab with temperature defaulting to zero and maximum new tokens defaulting to 32.
+   :width: 100%
+
+   Generation settings shared by the onnx-light and ONNX Runtime GenAI engines.
+
 For **parallel loading**, select onnx-light's **SDK owning loader**, then
 configure read/preparation overlap and its admission memory limit. One SDK I/O
 worker overlaps preparation on the CPU executor; CPU threads also apply to
@@ -229,7 +243,7 @@ Generation stops on any listed EOS ID; an empty list disables EOS stopping.
 Native pipeline generation uses the SDK's ``PipelineProto`` overload; unsupported
 stages or inputs fail explicitly, without a viewer-side generation loop.
 With the owning loader, the SDK's ``LoadedRuntimePipeline`` overload uses explicit
-generation options: Prompt's token limit and greedy decoding replace stored
+generation options: the viewer's token limit and temperature replace stored
 sampling settings, while pipeline interface names and EOS defaults are preserved.
 
 .. figure:: _static/feature-run-prompt-light.png
@@ -511,6 +525,8 @@ subtabs. ONNX Runtime GenAI and onnx-light share the session controls used by
 Prompt; changes apply to the next run and remain in this viewer panel, without
 changing the selected execution engine. PyTorch lists the fixed CPU, local-only
 validation settings; reference selection and validation remain on Prompt.
+Open **Settings → Generation** for temperature and maximum new tokens, shared
+by both prompt engines.
 Use Left/Right arrows, Home or End to switch categories or engine subtabs from
 their tab buttons.
 

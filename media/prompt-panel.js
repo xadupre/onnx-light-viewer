@@ -62,6 +62,13 @@ function createPromptPanel({ byId, postMessage }) {
   byId("prompt-settings-back").addEventListener("click", () => {
     byId("prompt-tab").click();
   });
+  byId("prompt-generation-open").addEventListener("click", () => {
+    byId("settings-tab").click();
+    byId("settings-generation-tab").click();
+  });
+  byId("prompt-generation-back").addEventListener("click", () => {
+    byId("prompt-tab").click();
+  });
   const release = () => {
     postMessage({ type: "prompt-release", requestId });
     if (result?.lifecycle) result.lifecycle.retained = false;
@@ -123,6 +130,8 @@ function createPromptPanel({ byId, postMessage }) {
     updateReference();
     byId("prompt-reference-source").disabled = value;
     sessionFields.disabled = value;
+    byId("prompt-generation-fields").disabled = value;
+    byId("prompt-generation-open").disabled = value;
     byId("prompt-settings-open").disabled = value;
     byId("prompt-unload").disabled = value;
   };
@@ -332,12 +341,21 @@ function createPromptPanel({ byId, postMessage }) {
       return;
     }
     if (!validation) {
+      for (const id of ["prompt-temperature", "prompt-max-tokens"]) {
+        const field = byId(id);
+        if (!field.checkValidity()) {
+          byId("prompt-generation-open").click();
+          field.reportValidity();
+          return;
+        }
+      }
       const sessionSettings = readSettings();
       if (!sessionSettings) return;
       options = {
         engine: byId("prompt-engine").value,
         prompt: byId("prompt-text").value,
         maxTokens: Number(byId("prompt-max-tokens").value),
+        temperature: Number(byId("prompt-temperature").value),
         keepLoaded: byId("prompt-keep-loaded").checked,
         sessionSettings,
       };
