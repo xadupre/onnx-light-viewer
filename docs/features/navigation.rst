@@ -10,6 +10,12 @@ the rows; parallel branches can share a row, with spacing based on block sizes.
 Four barycentric sweeps reduce crossings without adding intermediate nodes
 along long connections.
 
+Each input has its own entry point on the top edge, and each output has its
+own exit point on the bottom edge, in array order from left to right.
+Repeated input names use separate entry points. Empty optional outputs reserve
+their position with a short bottom line, without a connection or tensor label.
+Stored inputs and empty optional inputs also retain their entry-point slots.
+
 Features are grouped by theme:
 
 * **Navigation** includes Model, Statistics, Memory and Tensors, with Open,

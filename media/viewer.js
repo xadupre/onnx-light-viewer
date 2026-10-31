@@ -1637,13 +1637,22 @@ function setZoomAreaMode(active) {
   svg.classList.toggle("zoom-area", active);
 }
 
-function connectionPoints({ from, to, fromHeight, toHeight, route }) {
-  const start = { x: from.x, y: from.y + fromHeight };
-  const end = { x: to.x, y: to.y - toHeight };
+function connectionPoints({
+  from,
+  to,
+  fromHeight,
+  toHeight,
+  fromOffset = 0,
+  toOffset = 0,
+  route,
+}) {
+  const start = { x: from.x + fromOffset, y: from.y + fromHeight };
+  const end = { x: to.x + toOffset, y: to.y - toHeight };
   if (!route) return [start, end];
   const span = route.to.y - toHeight - route.from.y - fromHeight;
   return [
     start,
+    ...(fromOffset ? [{ x: start.x, y: start.y + 12 }] : []),
     ...route.points.map((point, index) => {
       // Translate the whole route for group drags, blend offsets for one endpoint.
       const fraction = span
@@ -1660,6 +1669,7 @@ function connectionPoints({ from, to, fromHeight, toHeight, route }) {
           (to.y - route.to.y) * fraction,
       };
     }),
+    ...(toOffset ? [{ x: end.x, y: end.y - 12 }] : []),
     end,
   ];
 }
@@ -1703,11 +1713,9 @@ function connectionPath(connection) {
     }
     return path;
   }
-  const { from, to, fromHeight, toHeight } = connection;
-  const y1 = from.y + fromHeight;
-  const y2 = to.y - toHeight;
-  const middle = (y1 + y2) / 2;
-  return `M${from.x},${y1} C${from.x},${middle} ${to.x},${middle} ${to.x},${y2}`;
+  const [start, end] = connectionPoints(connection);
+  const middle = (start.y + end.y) / 2;
+  return `M${start.x},${start.y} C${start.x},${middle} ${end.x},${middle} ${end.x},${end.y}`;
 }
 
 function drawOverview() {
@@ -2005,6 +2013,19 @@ function render(graph, metadata) {
   const sizes = operatorSizes(graph.nodes);
   const layout = sugiyamaLayout(graph, sizes);
   const { producers, positions } = layout;
+  const nodesById = new Map(graph.nodes.map((node) => [node.id, node]));
+  const portOffset = (width, index, count) =>
+    width * ((index + 1) / (count + 1) - 0.5);
+  const outputOffset = (producer, name) => {
+    const node = nodesById.get(producer);
+    return node
+      ? portOffset(
+          sizes.get(producer).width,
+          node.outputs.indexOf(name),
+          node.outputs.length,
+        )
+      : 0;
+  };
   bounds = layout.bounds;
   layoutBounds = bounds;
   const addPort = (name, index, output) => {
@@ -2050,7 +2071,16 @@ function render(graph, metadata) {
   const inputPositions = new Map(
     graph.inputs.map((name, index) => [name, addPort(name, index, false)]),
   );
-  const connect = (from, to, name, fromHeight, toHeight, points) => {
+  const connect = (
+    from,
+    to,
+    name,
+    fromHeight,
+    toHeight,
+    points,
+    fromOffset = 0,
+    toOffset = 0,
+  ) => {
     if (!from || !to) return;
     const connection = {
       from,
@@ -2059,6 +2089,8 @@ function render(graph, metadata) {
       name,
       fromHeight,
       toHeight,
+      fromOffset,
+      toOffset,
       route: points?.length
         ? { points, from: { ...from }, to: { ...to } }
         : undefined,
@@ -2158,6 +2190,22 @@ function render(graph, metadata) {
           rx: 12,
         }),
       );
+      for (const [names, output] of [
+        [[...node.inputs, ...(node.captures ?? [])], false],
+        [node.outputs, true],
+      ]) {
+        names.forEach((name, index) => {
+          const x = position.x + portOffset(size.width, index, names.length);
+          const y = output ? top + size.height : top;
+          const port = element("path", {
+            class: `node-port ${output ? "node-output" : "node-input"}`,
+            "data-index": index,
+            d: `M${x},${y} v${output ? 12 : -12}`,
+          });
+          if (name) port.append(element("title", {}, name));
+          group.append(port);
+        });
+      }
       const typeLabel = label(
         group,
         position.x,
@@ -2199,12 +2247,13 @@ function render(graph, metadata) {
         bindGraphLink(link, () => openTensorStatistics(storedInputs));
         group.append(link);
       }
-      if (node.outputs.length) {
+      const namedOutputs = node.outputs.filter(Boolean);
+      if (namedOutputs.length) {
         const information = tensorLabel(
           group,
           position.x,
           top + 78 + size.parameterHeight,
-          node.outputs,
+          namedOutputs,
           26,
         );
         information.classList.add("node-tensor-info");
@@ -2287,7 +2336,9 @@ function render(graph, metadata) {
       parameterRows: size.parameterRows,
     });
     if (!virtualized) nodes.append(nodeViews.get(node.id).group);
-    for (const input of [...node.inputs, ...(node.captures ?? [])]) {
+    const inputs = [...node.inputs, ...(node.captures ?? [])];
+    inputs.forEach((input, index) => {
+      if (!input) return;
       const producer = producers.get(input);
       connect(
         producer ? positions.get(producer) : inputPositions.get(input),
@@ -2298,15 +2349,25 @@ function render(graph, metadata) {
         producer
           ? layout.routes.get(node.id)?.get(producer)
           : layout.inputRoutes.get(node.id)?.get(input),
+        outputOffset(producer, input),
+        portOffset(size.width, index, inputs.length),
       );
-    }
+    });
   }
   graph.outputs.forEach((name, index) => {
     const producer = producers.get(name);
     const from = producer ? positions.get(producer) : inputPositions.get(name);
     const to = addPort(name, index, true);
     const fromHeight = producer ? sizes.get(producer).height / 2 : 26;
-    connect(from, to, name, fromHeight, 26, layout.outputRoutes.get(name));
+    connect(
+      from,
+      to,
+      name,
+      fromHeight,
+      26,
+      layout.outputRoutes.get(name),
+      outputOffset(producer, name),
+    );
   });
   overviewDirty = true;
   zoom = 1;

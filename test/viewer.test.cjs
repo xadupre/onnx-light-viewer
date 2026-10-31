@@ -12175,6 +12175,104 @@ function nodePositions(document, selector = ".graph-node > rect") {
   });
 }
 
+test("connects ordered tensor slots, including repeated inputs and empty outputs", (t) => {
+  const { document, load, pointer } = openViewer(t);
+  load({
+    ...demoGraph,
+    inputs: ["input"],
+    outputs: ["b", "a", "result"],
+    nodes: [
+      {
+        ...demoGraph.nodes[0],
+        id: "node-0",
+        inputs: ["input"],
+        outputs: ["a", "", "b"],
+      },
+      {
+        ...demoGraph.nodes[0],
+        id: "consumer",
+        inputs: ["b", "", "a", "b", "weight"],
+        captures: ["input"],
+        outputs: ["result"],
+      },
+    ],
+  });
+  const [source, target] = document.querySelectorAll(".graph-node");
+  const coordinates = (path) =>
+    path
+      .getAttribute("d")
+      .match(/-?\d+(?:\.\d+)?(?:e[+-]?\d+)?/gi)
+      .map(Number);
+  const ports = (node, direction) =>
+    [...node.querySelectorAll(`.node-${direction}`)].map(coordinates);
+  const outputs = ports(source, "output");
+  const inputs = ports(target, "input");
+  assert.equal(outputs.length, 3);
+  assert.equal(inputs.length, 6);
+  for (const slots of [outputs, inputs]) {
+    slots.forEach(([x], index) => {
+      if (index) assert.ok(x > slots[index - 1][0]);
+    });
+  }
+  const sourceRect = source.querySelector("rect");
+  const bottom =
+    Number(sourceRect.getAttribute("y")) +
+    Number(sourceRect.getAttribute("height"));
+  assert.equal(outputs[1][1], bottom);
+  assert.equal(
+    outputs[1][2],
+    12,
+    "An empty output is only a short bottom line",
+  );
+  assert.equal(source.querySelectorAll(".node-output title").length, 2);
+  assert.equal(
+    source.querySelector(".node-tensor-info").textContent.split(" | ").length,
+    2,
+    "Empty outputs have no tensor label",
+  );
+  const paths = (name) =>
+    [
+      ...document.querySelectorAll(
+        `.connection[aria-label="Connection: ${name}"] .edge`,
+      ),
+    ].map(coordinates);
+  assert.equal(document.querySelectorAll(".connection").length, 8);
+  assert.equal(
+    document.querySelector('.connection[aria-label="Connection: "]'),
+    null,
+  );
+  assert.deepEqual(
+    paths("b").map((points) => points.slice(0, 2)),
+    [outputs[2].slice(0, 2), outputs[2].slice(0, 2), outputs[2].slice(0, 2)],
+  );
+  assert.deepEqual(
+    paths("b")
+      .slice(0, 2)
+      .map((points) => points.slice(-2)),
+    [inputs[0].slice(0, 2), inputs[3].slice(0, 2)],
+  );
+  assert.deepEqual(paths("a")[0].slice(0, 2), outputs[0].slice(0, 2));
+  assert.deepEqual(paths("a")[0].slice(-2), inputs[2].slice(0, 2));
+  assert.deepEqual(paths("input")[1].slice(-2), inputs[5].slice(0, 2));
+  const before = paths("b").slice(0, 2);
+  const start = nodePositions(document)[1];
+  const graph = document.getElementById("graph");
+  pointer(target, "pointerdown", start.x, start.y);
+  pointer(graph, "pointermove", start.x + 40, start.y + 25);
+  pointer(graph, "pointerup", start.x + 40, start.y + 25);
+  paths("b")
+    .slice(0, 2)
+    .forEach((points, index) => {
+      assert.deepEqual(points.slice(0, 2), before[index].slice(0, 2));
+      assert.deepEqual(points.slice(-2), [
+        before[index].at(-2) + 40,
+        before[index].at(-1) + 25,
+      ]);
+    });
+  document.getElementById("refresh-positions").click();
+  assert.deepEqual(paths("b").slice(0, 2), before);
+});
+
 test("keeps residual routes attached while dragging and restores their bends with Refresh positions", (t) => {
   const { document, window, load, pointer } = openViewer(t);
   const model = chainGraph(5);
@@ -12202,6 +12300,14 @@ test("keeps residual routes attached while dragging and restores their bends wit
       .match(/-?\d+(?:\.\d+)?(?:e[+-]?\d+)?/gi)
       .map(Number);
   const before = coordinates();
+  const targetPort = document.querySelector(
+    '.graph-node[data-id="node-4"] .node-input[data-index="1"]',
+  );
+  const targetCoordinates = targetPort
+    .getAttribute("d")
+    .match(/-?\d+(?:\.\d+)?(?:e[+-]?\d+)?/gi)
+    .map(Number);
+  assert.deepEqual(before.slice(-2), targetCoordinates.slice(0, 2));
   const text = connection.querySelector(".tensor-label");
   const label = {
     x: Number(text.getAttribute("x")),
