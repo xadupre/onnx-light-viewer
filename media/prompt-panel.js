@@ -60,6 +60,7 @@ function createPromptPanel({ byId, postMessage }) {
     byId("settings-engine-tab").click();
   });
   byId("prompt-settings-back").addEventListener("click", () => {
+    byId("execution-prompt-tab").click();
     byId("prompt-tab").click();
   });
   byId("prompt-generation-open").addEventListener("click", () => {
@@ -67,6 +68,7 @@ function createPromptPanel({ byId, postMessage }) {
     byId("settings-generation-tab").click();
   });
   byId("prompt-generation-back").addEventListener("click", () => {
+    byId("execution-prompt-tab").click();
     byId("prompt-tab").click();
   });
   const release = () => {

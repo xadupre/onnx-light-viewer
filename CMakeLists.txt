@@ -81,6 +81,7 @@ add_library(onnx_light_viewer SHARED
   native/tensor_preview.cc
   native/tensor_statistics.cc
   native/prompt.cc
+  native/run.cc
   ${CMAKE_JS_SRC}
 )
 target_compile_features(onnx_light_viewer PRIVATE cxx_std_20)

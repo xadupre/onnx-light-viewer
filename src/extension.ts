@@ -515,6 +515,7 @@ async function configurePanel(
   let releaseController: AbortController | undefined;
   let promptResult: { owner: LoadedModel; result: PromptResult } | undefined;
   let memoryRequest = 0;
+  let runRequest = 0;
   let fusionRequest = 0;
   let diagnosticRequest = 0;
   let undoRequest = 0;
@@ -813,6 +814,7 @@ async function configurePanel(
         type?: string;
         path?: unknown;
         paths?: unknown;
+        inputs?: unknown;
         asPipeline?: unknown;
         nodeIndex?: unknown;
         nodes?: unknown;
@@ -1081,6 +1083,77 @@ async function configurePanel(
           await vscode.window.showErrorMessage(
             `Could not estimate ONNX memory: ${detail}`,
           );
+        }
+      } else if (
+        message?.type === "run-inputs" ||
+        message?.type === "run-model"
+      ) {
+        const owner = model;
+        const revision = graphRevision;
+        const generation = ++runRequest;
+        const isCurrent = () =>
+          active &&
+          model === owner &&
+          graphRevision === revision &&
+          runRequest === generation;
+        try {
+          if (
+            typeof message.requestId !== "number" ||
+            !Number.isSafeInteger(message.requestId) ||
+            message.requestId < 0
+          )
+            throw new Error("Invalid model run request.");
+          const current = requireModel();
+          const native = await nativeModel(current, log, () => {
+            void sendStatus();
+          });
+          if (!isCurrent()) return;
+          const stages = current.graph.pipeline
+            ? (native.graph().pipelineStages ?? [])
+            : [];
+          const path =
+            stages.length &&
+            (message.path === undefined ||
+              (Array.isArray(message.path) && !message.path.length))
+              ? stages[0].path
+              : (message.path ?? []);
+          if (!isGraphPath(path)) throw new Error("Invalid model run path.");
+          if (message.type === "run-inputs") {
+            const inputs = native.runInputs(path);
+            if (isCurrent())
+              await postMessage({
+                type: "run-inputs",
+                requestId: message.requestId,
+                inputs,
+                stages,
+                path,
+              });
+          } else {
+            if (!vscode.workspace.isTrusted)
+              throw new Error("Trust this workspace before running a model.");
+            const inputs = message.inputs;
+            if (
+              !Array.isArray(inputs) ||
+              inputs.some((value: unknown) => typeof value !== "string")
+            )
+              throw new Error("Expected input tensor text.");
+            const result = await log.run("Run model", () =>
+              native.run(inputs, path),
+            );
+            if (isCurrent())
+              await postMessage({
+                type: "run-result",
+                requestId: message.requestId,
+                result,
+              });
+          }
+        } catch (error) {
+          if (isCurrent())
+            await postMessage({
+              type: "run-error",
+              requestId: message.requestId,
+              error: error instanceof Error ? error.message : String(error),
+            });
         }
       } else if (message?.type === "prompt-cancel") {
         promptController?.abort();

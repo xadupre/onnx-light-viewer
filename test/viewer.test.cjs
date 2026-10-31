@@ -708,6 +708,48 @@ test("Run Prompt recovers after a cancelled model replacement", (t) => {
   assert.equal(document.getElementById("prompt-fields").disabled, false);
 });
 
+test("Run subtab reloads after model replacement and conversion returns to Prompt", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const byId = (id) => document.getElementById(id);
+  const receive = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  load(demoGraph);
+  byId("prompt-tab").click();
+  byId("execution-run-tab").click();
+  const request = messages.findLast((message) => message.type === "run-inputs");
+  assert.ok(request);
+  receive({
+    type: "run-inputs",
+    requestId: request.requestId,
+    stages: [],
+    path: [],
+    inputs: [],
+  });
+  assert.equal(byId("run-fields").disabled, false);
+  receive({ type: "load-state", pending: true });
+  assert.equal(byId("run-fields").disabled, true);
+  const pendingRequests = messages.filter(
+    (message) =>
+      message.type === "run-inputs" || message.type === "prompt-info",
+  ).length;
+  byId("execution-prompt-tab").click();
+  byId("execution-run-tab").click();
+  assert.equal(
+    messages.filter(
+      (message) =>
+        message.type === "run-inputs" || message.type === "prompt-info",
+    ).length,
+    pendingRequests,
+  );
+  receive({ type: "load-state", pending: false });
+  assert.notEqual(messages.at(-1).requestId, request.requestId);
+  assert.equal(byId("execution-run-view").hidden, false);
+  receive({ type: "show-prompt" });
+  assert.equal(byId("prompt-view").hidden, false);
+  assert.equal(byId("execution-prompt-view").hidden, false);
+  assert.equal(byId("execution-run-view").hidden, true);
+});
+
 function tensorStatistics(name = "weight") {
   return {
     name,
