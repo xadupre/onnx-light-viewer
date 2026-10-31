@@ -28,6 +28,81 @@ function panel(t) {
   return { dom, byId, api, messages };
 }
 
+test("ONNX Runtime settings send diagnostics and arbitrary native session options", (t) => {
+  const { dom, byId, api, messages } = panel(t);
+  api.handleMessage({
+    type: "prompt-info",
+    requestId: messages.at(-1).requestId,
+    info: { available: true, engines: ["onnxruntime-genai"] },
+  });
+  const pane = byId("prompt-settings-genai");
+  const field = (name) => pane.querySelector(`[data-setting="${name}"]`);
+  field("logVerbosity").value = "2";
+  field("logId").value = "viewer-session";
+  field("customOpsLibrary").value = "/tmp/custom-ops.so";
+  const sessionOptions = JSON.stringify({
+    "session.intra_op.allow_spinning": "0",
+    provider_options: [{ cuda: { device_id: "0" } }],
+    use_deterministic_compute: true,
+  });
+  field("sessionOptions").value = sessionOptions;
+  field("sessionOptions").dispatchEvent(
+    new dom.window.Event("change", { bubbles: true }),
+  );
+  assert.equal(messages.at(-1).type, "prompt-release");
+  byId("prompt-form").querySelector('button[type="submit"]').click();
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(messages.at(-1).options.sessionSettings)),
+    {
+      logVerbosity: 2,
+      logId: "viewer-session",
+      customOpsLibrary: "/tmp/custom-ops.so",
+      profile: false,
+      sessionOptions,
+    },
+  );
+  assert.equal(byId("prompt-session-fields").disabled, true);
+});
+
+test("invalid session JSON stops generation and corrected or blank JSON clears validity", (t) => {
+  const { byId, api, messages } = panel(t);
+  api.handleMessage({
+    type: "prompt-info",
+    requestId: messages.at(-1).requestId,
+    info: { available: true, engines: ["onnxruntime-genai"] },
+  });
+  const field = byId("prompt-settings-genai").querySelector(
+    '[data-setting="sessionOptions"]',
+  );
+  const submit = byId("prompt-form").querySelector('button[type="submit"]');
+  for (const invalid of ["{", "null", "[]", '"text"', "true"]) {
+    field.value = invalid;
+    submit.click();
+    assert.equal(field.checkValidity(), false);
+    assert.equal(byId("prompt-fields").disabled, false);
+    assert.equal(byId("prompt-settings-genai").hidden, false);
+    assert.equal(
+      messages.some((message) => message.type === "run-prompt"),
+      false,
+    );
+  }
+  field.value = " \n ";
+  submit.click();
+  assert.equal(field.checkValidity(), true);
+  assert.equal(
+    messages.at(-1).options.sessionSettings.sessionOptions,
+    undefined,
+  );
+  api.handleMessage({
+    type: "prompt-error",
+    requestId: messages.at(-1).requestId,
+    error: "test error",
+  });
+  field.value = "{}";
+  submit.click();
+  assert.equal(messages.at(-1).options.sessionSettings.sessionOptions, "{}");
+});
+
 test("prompt defaults, engine applicability and aligned validation results", (t) => {
   const { byId, api, messages } = panel(t);
   assert.equal(byId("prompt-tab").textContent, "Prompt");

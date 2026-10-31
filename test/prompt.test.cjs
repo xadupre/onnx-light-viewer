@@ -678,6 +678,84 @@ test("parallel loading/session settings use native SDK APIs and profiles exclude
   );
 });
 
+test("GenAI applies advanced session options without changing the exported configuration", async (t) => {
+  const { root, model } = await fixture(t);
+  const configPath = path.join(root, "genai_config.json");
+  const original = await readFile(configPath, "utf8");
+  const session = new PromptSession();
+  const run = (sessionOptions, controls = {}) =>
+    runPrompt(
+      model,
+      {
+        ...options,
+        keepLoaded: true,
+        sessionSettings: { sessionOptions, ...controls },
+      },
+      "/no/python",
+      signal(),
+      () => {},
+      undefined,
+      undefined,
+      session,
+    );
+  const sessionOptions = JSON.stringify({
+    log_id: "advanced-session",
+    log_verbosity_level: 1,
+    intra_op_num_threads: 1,
+    "session.intra_op.allow_spinning": "0",
+    provider_options: [{ CPU: {} }],
+  });
+  try {
+    const first = await run(sessionOptions, {
+      logId: "viewer-session",
+      logVerbosity: 0,
+    });
+    assert.deepEqual(
+      first.tokens.map((token) => token.id),
+      [1, 1, 1],
+    );
+    assert.equal(first.lifecycle.reused, false);
+    assert.equal(
+      (await run(sessionOptions, { logId: "viewer-session", logVerbosity: 0 }))
+        .lifecycle.reused,
+      true,
+    );
+    assert.equal(
+      (await run(sessionOptions, { logId: "changed-session" })).lifecycle
+        .reused,
+      false,
+    );
+    await assert.rejects(
+      run('{"graph_optimization_level":"INVALID"}'),
+      /ONNX Runtime GenAI/,
+    );
+    assert.deepEqual(
+      (
+        await run('{"graph_optimization_level":"INVALID"}', {
+          graphOptimization: "ORT_DISABLE_ALL",
+        })
+      ).tokens.map((token) => token.id),
+      [1, 1, 1],
+    );
+    const unsupportedProvider =
+      '{"provider_options":[{"ViewerUnsupportedProvider":{}}]}';
+    await assert.rejects(run(unsupportedProvider), /ONNX Runtime GenAI/);
+    assert.deepEqual(
+      (await run(unsupportedProvider, { provider: "cpu" })).tokens.map(
+        (token) => token.id,
+      ),
+      [1, 1, 1],
+    );
+    await assert.rejects(
+      run("{}", { customOpsLibrary: path.join(root, "missing-ops.so") }),
+      /ONNX Runtime GenAI/,
+    );
+    assert.equal(await readFile(configPath, "utf8"), original);
+  } finally {
+    await session.close();
+  }
+});
+
 test("the released SDK owning loader supports external tensors without explicit lengths", async (t) => {
   const { root, model } = await fixture(t, true, true);
   for (const loadOverlap of [false, true]) {
@@ -1244,6 +1322,30 @@ test("rejects malformed options, tampering, changed assets and cancellation", as
     { ...options, sessionSettings: { threads: 2 } },
     { ...options, sessionSettings: { provider: "unknown" } },
     { ...options, sessionSettings: { gpuMemoryMiB: 128 } },
+    { ...options, sessionSettings: { logVerbosity: -1 } },
+    { ...options, sessionSettings: { logVerbosity: 2147483648 } },
+    { ...options, sessionSettings: { logId: 2 } },
+    { ...options, sessionSettings: { customOpsLibrary: "bad\0path" } },
+    { ...options, sessionSettings: { logId: "x".repeat(4097) } },
+    ...[
+      "{",
+      "[]",
+      "null",
+      "true",
+      '{"__proto__":{"polluted":true}}',
+      '{"log_id":"bad\\u0000id"}',
+      '{"number":1e400}',
+      '{"x":'.repeat(18) + "0" + "}".repeat(18),
+      " ".repeat(65537),
+    ].map((sessionOptions) => ({
+      ...options,
+      sessionSettings: { sessionOptions },
+    })),
+    {
+      ...options,
+      engine: "onnx-light",
+      sessionSettings: { sessionOptions: "{}" },
+    },
     { ...options, sessionSettings: JSON.parse('{"__proto__":1}') },
   ])
     await assert.rejects(

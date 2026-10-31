@@ -621,7 +621,13 @@ export function webviewHtml(
             <label>CPU memory arena<select data-setting="cpuArena" data-boolean><option value="">From genai_config.json</option><option value="true">Enabled</option><option value="false">Disabled</option></select></label>
             <label>Memory pattern<select data-setting="memoryPattern" data-boolean><option value="">From genai_config.json</option><option value="true">Enabled</option><option value="false">Disabled</option></select></label>
             <label>Log severity (0 verbose, 1 info, 2 warning, 3 error, 4 fatal)<input data-setting="logSeverity" type="number" min="0" max="4" placeholder="From genai_config.json"></label>
+            <label>Log verbosity<input data-setting="logVerbosity" type="number" min="0" max="2147483647" placeholder="From genai_config.json"></label>
+            <label>Log ID<input data-setting="logId" type="text" maxlength="4096" placeholder="From genai_config.json"></label>
+            <label>Custom operators library<input data-setting="customOpsLibrary" type="text" maxlength="4096" placeholder="From genai_config.json"></label>
             <label class="prompt-checkbox"><span>Enable ONNX Runtime profiling</span><input data-setting="profile" type="checkbox"></label>
+            <h3>All session options</h3>
+            <p>Use the native GenAI session_options JSON format to override any option supported by your installed runtime, including provider_options and string-valued session configuration entries. Nonblank controls above take precedence over JSON. Leave blank to preserve the exported configuration. Runtime errors are reported on Prompt.</p>
+            <label>Session options (JSON object)<textarea data-setting="sessionOptions" data-json rows="8" maxlength="65536" placeholder='{"session.intra_op.allow_spinning":"0","provider_options":[{"cuda":{"device_id":"0"}}]}'></textarea></label>
           </div>
         </fieldset>
       </div>
