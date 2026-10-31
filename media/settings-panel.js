@@ -18,6 +18,34 @@ function createSettingsPanel({
   let pathHistory = { open: [], save: [] };
   let exportHistory = { models: [], directories: [] };
 
+  const categories = ["app", "history"];
+  function selectCategory(selected) {
+    for (const category of categories) {
+      const active = category === selected;
+      const tab = byId(`settings-${category}-tab`);
+      tab.setAttribute("aria-selected", String(active));
+      tab.tabIndex = active ? 0 : -1;
+      byId(`settings-${category}-view`).hidden = !active;
+    }
+  }
+  for (const category of categories) {
+    const tab = byId(`settings-${category}-tab`);
+    tab.addEventListener("click", () => selectCategory(category));
+    tab.addEventListener("keydown", (event) => {
+      let index = categories.indexOf(category);
+      if (event.key === "Home") index = 0;
+      else if (event.key === "End") index = categories.length - 1;
+      else if (event.key === "ArrowLeft")
+        index = (index + categories.length - 1) % categories.length;
+      else if (event.key === "ArrowRight")
+        index = (index + 1) % categories.length;
+      else return;
+      event.preventDefault();
+      selectCategory(categories[index]);
+      byId(`settings-${categories[index]}-tab`).focus();
+    });
+  }
+
   function sanitizeReleaseUrl(url) {
     if (typeof url !== "string" || !url) return undefined;
     try {

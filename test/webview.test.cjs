@@ -85,7 +85,7 @@ for (const initialTab of ["model", "logs"]) {
       "shorten-dimensions",
     ])
       assert.equal(document.getElementById(id).closest("section"), symbolic);
-    const tabs = [...document.querySelectorAll('[role="tab"]')];
+    const tabs = [...document.querySelectorAll('.viewer-tabs [role="tab"]')];
     assert.deepEqual(
       tabs
         .filter((tab) => tab.getAttribute("aria-selected") === "true")

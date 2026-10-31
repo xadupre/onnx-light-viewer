@@ -7646,6 +7646,76 @@ test("switches all tabs without logging clicks or changing graph, selection or c
   );
 });
 
+test("Settings categories support mouse and keyboard navigation without changing settings or graph state", (t) => {
+  const { document, window, messages, events, load } = openViewer(t);
+  const byId = (id) => document.getElementById(id);
+  load(demoGraph);
+  byId("zoom-in").click();
+  const camera = byId("graph").getAttribute("viewBox");
+  const graph = byId("nodes").innerHTML;
+  byId("settings-tab").click();
+  byId("settings-python").value = "/unsaved/python";
+  const messageCount = messages.length;
+  const eventCount = events.length;
+  const assertCategory = (selected) => {
+    for (const category of ["app", "history"]) {
+      const active = category === selected;
+      const tab = byId(`settings-${category}-tab`);
+      const panel = byId(`settings-${category}-view`);
+      assert.equal(tab.getAttribute("aria-selected"), String(active));
+      assert.equal(tab.tabIndex, active ? 0 : -1);
+      assert.equal(tab.getAttribute("aria-controls"), panel.id);
+      assert.equal(panel.getAttribute("aria-labelledby"), tab.id);
+      assert.equal(panel.hidden, !active);
+    }
+    assert.equal(byId("settings-view").hidden, false);
+  };
+  assertCategory("app");
+  for (const id of [
+    "application-settings-form",
+    "settings-reset-viewer",
+    "settings-panels",
+  ])
+    assert.ok(byId("settings-app-view").contains(byId(id)));
+  assert.ok(
+    byId("settings-history-view").contains(byId("settings-stored-data")),
+  );
+  byId("settings-history-tab").click();
+  assertCategory("history");
+  for (const [key, category] of [
+    ["ArrowRight", "app"],
+    ["ArrowLeft", "history"],
+    ["Home", "app"],
+    ["End", "history"],
+  ]) {
+    byId(
+      `settings-${key === "ArrowRight" || key === "Home" ? "history" : "app"}-tab`,
+    ).dispatchEvent(
+      new window.KeyboardEvent("keydown", {
+        key,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    assertCategory(category);
+    assert.equal(document.activeElement.id, `settings-${category}-tab`);
+  }
+  byId("settings-history-tab").dispatchEvent(
+    new window.KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
+  );
+  assertCategory("history");
+  assert.equal(messages.length, messageCount);
+  assert.equal(events.length, eventCount);
+  byId("model-tab").click();
+  byId("settings-tab").click();
+  assertCategory("history");
+  byId("settings-app-tab").click();
+  assertCategory("app");
+  assert.equal(byId("settings-python").value, "/unsaved/python");
+  assert.equal(byId("graph").getAttribute("viewBox"), camera);
+  assert.equal(byId("nodes").innerHTML, graph);
+});
+
 test("Settings exposes histories, removes selected entries, clears categories and resets viewer preferences", (t) => {
   const { document, window, messages } = openViewer(t);
   const byId = (id) => document.getElementById(id);
@@ -7673,6 +7743,7 @@ test("Settings exposes histories, removes selected entries, clears categories an
     trusted: true,
   };
   byId("settings-tab").click();
+  byId("settings-history-tab").click();
   send(settings);
   assert.equal(byId("settings-cache-download").textContent, "/downloads");
   assert.equal(
@@ -7717,6 +7788,7 @@ test("Settings exposes histories, removes selected entries, clears categories an
     byId("settings-history-feedback").textContent,
     "Could not persist history",
   );
+  byId("settings-app-tab").click();
   byId("settings-reset-viewer").click();
   assert.equal(messages.at(-1).type, "reset-viewer-settings");
   assert.equal(byId("settings-reset-viewer").disabled, true);

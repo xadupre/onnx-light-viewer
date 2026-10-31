@@ -473,6 +473,27 @@ Python result. Saving does not persist the session's undo stack.
 
    Undo one native operation or all available native edits from Optimize.
 
+Settings by category
+^^^^^^^^^^^^^^^^^^^^
+
+Open **Settings → App** to configure download and Python paths, sidebar width
+and visible viewer panels, or reset viewer preferences.
+Open **Settings → History** to inspect cache locations and remove or clear Open,
+Save and conversion suggestions. Clearing history never deletes files.
+Use Left/Right arrows, Home or End to switch categories from the tab buttons.
+
+.. figure:: _static/feature-settings-app.png
+   :alt: Settings App tab with application paths and two-column viewer preferences.
+   :width: 100%
+
+   Configure application paths and viewer preferences in App.
+
+.. figure:: _static/feature-settings-history.png
+   :alt: Settings History tab with cache locations and Open, Save and conversion histories.
+   :width: 100%
+
+   Manage remembered suggestions separately in History.
+
 Diagnostics and help
 ^^^^^^^^^^^^^^^^^^^^
 
