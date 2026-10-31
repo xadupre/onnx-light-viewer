@@ -12785,6 +12785,90 @@ test("shows longer carried-result names and complete hover information after sha
   );
 });
 
+test("edge labels follow routed and curved tangents, stay upright, and rotate both lines after dragging", (t) => {
+  const { document, window } = openViewer(t);
+  const connection = {
+    from: { x: 0, y: 0 },
+    to: { x: 200, y: 200 },
+    fromHeight: 0,
+    toHeight: 0,
+    labelWidth: 100,
+    group: document.createElementNS("http://www.w3.org/2000/svg", "g"),
+  };
+  for (const name of ["path", "hit", "text", "information"])
+    connection[name] = document.createElementNS(
+      "http://www.w3.org/2000/svg",
+      name === "path" || name === "hit" ? "path" : "text",
+    );
+  const curved = window.connectionLabelPosition(connection);
+  assert.ok(
+    curved.angle > 15 && curved.angle < 40,
+    "cubic midpoint follows its tangent rather than the 45-degree endpoint chord",
+  );
+  connection.route = {
+    from: { ...connection.from },
+    to: { ...connection.to },
+    points: [{ x: 100, y: 100 }],
+  };
+  assert.equal(window.connectionLabelPosition(connection).angle, 45);
+  window.updateConnection(connection);
+  assert.equal(connection.text.getAttribute("transform"), "rotate(45 100 100)");
+  assert.equal(
+    connection.information.getAttribute("transform"),
+    connection.text.getAttribute("transform"),
+  );
+  const bounds = window.connectionLabelBounds(connection);
+  assert.ok(bounds.left < 100 && bounds.right > 170);
+  assert.ok(bounds.top < 100 && bounds.bottom > 170);
+  connection.to.x = -200;
+  const dragged = window.connectionLabelPosition(connection);
+  assert.ok(dragged.angle >= -90 && dragged.angle < 0);
+  window.updateConnection(connection);
+  assert.equal(
+    connection.text.getAttribute("transform"),
+    `rotate(${dragged.angle} ${dragged.x} ${dragged.y})`,
+  );
+  delete connection.route;
+  connection.to = { x: 0, y: 200 };
+  assert.equal(window.connectionLabelPosition(connection).angle, 90);
+  connection.to = { x: 0, y: 0 };
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(window.connectionLabelPosition(connection))),
+    { x: 0, y: 0, angle: 0 },
+  );
+});
+
+test("virtualization retains a rotated label when only its far end is in the viewport", (t) => {
+  const { window } = openViewer(t);
+  const connection = {
+    from: { x: 0, y: 0 },
+    to: { x: 0, y: 100 },
+    fromHeight: 0,
+    toHeight: 0,
+    labelWidth: 100,
+  };
+  let visible;
+  const crossings = new Set();
+  const update = runInNewContext(
+    `(${window.updateConnectionVisibility.toString()})`,
+    {
+      connectionPoints: window.connectionPoints,
+      connectionLabelBounds: window.connectionLabelBounds,
+      intersectsCamera: (left, top, right, bottom) =>
+        left <= -5 && right >= -5 && top <= 150 && bottom >= 150,
+      virtualized: true,
+      overviewVisible: false,
+      crossingConnections: crossings,
+      setVisible: (_connection, _group, value) => {
+        visible = value;
+      },
+    },
+  );
+  update(connection);
+  assert.equal(visible, true);
+  assert.equal(crossings.size, 0);
+});
+
 test("staggered carried-result labels avoid neighboring labels and follow a group drag", (t) => {
   const { document, load, pointer } = openViewer(t);
   const name = "carried_tensor_with_a_long_name";
@@ -12800,26 +12884,54 @@ test("staggered carried-result labels avoid neighboring labels and follow a grou
   const boxes = () =>
     labels.map((label) => {
       const info = label.parentElement.querySelector(".tensor-info tspan");
-      const x = Number(label.getAttribute("x"));
-      const y = Number(label.getAttribute("y"));
+      const [angle, x, y] = label
+        .getAttribute("transform")
+        .slice(7, -1)
+        .split(" ")
+        .map(Number);
+      const radians = (angle * Math.PI) / 180;
+      const width =
+        Math.max(label.textContent.length, info.textContent.length) * 6;
+      const corners = [];
+      for (const dx of [8, width + 12])
+        for (const dy of [-12, 18])
+          corners.push({
+            x: x + dx * Math.cos(radians) - dy * Math.sin(radians),
+            y: y + dx * Math.sin(radians) + dy * Math.cos(radians),
+          });
       return {
-        x,
-        y,
-        right:
-          x + Math.max(label.textContent.length, info.textContent.length) * 6,
-        bottom: y + 14,
+        x: Math.min(...corners.map((point) => point.x)),
+        y: Math.min(...corners.map((point) => point.y)),
+        right: Math.max(...corners.map((point) => point.x)),
+        bottom: Math.max(...corners.map((point) => point.y)),
       };
     });
   const before = boxes();
   assert.ok(new Set(before.map(({ y }) => y)).size > 1);
+  for (const rect of document.querySelectorAll(
+    ".graph-node > rect, .graph-port > rect",
+  )) {
+    const [dx, dy] = translationOffsets(
+      rect.parentElement.getAttribute("transform"),
+    );
+    const left = Number(rect.getAttribute("x")) + dx;
+    const top = Number(rect.getAttribute("y")) + dy;
+    const right = left + Number(rect.getAttribute("width"));
+    const bottom = top + Number(rect.getAttribute("height"));
+    for (const box of before)
+      assert.ok(
+        box.right < left || box.x > right || box.bottom < top || box.y > bottom,
+        "rotated labels must not cover nodes or ports",
+      );
+  }
   for (let index = 0; index < before.length; index++)
     for (const other of before.slice(index + 1)) {
       const box = before[index];
       assert.ok(
         box.right < other.x ||
           other.right < box.x ||
-          box.bottom < other.y - 10 ||
-          other.bottom < box.y - 10,
+          box.bottom < other.y ||
+          other.bottom < box.y,
       );
     }
   const graph = document.getElementById("graph");
@@ -12841,11 +12953,9 @@ test("staggered carried-result labels avoid neighboring labels and follow a grou
       .getAttribute("viewBox")
       .split(" ")
       .map(Number);
-    for (const label of labels) {
-      const info = label.parentElement.querySelector(".tensor-info tspan");
-      const x = Number(label.getAttribute("x"));
-      assert.ok(x >= left);
-      assert.ok(x + info.textContent.length * 6 <= left + width);
+    for (const box of boxes()) {
+      assert.ok(box.x >= left);
+      assert.ok(box.right <= left + width);
     }
   }
   document.defaultView.dispatchEvent(
@@ -12895,6 +13005,7 @@ test("crowded label placement bounds spatial comparisons across candidate attemp
         shortName: window.shortName,
         tensorDescription: window.tensorDescription,
         connectionLabelPosition: window.connectionLabelPosition,
+        connectionLabelBounds: window.connectionLabelBounds,
         graphSpatialIndex(items) {
           const index = window.graphSpatialIndex(items);
           return {
@@ -12950,6 +13061,7 @@ test("label re-placement refreshes connection visibility and crossing batches on
     tensorDescription: window.tensorDescription,
     graphSpatialIndex: window.graphSpatialIndex,
     connectionLabelPosition: window.connectionLabelPosition,
+    connectionLabelBounds: window.connectionLabelBounds,
     updateConnection() {
       events.push("position");
     },
@@ -12976,13 +13088,13 @@ test("label re-placement refreshes connection visibility and crossing batches on
 
 test("Fit drops initial label extents when refreshed tensor descriptions shrink", (t) => {
   const { document, window, load, resize } = openViewer(t);
-  resize(350, 1060);
-  const name = "input";
+  resize(1060, 350);
+  const name = "output";
   const graph = {
     ...demoGraph,
-    inputs: [name],
+    outputs: [name],
     tensors: [{ name, type: "FLOAT", shape: ["long_dimension".repeat(8)] }],
-    nodes: [{ ...demoGraph.nodes[0], inputs: [name, name, name] }],
+    nodes: [{ ...demoGraph.nodes[0], outputs: [name] }],
   };
   const fitted = () => {
     document.getElementById("zoom-fit").click();
