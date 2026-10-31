@@ -57,6 +57,7 @@ interface PromptOptions {
   engine: "onnx-light" | "onnxruntime-genai";
   prompt: string;
   maxTokens: number;
+  temperature: number;
   validate: boolean;
   keepLoaded: boolean;
   referenceSource?: string;
@@ -95,6 +96,10 @@ function optionsFrom(value: unknown): PromptOptions {
     !Number.isSafeInteger(options.maxTokens) ||
     (options.maxTokens as number) < 1 ||
     (options.maxTokens as number) > 4096 ||
+    (options.temperature !== undefined &&
+      (typeof options.temperature !== "number" ||
+        !Number.isFinite(options.temperature) ||
+        options.temperature < 0)) ||
     (options.validate !== undefined && typeof options.validate !== "boolean") ||
     (options.keepLoaded !== undefined &&
       typeof options.keepLoaded !== "boolean") ||
@@ -104,6 +109,7 @@ function optionsFrom(value: unknown): PromptOptions {
           "engine",
           "prompt",
           "maxTokens",
+          "temperature",
           "validate",
           "keepLoaded",
           "referenceSource",
@@ -112,7 +118,7 @@ function optionsFrom(value: unknown): PromptOptions {
     )
   )
     throw new Error(
-      "Choose a supported engine, prompt and 1–4096 output tokens.",
+      "Choose a supported engine, prompt, 1–4096 output tokens and a finite non-negative temperature.",
     );
   if (
     options.referenceSource !== undefined &&
@@ -129,6 +135,7 @@ function optionsFrom(value: unknown): PromptOptions {
     engine: options.engine as PromptOptions["engine"],
     prompt: options.prompt,
     maxTokens: options.maxTokens as number,
+    temperature: (options.temperature as number | undefined) ?? 0,
     validate: options.validate === true,
     keepLoaded: options.keepLoaded === true,
     ...(typeof options.referenceSource === "string"
@@ -501,6 +508,7 @@ export async function runPrompt(
     ...sessionContext,
     prompt: options.prompt,
     maxTokens: options.maxTokens,
+    temperature: options.temperature,
   });
   const signature = (tokens: PromptToken[], capture: Buffer) =>
     createHmac("sha256", signingKey)

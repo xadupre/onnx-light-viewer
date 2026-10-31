@@ -47,7 +47,7 @@ function createSettingsPanel({
   }
   selectEngine("onnxruntime");
 
-  const categories = ["app", "history", "engine"];
+  const categories = ["app", "history", "engine", "generation"];
   function selectCategory(selected) {
     for (const category of categories) {
       const active = category === selected;

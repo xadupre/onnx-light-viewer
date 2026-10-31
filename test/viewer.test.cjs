@@ -7659,7 +7659,7 @@ test("Settings categories support mouse and keyboard navigation without changing
   const messageCount = messages.length;
   const eventCount = events.length;
   const assertCategory = (selected) => {
-    for (const category of ["app", "history", "engine"]) {
+    for (const category of ["app", "history", "engine", "generation"]) {
       const active = category === selected;
       const tab = byId(`settings-${category}-tab`);
       const panel = byId(`settings-${category}-view`);
@@ -7685,10 +7685,11 @@ test("Settings categories support mouse and keyboard navigation without changing
   assertCategory("history");
   for (const [from, key, category] of [
     ["history", "ArrowRight", "engine"],
-    ["engine", "ArrowRight", "app"],
-    ["app", "ArrowLeft", "engine"],
+    ["engine", "ArrowRight", "generation"],
+    ["generation", "ArrowRight", "app"],
+    ["app", "ArrowLeft", "generation"],
     ["engine", "Home", "app"],
-    ["app", "End", "engine"],
+    ["app", "End", "generation"],
   ]) {
     byId(`settings-${from}-tab`).dispatchEvent(
       new window.KeyboardEvent("keydown", {
@@ -7715,6 +7716,83 @@ test("Settings categories support mouse and keyboard navigation without changing
   assert.equal(byId("settings-python").value, "/unsaved/python");
   assert.equal(byId("graph").getAttribute("viewBox"), camera);
   assert.equal(byId("nodes").innerHTML, graph);
+});
+
+test("Generation settings validate inputs and apply to both prompt engines", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const byId = (id) => document.getElementById(id);
+  const submit = () =>
+    byId("prompt-form").dispatchEvent(new window.Event("submit"));
+  const receive = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  const temperature = byId("prompt-temperature");
+  const maximum = byId("prompt-max-tokens");
+  assert.equal(temperature.value, "0");
+  assert.equal(maximum.value, "32");
+  assert.ok(byId("settings-generation-view").contains(temperature));
+  assert.ok(byId("settings-generation-view").contains(maximum));
+  load(demoGraph);
+  byId("prompt-tab").click();
+  receive({
+    type: "prompt-info",
+    requestId: messages.findLast(({ type }) => type === "prompt-info")
+      .requestId,
+    info: { available: true, engines: ["onnx-light", "onnxruntime-genai"] },
+  });
+  submit();
+  let request = messages.findLast(({ type }) => type === "run-prompt");
+  assert.equal(request.options.temperature, 0);
+  assert.equal(request.options.maxTokens, 32);
+  assert.equal(byId("prompt-generation-fields").disabled, true);
+  byId("prompt-cancel").click();
+  assert.equal(byId("prompt-generation-fields").disabled, false);
+  byId("prompt-generation-open").click();
+  assert.equal(byId("settings-generation-view").hidden, false);
+  for (const [field, value] of [
+    [temperature, "-1"],
+    [temperature, ""],
+    [maximum, "0"],
+    [maximum, "1.5"],
+    [maximum, "4097"],
+    [maximum, ""],
+  ]) {
+    temperature.value = "0";
+    maximum.value = "32";
+    field.value = value;
+    byId("prompt-generation-back").click();
+    const count = messages.filter(({ type }) => type === "run-prompt").length;
+    submit();
+    assert.equal(
+      messages.filter(({ type }) => type === "run-prompt").length,
+      count,
+    );
+    assert.equal(byId("settings-generation-view").hidden, false);
+  }
+  temperature.value = "0.75";
+  maximum.value = "7";
+  for (const engine of ["onnx-light", "onnxruntime-genai"]) {
+    byId("prompt-generation-back").click();
+    byId("prompt-engine").value = engine;
+    submit();
+    request = messages.findLast(({ type }) => type === "run-prompt");
+    assert.equal(request.options.engine, engine);
+    assert.equal(request.options.temperature, 0.75);
+    assert.equal(request.options.maxTokens, 7);
+    receive({
+      type: "prompt-result",
+      requestId: request.requestId,
+      result: { prompt: request.options.prompt, engine, tokens: [] },
+    });
+    temperature.value = "2";
+    byId("prompt-validate").click();
+    assert.equal(
+      messages.findLast(({ type }) => type === "run-prompt").options
+        .temperature,
+      0.75,
+    );
+    byId("prompt-cancel").click();
+    temperature.value = "0.75";
+  }
 });
 
 test("Engine settings subtabs reuse prompt controls without changing the execution engine", (t) => {
