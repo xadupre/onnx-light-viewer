@@ -17,10 +17,43 @@ function createExportPanel({ byId, postMessage, requestAction, revealPanel }) {
   let recipeRequest = 0;
   let recipeLoading = false;
   let recipeCatalog;
-  let modelSuggestionRequest = 0;
-  let modelSuggestionPython;
-  let modelIds = [];
-  let exportHistory = { models: [], directories: [] };
+  const modelIds = [
+    "THUDM/chatglm3-6b",
+    "deepseek-ai/DeepSeek-V3",
+    "baidu/ERNIE-4.5-0.3B-PT",
+    "google/gemma-2b",
+    "google/gemma-2-2b",
+    "google/gemma-3-1b-it",
+    "google/gemma-3-4b-it",
+    "openai-community/gpt2",
+    "openai/gpt-oss-20b",
+    "ibm-granite/granite-3.0-2b-base",
+    "internlm/internlm2-7b",
+    "LiquidAI/LFM2-350M",
+    "meta-llama/Llama-2-7b-hf",
+    "microsoft/Mage-Flow",
+    "mistralai/Mistral-7B-v0.1",
+    "mistralai/Ministral-3-3B-Instruct-2512",
+    "mistralai/Mixtral-8x7B-v0.1",
+    "nvidia/Minitron-8B-Base",
+    "allenai/OLMo-7B-hf",
+    "allenai/OLMo-2-1124-7B",
+    "microsoft/phi-2",
+    "microsoft/Phi-3-mini-4k-instruct",
+    "microsoft/Phi-3-small-8k-instruct",
+    "microsoft/Phi-3-vision-128k-instruct",
+    "microsoft/Phi-4-multimodal-instruct",
+    "microsoft/Phi-3.5-MoE-instruct",
+    "Qwen/Qwen2-0.5B",
+    "Qwen/Qwen2.5-Omni-3B",
+    "Qwen/Qwen2.5-VL-7B-Instruct",
+    "Qwen/Qwen3-0.6B",
+    "Qwen/Qwen3-VL-4B-Instruct",
+    "HuggingFaceTB/SmolLM3-3B",
+    "HuggingFaceTB/SmolVLM-256M-Instruct",
+    "OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B",
+    "openai/whisper-tiny",
+  ];
   function recipeDetails() {
     const recipe = recipeCatalog?.recipes.find(
       (entry) => entry.id === byId("export-recipe").value,
@@ -170,7 +203,6 @@ function createExportPanel({ byId, postMessage, requestAction, revealPanel }) {
     }
   }
   function historySuggestions(history) {
-    exportHistory = history;
     for (const [id, entries] of [
       ["export-source-history", [...new Set([...history.models, ...modelIds])]],
       ["export-directory-history", history.directories],
@@ -259,24 +291,12 @@ function createExportPanel({ byId, postMessage, requestAction, revealPanel }) {
     requestAction("export", "Convert ONNX model", { exportOptions: options() });
   });
   updateAdvancedOptions();
+  historySuggestions({ models: [], directories: [] });
   return {
-    setPythonPackages(packages, pythonPath) {
-      modelSuggestionRequest++;
-      modelSuggestionPython = pythonPath;
-      modelIds = [];
-      historySuggestions(exportHistory);
+    setPythonPackages(packages) {
       const available = !!packages?.some(
         (pkg) => pkg.name === "modelbuilder" && (pkg.version || pkg.source),
       );
-      byId("export-model-suggestions-status").textContent = available
-        ? "Loading example model IDs from mbext..."
-        : "Install mbext in the selected Python environment for example model ID suggestions. You can also enter any model ID or local path.";
-      if (available)
-        postMessage({
-          type: "model-id-suggestions",
-          requestId: modelSuggestionRequest,
-          pythonPath,
-        });
       byId("mbext-repository").hidden = !available;
       const tool = byId("export-tool");
       const previous = tool.value;
@@ -327,19 +347,6 @@ function createExportPanel({ byId, postMessage, requestAction, revealPanel }) {
       enabled();
     },
     handleMessage(data) {
-      if (data?.type === "model-id-suggestions") {
-        if (
-          data.requestId !== modelSuggestionRequest ||
-          data.pythonPath !== modelSuggestionPython
-        )
-          return true;
-        modelIds = data.error ? [] : data.ids;
-        historySuggestions(exportHistory);
-        byId("export-model-suggestions-status").textContent = data.error
-          ? `Model ID suggestions unavailable: ${data.error}. You can still enter a model ID or local path.`
-          : `${modelIds.length} example model IDs from mbext (non-exhaustive; checkpoint and exporter compatibility are not guaranteed).`;
-        return true;
-      }
       if (data?.type === "olive-recipes") {
         if (data.requestId !== recipeRequest) return true;
         recipeLoading = false;

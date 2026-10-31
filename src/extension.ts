@@ -26,7 +26,6 @@ import {
   applicationSettings,
   inspectPythonPackages,
   latestPackageVersions,
-  supportedModelIds,
 } from "./settings";
 import {
   defaultExportDirectory,
@@ -927,38 +926,6 @@ async function configurePanel(
           });
         } finally {
           if (releaseController === controller) releaseController = undefined;
-        }
-      } else if (message?.type === "model-id-suggestions") {
-        try {
-          if (!vscode.workspace.isTrusted)
-            throw new Error("Trust this workspace before running Python.");
-          if (
-            typeof message.requestId !== "number" ||
-            !Number.isSafeInteger(message.requestId) ||
-            message.requestId <= 0 ||
-            message.pythonPath !== getApplicationSettings().pythonPath
-          )
-            throw new Error("Invalid model ID suggestions request.");
-          const ids = await log.run("Read mbext model ID suggestions", () =>
-            supportedModelIds(getApplicationSettings().pythonPath),
-          );
-          if (!active) return;
-          await postMessage({
-            type: "model-id-suggestions",
-            requestId: message.requestId,
-            pythonPath: message.pythonPath,
-            ids,
-          });
-        } catch (error) {
-          if (!active) return;
-          const detail = error instanceof Error ? error.message : String(error);
-          log.record("FAILED", `Model ID suggestions: ${detail}`);
-          await postMessage({
-            type: "model-id-suggestions",
-            requestId: message.requestId,
-            pythonPath: message.pythonPath,
-            error: detail,
-          });
         }
       } else if (
         message?.type === "get-settings" ||

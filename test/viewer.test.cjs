@@ -7782,7 +7782,10 @@ test("Settings exposes histories, removes selected entries, clears categories an
   assert.equal(messages.at(-1).historyAction, "clear");
   send({ type: "export-history", history: { models: [], directories: [] } });
   assert.equal(byId("settings-clear-export").disabled, true);
-  assert.equal(byId("export-source-history").children.length, 0);
+  assert.deepEqual(
+    [...byId("export-source-history").options].map((option) => option.value),
+    [...byId("prompt-model-suggestions").options].map((option) => option.value),
+  );
   send({ type: "settings-error", error: "Could not persist history" });
   assert.equal(
     byId("settings-history-feedback").textContent,
@@ -7804,7 +7807,7 @@ test("Settings exposes histories, removes selected entries, clears categories an
   assert.equal(byId("settings-download").value, "/downloads");
 });
 
-test("model ID suggestions merge with history without changing inputs and discard stale Python results", (t) => {
+test("static model ID suggestions work without Python and merge with history without changing inputs", (t) => {
   const { document, window, messages } = openViewer(t);
   const byId = (id) => document.getElementById(id);
   const send = (data) =>
@@ -7816,47 +7819,24 @@ test("model ID suggestions merge with history without changing inputs and discar
       pythonPath: "/first/python",
     },
     viewer: { panels: { operator: true, find: true, metadata: false } },
-    trusted: true,
+    trusted: false,
     exportHistory: {
       models: ["owner/recent", "Qwen/Qwen3-0.6B"],
       directories: ["/previous/export"],
     },
   };
   const values = (id) => [...byId(id).options].map((option) => option.value);
-  const inspect = (packages) => {
-    const request = messages.findLast(
-      (message) => message.type === "inspect-python",
-    );
-    send({
-      ...request,
-      type: "python-info",
-      python: { executable: request.pythonPath, version: "3.12", packages },
-    });
-  };
+  const catalog = values("prompt-model-suggestions");
+  assert.ok(catalog.includes("Qwen/Qwen3-0.6B"));
+  assert.ok(catalog.includes("openai-community/gpt2"));
+  assert.deepEqual(values("export-source-history"), catalog);
   send(settings);
   byId("export-source").value = "owner/custom";
   byId("prompt-reference-source").value = "/local/reference";
-  inspect([
-    {
-      name: "modelbuilder",
-      version: null,
-      source: "/sources/mbext/modelbuilder",
-    },
-  ]);
-  const request = messages.findLast(
-    (message) => message.type === "model-id-suggestions",
-  );
-  assert.equal(request.pythonPath, "/first/python");
-  send({ ...request, ids: ["Qwen/Qwen3-0.6B", "openai-community/gpt2"] });
   assert.deepEqual(values("export-source-history"), [
-    "owner/recent",
-    "Qwen/Qwen3-0.6B",
-    "openai-community/gpt2",
+    ...new Set([...settings.exportHistory.models, ...catalog]),
   ]);
-  assert.deepEqual(values("prompt-model-suggestions"), [
-    "Qwen/Qwen3-0.6B",
-    "openai-community/gpt2",
-  ]);
+  assert.deepEqual(values("prompt-model-suggestions"), catalog);
   assert.equal(
     byId("prompt-reference-source").getAttribute("list"),
     "prompt-model-suggestions",
@@ -7865,41 +7845,23 @@ test("model ID suggestions merge with history without changing inputs and discar
   assert.equal(byId("prompt-reference-source").value, "/local/reference");
   assert.deepEqual(values("export-directory-history"), ["/previous/export"]);
   send({ type: "export-history", history: { models: [], directories: [] } });
-  assert.deepEqual(values("export-source-history"), [
-    "Qwen/Qwen3-0.6B",
-    "openai-community/gpt2",
-  ]);
+  assert.deepEqual(values("export-source-history"), catalog);
   send({
     ...settings,
     application: { ...settings.application, pythonPath: "/second/python" },
   });
-  send({ ...request, ids: ["owner/stale"] });
-  assert.deepEqual(
-    values("export-source-history"),
-    settings.exportHistory.models,
-  );
-  assert.deepEqual(values("prompt-model-suggestions"), []);
-  inspect([{ name: "modelbuilder", version: "0.2.1" }]);
-  const current = messages.findLast(
-    (message) => message.type === "model-id-suggestions",
-  );
-  send({ ...current, error: "list_supported_model_ids is missing" });
-  assert.match(
-    byId("export-model-suggestions-status").textContent,
-    /unavailable.*list_supported_model_ids/,
-  );
-  assert.deepEqual(
-    values("export-source-history"),
-    settings.exportHistory.models,
-  );
-  byId("settings-inspect-python").click();
-  inspect([{ name: "modelbuilder", version: null }]);
+  assert.deepEqual(values("export-source-history"), [
+    ...new Set([...settings.exportHistory.models, ...catalog]),
+  ]);
+  assert.deepEqual(values("prompt-model-suggestions"), catalog);
+  assert.equal(byId("export-source").value, "owner/custom");
+  assert.equal(byId("prompt-reference-source").value, "/local/reference");
   assert.equal(
-    messages.filter((message) => message.type === "model-id-suggestions")
-      .length,
-    2,
+    messages.some((message) =>
+      ["model-id-suggestions", "inspect-python"].includes(message.type),
+    ),
+    false,
   );
-  assert.deepEqual(values("prompt-model-suggestions"), []);
 });
 
 test("mbext stays hidden until its package is available and follows Python inspection changes", (t) => {
@@ -10610,7 +10572,14 @@ test("export defaults follow the download directory without replacing chosen pat
   );
   assert.deepEqual(
     [...byId("export-source-history").options].map((option) => option.value),
-    settings.exportHistory.models,
+    [
+      ...new Set([
+        ...settings.exportHistory.models,
+        ...[...byId("prompt-model-suggestions").options].map(
+          (option) => option.value,
+        ),
+      ]),
+    ],
   );
   assert.equal(byId("export-source-history").querySelector("img"), null);
   change("export-precision", "fp4");

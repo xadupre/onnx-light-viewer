@@ -357,7 +357,7 @@ function createSettingsPanel({
       byId("settings-python-status").textContent =
         `Python ${message.python.version} — ${message.python.executable}`;
       packages = message.python.packages;
-      onPythonPackages(packages, pythonPath);
+      onPythonPackages(packages);
       renderVersions();
     } else if (message.type === "settings-error") {
       byId("settings-feedback").textContent = message.error;

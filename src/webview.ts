@@ -135,7 +135,7 @@ export function webviewHtml(
                 <div id="export-source-options" class="export-option">
                 <label id="export-source-label" for="export-source">Hugging Face model ID or absolute local model directory</label>
                 <input id="export-source" required placeholder="Qwen/Qwen3-0.6B" autocomplete="off" list="export-source-history"><datalist id="export-source-history"></datalist>
-                <p id="export-model-suggestions-status" role="status">Install mbext in the selected Python environment for example model ID suggestions. You can also enter any model ID or local path.</p>
+                <p>Model ID suggestions are static, non-exhaustive examples, not guarantees of checkpoint or exporter compatibility. You can also enter any model ID or local path.</p>
                 </div>
                 <div id="export-olive-quantization" class="export-option" hidden>
                   <div class="export-field">

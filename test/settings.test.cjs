@@ -15,11 +15,7 @@ const { tmpdir } = require("node:os");
 const path = require("node:path");
 const { test } = require("node:test");
 const vm = require("node:vm");
-const {
-  inspectPythonPackages,
-  pythonPackages,
-  supportedModelIds,
-} = require("../dist/settings");
+const { inspectPythonPackages, pythonPackages } = require("../dist/settings");
 
 test("checks published GitHub and PyPI versions with explicit per-package failures and cancellation", async (t) => {
   const requests = [];
@@ -111,36 +107,6 @@ function setPythonPath(t, value) {
     else process.env.PYTHONPATH = previous;
   });
 }
-
-test("reads mbext model ID suggestions through its API on PYTHONPATH and reports incompatible versions", async (t) => {
-  const directory = mkdtempSync(path.join(tmpdir(), "viewer-model-ids-"));
-  t.after(() => rmSync(directory, { recursive: true, force: true }));
-  const packagePath = path.join(directory, "modelbuilder");
-  mkdirSync(packagePath);
-  writeFileSync(path.join(packagePath, "__init__.py"), "");
-  const architectures = path.join(packagePath, "architectures.py");
-  setPythonPath(t, directory);
-  const python = process.platform === "win32" ? "python" : "python3";
-  writeFileSync(
-    architectures,
-    `def list_supported_model_ids():
-    return ["Qwen/Qwen3-0.6B", "openai-community/gpt2", "Qwen/Qwen3-0.6B"]
-`,
-  );
-  assert.deepEqual(await supportedModelIds(python), [
-    "Qwen/Qwen3-0.6B",
-    "openai-community/gpt2",
-  ]);
-  writeFileSync(architectures, "");
-  await assert.rejects(supportedModelIds(python), /ImportError/);
-  writeFileSync(
-    architectures,
-    `def list_supported_model_ids():
-    return ["<img src=x>"]
-`,
-  );
-  await assert.rejects(supportedModelIds(python), /Invalid mbext model ID/);
-});
 
 test("inspects real Python metadata without importing optional model libraries", async (t) => {
   setPythonPath(t, "");
