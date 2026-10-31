@@ -105,9 +105,9 @@ test("invalid session JSON stops generation and corrected or blank JSON clears v
 
 test("prompt defaults, engine applicability and aligned validation results", (t) => {
   const { byId, api, messages } = panel(t);
-  assert.equal(byId("prompt-tab").textContent, "Prompt");
+  assert.equal(byId("prompt-tab").textContent, "Run");
   assert.ok(byId("prompt-tab").querySelector("svg"));
-  assert.equal(byId("prompt-view").querySelector("h1").textContent, "Prompt");
+  assert.equal(byId("prompt-view").querySelector("h1").textContent, "Run");
   assert.equal(byId("prompt-fields").disabled, false);
   assert.equal(byId("prompt-max-tokens").value, "32");
   assert.equal(byId("prompt-engine").options[1].disabled, true);

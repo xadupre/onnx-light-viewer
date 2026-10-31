@@ -92,5 +92,6 @@ void AddMemoryProfileMethods(Napi::Env env, Napi::Object result,
 void AddTensorStatisticsMethods(Napi::Env env, Napi::Object result,
                                 std::shared_ptr<StoredModel> model);
 void AddDimensionMethods(Napi::Env env, Napi::Object result, std::shared_ptr<StoredModel> model);
+void AddRunMethods(Napi::Env env, Napi::Object result, std::shared_ptr<StoredModel> model);
 
 } // namespace onnx_light_viewer

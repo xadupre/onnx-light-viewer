@@ -2010,6 +2010,15 @@ button:disabled {
   grid-column: 1 / -1;
 }
 
+#run-inputs {
+  grid-column: 1 / -1;
+}
+
+#run-results pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .form-grid > button {
   grid-column: 2;
   justify-self: start;
