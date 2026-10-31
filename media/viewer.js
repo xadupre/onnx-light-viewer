@@ -1,7 +1,7 @@
 /* global acquireVsCodeApi, createSidebar, createFilePanels, createInspector,
           createMetadataPanel, createFusionPanel, createSettingsPanel, createExportPanel,
           createMemoryPanel, createTensorListPanel, createTensorStatisticsPanel, sugiyamaLayout, graphPathSegments,
-          flattenGraphPath, graphPointDistance */
+          flattenGraphPath, graphPointDistance, graphPortOffset */
 const vscode = acquireVsCodeApi();
 const svgNS = "http://www.w3.org/2000/svg";
 const byId = (id) => document.getElementById(id);
@@ -1652,7 +1652,6 @@ function connectionPoints({
   const span = route.to.y - toHeight - route.from.y - fromHeight;
   return [
     start,
-    ...(fromOffset ? [{ x: start.x, y: start.y + 12 }] : []),
     ...route.points.map((point, index) => {
       // Translate the whole route for group drags, blend offsets for one endpoint.
       const fraction = span
@@ -1669,7 +1668,6 @@ function connectionPoints({
           (to.y - route.to.y) * fraction,
       };
     }),
-    ...(toOffset ? [{ x: end.x, y: end.y - 12 }] : []),
     end,
   ];
 }
@@ -2013,19 +2011,8 @@ function render(graph, metadata) {
   const sizes = operatorSizes(graph.nodes);
   const layout = sugiyamaLayout(graph, sizes);
   const { producers, positions } = layout;
-  const nodesById = new Map(graph.nodes.map((node) => [node.id, node]));
-  const portOffset = (width, index, count) =>
-    width * ((index + 1) / (count + 1) - 0.5);
-  const outputOffset = (producer, name) => {
-    const node = nodesById.get(producer);
-    return node
-      ? portOffset(
-          sizes.get(producer).width,
-          node.outputs.indexOf(name),
-          node.outputs.length,
-        )
-      : 0;
-  };
+  const outputOffset = (producer, name) =>
+    layout.outputOffsets.get(producer)?.get(name) ?? 0;
   bounds = layout.bounds;
   layoutBounds = bounds;
   const addPort = (name, index, output) => {
@@ -2195,7 +2182,8 @@ function render(graph, metadata) {
         [node.outputs, true],
       ]) {
         names.forEach((name, index) => {
-          const x = position.x + portOffset(size.width, index, names.length);
+          const x =
+            position.x + graphPortOffset(size.width, index, names.length);
           const y = output ? top + size.height : top;
           const port = element("path", {
             class: `node-port ${output ? "node-output" : "node-input"}`,
@@ -2346,11 +2334,9 @@ function render(graph, metadata) {
         input,
         producer ? sizes.get(producer).height / 2 : 26,
         size.height / 2,
-        producer
-          ? layout.routes.get(node.id)?.get(producer)
-          : layout.inputRoutes.get(node.id)?.get(input),
+        layout.portRoutes.get(node.id)?.[index],
         outputOffset(producer, input),
-        portOffset(size.width, index, inputs.length),
+        graphPortOffset(size.width, index, inputs.length),
       );
     });
   }

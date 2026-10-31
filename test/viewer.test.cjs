@@ -12273,6 +12273,34 @@ test("connects ordered tensor slots, including repeated inputs and empty outputs
   assert.deepEqual(paths("b").slice(0, 2), before);
 });
 
+test("connects variadic outputs without rescanning their names for each consumer", (t) => {
+  const { document, load } = openViewer(t);
+  const outputs = Array.from({ length: 64 }, (_, index) => `split_${index}`);
+  let scans = 0;
+  outputs.indexOf = function (name) {
+    scans++;
+    return Array.prototype.indexOf.call(this, name);
+  };
+  load({
+    ...demoGraph,
+    outputs,
+    nodes: [
+      { ...demoGraph.nodes[0], opType: "Split", outputs },
+      ...outputs.map((name, index) => ({
+        ...demoGraph.nodes[0],
+        id: `consumer-${index}`,
+        inputs: [name],
+        outputs: [],
+      })),
+    ],
+  });
+  assert.equal(scans, 0, "Output offsets must use precomputed name lookups");
+  assert.equal(
+    document.querySelectorAll(".node-output").length,
+    outputs.length,
+  );
+});
+
 test("keeps residual routes attached while dragging and restores their bends with Refresh positions", (t) => {
   const { document, window, load, pointer } = openViewer(t);
   const model = chainGraph(5);

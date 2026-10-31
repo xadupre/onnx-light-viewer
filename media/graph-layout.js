@@ -23,6 +23,7 @@ function sugiyamaLayout(graph, sizes) {
   };
   const result = layeredGraphLayout(layoutGraph, dimensions);
   shortenGraphRoutes(layoutGraph, dimensions, result);
+  routeGraphPorts(layoutGraph, dimensions, result);
   result.inputPositions = new Map();
   result.outputPositions = new Map();
   result.inputRoutes = new Map();
@@ -36,10 +37,12 @@ function sugiyamaLayout(graph, sizes) {
     if (result.producers.get(port.name) === port.id)
       result.producers.delete(port.name);
     if (port.port === "output") {
-      const route = result.routes.get(port.id)?.values().next().value;
+      const route = result.portRoutes.get(port.id)?.[0];
       if (route?.length) result.outputRoutes.set(port.name, route);
       result.routes.delete(port.id);
     }
+    result.portRoutes.delete(port.id);
+    result.outputOffsets.delete(port.id);
   }
   for (const [target, routes] of result.routes) {
     for (const [source, points] of routes) {
@@ -56,6 +59,164 @@ function sugiyamaLayout(graph, sizes) {
     if (!routes.size) result.routes.delete(target);
   }
   return result;
+}
+
+function graphPortOffset(width, index, count) {
+  return width * ((index + 1) / (count + 1) - 0.5);
+}
+
+function routeGraphPorts(graph, sizes, result) {
+  result.outputOffsets = new Map();
+  result.portRoutes = new Map();
+  for (const node of graph.nodes) {
+    const offsets = new Map();
+    node.outputs.forEach((name, index) => {
+      if (name && !offsets.has(name))
+        offsets.set(
+          name,
+          graphPortOffset(sizes.get(node.id).width, index, node.outputs.length),
+        );
+    });
+    result.outputOffsets.set(node.id, offsets);
+  }
+  let obstacles;
+  let boxes;
+  let rows;
+  let leftLane;
+  let rightLane;
+  const prepareRows = () => {
+    if (rows) return;
+    boxes = graphNodeBoxes(graph, sizes, result.positions);
+    rows = new Map();
+    leftLane = Infinity;
+    rightLane = -Infinity;
+    for (const { id, bounds } of boxes) {
+      const y = result.positions.get(id).y;
+      const row = rows.get(y) ?? { top: Infinity, bottom: -Infinity };
+      row.top = Math.min(row.top, bounds.top);
+      row.bottom = Math.max(row.bottom, bounds.bottom);
+      rows.set(y, row);
+      leftLane = Math.min(leftLane, bounds.left - graphRouteRadius - 1);
+      rightLane = Math.max(rightLane, bounds.right + graphRouteRadius + 1);
+    }
+    [...rows]
+      .sort(([a], [b]) => a - b)
+      .forEach(([, row], index) => {
+        row.index = index;
+      });
+  };
+  const clear = (source, target, points, routed) => {
+    obstacles ??= graphSpatialIndex(boxes);
+    const curve = flattenGraphPath(points, routed);
+    const budget = { remaining: 256 };
+    for (let index = 1; index < curve.length; index++) {
+      if (--budget.remaining < 0) return false;
+      const start = curve[index - 1];
+      const end = curve[index];
+      if (
+        obstacles.find(
+          graphSegmentBounds(start, end, 1),
+          (node) =>
+            node.id !== source &&
+            node.id !== target &&
+            graphSegmentHitsBox(start, end, node.bounds, 1),
+          budget,
+        )
+      )
+        return false;
+    }
+    return true;
+  };
+  for (const node of graph.nodes) {
+    const inputs = [...node.inputs, ...(node.captures ?? [])];
+    const routes = [];
+    result.portRoutes.set(node.id, routes);
+    inputs.forEach((name, index) => {
+      const source = result.producers.get(name);
+      if (source === undefined) return;
+      const from = result.positions.get(source);
+      const to = result.positions.get(node.id);
+      const fromOffset = result.outputOffsets.get(source).get(name);
+      const toOffset = graphPortOffset(
+        sizes.get(node.id).width,
+        index,
+        inputs.length,
+      );
+      const route = result.routes.get(node.id)?.get(source) ?? [];
+      if (!fromOffset && !toOffset) {
+        routes[index] = route;
+        return;
+      }
+      const start = {
+        x: from.x + fromOffset,
+        y: from.y + sizes.get(source).height / 2,
+      };
+      const end = {
+        x: to.x + toOffset,
+        y: to.y - sizes.get(node.id).height / 2,
+      };
+      let points = [
+        start,
+        ...(route.length && fromOffset
+          ? [{ x: start.x, y: start.y + 12 }]
+          : []),
+        ...route,
+        ...(route.length && toOffset ? [{ x: end.x, y: end.y - 12 }] : []),
+        end,
+      ];
+      prepareRows();
+      const fromRow = rows.get(from.y);
+      const toRow = rows.get(to.y);
+      if (
+        toRow.index === fromRow.index + 1 &&
+        toRow.top - fromRow.bottom >= (graphRouteRadius + 8) * 2
+      ) {
+        // Adjacent rows have an empty corridor; shorter boxes need vertical port approaches.
+        routes[index] =
+          start.y === fromRow.bottom &&
+          end.y === toRow.top &&
+          points.every(({ y }) => y >= start.y && y <= end.y)
+            ? points.slice(1, -1)
+            : [
+                { x: start.x, y: fromRow.bottom + graphRouteRadius + 8 },
+                { x: end.x, y: toRow.top - graphRouteRadius - 8 },
+              ];
+        return;
+      }
+      if (!clear(source, node.id, points, !!route.length)) {
+        const exit = {
+          x: start.x,
+          y: fromRow.bottom + graphRouteRadius + 8,
+        };
+        const entry = {
+          x: end.x,
+          y: toRow.top - graphRouteRadius - 8,
+        };
+        // Row-gap rails and an exterior lane stay clear even when the query budget expires.
+        const lane =
+          Math.abs(start.x - leftLane) + Math.abs(end.x - leftLane) <=
+          Math.abs(start.x - rightLane) + Math.abs(end.x - rightLane)
+            ? leftLane
+            : rightLane;
+        points = [
+          start,
+          exit,
+          { x: lane, y: exit.y },
+          { x: lane, y: entry.y },
+          entry,
+          end,
+        ];
+        const left = Math.min(result.bounds.x, lane - 20);
+        const right = Math.max(
+          result.bounds.x + result.bounds.width,
+          lane + 20,
+        );
+        result.bounds.x = left;
+        result.bounds.width = right - left;
+      }
+      routes[index] = points.slice(1, -1);
+    });
+  }
 }
 
 function graphPathSegments(points, routed) {
