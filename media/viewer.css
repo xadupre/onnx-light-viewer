@@ -66,7 +66,8 @@ p {
 [hidden] {
   display: none !important;
 }
-.viewer-tabs {
+.viewer-tabs,
+.settings-tabs {
   display: flex;
   overflow-x: auto;
   border-bottom: 1px solid var(--border);
@@ -92,14 +93,16 @@ p {
 .viewer-tabs .feature-group + .feature-group {
   border-left: 1px solid var(--border);
 }
-.viewer-tabs button {
+.viewer-tabs button,
+.settings-tabs button {
   padding: 8px 20px;
   color: var(--muted);
   background: transparent;
   border: 0;
   border-bottom: 2px solid transparent;
 }
-.viewer-tabs [aria-selected="true"] {
+.viewer-tabs [aria-selected="true"],
+.settings-tabs [aria-selected="true"] {
   color: var(--text);
   border-bottom-color: var(--mint);
 }
