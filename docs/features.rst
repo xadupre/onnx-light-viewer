@@ -202,8 +202,23 @@ configuration, or the engine default when the option is absent from that file.
 onnx-light exposes CPU threads, shape checks, allocation capacity, intermediate
 release, logging and native kernel profiles. GenAI exposes CPU threads,
 CPU/CUDA/DirectML providers and GPU limits, graph optimization, memory options,
-prepacking, graph execution mode, logging and ORT profiling. Unsupported
+prepacking, graph execution mode, log ID/verbosity, custom operator libraries and ORT profiling. Unsupported
 providers/options raise runtime errors, without switching engines.
+
+**Settings → Engine → onnxruntime → All session options** accepts a JSON object
+in the native GenAI ``session_options`` format, exposing all options supported by
+the installed runtime, including ``provider_options`` and string-valued ORT
+configuration entries. For example, ``{"session.intra_op.allow_spinning":"0"}``
+disables intra-op spinning. Nonblank individual controls override matching JSON
+keys; blank JSON preserves the exported configuration. Provider selection and GPU
+controls also take precedence over JSON provider options. Invalid JSON blocks
+generation; unsupported runtime options are reported on Prompt.
+
+.. figure:: _static/feature-ort-session-options.png
+   :alt: ONNX Runtime settings with log verbosity, log ID, custom operator library and a JSON editor for all native session options.
+   :width: 100%
+
+   Advanced session options supplement the shared Prompt controls without editing exported files.
 
 Open **Generation settings** from Prompt, or **Settings → Generation**, to set
 **Temperature** (default **0**, greedy decoding) and **Maximum new tokens**

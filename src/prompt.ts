@@ -169,6 +169,7 @@ function sessionSettingsFrom(
           deviceId: 65535,
           gpuMemoryMiB: 1048576,
           logSeverity: 4,
+          logVerbosity: 2147483647,
         };
   const boolean =
     engine === "onnx-light"
@@ -214,6 +215,50 @@ function sessionSettingsFrom(
     } else if (Object.hasOwn(enums, key)) {
       if (typeof setting !== "string" || !enums[key].includes(setting))
         throw new Error(`Invalid session setting: ${key}.`);
+    } else if (
+      engine === "onnxruntime-genai" &&
+      ["logId", "customOpsLibrary", "sessionOptions"].includes(key)
+    ) {
+      if (
+        typeof setting !== "string" ||
+        setting.includes("\0") ||
+        setting.length > (key === "sessionOptions" ? 65536 : 4096)
+      )
+        throw new Error(`Invalid session setting: ${key}.`);
+      if (key === "sessionOptions") {
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(setting);
+        } catch {
+          throw new Error("Enter a valid session options JSON object.");
+        }
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+          throw new Error("Enter a valid session options JSON object.");
+        const check = (entry: unknown, depth: number): void => {
+          if (depth > 16)
+            throw new Error("Session options JSON is nested too deeply.");
+          if (typeof entry === "string" && entry.includes("\0"))
+            throw new Error("Session options cannot contain null characters.");
+          if (
+            typeof entry === "number" &&
+            (!Number.isFinite(entry) ||
+              (Number.isInteger(entry) && !Number.isSafeInteger(entry)))
+          )
+            throw new Error(
+              "Session options numbers must be finite, and integers must be within JavaScript's safe integer range.",
+            );
+          if (entry && typeof entry === "object")
+            for (const [name, child] of Object.entries(entry)) {
+              if (
+                ["__proto__", "prototype", "constructor"].includes(name) ||
+                name.includes("\0")
+              )
+                throw new Error("Invalid session options key.");
+              check(child, depth + 1);
+            }
+        };
+        check(parsed, 0);
+      }
     } else throw new Error(`Unsupported ${engine} session setting: ${key}.`);
     result[key] = setting;
   }
