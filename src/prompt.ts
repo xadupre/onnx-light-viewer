@@ -239,8 +239,14 @@ function sessionSettingsFrom(
             throw new Error("Session options JSON is nested too deeply.");
           if (typeof entry === "string" && entry.includes("\0"))
             throw new Error("Session options cannot contain null characters.");
-          if (typeof entry === "number" && !Number.isFinite(entry))
-            throw new Error("Session options must contain finite numbers.");
+          if (
+            typeof entry === "number" &&
+            (!Number.isFinite(entry) ||
+              (Number.isInteger(entry) && !Number.isSafeInteger(entry)))
+          )
+            throw new Error(
+              "Session options numbers must be finite, and integers must be within JavaScript's safe integer range.",
+            );
           if (entry && typeof entry === "object")
             for (const [name, child] of Object.entries(entry)) {
               if (
