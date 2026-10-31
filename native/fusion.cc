@@ -512,24 +512,26 @@ public:
         }
       }
       RestoreModelPayloads(snapshot_, *canonical_, path_);
-      std::vector<ol::EncodedValueProto *> encoded;
-      std::set<const ol::TensorProto *> layout_tensors;
-      const auto tensors = ModelSaveTensors(snapshot_, &encoded, &layout_tensors);
-      for (auto *value : encoded)
-        if (value->has_data_location() && value->data_location() == ol::TensorProto::EXTERNAL) {
-          if (path_.empty())
-            throw std::runtime_error("Fusion needs a local source path for external weights.");
-          LoadExternalTensor(*value, ModelFilePath(path_).parent_path());
-        }
-      for (auto *tensor : tensors)
-        if ((!layout_tensors.contains(tensor) || tensor->has_data_location()) &&
-            tensor->data_location() == ol::TensorProto::EXTERNAL) {
-          if (path_.empty())
-            throw std::runtime_error("Fusion needs a local source path for external weights.");
-          auto reference = tensor->SharedCopy();
-          LoadExternalTensor(*tensor, ModelFilePath(path_).parent_path());
-          weights_.push_back({std::move(reference), tensor->SharedCopy()});
-        }
+      if (operation_ != "Optimize") {
+        std::vector<ol::EncodedValueProto *> encoded;
+        std::set<const ol::TensorProto *> layout_tensors;
+        const auto tensors = ModelSaveTensors(snapshot_, &encoded, &layout_tensors);
+        for (auto *value : encoded)
+          if (value->has_data_location() && value->data_location() == ol::TensorProto::EXTERNAL) {
+            if (path_.empty())
+              throw std::runtime_error("Fusion needs a local source path for external weights.");
+            LoadExternalTensor(*value, ModelFilePath(path_).parent_path());
+          }
+        for (auto *tensor : tensors)
+          if ((!layout_tensors.contains(tensor) || tensor->has_data_location()) &&
+              tensor->data_location() == ol::TensorProto::EXTERNAL) {
+            if (path_.empty())
+              throw std::runtime_error("Fusion needs a local source path for external weights.");
+            auto reference = tensor->SharedCopy();
+            LoadExternalTensor(*tensor, ModelFilePath(path_).parent_path());
+            weights_.push_back({std::move(reference), tensor->SharedCopy()});
+          }
+      }
       ol::VerifyModel(snapshot_);
       if (!operation_.empty()) {
         ApplyTransformation();

@@ -3481,6 +3481,96 @@ function optimizationModel() {
   );
 }
 
+test("optimization keeps external weights unloaded through rewriting, clone and undo, and saves them later", async (t) => {
+  const directory = mkdtempSync(path.join(tmpdir(), "optimization-unloaded-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const node = (op, inputs, output, attributes = []) =>
+    Buffer.concat([
+      ...inputs.map((name) => bytesField(1, name)),
+      bytesField(2, output),
+      bytesField(4, op),
+      ...attributes,
+    ]);
+  const perm = bytesField(
+    5,
+    Buffer.concat([
+      bytesField(1, "perm"),
+      varintField(8, 1),
+      varintField(8, 0),
+      varintField(20, 7),
+    ]),
+  );
+  const weight = Buffer.concat([
+    varintField(1, 128),
+    varintField(1, 64),
+    varintField(2, 1),
+    bytesField(8, "weight"),
+    bytesField(9, Buffer.alloc(128 * 64 * 4, 63)),
+  ]);
+  const inline = memoryTestModel([128, 64], {
+    nodes: [
+      node("Transpose", ["x"], "transposed", [perm]),
+      node("Transpose", ["transposed"], "restored", [perm]),
+      node("Add", ["restored", "weight"], "y"),
+    ],
+    initializers: [weight],
+  });
+  const files = await inline.serializeFiles(128 * 64 * 4, "weight");
+  const file = path.join(directory, "model.onnx");
+  writeFileSync(file, files.model);
+  const source = await loadModelFile(file, "model.onnx");
+  const original = source.graph();
+  const locations = source.externalDataLocations();
+  assert.equal(locations.length, 1);
+  const optimized = await source.optimize(
+    source
+      .optimizationPatterns()
+      .filter(({ enabledByDefault }) => enabledByDefault)
+      .map(({ name }) => name),
+    "Optimize",
+  );
+  optimized.verify();
+  assert.deepEqual(
+    optimized.graph().nodes.map(({ opType }) => opType),
+    ["Add"],
+  );
+  assert.deepEqual(optimized.externalDataLocations(), locations);
+  assert.equal(optimized.graph().nodes[0].parameters[0].storage.external, true);
+  assert.deepEqual(optimized.clone().externalDataLocations(), locations);
+  assert.deepEqual(optimized.undoFusion().graph(), original);
+  assert.deepEqual(source.graph(), original);
+  const repeated = await optimized.optimize(["TransposeTranspose"], "Optimize");
+  assert.deepEqual(repeated.graph(), optimized.graph());
+  assert.deepEqual(repeated.externalDataLocations(), locations);
+
+  for (const weight of files.weights)
+    writeFileSync(path.join(directory, weight.name), weight.bytes);
+  const saved = loadModel(await optimized.serialize(), "saved");
+  saved.verify();
+  assert.deepEqual(saved.externalDataLocations(), []);
+  assert.equal(saved.graph().nodes[0].parameters[0].storage.external, false);
+  const [plan] = rewritingPlans(
+    Buffer.from(await optimized.serialize(undefined, undefined, true)),
+  );
+  assert.deepEqual(loadModel(plan.bytes, "replayed").graph(), saved.graph());
+});
+
+test("optimization accepts unloaded encoded weights without a local source path", async () => {
+  const source = loadModel(encodedModel({ external: "absent.bin" }), "encoded");
+  const original = source.graph();
+  const optimized = await source.optimize(
+    source
+      .optimizationPatterns()
+      .filter(({ enabledByDefault }) => enabledByDefault)
+      .map(({ name }) => name),
+    "Optimize",
+  );
+  optimized.verify();
+  assert.deepEqual(optimized.graph(), original);
+  assert.deepEqual(optimized.externalDataLocations(), ["absent.bin"]);
+  await assert.rejects(optimized.serialize(), /local source model path/);
+});
+
 test("optimization shares large initializer and Constant payloads across snapshots", async (t) => {
   const directory = mkdtempSync(path.join(tmpdir(), "optimization-payloads-"));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
