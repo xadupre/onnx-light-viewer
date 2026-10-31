@@ -2027,7 +2027,8 @@ button:disabled {
   margin-bottom: 0.5rem;
 }
 
-.prompt-token-table .prompt-token-section th {
+.prompt-token-table .prompt-token-section th,
+.prompt-token-table .prompt-token-section td {
   border-top-width: 3px;
   background: var(--border);
   font-weight: bold;
