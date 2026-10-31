@@ -243,12 +243,20 @@ test("Prompt and Settings align labels beside their controls, including session 
   ]) {
     const control = document.getElementById(id);
     const label = document.querySelector(`label[for="${id}"]`);
-    assert.equal(label.parentElement, control.parentElement, id);
+    const field = control.closest(".model-suggestion-field") ?? control;
+    assert.equal(label.parentElement, field.parentElement, id);
     assert.equal(
-      dom.window.getComputedStyle(control.parentElement).gridTemplateColumns,
+      dom.window.getComputedStyle(field.parentElement).gridTemplateColumns,
       "minmax(0, 1fr) minmax(0, 2fr)",
       id,
     );
+  }
+  for (const id of ["export-source-history", "prompt-model-suggestions"]) {
+    const list = document.getElementById(id);
+    const style = dom.window.getComputedStyle(list);
+    assert.equal(style.overflowY, "scroll");
+    assert.equal(style.maxHeight, "200px");
+    assert.ok(list.size > 1);
   }
   for (const label of document.querySelectorAll(
     ".prompt-settings-grid label, #settings-panels label",

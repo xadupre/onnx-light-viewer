@@ -134,7 +134,10 @@ export function webviewHtml(
                 </div>
                 <div id="export-source-options" class="export-option">
                 <label id="export-source-label" for="export-source">Hugging Face model ID or absolute local model directory</label>
-                <input id="export-source" required placeholder="Qwen/Qwen3-0.6B" autocomplete="off" list="export-source-history"><datalist id="export-source-history"></datalist>
+                <div class="model-suggestion-field">
+                  <input id="export-source" required placeholder="Qwen/Qwen3-0.6B" autocomplete="off">
+                  <details id="export-source-picker"><summary>History</summary><select id="export-source-history" size="8" aria-label="Model ID suggestions and recent sources"></select></details>
+                </div>
                 <p>Model ID suggestions are static, non-exhaustive examples, not guarantees of checkpoint or exporter compatibility. You can also enter any model ID or local path.</p>
                 </div>
                 <div id="export-olive-quantization" class="export-option" hidden>
@@ -558,8 +561,10 @@ export function webviewHtml(
           <input id="prompt-keep-loaded" type="checkbox">
           <p>Off by default to limit memory use and swapping. Changing engines, models or settings releases the previous session. Keeping a native model loaded during HF validation can hold two models in memory.</p>
           <label for="prompt-reference-source">Hugging Face reference (model ID or local checkpoint)</label>
-          <input id="prompt-reference-source" type="text" autocomplete="off" placeholder="e.g. Qwen/Qwen3-0.6B" list="prompt-model-suggestions" aria-describedby="prompt-validation-status">
-          <datalist id="prompt-model-suggestions"></datalist>
+          <div class="model-suggestion-field">
+            <input id="prompt-reference-source" type="text" autocomplete="off" placeholder="e.g. Qwen/Qwen3-0.6B" aria-describedby="prompt-validation-status">
+            <details id="prompt-reference-picker"><summary>Suggestions</summary><select id="prompt-model-suggestions" size="8" aria-label="Reference model ID suggestions"></select></details>
+          </div>
           <p id="prompt-validation-status" role="status">Open a model to check whether its Hugging Face reference is identified.</p>
           <label for="prompt-validate-run">Validate with Hugging Face after generation</label>
           <input id="prompt-validate-run" type="checkbox">

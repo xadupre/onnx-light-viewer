@@ -7833,13 +7833,16 @@ test("static model ID suggestions work without Python and merge with history wit
   send(settings);
   byId("export-source").value = "owner/custom";
   byId("prompt-reference-source").value = "/local/reference";
-  assert.deepEqual(values("export-source-history"), [
-    ...new Set([...settings.exportHistory.models, ...catalog]),
-  ]);
+  assert.deepEqual(
+    values("export-source-history"),
+    [...new Set([...settings.exportHistory.models, ...catalog])].sort(
+      new Intl.Collator("en").compare,
+    ),
+  );
   assert.deepEqual(values("prompt-model-suggestions"), catalog);
   assert.equal(
-    byId("prompt-reference-source").getAttribute("list"),
-    "prompt-model-suggestions",
+    byId("prompt-reference-picker").querySelector("select"),
+    byId("prompt-model-suggestions"),
   );
   assert.equal(byId("export-source").value, "owner/custom");
   assert.equal(byId("prompt-reference-source").value, "/local/reference");
@@ -7850,9 +7853,12 @@ test("static model ID suggestions work without Python and merge with history wit
     ...settings,
     application: { ...settings.application, pythonPath: "/second/python" },
   });
-  assert.deepEqual(values("export-source-history"), [
-    ...new Set([...settings.exportHistory.models, ...catalog]),
-  ]);
+  assert.deepEqual(
+    values("export-source-history"),
+    [...new Set([...settings.exportHistory.models, ...catalog])].sort(
+      new Intl.Collator("en").compare,
+    ),
+  );
   assert.deepEqual(values("prompt-model-suggestions"), catalog);
   assert.equal(byId("export-source").value, "owner/custom");
   assert.equal(byId("prompt-reference-source").value, "/local/reference");
@@ -7862,6 +7868,91 @@ test("static model ID suggestions work without Python and merge with history wit
     ),
     false,
   );
+});
+
+test("model pickers reopen the full alphabetic list with the current choice highlighted", async (t) => {
+  const { document, window } = openViewer(t);
+  const byId = (id) => document.getElementById(id);
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  const history = {
+    models: ["z-owner/model", "a-owner/model", "Qwen/Qwen3-0.6B"],
+    directories: [],
+  };
+  send({ type: "export-history", history });
+  for (const [inputId, pickerId, listId] of [
+    ["export-source", "export-source-picker", "export-source-history"],
+    [
+      "prompt-reference-source",
+      "prompt-reference-picker",
+      "prompt-model-suggestions",
+    ],
+  ]) {
+    const input = byId(inputId);
+    const picker = byId(pickerId);
+    const list = byId(listId);
+    if (inputId === "export-source") {
+      send({ type: "load-state", pending: false });
+      byId("export-model").click();
+    } else {
+      byId("prompt-tab").click();
+    }
+    const toggle = async (open) => {
+      const toggled = once(picker, "toggle");
+      picker.open = open;
+      await toggled;
+    };
+    const options = [...list.options];
+    const values = options.map((option) => option.value);
+    assert.deepEqual(values, [...values].sort(new Intl.Collator("en").compare));
+    assert.ok(list.size > 1);
+    input.closest("fieldset").disabled = false;
+    input.disabled = false;
+    assert.equal(input.matches(":disabled"), false, inputId);
+    assert.equal(list.matches(":disabled"), false, listId);
+    input.value = "Qwen/Qwen3-0.6B";
+    await toggle(true);
+    assert.equal(picker.open, true, pickerId);
+    assert.equal(list.selectedOptions[0].value, input.value);
+    assert.equal(document.activeElement, list, listId);
+    list.value = "openai-community/gpt2";
+    list.dispatchEvent(new window.Event("change", { bubbles: true }));
+    assert.equal(input.value, "openai-community/gpt2");
+    list.dispatchEvent(
+      new window.KeyboardEvent("keydown", {
+        key: "Enter",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    assert.equal(picker.open, false);
+    await once(picker, "toggle");
+    send({
+      type: "export-history",
+      history: { ...history, models: [...history.models].reverse() },
+    });
+    await toggle(true);
+    assert.equal(list.selectedOptions[0].value, "openai-community/gpt2");
+    assert.deepEqual([...list.options], options);
+    input.value = "custom/not-in-list";
+    await toggle(false);
+    await toggle(true);
+    assert.equal(list.selectedIndex, -1);
+    assert.deepEqual([...list.options], options);
+    list.dispatchEvent(
+      new window.KeyboardEvent("keydown", {
+        key: "Escape",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    assert.equal(picker.open, false);
+    await once(picker, "toggle");
+    assert.equal(input.value, "custom/not-in-list");
+    await toggle(true);
+    byId("model-tab").focus();
+    assert.equal(picker.open, false);
+  }
 });
 
 test("mbext stays hidden until its package is available and follows Python inspection changes", (t) => {
@@ -10567,8 +10658,8 @@ test("export defaults follow the download directory without replacing chosen pat
     "/downloads/<model_id>/<exporter>",
   );
   assert.equal(
-    byId("export-source").getAttribute("list"),
-    "export-source-history",
+    byId("export-source-picker").querySelector("select"),
+    byId("export-source-history"),
   );
   assert.deepEqual(
     [...byId("export-source-history").options].map((option) => option.value),
@@ -10579,7 +10670,7 @@ test("export defaults follow the download directory without replacing chosen pat
           (option) => option.value,
         ),
       ]),
-    ],
+    ].sort(new Intl.Collator("en").compare),
   );
   assert.equal(byId("export-source-history").querySelector("img"), null);
   change("export-precision", "fp4");
