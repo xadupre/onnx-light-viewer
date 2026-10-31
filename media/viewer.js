@@ -1781,10 +1781,16 @@ function connectionPoints({
 }
 
 function connectionLabelPosition(connection) {
-  const points = flattenGraphPath(
-    connectionPoints(connection),
-    !!connection.route,
-  );
+  const routePoints = connectionPoints(connection);
+  const geometry = JSON.stringify([!!connection.route, routePoints]);
+  if (connection.labelPathGeometry !== geometry) {
+    connection.labelPathPoints = flattenGraphPath(
+      routePoints,
+      !!connection.route,
+    );
+    connection.labelPathGeometry = geometry;
+  }
+  const points = connection.labelPathPoints;
   let length = 0;
   for (let i = 1; i < points.length; i++)
     length += Math.hypot(
