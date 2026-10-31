@@ -5462,6 +5462,88 @@ test("FunctionPattern creation recognizes functions already in the ONNX file on 
   assert.equal(request.text, text);
 });
 
+test("model function bodies load only in the editor and ignore obsolete selections and closed dialogs", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  load(demoGraph);
+  const byId = (id) => document.getElementById(id);
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  document
+    .querySelector('[data-id="node-0"]')
+    .dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  byId("fuse-pattern").click();
+  send({
+    type: "fusion-patterns",
+    requestId: messages.at(-1).requestId,
+    patterns: [],
+    optimizationPatterns: [],
+    functions: [
+      { name: "FirstFunction", functionIndex: 0 },
+      { name: "SecondFunction", functionIndex: 1 },
+    ],
+  });
+  assert.equal(
+    messages.some(({ type }) => type === "load-model-function"),
+    false,
+  );
+  byId("open-selection-pattern").click();
+  const first = messages.at(-1);
+  assert.equal(first.type, "load-model-function");
+  assert.equal(first.functionIndex, 0);
+  assert.equal(byId("selection-pattern-replacement").disabled, true);
+  assert.equal(byId("update-function-pattern").disabled, true);
+  const picker = byId("selection-pattern-picker");
+  picker.value = "model-function:1";
+  picker.dispatchEvent(new window.Event("change"));
+  const second = messages.at(-1);
+  const definition = {
+    name: "FirstFunction",
+    functionIndex: 0,
+    text: "first body",
+    replacement: "first body",
+  };
+  send({
+    type: "model-function-loaded",
+    requestId: first.requestId,
+    functionIndex: 0,
+    definition,
+  });
+  assert.equal(byId("selection-pattern-replacement").value, "");
+  send({
+    type: "model-function-error",
+    requestId: second.requestId,
+    functionIndex: 1,
+    error: "External attributes need a local source path",
+  });
+  assert.match(
+    byId("selection-pattern-status").textContent,
+    /Could not load function.*local source path/,
+  );
+  assert.equal(byId("update-function-pattern").disabled, true);
+  picker.value = "model-function:0";
+  picker.dispatchEvent(new window.Event("change"));
+  send({
+    type: "model-function-loaded",
+    requestId: messages.at(-1).requestId,
+    functionIndex: 0,
+    definition,
+  });
+  assert.equal(byId("selection-pattern-replacement").value, "first body");
+  assert.equal(byId("selection-pattern-replacement").disabled, false);
+  picker.value = "model-function:1";
+  picker.dispatchEvent(new window.Event("change"));
+  const pending = messages.at(-1);
+  byId("close-selection-pattern").click();
+  send({
+    type: "model-function-loaded",
+    requestId: pending.requestId,
+    functionIndex: 1,
+    definition: { ...definition, name: "SecondFunction", functionIndex: 1 },
+  });
+  assert.equal(byId("selection-pattern-replacement").value, "");
+  assert.equal(byId("selection-pattern-dialog").open, false);
+});
+
 test("selection FunctionPattern errors recover controls and obsolete replies are ignored", (t) => {
   const { document, window, messages, load } = openViewer(t);
   load(demoGraph);

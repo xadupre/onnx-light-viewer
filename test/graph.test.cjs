@@ -31,6 +31,7 @@ const {
   listBackendTests,
   loadBackendTest,
   isEncryptedModel,
+  updateModelFunctionHistory,
 } = require("../dist/graph");
 const { PipelineModel } = require("../dist/pipeline");
 const { PatternLibrary } = require("../dist/patternLibrary");
@@ -2702,6 +2703,118 @@ test("updates existing model function bodies for every call, save and fusion rep
   }
 });
 
+test("model function catalogs do not load unused external attributes and selected bodies load independently", async (t) => {
+  const fn = (name, node) =>
+    bytesField(
+      25,
+      Buffer.concat([
+        bytesField(1, name),
+        bytesField(4, "x"),
+        bytesField(5, "y"),
+        bytesField(7, node),
+        bytesField(9, varintField(2, 13)),
+        bytesField(10, "extra"),
+      ]),
+    );
+  const external = Buffer.concat([
+    bytesField(2, "y"),
+    bytesField(4, "Constant"),
+    bytesField(
+      5,
+      Buffer.concat([
+        bytesField(1, "value"),
+        bytesField(
+          5,
+          Buffer.concat([
+            varintField(1, 128),
+            varintField(2, 1),
+            bytesField(
+              13,
+              Buffer.concat([
+                bytesField(1, "location"),
+                bytesField(2, "unavailable.bin"),
+              ]),
+            ),
+            varintField(14, 1),
+          ]),
+        ),
+        varintField(20, 4),
+      ]),
+    ),
+  ]);
+  const source = loadModel(
+    Buffer.concat([
+      modelBytes("relu.onnx"),
+      fn("UnavailableConstant", external),
+      fn(
+        "HealthyFunction",
+        Buffer.concat([
+          bytesField(1, "x"),
+          bytesField(2, "y"),
+          bytesField(4, "Relu"),
+        ]),
+      ),
+    ]),
+    "unused-external.onnx",
+  );
+  const descriptors = source.modelFunctionDescriptors();
+  assert.deepEqual(
+    descriptors.map(({ functionIndex }) => functionIndex),
+    [0, 1],
+  );
+  assert.equal(descriptors[0].text, undefined);
+  assert.match(source.modelFunction(1).text, /Relu/);
+  assert.throws(() => source.modelFunction(0), /local source path/);
+  assert.throws(() => source.modelFunctions(), /local source path/);
+  for (const index of [-1, 0.5, 2, "1", undefined])
+    assert.throws(() => source.modelFunction(index), /function index/);
+
+  const directory = mkdtempSync(path.join(tmpdir(), "viewer-lazy-functions-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const payload = Buffer.alloc(128 * 4);
+  payload.writeFloatLE(0.25);
+  const file = path.join(directory, "inline.onnx");
+  writeFileSync(
+    file,
+    Buffer.concat([
+      modelBytes("relu.onnx"),
+      fn(
+        "FirstFunction",
+        Buffer.concat([
+          bytesField(1, "x"),
+          bytesField(2, "y"),
+          bytesField(4, "Relu"),
+        ]),
+      ),
+      fn(
+        "InlineConstant",
+        Buffer.concat([
+          bytesField(2, "y"),
+          bytesField(4, "Constant"),
+          bytesField(
+            5,
+            Buffer.concat([
+              bytesField(1, "value"),
+              bytesField(
+                5,
+                Buffer.concat([
+                  varintField(1, 128),
+                  varintField(2, 1),
+                  bytesField(9, payload),
+                ]),
+              ),
+              varintField(20, 4),
+            ]),
+          ),
+        ]),
+      ),
+    ]),
+  );
+  const loaded = await loadModelFile(file, "inline.onnx");
+  assert.match(loaded.modelFunction(1).text, /\{0\.25,/);
+  assert.match(loaded.modelFunction(0).text, /Relu/);
+});
+
 test("model function edits replace omitted Constant payloads without restoring the old bytes on save", async (t) => {
   const directory = mkdtempSync(
     path.join(tmpdir(), "viewer-function-constant-"),
@@ -2750,6 +2863,10 @@ test("model function edits replace omitted Constant payloads without restoring t
   const saved = loadModel(await edited.serialize(undefined, file), "saved");
   assert.match(saved.modelFunctions()[0].text, /\{9\.25,/);
   assert.match(source.modelFunctions()[0].text, /\{0\.25,/);
+  assert.match(source.modelFunction(0).text, /\{0\.25,/);
+  renameSync(file, path.join(directory, "moved.onnx"));
+  assert.equal(source.modelFunctionDescriptors().length, 1);
+  assert.throws(() => source.modelFunction(0));
 });
 
 test("model function edits remain stage-local and survive pipeline undo", async () => {
@@ -2783,6 +2900,78 @@ test("model function edits remain stage-local and survive pipeline undo", async 
   const saved = loadModel(await edited.serialize(), "saved.pipe-onnx");
   assert.equal(saved.modelFunctions(prefill)[0].text, text);
   assert.equal(saved.modelFunctions(decode)[0].text, original);
+});
+
+test("model function edits share repeated pipeline stage histories and leave rejected batches untouched", async () => {
+  const count = 8;
+  const stage = memoryTestModel([2, 3], {
+    nodes: Array.from({ length: 2 * count }, (_, index) =>
+      Buffer.concat([
+        bytesField(1, index ? `t${index - 1}` : "x"),
+        bytesField(2, index === 2 * count - 1 ? "y" : `t${index}`),
+        bytesField(4, "Transpose"),
+        bytesField(
+          5,
+          Buffer.concat([
+            bytesField(1, "perm"),
+            varintField(8, 1),
+            varintField(8, 0),
+            varintField(20, 7),
+          ]),
+        ),
+      ]),
+    ),
+  });
+  let pipeline = loadModel(
+    pipelineBytes({
+      prefill: await stage.serialize(),
+      decode: modelBytes("relu.onnx"),
+    }),
+    "repeated.pipe-onnx",
+  );
+  const prefill = [{ pipeline: "prefill" }];
+  const decode = [{ pipeline: "decode" }];
+  const original = pipeline;
+  const untouched = pipeline.graph(false, decode);
+  for (let i = 0; i < count; ++i) {
+    const nodes = pipeline
+      .graph(false, prefill)
+      .nodes.filter(({ opType }) => opType === "Transpose")
+      .slice(0, 2)
+      .map(({ id }) => Number(id.slice(5)));
+    const name = `TransposePair${i}`;
+    pipeline.createFunctionPattern(nodes, name, prefill);
+    const preview = await pipeline.previewFusion(name, undefined, prefill);
+    pipeline = await preview.model.applyFusion(
+      name,
+      [preview.matches[0].anchor],
+      prefill,
+    );
+  }
+  const definition = pipeline.modelFunction(0, prefill);
+  const text = definition.text.replaceAll("[1, 0]", "[0, 1]");
+  let edited = pipeline.updateModelFunction(0, text, prefill);
+  for (let i = count; i > 0; --i) {
+    assert.equal(edited.fusionCount(), i);
+    assert.equal(edited.modelFunction(0, prefill).text, text);
+    assert.deepEqual(edited.graph(false, decode), untouched);
+    edited = edited.undoFusion();
+  }
+  assert.deepEqual(
+    edited.graph(false, prefill),
+    original.graph(false, prefill),
+  );
+  assert.equal(pipeline.modelFunction(0, prefill).text, definition.text);
+
+  const native = pipeline.models.prefill;
+  const before = Buffer.from(await native.serialize());
+  assert.throws(() => updateModelFunctionHistory([], 0, text));
+  assert.throws(
+    () => updateModelFunctionHistory([native, {}], 0, text),
+    /native model handle/,
+  );
+  assert.throws(() => updateModelFunctionHistory([native], 0, "invalid"));
+  assert.deepEqual(Buffer.from(await native.serialize()), before);
 });
 
 test("selection FunctionPatterns omit original operator names without changing the source model", async () => {

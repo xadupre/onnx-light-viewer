@@ -3752,6 +3752,19 @@ test("FunctionPattern creation prevents duplicate names through the real webview
   await writeFile(file, await fused.serialize());
   await extension.resolveCustomEditor(file);
   await extension.receive({ type: "ready" });
+  const reopenedNative = extension.nativeModels.at(-1);
+  reopenedNative.modelFunctions = () => {
+    throw new Error("Catalog requests must not read every function body.");
+  };
+  const readFunction = reopenedNative.modelFunction;
+  let bodyReads = 0;
+  reopenedNative.modelFunction = (...args) => {
+    bodyReads++;
+    return readFunction(...args);
+  };
+  await extension.receive({ type: "fusion-patterns", requestId: 975 });
+  assert.equal(bodyReads, 0);
+  assert.equal(extension.messages.at(-1).functions[0].text, undefined);
   document
     .querySelector('[data-id="node-0"]')
     .dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
@@ -3767,7 +3780,6 @@ test("FunctionPattern creation prevents duplicate names through the real webview
   assert.equal(byId("selection-pattern-python"), null);
   const body = byId("selection-pattern-replacement");
   const originalText = body.value;
-  const reopenedNative = extension.nativeModels.at(-1);
   const update = reopenedNative.updateModelFunction;
   let updatedNative;
   let retainedNative;
@@ -3839,7 +3851,17 @@ test("FunctionPattern creation prevents duplicate names through the real webview
     false,
   );
   await extension.receive({ type: "fusion-patterns", requestId: 100 });
-  assert.match(extension.messages.at(-1).functions[0].text, /\[0, 1\]/);
+  await flush();
+  const catalog = extension.messages.findLast(
+    ({ type, requestId }) => type === "fusion-patterns" && requestId === 100,
+  );
+  assert.equal(catalog.functions[0].text, undefined);
+  await extension.receive({
+    type: "load-model-function",
+    functionIndex: 0,
+    requestId: 101,
+  });
+  assert.match(extension.messages.at(-1).definition.text, /\[0, 1\]/);
 });
 
 test("function pattern copy uses the VS Code clipboard for current edits and reports validation and clipboard errors", async (t) => {

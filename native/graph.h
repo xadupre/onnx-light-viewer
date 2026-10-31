@@ -41,5 +41,6 @@ Napi::Object ModelSummary(Napi::Env env, const ol::ModelProto &model, const std:
 Napi::Object ModelMetadata(Napi::Env env, const ol::ModelProto &model, const GraphPath &path);
 void InferShapes(ol::ModelProto &model);
 Napi::Value ValidateFunctionPatterns(const Napi::CallbackInfo &call);
+Napi::Value UpdateModelFunctionHistory(const Napi::CallbackInfo &call);
 
 } // namespace onnx_light_viewer

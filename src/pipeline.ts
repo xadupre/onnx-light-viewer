@@ -11,6 +11,7 @@ import type {
   MetadataEntry,
   MemoryDimension,
   MemoryProfile,
+  ModelFunctionDescriptor,
   NativeModel,
   OptimizationOperation,
   OptimizationPattern,
@@ -19,6 +20,7 @@ import type {
   RewritingScenario,
   TensorInspection,
 } from "./graph";
+import { updateModelFunctionHistory } from "./graph";
 
 export interface PipelineData {
   name: string;
@@ -389,6 +391,23 @@ export class PipelineModel implements NativeModel {
     return stage.model.modelFunctions();
   };
 
+  modelFunctionDescriptors = (
+    path: GraphPath = [],
+  ): ModelFunctionDescriptor[] => {
+    const stage = this.select(path);
+    this.fusionPatterns(path);
+    return stage.model.modelFunctionDescriptors();
+  };
+
+  modelFunction = (
+    functionIndex: number,
+    path: GraphPath = [],
+  ): FunctionPatternDefinition => {
+    const stage = this.select(path);
+    this.fusionPatterns(path);
+    return stage.model.modelFunction(functionIndex);
+  };
+
   updateModelFunction = (
     functionIndex: number,
     text: string,
@@ -396,31 +415,36 @@ export class PipelineModel implements NativeModel {
   ): NativeModel => {
     const stage = this.select(path);
     this.fusionPatterns(path);
-    const definition = stage.model
-      .modelFunctions()
-      .find((entry) => entry.functionIndex === functionIndex);
-    if (!definition) throw new Error("Unknown model function.");
-    const update = (pipeline: PipelineModel): PipelineModel => {
-      const current = pipeline.models[stage.role];
+    const snapshots: PipelineModel[] = [];
+    for (
+      let snapshot: PipelineModel | undefined = this;
+      snapshot;
+      snapshot = snapshot.previous
+    )
+      snapshots.push(snapshot);
+    const models = snapshots.map((snapshot) => {
+      const current = snapshot.models[stage.role];
       if (!current) throw new Error("Invalid pipeline stage.");
-      const fn = current
-        .modelFunctions()
-        .find((entry) => entry.name === definition.name);
-      const edited =
-        fn?.functionIndex === undefined
-          ? current.clone()
-          : current.updateModelFunction(fn.functionIndex, text);
-      const replacement = pipeline.replace(stage.role, edited);
-      return new PipelineModel(
-        pipeline.data,
-        pipeline.fileName,
-        replacement.models,
-        pipeline.previous ? update(pipeline.previous) : undefined,
-        pipeline.fusionOrder,
-        pipeline.undoDimensionPrefixes,
+      return current;
+    });
+    const edited = updateModelFunctionHistory(models, functionIndex, text);
+    const replace = (
+      snapshot: PipelineModel,
+      index: number,
+      previous?: PipelineModel,
+    ) =>
+      new PipelineModel(
+        snapshot.data,
+        snapshot.fileName,
+        snapshot.replace(stage.role, edited[index]).models,
+        previous,
+        snapshot.fusionOrder,
+        snapshot.undoDimensionPrefixes,
       );
-    };
-    return update(this);
+    let previous: PipelineModel | undefined;
+    for (let i = snapshots.length - 1; i > 0; --i)
+      previous = replace(snapshots[i], i, previous);
+    return replace(this, 0, previous);
   };
 
   optimizationReport = (path: GraphPath = []): OptimizationReport | null => {

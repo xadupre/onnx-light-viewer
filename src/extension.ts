@@ -2453,6 +2453,7 @@ async function configurePanel(
         message?.type === "create-function-pattern" ||
         message?.type === "update-function-pattern" ||
         message?.type === "update-model-function" ||
+        message?.type === "load-model-function" ||
         message?.type === "fusion-patterns" ||
         message?.type === "preview-fusion" ||
         message?.type === "apply-optimization" ||
@@ -2467,13 +2468,15 @@ async function configurePanel(
           message.type === "update-function-pattern" ||
           message.type === "update-model-function";
         const updatesModelFunction = message.type === "update-model-function";
+        const loadsModelFunction = message.type === "load-model-function";
         const undoGeneration =
           message.type === "undo-fusion" ? ++undoRequest : undoRequest;
         const isCurrent = () =>
           active &&
           model === owner &&
           graphRevision === revision &&
-          (!editsFunctionPattern || navigationRequest === navigation) &&
+          (!(editsFunctionPattern || loadsModelFunction) ||
+            navigationRequest === navigation) &&
           (message.type === "undo-fusion"
             ? undoRequest === undoGeneration
             : fusionRequest === generation);
@@ -2497,9 +2500,36 @@ async function configurePanel(
                             ? "Update function pattern"
                             : updatesModelFunction
                               ? "Update ONNX function"
-                              : "List fusion patterns",
+                              : loadsModelFunction
+                                ? "Load ONNX function"
+                                : "List fusion patterns",
             async (id) => {
               const current = requireModel();
+              if (loadsModelFunction) {
+                if (
+                  typeof message.functionIndex !== "number" ||
+                  !Number.isSafeInteger(message.functionIndex) ||
+                  message.functionIndex < 0
+                )
+                  throw new Error("Expected a model function index.");
+                const native = await nativeModel(
+                  current,
+                  log,
+                  () => void sendStatus(),
+                );
+                if (!isCurrent()) return;
+                const path = current.graph.breadcrumbs.at(-1)?.path ?? [];
+                const definition = path.length
+                  ? native.modelFunction(message.functionIndex, path)
+                  : native.modelFunction(message.functionIndex);
+                await postMessage({
+                  type: "model-function-loaded",
+                  requestId: message.requestId,
+                  functionIndex: message.functionIndex,
+                  definition,
+                });
+                return;
+              }
               if (message.type === "undo-fusion") {
                 if (
                   message.all !== undefined &&
@@ -2577,7 +2607,7 @@ async function configurePanel(
                     () => void sendStatus(),
                   );
                   if (!isCurrent()) return;
-                  const definitions = native.modelFunctions(path);
+                  const definitions = native.modelFunctionDescriptors(path);
                   const definition = definitions.find(
                     (entry) => entry.functionIndex === message.functionIndex,
                   );
@@ -2595,7 +2625,7 @@ async function configurePanel(
                   let rewritingQueue = current.rewritingQueue;
                   if (rewritingQueue) {
                     const queued = rewritingQueue.model
-                      .modelFunctions(path)
+                      .modelFunctionDescriptors(path)
                       .find((entry) => entry.name === definition.name);
                     if (queued?.functionIndex === undefined)
                       throw new Error(
@@ -2619,7 +2649,10 @@ async function configurePanel(
                   const catalog = {
                     patterns: edited.fusionPatterns(path),
                     optimizationPatterns: edited.optimizationPatterns(path),
-                    functions: edited.modelFunctions(path),
+                    functions: edited.modelFunctionDescriptors(path),
+                    definition: path.length
+                      ? edited.modelFunction(message.functionIndex, path)
+                      : edited.modelFunction(message.functionIndex),
                     scenarios: edited.rewritingScenarios(path),
                   };
                   const replacement: LoadedModel = {
@@ -2713,7 +2746,7 @@ async function configurePanel(
                   pattern,
                   patterns: native.fusionPatterns(path),
                   optimizationPatterns: native.optimizationPatterns(path),
-                  functions: native.modelFunctions(path),
+                  functions: native.modelFunctionDescriptors(path),
                   scenarios: native.rewritingScenarios(path),
                 });
                 return;
@@ -2756,7 +2789,7 @@ async function configurePanel(
                   optimizationReport: null,
                   patterns: edited.fusionPatterns(path),
                   optimizationPatterns: edited.optimizationPatterns(path),
-                  functions: edited.modelFunctions(path),
+                  functions: edited.modelFunctionDescriptors(path),
                   scenarios: edited.rewritingScenarios(path),
                 });
                 return;
@@ -2860,7 +2893,7 @@ async function configurePanel(
                         : "No changes. Existing native undo history is retained.",
                     patterns: edited.fusionPatterns(),
                     optimizationPatterns: edited.optimizationPatterns(),
-                    functions: edited.modelFunctions(),
+                    functions: edited.modelFunctionDescriptors(),
                     scenarios: edited.rewritingScenarios(),
                   });
                   return;
@@ -2934,7 +2967,7 @@ async function configurePanel(
                   matches,
                   patterns: edited.fusionPatterns(path),
                   optimizationPatterns: edited.optimizationPatterns(path),
-                  functions: edited.modelFunctions(path),
+                  functions: edited.modelFunctionDescriptors(path),
                   scenarios: edited.rewritingScenarios(path),
                 });
                 return;
@@ -2992,7 +3025,7 @@ async function configurePanel(
                   name: message.scenario,
                   patterns: edited.fusionPatterns(path),
                   optimizationPatterns: edited.optimizationPatterns(path),
-                  functions: edited.modelFunctions(path),
+                  functions: edited.modelFunctionDescriptors(path),
                   scenarios: edited.rewritingScenarios(path),
                 });
                 return;
@@ -3079,7 +3112,7 @@ async function configurePanel(
                   count: anchors.length,
                   patterns: edited.fusionPatterns(path),
                   optimizationPatterns: edited.optimizationPatterns(path),
-                  functions: edited.modelFunctions(path),
+                  functions: edited.modelFunctionDescriptors(path),
                   scenarios: edited.rewritingScenarios(path),
                 });
                 return;
@@ -3104,7 +3137,7 @@ async function configurePanel(
                   requestId: message.requestId,
                   patterns,
                   optimizationPatterns: native.optimizationPatterns(path),
-                  functions: native.modelFunctions(path),
+                  functions: native.modelFunctionDescriptors(path),
                   optimizationReport: native.optimizationReport(path),
                   scenarios: native.rewritingScenarios(path),
                 });
@@ -3148,7 +3181,7 @@ async function configurePanel(
                     replayed: true,
                     patterns,
                     optimizationPatterns: native.optimizationPatterns(path),
-                    functions: native.modelFunctions(path),
+                    functions: native.modelFunctionDescriptors(path),
                     scenarios: native.rewritingScenarios(path),
                   }
                 : {};
@@ -3205,14 +3238,19 @@ async function configurePanel(
             type:
               message.type === "undo-fusion"
                 ? "undo-fusion-error"
-                : editsFunctionPattern
-                  ? "function-pattern-error"
-                  : "fusion-error",
+                : loadsModelFunction
+                  ? "model-function-error"
+                  : editsFunctionPattern
+                    ? "function-pattern-error"
+                    : "fusion-error",
             requestId: message.requestId,
+            ...(loadsModelFunction
+              ? { functionIndex: message.functionIndex }
+              : {}),
             error: detail,
           });
           await vscode.window.showErrorMessage(
-            `${message.type === "undo-fusion" ? "Could not undo fusion" : updatesModelFunction ? "Could not update ONNX function" : editsFunctionPattern ? "Could not save function pattern" : "Could not fuse ONNX model"}: ${detail}`,
+            `${message.type === "undo-fusion" ? "Could not undo fusion" : loadsModelFunction ? "Could not load ONNX function" : updatesModelFunction ? "Could not update ONNX function" : editsFunctionPattern ? "Could not save function pattern" : "Could not fuse ONNX model"}: ${detail}`,
           );
         }
       } else if (message?.type === "save") {

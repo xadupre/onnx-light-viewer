@@ -89,8 +89,8 @@ bool SameFunction(const ol::FunctionProto &left, const ol::FunctionProto &right)
 }
 
 struct FunctionEdit {
-  const ol::FunctionProto &original;
-  const ol::FunctionProto &replacement;
+  ol::FunctionProto original;
+  ol::FunctionProto replacement;
   std::unordered_map<const StoredModel *, std::shared_ptr<StoredModel>> copies;
 
   void Functions(ol::utils::RepeatedProtoField<ol::FunctionProto> &functions) {
@@ -128,6 +128,60 @@ struct FunctionEdit {
     return copy;
   }
 };
+
+size_t ModelFunctionIndex(const StoredModel &model, const Napi::Value &value) {
+  if (!value.IsNumber())
+    throw std::runtime_error("Invalid model function index.");
+  const auto index = value.As<Napi::Number>().DoubleValue();
+  if (!std::isfinite(index) || index < 0 || std::floor(index) != index ||
+      index >= model.model->functions().size())
+    throw std::runtime_error("Invalid model function index.");
+  return static_cast<size_t>(index);
+}
+
+FunctionEdit ReadFunctionEdit(const StoredModel &model, const Napi::Value &index,
+                              const Napi::Value &text) {
+  if (!text.IsString())
+    throw std::runtime_error("Expected a model function index and function text.");
+  const auto &original = model.model->functions(ModelFunctionIndex(model, index));
+  auto replacement = ParseFunctionText(text.As<Napi::String>().Utf8Value());
+  if (!SameFunction(original, replacement) ||
+      !std::equal(original.input().begin(), original.input().end(), replacement.input().begin(),
+                  replacement.input().end()) ||
+      !std::equal(original.output().begin(), original.output().end(), replacement.output().begin(),
+                  replacement.output().end()) ||
+      !std::equal(original.attribute().begin(), original.attribute().end(),
+                  replacement.attribute().begin(), replacement.attribute().end()))
+    throw std::runtime_error(
+        "Edit the function body without changing its name, domain, overload or "
+        "input/output/attribute interface.");
+  return {original.SharedCopy(), std::move(replacement), {}};
+}
+
+Napi::Object ModelFunctionValue(Napi::Env env, const StoredModel &model, size_t index) {
+  auto function = model.model->functions(index).SharedCopy();
+  std::vector<SkippedTensorPayload> payloads;
+  for (const auto &payload : model.skipped)
+    if (!payload.path.empty() && payload.path[0] == ProtoPathStep{25, index})
+      payloads.push_back(payload);
+  if (!payloads.empty()) {
+    ol::ModelProto snapshot;
+    // Retain the original field index for source-file payload restoration.
+    for (size_t i = 0; i <= index; ++i)
+      snapshot.add_functions();
+    snapshot.ref_functions()[index] = std::move(function);
+    RestoreStatisticsPayloads(snapshot, model, model.file_path, payloads);
+    function = snapshot.functions(index).SharedCopy();
+  }
+  RestoreFunctionExternalData(function, model.file_path);
+  auto value = Napi::Object::New(env);
+  value.Set("name", FunctionName(function));
+  value.Set("functionIndex", Napi::Number::New(env, index));
+  const auto text = ol::ProtoToString(function);
+  value.Set("text", text);
+  value.Set("replacement", text);
+  return value;
+}
 
 ol::FunctionProto SelectionFunction(ol::ModelProto &model, const StoredModel &source,
                                     const Napi::Array &selection, const std::string &name,
@@ -1117,6 +1171,30 @@ Napi::Value ValidateFunctionPatterns(const Napi::CallbackInfo &call) {
   }
 }
 
+Napi::Value UpdateModelFunctionHistory(const Napi::CallbackInfo &call) {
+  try {
+    if (call.Length() != 3 || !call[0].IsArray() || !call[0].As<Napi::Array>().Length())
+      throw std::runtime_error("Expected native history snapshots, a function index and text.");
+    const auto handles = call[0].As<Napi::Array>();
+    std::vector<std::shared_ptr<StoredModel>> models;
+    models.reserve(handles.Length());
+    for (uint32_t i = 0; i < handles.Length(); ++i)
+      models.push_back(UnwrapStoredModel(handles.Get(i)));
+    auto edit = ReadFunctionEdit(*models.front(), call[1], call[2]);
+    std::vector<std::shared_ptr<StoredModel>> edited;
+    edited.reserve(models.size());
+    for (const auto &model : models)
+      edited.push_back(edit.Copy(model));
+    auto result = Napi::Array::New(call.Env(), edited.size());
+    for (size_t i = 0; i < edited.size(); ++i)
+      result.Set(i, ModelHandle(call.Env(), std::move(edited[i])));
+    return result;
+  } catch (const std::exception &error) {
+    Napi::Error::New(call.Env(), error.what()).ThrowAsJavaScriptException();
+    return call.Env().Undefined();
+  }
+}
+
 void AddFusionMethods(Napi::Env env, Napi::Object result, std::shared_ptr<StoredModel> model) {
   result.Set("setFunctionPatterns",
              Napi::Function::New(env, [model](const Napi::CallbackInfo &call) -> Napi::Value {
@@ -1204,6 +1282,28 @@ void AddFusionMethods(Napi::Env env, Napi::Object result, std::shared_ptr<Stored
                  return call.Env().Undefined();
                }
              }));
+  result.Set("modelFunctionDescriptors",
+             Napi::Function::New(env, [model](const Napi::CallbackInfo &call) {
+               auto values = Napi::Array::New(call.Env(), model->model->functions().size());
+               for (size_t i = 0; i < model->model->functions().size(); ++i) {
+                 auto value = Napi::Object::New(call.Env());
+                 value.Set("name", FunctionName(model->model->functions(i)));
+                 value.Set("functionIndex", Napi::Number::New(call.Env(), i));
+                 values.Set(i, value);
+               }
+               return values;
+             }));
+  result.Set("modelFunction",
+             Napi::Function::New(env, [model](const Napi::CallbackInfo &call) -> Napi::Value {
+               try {
+                 if (call.Length() != 1)
+                   throw std::runtime_error("Expected a model function index.");
+                 return ModelFunctionValue(call.Env(), *model, ModelFunctionIndex(*model, call[0]));
+               } catch (const std::exception &error) {
+                 Napi::Error::New(call.Env(), error.what()).ThrowAsJavaScriptException();
+                 return call.Env().Undefined();
+               }
+             }));
   result.Set("modelFunctions",
              Napi::Function::New(env, [model](const Napi::CallbackInfo &call) -> Napi::Value {
                try {
@@ -1234,25 +1334,9 @@ void AddFusionMethods(Napi::Env env, Napi::Object result, std::shared_ptr<Stored
   result.Set("updateModelFunction",
              Napi::Function::New(env, [model](const Napi::CallbackInfo &call) -> Napi::Value {
                try {
-                 if (call.Length() != 2 || !call[0].IsNumber() || !call[1].IsString())
+                 if (call.Length() != 2)
                    throw std::runtime_error("Expected a model function index and function text.");
-                 const auto index = call[0].As<Napi::Number>().DoubleValue();
-                 if (!std::isfinite(index) || index < 0 || std::floor(index) != index ||
-                     index >= model->model->functions().size())
-                   throw std::runtime_error("Invalid model function index.");
-                 const auto &original = model->model->functions(static_cast<size_t>(index));
-                 const auto replacement = ParseFunctionText(call[1].As<Napi::String>().Utf8Value());
-                 if (!SameFunction(original, replacement) ||
-                     !std::equal(original.input().begin(), original.input().end(),
-                                 replacement.input().begin(), replacement.input().end()) ||
-                     !std::equal(original.output().begin(), original.output().end(),
-                                 replacement.output().begin(), replacement.output().end()) ||
-                     !std::equal(original.attribute().begin(), original.attribute().end(),
-                                 replacement.attribute().begin(), replacement.attribute().end()))
-                   throw std::runtime_error(
-                       "Edit the function body without changing its name, domain, overload or "
-                       "input/output/attribute interface.");
-                 FunctionEdit edit{original, replacement, {}};
+                 auto edit = ReadFunctionEdit(*model, call[0], call[1]);
                  return ModelHandle(call.Env(), edit.Copy(model));
                } catch (const std::exception &error) {
                  Napi::Error::New(call.Env(), error.what()).ThrowAsJavaScriptException();

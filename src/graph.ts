@@ -224,6 +224,11 @@ export interface FunctionPatternDefinition {
   functionIndex?: number;
 }
 
+export interface ModelFunctionDescriptor {
+  name: string;
+  functionIndex: number;
+}
+
 export interface FusionDiagnostic {
   pattern: string;
   anchor: number;
@@ -421,6 +426,11 @@ export interface NativeModel {
     path?: GraphPath,
   ): FunctionPatternDefinition;
   modelFunctions(path?: GraphPath): FunctionPatternDefinition[];
+  modelFunctionDescriptors(path?: GraphPath): ModelFunctionDescriptor[];
+  modelFunction(
+    functionIndex: number,
+    path?: GraphPath,
+  ): FunctionPatternDefinition;
   updateModelFunction(
     functionIndex: number,
     text: string,
@@ -554,6 +564,11 @@ export interface BackendTest {
 const native: {
   onnxLightVersion: string;
   validateFunctionPatterns(patterns: unknown): FunctionPatternDefinition[];
+  updateModelFunctionHistory(
+    models: NativeModel[],
+    functionIndex: number,
+    text: string,
+  ): NativeModel[];
   decodeGraph(bytes: Uint8Array, fileName: string, inferShapes: boolean): Graph;
   getSchema(
     opType: string,
@@ -619,6 +634,14 @@ export const demoGraph: Graph = {
     { name: "output", type: "FLOAT", shape: ["1", "3"] },
   ],
 };
+
+export function updateModelFunctionHistory(
+  models: NativeModel[],
+  functionIndex: number,
+  text: string,
+): NativeModel[] {
+  return native.updateModelFunctionHistory(models, functionIndex, text);
+}
 
 /**
  * One-shot projection, skipping raw tensor bytes unless inference is requested.

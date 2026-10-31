@@ -83,6 +83,7 @@ struct StoredModel {
 };
 
 std::shared_ptr<StoredModel> CloneStoredModel(const std::shared_ptr<StoredModel> &model);
+std::shared_ptr<StoredModel> UnwrapStoredModel(const Napi::Value &value);
 Napi::Object ModelHandle(Napi::Env env, std::shared_ptr<StoredModel> model);
 void AddSerializationMethods(Napi::Env env, Napi::Object result,
                              std::shared_ptr<StoredModel> model);
