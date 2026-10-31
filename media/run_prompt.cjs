@@ -70,7 +70,15 @@ function run(input, output, sessionKey) {
     ...(Array.isArray(options.provider_options)
       ? {
           genaiProviders: [
-            ...new Set(options.provider_options.flatMap(Object.keys)),
+            ...new Set(
+              options.provider_options.flatMap((provider) =>
+                provider &&
+                typeof provider === "object" &&
+                !Array.isArray(provider)
+                  ? Object.keys(provider)
+                  : [],
+              ),
+            ),
           ],
         }
       : {}),
