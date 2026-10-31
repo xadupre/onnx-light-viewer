@@ -12594,6 +12594,14 @@ test("Fit drops initial label extents when refreshed tensor descriptions shrink"
       },
     }),
   );
+  document
+    .getElementById("graph")
+    .getAttribute("viewBox")
+    .split(" ")
+    .map(Number)
+    .forEach((value, index) => {
+      assert.ok(Math.abs(value - initial[index]) < 1e-8);
+    });
   const refreshed = fitted();
   assert.ok(refreshed[2] < initial[2], `${initial[2]} -> ${refreshed[2]}`);
   load({ ...graph, tensors: [{ name, type: "FLOAT", shape: [] }] });

@@ -939,7 +939,8 @@ function countUpdates(previous, current, key) {
   ).length;
 }
 
-function updateTensorInformation(tensors) {
+function updateTensorInformation(tensors, preserveView = true) {
+  const previousCamera = preserveView ? camera : undefined;
   const updates = countUpdates(
     [...tensorInformation.values()],
     tensors,
@@ -953,6 +954,24 @@ function updateTensorInformation(tensors) {
       connection.title.textContent = `${connection.name}: ${tensorDescription(connection.name)}`;
   arrangeConnectionLabels();
   reframe();
+  if (previousCamera) {
+    zoom = Math.max(
+      bounds.width / previousCamera.width,
+      bounds.height / previousCamera.height,
+    );
+    pan = {
+      x:
+        previousCamera.x +
+        previousCamera.width / 2 -
+        bounds.x -
+        bounds.width / 2,
+      y:
+        previousCamera.y +
+        previousCamera.height / 2 -
+        bounds.y -
+        bounds.height / 2,
+    };
+  }
   return updates;
 }
 
@@ -2535,7 +2554,7 @@ function render(graph, metadata) {
   zoom = 1;
   pan = { x: 0, y: 0 };
   if (graph.nodes.length) selected.add(graph.nodes[0].id);
-  updateTensorInformation(graph.tensors ?? []);
+  updateTensorInformation(graph.tensors ?? [], false);
   updateSelection(undefined, true);
   if (virtualized) readableZoom();
   else fit();
