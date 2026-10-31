@@ -2,6 +2,21 @@ const assert = require("node:assert/strict");
 const { readFileSync } = require("node:fs");
 const path = require("node:path");
 const { test } = require("node:test");
+const { skipSdkReplay } = require("./helpers/sdk-replay.cjs");
+
+test("SDK replay skips expire above onnx-light 0.2.3", () => {
+  for (const version of [
+    "0.1.10",
+    "0.2.2",
+    "0.2.3",
+    "0.2.3-rc.1",
+    "0.2.3+build",
+  ])
+    assert.match(skipSdkReplay(version), /xadupre\/onnx-light#5756/);
+  for (const version of ["0.2.4", "0.2.4-rc.1", "0.2.10", "0.3.0", "1.0.0"])
+    assert.equal(skipSdkReplay(version), false);
+  assert.throws(() => skipSdkReplay("invalid"), /Invalid onnx-light version/);
+});
 
 function workflow(name) {
   return readFileSync(

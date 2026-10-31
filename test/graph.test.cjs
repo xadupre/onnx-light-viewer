@@ -31,10 +31,13 @@ const {
   listBackendTests,
   loadBackendTest,
   isEncryptedModel,
+  onnxLightVersion,
   updateModelFunctionHistory,
 } = require("../dist/graph");
 const { PipelineModel } = require("../dist/pipeline");
 const { PatternLibrary } = require("../dist/patternLibrary");
+const { skipSdkReplay } = require("./helpers/sdk-replay.cjs");
+const sdkReplaySkip = skipSdkReplay(onnxLightVersion);
 const python = process.platform === "win32" ? "python" : "python3";
 
 function modelBytes(name) {
@@ -2498,7 +2501,8 @@ test("saves complete streamed weights, inferred shapes and authenticated encrypt
   );
 });
 
-test("selection FunctionPatterns retain exports and catalog across repeated matches, undo and optimize", async () => {
+test("selection FunctionPatterns retain exports and catalog across repeated matches, undo and optimize", async (t) => {
+  if (sdkReplaySkip) return t.skip(sdkReplaySkip);
   const source = loadModel(modelBytes("fusion.onnx"), "selection");
   const original = source.graph();
   const originalBytes = Buffer.from(await source.serialize());
@@ -3137,7 +3141,8 @@ test("invalid portable libraries and stale edits leave the library and native ca
   assert.deepEqual(library.snapshot(), snapshot);
 });
 
-test("selection FunctionPatterns update SDK text atomically and use both edited bodies everywhere", async () => {
+test("selection FunctionPatterns update SDK text atomically and use both edited bodies everywhere", async (t) => {
+  if (sdkReplaySkip) return t.skip(sdkReplaySkip);
   const source = loadModel(modelBytes("fusion.onnx"), "editable-selection");
   const original = source.graph();
   const definition = source.createFunctionPattern([0, 1], "EditablePair");
@@ -4050,7 +4055,8 @@ test("explains one native pattern/node without changing matching, history or the
   assert.equal(fused.fusionCount(), 1);
 });
 
-test("retains native optimizer reports for changed and no-op snapshots, clone and undo", async () => {
+test("retains native optimizer reports for changed and no-op snapshots, clone and undo", async (t) => {
+  if (sdkReplaySkip) return t.skip(sdkReplaySkip);
   const source = optimizationModel();
   assert.equal(source.optimizationReport(), null);
   const started = process.hrtime.bigint();
@@ -4225,7 +4231,8 @@ function inspectScopedGraphs(model, path = []) {
   };
 }
 
-test("preserves nested scope identities through canonicalization, fusion and rewriting replay", async () => {
+test("preserves nested scope identities through canonicalization, fusion and rewriting replay", async (t) => {
+  if (sdkReplaySkip) return t.skip(sdkReplaySkip);
   for (const [depth, alias] of [
     [1, false],
     [2, true],
@@ -4282,7 +4289,8 @@ test("preserves nested scope identities through canonicalization, fusion and rew
   }
 });
 
-test("replays nested optimization after a fusion finalizes the parent node order", async () => {
+test("replays nested optimization after a fusion finalizes the parent node order", async (t) => {
+  if (sdkReplaySkip) return t.skip(sdkReplaySkip);
   const source = loadModel(
     nestedOptimizationModelBytes(1, false, true),
     "nested-metadata",
@@ -4712,7 +4720,8 @@ test("matches and applies unused-code removal including initializer-only changes
   );
 });
 
-test("exposes native pattern sets including explicitly enabled Layer patterns", async () => {
+test("exposes native pattern sets including explicitly enabled Layer patterns", async (t) => {
+  if (sdkReplaySkip) return t.skip(sdkReplaySkip);
   const source = optimizationModel();
   const catalog = source.optimizationPatterns();
   assert.equal(
@@ -4740,7 +4749,8 @@ test("exposes native pattern sets including explicitly enabled Layer patterns", 
   assert.deepEqual(source.optimizationPatterns(), catalog);
 });
 
-test("uses the full catalog and native priorities without absorbing Gemm output transposes", async () => {
+test("uses the full catalog and native priorities without absorbing Gemm output transposes", async (t) => {
+  if (sdkReplaySkip) return t.skip(sdkReplaySkip);
   const source = optimizationModel();
   const catalog = source.optimizationPatterns();
   assert.equal(source.fusionPatterns().includes("GemmTranspose"), false);
@@ -4838,7 +4848,8 @@ test("uses the full catalog and native priorities without absorbing Gemm output 
   );
 });
 
-test("optimizes one pipeline stage without adding no-op undo entries or changing other stages", async () => {
+test("optimizes one pipeline stage without adding no-op undo entries or changing other stages", async (t) => {
+  if (sdkReplaySkip) return t.skip(sdkReplaySkip);
   const stagePath = [{ pipeline: "prefill" }];
   const source = loadModel(
     pipelineBytes({

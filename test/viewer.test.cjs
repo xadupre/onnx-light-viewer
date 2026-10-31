@@ -11,6 +11,8 @@ const {
   onnxLightVersion,
 } = require("../dist/graph");
 const { webviewHtml } = require("../dist/webview");
+const { skipSdkReplay } = require("./helpers/sdk-replay.cjs");
+const sdkReplaySkip = skipSdkReplay(onnxLightVersion);
 
 function closeViewerAfterTest(t, window) {
   t.after(() => {
@@ -5822,6 +5824,8 @@ test("rejects queued fusion and scenario completions after local close or naviga
   for (const type of ["fusion-info", "rewriting-info", "optimization-info"]) {
     for (const invalidation of ["close", "navigate", "replace"]) {
       await t.test(`${type}: ${invalidation}`, async (t) => {
+        if (type === "optimization-info" && sdkReplaySkip)
+          return t.skip(sdkReplaySkip);
         const { document, window, messages, load } = openViewer(t);
         const send = (data) =>
           window.dispatchEvent(new window.MessageEvent("message", { data }));
@@ -5919,6 +5923,7 @@ test("rejects queued fusion and scenario completions after local close or naviga
 });
 
 test("opens tabular optimization reports only on request, including no-op runs and reopened Optimize", async (t) => {
+  if (sdkReplaySkip) return t.skip(sdkReplaySkip);
   const { document, window, messages, load } = openViewer(t);
   const source = loadModel(
     readFileSync(require.resolve("../examples/optimization.onnx")),
@@ -6059,6 +6064,7 @@ test("opens tabular optimization reports only on request, including no-op runs a
 });
 
 test("renders report details safely and closes the report immediately on navigation", async (t) => {
+  if (sdkReplaySkip) return t.skip(sdkReplaySkip);
   const { document, window, messages, load } = openViewer(t);
   const source = loadModel(
     readFileSync(require.resolve("../examples/optimization.onnx")),

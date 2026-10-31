@@ -23,6 +23,8 @@ const vm = require("node:vm");
 const { test } = require("node:test");
 const { JSDOM } = require("jsdom");
 const { exportHub } = require("./helpers/export-hub.cjs");
+const { skipSdkReplay } = require("./helpers/sdk-replay.cjs");
+const sdkReplaySkip = skipSdkReplay(require("../dist/graph").onnxLightVersion);
 
 test("prompt host requires workspace trust and a locally saved converted model", async () => {
   const extension = await openExtension();
@@ -3287,6 +3289,7 @@ process.exit(result.status ?? 1);
 );
 
 test("previews global passes without editing, rejects stale previews and optimizes with replayable saves", async (t) => {
+  if (sdkReplaySkip) return t.skip(sdkReplaySkip);
   const directory = await mkdtemp(
     path.join(tmpdir(), "onnx-light-optimization-"),
   );
@@ -3414,6 +3417,7 @@ test("previews global passes without editing, rejects stale previews and optimiz
 });
 
 test("creates a native function pattern and retains it through preview, undo, replay and recovery", async (t) => {
+  if (sdkReplaySkip) return t.skip(sdkReplaySkip);
   const extension = await openExtension("fusion.onnx", undefined, true);
   t.after(() => extension.dispose());
   await extension.receive({ type: "ready" });
@@ -6130,6 +6134,7 @@ test("recovers a downloaded model from its published cache path after the tempor
 });
 
 test("selects optimization groups and previews global passes through the real webview bridge", async (t) => {
+  if (sdkReplaySkip) return t.skip(sdkReplaySkip);
   const extension = await openExtension("../../examples/optimization.onnx");
   t.after(() => extension.dispose());
   const dom = new JSDOM(extension.webview.html, { runScripts: "outside-only" });
