@@ -2,7 +2,7 @@ Implemented features
 ====================
 
 The viewer inspects ONNX graphs locally with onnx-light. Models are not uploaded.
-Explicit Convert and Run Prompt actions execute installed tooling;
+Explicit Convert and Run actions execute installed tooling;
 inspection does not save or modify the source file.
 
 Available in the viewer
@@ -42,7 +42,7 @@ dialog for paths outside the workspace.
 or running inference. Mobius exports show whether a pipeline can be assembled,
 or explain missing assets and unsupported input contracts. **Load as pipeline**
 creates a native ``PipelineProto`` beside the export, reusing external weights
-and leaving the original models unchanged, then opens **Run Prompt**. Separate
+and leaving the original models unchanged, then opens **Run → Prompt**. Separate
 embedding/decoder exports and declared past/present caches are connected in C++;
 onnx-light owns generation and cache feedback. Existing pipelines can be opened
 directly. Inspection does not reorder history; only a successful open does.
@@ -134,10 +134,32 @@ labels stagger when space permits.
 
    Inspect a selected node at readable size.
 
+Running a model
+^^^^^^^^^^^^^^^
+
+Open **Run** next to **Tensors**, then select its **Run** subtab for one-shot
+CPU inference with onnx-light. The **Prompt** subtab preserves language-model
+generation. Regular execution uses the current model, including unsaved edits;
+for a pipeline, choose a stage in **Model**.
+
+Fill each input's ONNX tensor text, replacing symbolic dimensions with concrete
+sizes. For example, a three-element float input named ``X`` is
+``float[3] X = {-1, 0, 2}``. Names, types and shapes are prefilled; integer values
+are parsed natively without JavaScript rounding. A trusted workspace is required.
+**Run model** displays execution time and output type, shape and values for
+tensors up to 32 elements. Larger tensors show metadata only. Native errors
+appear in the status; execution does not modify the graph or save files.
+
+.. figure:: _static/feature-run-model.png
+   :alt: Run window with Prompt and Run subtabs, editable ReLU input and native tensor output.
+   :width: 100%
+
+   Execute a regular model independently of language-model prompting.
+
 Running language-model prompts
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-After conversion, open **Run Prompt** next to **Tensors**. Select **onnx-light**
+After conversion, open **Run → Prompt** next to **Tensors**. Select **onnx-light**
 or **onnxruntime-genai** (when a GenAI configuration is available), edit the
 prompt and choose a maximum number of new tokens (default: 32). Requires a
 trusted workspace and a causal language model. Both ONNX engines execute in
@@ -195,15 +217,30 @@ now**, cancellation, changing models/engines/settings and closing the panel
 release it. One panel retains at most one native model; keeping it during HF
 validation can hold two models in memory.
 
-Select the engine on **Run Prompt**, then open **Session settings** to jump to
+Select the engine on **Run → Prompt**, then open **Session settings** to jump to
 its subtab in **Settings → Engine**. Controls preserve defaults unless changed and never edit the
 exported configuration. GenAI's **From genai_config.json** uses the exported
 configuration, or the engine default when the option is absent from that file.
 onnx-light exposes CPU threads, shape checks, allocation capacity, intermediate
 release, logging and native kernel profiles. GenAI exposes CPU threads,
 CPU/CUDA/DirectML providers and GPU limits, graph optimization, memory options,
-prepacking, graph execution mode, logging and ORT profiling. Unsupported
+prepacking, graph execution mode, log ID/verbosity, custom operator libraries and ORT profiling. Unsupported
 providers/options raise runtime errors, without switching engines.
+
+**Settings → Engine → onnxruntime → All session options** accepts a JSON object
+in the native GenAI ``session_options`` format, exposing all options supported by
+the installed runtime, including ``provider_options`` and string-valued ORT
+configuration entries. For example, ``{"session.intra_op.allow_spinning":"0"}``
+disables intra-op spinning. Nonblank individual controls override matching JSON
+keys; blank JSON preserves the exported configuration. Provider selection and GPU
+controls also take precedence over JSON provider options. Invalid JSON blocks
+generation; unsupported runtime options are reported on Prompt.
+
+.. figure:: _static/feature-ort-session-options.png
+   :alt: ONNX Runtime settings with log verbosity, log ID, custom operator library and a JSON editor for all native session options.
+   :width: 100%
+
+   Advanced session options supplement the shared Prompt controls without editing exported files.
 
 Open **Generation settings** from Prompt, or **Settings → Generation**, to set
 **Temperature** (default **0**, greedy decoding) and **Maximum new tokens**

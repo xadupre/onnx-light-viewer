@@ -60,6 +60,7 @@ function createPromptPanel({ byId, postMessage }) {
     byId("settings-engine-tab").click();
   });
   byId("prompt-settings-back").addEventListener("click", () => {
+    byId("execution-prompt-tab").click();
     byId("prompt-tab").click();
   });
   byId("prompt-generation-open").addEventListener("click", () => {
@@ -67,6 +68,7 @@ function createPromptPanel({ byId, postMessage }) {
     byId("settings-generation-tab").click();
   });
   byId("prompt-generation-back").addEventListener("click", () => {
+    byId("execution-prompt-tab").click();
     byId("prompt-tab").click();
   });
   const release = () => {
@@ -100,6 +102,17 @@ function createPromptPanel({ byId, postMessage }) {
     );
     const settings = {};
     for (const field of pane.querySelectorAll("[data-setting]")) {
+      if (field.hasAttribute("data-json")) {
+        field.setCustomValidity("");
+        if (!field.value.trim()) continue;
+        try {
+          const value = JSON.parse(field.value);
+          if (!value || typeof value !== "object" || Array.isArray(value))
+            throw new Error("Expected an object");
+        } catch {
+          field.setCustomValidity("Enter a valid session options JSON object.");
+        }
+      }
       if (field.disabled || (field.value === "" && field.type !== "checkbox"))
         continue;
       if (!field.checkValidity()) {

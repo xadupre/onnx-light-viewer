@@ -250,6 +250,13 @@ public:
                 std::to_string(Integer(settings.Get("gpuMemoryMiB"), 1, 1'048'576) * 1024 * 1024)
                     .c_str()));
         }
+      } else if (request.Has("genaiProviders")) {
+        const auto providers = request.Get("genaiProviders").As<Napi::Array>();
+        api.Check(api.OgaConfigClearProviders(config.get()));
+        for (uint32_t index = 0; index < providers.Length(); ++index) {
+          const std::string provider = providers.Get(index).As<Napi::String>();
+          api.Check(api.OgaConfigAppendProvider(config.get(), provider.c_str()));
+        }
       }
       OgaModel *raw_model = nullptr;
       api.Check(api.OgaCreateModelFromConfig(config.get(), &raw_model));

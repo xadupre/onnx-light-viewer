@@ -74,6 +74,7 @@ Napi::Object ModelHandle(Napi::Env env, std::shared_ptr<StoredModel> model) {
   AddMemoryProfileMethods(env, result, model);
   AddTensorStatisticsMethods(env, result, model);
   AddDimensionMethods(env, result, model);
+  AddRunMethods(env, result, model);
   result.Set("verify",
              Napi::Function::New(env, [model](const Napi::CallbackInfo &call) -> Napi::Value {
                try {

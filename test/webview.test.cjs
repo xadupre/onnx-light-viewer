@@ -266,7 +266,7 @@ test("Prompt and Settings align labels beside their controls, including session 
       dom.window.getComputedStyle(label).gridTemplateColumns,
       "minmax(0, 1fr) minmax(0, 2fr)",
     );
-    assert.ok(label.lastElementChild.matches("input, select"));
+    assert.ok(label.lastElementChild.matches("input, select, textarea"));
   }
   assert.ok(
     document

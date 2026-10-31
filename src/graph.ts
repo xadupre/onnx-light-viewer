@@ -351,6 +351,16 @@ export interface TensorValues {
 
 export type TensorInspection = TensorStatistics | TensorValues;
 
+export interface RunTensor {
+  name: string;
+  text: string;
+}
+
+export interface RunResult {
+  timeMs: number;
+  outputs: RunTensor[];
+}
+
 /** SDK statistics; integer metadata and nonfinite numbers survive webview transport exactly. */
 export interface TensorStatistics {
   name: string;
@@ -373,9 +383,11 @@ export interface TensorStatistics {
 
 /**
  * Retained model or pipeline whose inferred information survives graph projections.
- * Methods do not execute the model or write files.
+ * Analysis methods do not execute the model; run explicitly executes a snapshot.
  */
 export interface NativeModel {
+  runInputs(path?: GraphPath): RunTensor[];
+  run(inputs: string[], path?: GraphPath): Promise<RunResult>;
   /** Common namespace prefix; null for static models, empty when none is shared. */
   dimensionPrefix(): string | null;
   /** Edits dimension labels on an independent snapshot, retaining edits through undo and Save. */

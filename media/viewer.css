@@ -2018,6 +2018,15 @@ button:disabled {
   grid-column: 1 / -1;
 }
 
+#run-inputs {
+  grid-column: 1 / -1;
+}
+
+#run-results pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .form-grid > button {
   grid-column: 2;
   justify-self: start;
@@ -2027,7 +2036,8 @@ button:disabled {
 .form-grid > select,
 .form-grid > textarea,
 .prompt-settings-grid label > input,
-.prompt-settings-grid label > select {
+.prompt-settings-grid label > select,
+.prompt-settings-grid label > textarea {
   width: 100%;
   min-width: 0;
   box-sizing: border-box;

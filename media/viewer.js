@@ -117,6 +117,15 @@ const promptPanel = createPromptPanel({
   byId,
   postMessage: (message) => vscode.postMessage(message),
 });
+const runPanel = createRunPanel({
+  byId,
+  postMessage: (message) => vscode.postMessage(message),
+  activatePrompt: () => promptPanel.activate(),
+  canActivate: () =>
+    hasModel &&
+    !replacementPending &&
+    byId("model-view").getAttribute("aria-busy") !== "true",
+});
 let promptReloadPending = false;
 const tensorListPanel = createTensorListPanel({
   byId,
@@ -259,7 +268,7 @@ function showTab(name, focus = false) {
   if (focus) byId(`${name}-tab`).focus();
   if (name === "model") fit();
   else if (name === "prompt" && hasModel && !replacementPending)
-    promptPanel.activate();
+    runPanel.activateSelected();
   else if (name === "statistics") requestStatistics();
   else if (name === "memory") memoryPanel.open();
   else if (name === "tensors") {
@@ -374,10 +383,11 @@ function setLoading(pending, message = "") {
   if (pending) tensorStatisticsPanel.reset();
   if (pending) {
     promptPanel.reset();
+    runPanel.reset();
     promptReloadPending = true;
   } else if (promptReloadPending && hasModel) {
     promptReloadPending = false;
-    if (!byId("prompt-view").hidden) promptPanel.activate();
+    if (!byId("prompt-view").hidden) runPanel.activateSelected();
   }
   tensorListPanel.setBusy(pending);
   if (pending) byId("model-error").hidden = true;
@@ -2898,6 +2908,7 @@ window.addEventListener("message", (event) => {
   if (
     tensorStatisticsPanel.handleMessage(event.data) ||
     promptPanel.handleMessage(event.data) ||
+    runPanel.handleMessage(event.data) ||
     memoryPanel.handleMessage(event.data) ||
     exportPanel.handleMessage(event.data) ||
     filePanels.handleMessage(event.data) ||
@@ -2920,6 +2931,7 @@ window.addEventListener("message", (event) => {
   } else if (event.data?.type === "log-entry") {
     displayLog(event.data.entry);
   } else if (event.data?.type === "show-prompt") {
+    runPanel.showPrompt();
     showTab("prompt", true);
   } else if (event.data?.type === "log-history") {
     for (const entry of event.data.entries) displayLog(entry);
@@ -3006,7 +3018,8 @@ window.addEventListener("message", (event) => {
     tensorListPanel.setGraph(displayedGraph);
     promptReloadPending = false;
     promptPanel.reset();
-    if (!byId("prompt-view").hidden) promptPanel.activate();
+    runPanel.reset();
+    if (!byId("prompt-view").hidden) runPanel.activateSelected();
     tensorStatisticsPanel.reset();
     memoryPanel.setGraph(displayedGraph);
     fusionPanel.reset(
@@ -3070,7 +3083,8 @@ window.addEventListener("message", (event) => {
       }
       promptReloadPending = false;
       promptPanel.reset();
-      if (!byId("prompt-view").hidden) promptPanel.activate();
+      runPanel.reset();
+      if (!byId("prompt-view").hidden) runPanel.activateSelected();
       tensorStatisticsPanel.reset();
       memoryPanel.setGraph(displayedGraph);
       const selection = new Set(selected);

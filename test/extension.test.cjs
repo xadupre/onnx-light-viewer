@@ -41,6 +41,79 @@ test("prompt host requires workspace trust and a locally saved converted model",
   assert.match(extension.messages.at(-1).error, /Invalid prompt request/);
 });
 
+test("regular run host executes tensor inputs and enforces workspace trust", async (t) => {
+  const extension = await openExtension("relu.onnx");
+  t.after(() => extension.dispose());
+  await extension.receive({ type: "run-inputs", requestId: 1 });
+  const info = extension.messages.at(-1);
+  assert.equal(info.type, "run-inputs");
+  assert.deepEqual(info.path, []);
+  const inputs = [info.inputs[0].text.replace("{}", "{-1, 0, 2}")];
+  extension.setTrusted(false);
+  await extension.receive({ type: "run-model", requestId: 2, inputs });
+  assert.equal(extension.messages.at(-1).type, "run-error");
+  assert.match(extension.messages.at(-1).error, /Trust this workspace/);
+  extension.setTrusted(true);
+  await extension.receive({ type: "run-model", requestId: 3, inputs });
+  const result = extension.messages.at(-1);
+  assert.equal(result.type, "run-result");
+  assert.match(result.result.outputs[0].text, /Values: \[0, 0, 2\]/);
+  for (const message of [
+    { requestId: "4", inputs },
+    { requestId: 4, inputs: [42] },
+    { requestId: 5, inputs, path: "invalid" },
+  ]) {
+    await extension.receive({ type: "run-model", ...message });
+    assert.equal(extension.messages.at(-1).type, "run-error");
+  }
+});
+
+test("regular run host selects a pipeline stage root", async (t) => {
+  const extension = await openExtension("tiny.pipe-onnx");
+  t.after(() => extension.dispose());
+  await extension.receive({ type: "run-inputs", requestId: 1, path: [] });
+  const info = extension.messages.at(-1);
+  assert.equal(info.type, "run-inputs");
+  assert.equal(info.stages.length, 3);
+  assert.deepEqual(info.path, info.stages[0].path);
+  await extension.receive({
+    type: "run-inputs",
+    requestId: 2,
+    path: [{ pipeline: "embedding" }, { function: 0 }],
+  });
+  assert.equal(extension.messages.at(-1).type, "run-error");
+  assert.match(extension.messages.at(-1).error, /stage root/);
+});
+
+test("regular run host discards results after replacing the model", async (t) => {
+  const extension = await openExtension("relu.onnx");
+  t.after(() => extension.dispose());
+  const native = extension.nativeModels.at(-1);
+  let finish;
+  native.run = () =>
+    new Promise((resolve) => {
+      finish = resolve;
+    });
+  const pending = extension.receive({
+    type: "run-model",
+    requestId: 1,
+    inputs: [],
+  });
+  while (!finish) await new Promise((resolve) => setImmediate(resolve));
+  await extension.receive({
+    type: "open",
+    source: "local",
+    location: path.join(__dirname, "models", "metadata.onnx"),
+    password: "",
+  });
+  finish({ timeMs: 1, outputs: [] });
+  await pending;
+  assert.equal(
+    extension.messages.some((message) => message.type === "run-result"),
+    false,
+  );
+});
+
 test("a fresh validated prompt does not reuse a previous generation's captured prefixes", async (t) => {
   const {
     promptModel,

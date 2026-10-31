@@ -54,7 +54,7 @@ export function webviewHtml(
           <button id="statistics-tab" role="tab" aria-controls="statistics-view" aria-selected="false" tabindex="-1">Statistics</button>
           <button id="memory-tab" role="tab" aria-controls="memory-view" aria-selected="false" tabindex="-1">Memory</button>
           <button id="tensors-tab" role="tab" aria-controls="tensors-view" aria-selected="false" tabindex="-1"><svg class="tensor-statistics-icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M4 3v17h17M8 16v-5m5 5V6m5 10V9"/></svg>Tensors</button>
-          <button id="prompt-tab" role="tab" aria-controls="prompt-view" aria-selected="false" tabindex="-1"><svg class="tensor-statistics-icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="m8 5 11 7-11 7Z"/></svg>Prompt</button>
+          <button id="prompt-tab" role="tab" aria-controls="prompt-view" aria-selected="false" tabindex="-1"><svg class="tensor-statistics-icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="m8 5 11 7-11 7Z"/></svg>Run</button>
         </div>
       </div>
       <div class="feature-group" role="presentation">
@@ -550,7 +550,12 @@ export function webviewHtml(
       </div>
     </section>
     <section id="prompt-view" role="tabpanel" aria-labelledby="prompt-tab" tabindex="0" hidden>
-      <h1>Prompt</h1>
+      <h1>Run</h1>
+      <nav class="settings-tabs" role="tablist" aria-label="Execution mode">
+        <button id="execution-prompt-tab" type="button" role="tab" aria-controls="execution-prompt-view" aria-selected="true">Prompt</button>
+        <button id="execution-run-tab" type="button" role="tab" aria-controls="execution-run-view" aria-selected="false" tabindex="-1">Run</button>
+      </nav>
+      <section id="execution-prompt-view" role="tabpanel" aria-labelledby="execution-prompt-tab" tabindex="0">
       <p>Run a converted causal language model with native C++ engines. Both engines display tokens as they arrive, with prefill and decode timings and raw scores. Python in Settings can locate native SDK libraries and is used for Hugging Face validation; inference runs in C++. The saved model on disk is used, not unsaved graph edits.</p>
       <div id="prompt-run-page">
       <button id="prompt-settings-open" type="button">Session settings</button>
@@ -626,10 +631,30 @@ export function webviewHtml(
             <label>CPU memory arena<select data-setting="cpuArena" data-boolean><option value="">From genai_config.json</option><option value="true">Enabled</option><option value="false">Disabled</option></select></label>
             <label>Memory pattern<select data-setting="memoryPattern" data-boolean><option value="">From genai_config.json</option><option value="true">Enabled</option><option value="false">Disabled</option></select></label>
             <label>Log severity (0 verbose, 1 info, 2 warning, 3 error, 4 fatal)<input data-setting="logSeverity" type="number" min="0" max="4" placeholder="From genai_config.json"></label>
+            <label>Log verbosity<input data-setting="logVerbosity" type="number" min="0" max="2147483647" placeholder="From genai_config.json"></label>
+            <label>Log ID<input data-setting="logId" type="text" maxlength="4096" placeholder="From genai_config.json"></label>
+            <label>Custom operators library<input data-setting="customOpsLibrary" type="text" maxlength="4096" placeholder="From genai_config.json"></label>
             <label class="prompt-checkbox"><span>Enable ONNX Runtime profiling</span><input data-setting="profile" type="checkbox"></label>
+            <h3>All session options</h3>
+            <p>Use the native GenAI session_options JSON format to override any option supported by your installed runtime, including provider_options and string-valued session configuration entries. Nonblank controls above take precedence over JSON. Leave blank to preserve the exported configuration. Runtime errors are reported on Prompt.</p>
+            <label>Session options (JSON object)<textarea data-setting="sessionOptions" data-json rows="8" maxlength="65536" placeholder='{"session.intra_op.allow_spinning":"0","provider_options":[{"cuda":{"device_id":"0"}}]}'></textarea></label>
           </div>
         </fieldset>
       </div>
+      </section>
+      <section id="execution-run-view" role="tabpanel" aria-labelledby="execution-run-tab" tabindex="0" hidden>
+        <p>Execute the current model once with onnx-light (CPU), including unsaved graph edits. For pipelines, select a stage. Enter ONNX tensor text, for example <code>float[3] X = {-1, 0, 2}</code>. Replace symbolic dimensions with concrete sizes and fill the braces with values. Integer values remain exact. Outputs show type, shape and values for tensors up to 32 elements.</p>
+        <form id="run-form">
+          <fieldset id="run-fields" class="form-grid" disabled>
+            <label for="run-stage">Model</label>
+            <select id="run-stage"><option value="[]">Root graph</option></select>
+            <div id="run-inputs" class="form-grid"></div>
+            <button type="submit">Run model</button>
+          </fieldset>
+        </form>
+        <p id="run-status" role="status">Open a model to run it.</p>
+        <div id="run-results" aria-live="polite"></div>
+      </section>
     </section>
     <section id="tensors-view" role="tabpanel" aria-labelledby="tensors-tab" tabindex="0" hidden>
       <h2>Tensors</h2>
@@ -1085,6 +1110,7 @@ export function webviewHtml(
   <script nonce="${nonce}" src="${resource("tensor-list-panel.js")}"></script>
   <script nonce="${nonce}" src="${resource("tensor-statistics-panel.js")}"></script>
   <script nonce="${nonce}" src="${resource("prompt-panel.js")}"></script>
+  <script nonce="${nonce}" src="${resource("run-panel.js")}"></script>
   <script nonce="${nonce}" src="${resource("vendor/dagre.min.js")}"></script>
   <script nonce="${nonce}" src="${resource("graph-layout.js")}"></script>
   <script nonce="${nonce}" src="${resource("viewer.js")}"></script>
