@@ -15,7 +15,83 @@ const { tmpdir } = require("node:os");
 const path = require("node:path");
 const { test } = require("node:test");
 const vm = require("node:vm");
-const { inspectPythonPackages, pythonPackages } = require("../dist/settings");
+const {
+  inspectPythonPackages,
+  inspectPythonDevices,
+  pythonPackages,
+} = require("../dist/settings");
+
+test("device inspection guarantees CPU and uses isolated runtime execution rather than package/platform guesses", async () => {
+  let args;
+  let options;
+  const module = { exports: {} };
+  const file = require.resolve("../dist/settings");
+  const execute = vm.runInThisContext(
+    `(function(require, module, exports) { ${readFileSync(file, "utf8")}\n})`,
+  );
+  const realRequire = createRequire(file);
+  execute(
+    (name) =>
+      name === "node:child_process"
+        ? {
+            execFile(executable, arguments_, options_, callback) {
+              assert.equal(executable, "/selected/python");
+              args = arguments_;
+              options = options_;
+              callback(null, { stdout: '["cpu","cuda","dml"]' });
+            },
+          }
+        : realRequire(name),
+    module,
+    module.exports,
+  );
+  assert.deepEqual(
+    await module.exports.inspectPythonDevices("/selected/python"),
+    ["cpu", "cuda", "dml"],
+  );
+  assert.deepEqual(args.slice(0, 2), ["-I", "-c"]);
+  assert.equal(options.cwd, require("node:os").homedir());
+  assert.equal(options.timeout, 20000);
+  assert.match(args[2], /session\.disable_cpu_ep_fallback/);
+  assert.match(args[2], /session\.run/);
+  const prefix = `
+import sys
+import types
+np = types.SimpleNamespace(array=lambda *a, **k: [], float32=1)
+sys.modules["numpy"] = np
+class Options:
+    def add_session_config_entry(self, *a): pass
+class Session:
+    def __init__(self, *a, **k):
+        self.providers = k["providers"] if SUCCESS else ["CPUExecutionProvider"]
+    def disable_fallback(self): pass
+    def get_providers(self): return self.providers
+    def run(self, *a): return []
+sys.modules["onnxruntime"] = types.SimpleNamespace(
+    get_available_providers=lambda: ["CPUExecutionProvider", "CUDAExecutionProvider", "DmlExecutionProvider"],
+    SessionOptions=Options, InferenceSession=Session)
+`;
+  for (const success of [false, true]) {
+    const result = execFileSync(
+      process.platform === "win32" ? "python" : "python3",
+      [
+        "-I",
+        "-c",
+        `SUCCESS = ${success ? "True" : "False"}\n${prefix}\n${args[2]}`,
+      ],
+      { encoding: "utf8" },
+    );
+    assert.deepEqual(
+      JSON.parse(result),
+      success ? ["cpu", "cuda", "dml"] : ["cpu"],
+    );
+  }
+  const devices = await inspectPythonDevices(
+    process.platform === "win32" ? "python" : "python3",
+  );
+  assert.ok(devices.includes("cpu"));
+  assert.ok(devices.every((device) => ["cpu", "cuda", "dml"].includes(device)));
+});
 
 test("checks published GitHub and PyPI versions with explicit per-package failures and cancellation", async (t) => {
   const requests = [];

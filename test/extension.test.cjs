@@ -24,6 +24,35 @@ const { test } = require("node:test");
 const { JSDOM } = require("jsdom");
 const { exportHub } = require("./helpers/export-hub.cjs");
 
+test("device inspection is trust-gated, correlated and uses the requested Python executable", async (t) => {
+  const extension = await openExtension();
+  t.after(() => extension.dispose());
+  const request = {
+    type: "inspect-devices",
+    requestId: 17,
+    pythonPath: process.platform === "win32" ? "python" : "python3",
+  };
+  extension.setTrusted(false);
+  await extension.receive(request);
+  assert.equal(extension.messages.at(-1).type, "device-error");
+  assert.equal(extension.messages.at(-1).requestId, 17);
+  assert.match(extension.messages.at(-1).error, /Trust this workspace/);
+  extension.setTrusted(true);
+  await extension.receive({ ...request, requestId: -1 });
+  assert.match(extension.messages.at(-1).error, /Invalid Python inspection/);
+  await extension.receive({
+    ...request,
+    pythonPath: path.resolve("missing-device-python"),
+  });
+  assert.equal(extension.messages.at(-1).type, "device-error");
+  assert.match(extension.messages.at(-1).error, /ENOENT/);
+  await extension.receive(request);
+  assert.equal(extension.messages.at(-1).type, "device-info");
+  assert.equal(extension.messages.at(-1).requestId, 17);
+  assert.equal(extension.messages.at(-1).pythonPath, request.pythonPath);
+  assert.ok(extension.messages.at(-1).devices.includes("cpu"));
+});
+
 test("prompt host requires workspace trust and a locally saved converted model", async () => {
   const extension = await openExtension();
   extension.setTrusted(false);

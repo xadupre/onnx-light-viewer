@@ -287,3 +287,53 @@ print(json.dumps({
   );
   return JSON.parse(stdout);
 }
+
+/** Probes actual GPU execution, not package names or platform-specific defaults. */
+export async function inspectPythonDevices(
+  pythonPath: string,
+): Promise<string[]> {
+  const script = `
+import base64
+import json
+devices = ["cpu"]
+try:
+    import numpy as np
+    import onnxruntime as ort
+except ImportError:
+    print(json.dumps(devices))
+else:
+    # A self-contained float[1,3] Relu graph (IR 9, opset 13).
+    model = base64.b64decode("CAlCBAoAEA0SEW9ubngtbGlnaHQtdmlld2VyOmoKIQoFaW5wdXQSBm91dHB1dBoKYWN0aXZhdGlvbiIEUmVsdRISQSBmaXJzdCBPTk5YIGdyYXBoWhcKBWlucHV0Eg4KDAgBEggKAggBCgIIA2IYCgZvdXRwdXQSDgoMCAESCAoCCAEKAggD")
+    available = ort.get_available_providers()
+    for device, provider in [("cuda", "CUDAExecutionProvider"), ("dml", "DmlExecutionProvider")]:
+        if provider not in available:
+            continue
+        try:
+            options = ort.SessionOptions()
+            options.log_severity_level = 4
+            options.enable_mem_pattern = False
+            options.add_session_config_entry("session.disable_cpu_ep_fallback", "1")
+            session = ort.InferenceSession(model, sess_options=options, providers=[provider])
+            session.disable_fallback()
+            if provider in session.get_providers():
+                session.run(None, {"input": np.array([[-1, 0, 1]], dtype=np.float32)})
+                devices.append(device)
+            del session
+        except Exception:
+            pass
+    print(json.dumps(devices))
+`;
+  const { stdout } = await promisify(execFile)(
+    pythonPath,
+    ["-I", "-c", script],
+    { cwd: homedir(), timeout: 20000, maxBuffer: 1024 * 1024 },
+  );
+  const devices: unknown = JSON.parse(stdout);
+  if (
+    !Array.isArray(devices) ||
+    !devices.includes("cpu") ||
+    devices.some((device) => !["cpu", "cuda", "dml"].includes(device))
+  )
+    throw new Error("Python returned invalid device capabilities.");
+  return devices;
+}

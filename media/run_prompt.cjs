@@ -3,6 +3,7 @@ const { execFileSync } = require("node:child_process");
 const { dirname, isAbsolute, join, resolve } = require("node:path");
 const { createInterface } = require("node:readline");
 const native = require("../dist/native/onnx_light_viewer.node");
+const { genaiSessionOptions } = require("./prompt-settings.cjs");
 
 const emit = (event) => writeSync(1, `\x1e${JSON.stringify(event)}\n`);
 
@@ -34,32 +35,12 @@ function run(input, output, sessionKey) {
   if (runtimePath && !isAbsolute(runtimePath))
     throw new Error("ORT_LIB_PATH must be an absolute path.");
   const settings = request.sessionSettings ?? {};
-  const options = settings.sessionOptions
-    ? JSON.parse(settings.sessionOptions)
-    : {};
-  for (const [key, name] of [
-    ["intraOpThreads", "intra_op_num_threads"],
-    ["interOpThreads", "inter_op_num_threads"],
-    ["graphOptimization", "graph_optimization_level"],
-    ["cpuArena", "enable_cpu_mem_arena"],
-    ["memoryPattern", "enable_mem_pattern"],
-    ["logSeverity", "log_severity_level"],
-    ["logVerbosity", "log_verbosity_level"],
-    ["logId", "log_id"],
-    ["customOpsLibrary", "custom_ops_library"],
-  ])
-    if (settings[key] !== undefined) options[name] = settings[key];
-  if (settings.parallelExecution !== undefined)
-    options["session.execution_mode"] = settings.parallelExecution
-      ? "parallel"
-      : "sequential";
-  if (settings.prepacking !== undefined)
-    options["session.disable_prepacking"] = settings.prepacking ? "0" : "1";
-  if (settings.profile)
-    options.enable_profiling = join(
-      request.profileDirectory,
-      `genai-${process.pid}`,
-    );
+  const { options, providers } = genaiSessionOptions(
+    settings,
+    settings.profile
+      ? join(request.profileDirectory, `genai-${process.pid}`)
+      : undefined,
+  );
   const nativeRequest = {
     ...request,
     sessionSettings: settings,
@@ -67,21 +48,7 @@ function run(input, output, sessionKey) {
     genaiOverlay: JSON.stringify({
       model: { decoder: { session_options: options } },
     }),
-    ...(Array.isArray(options.provider_options)
-      ? {
-          genaiProviders: [
-            ...new Set(
-              options.provider_options.flatMap((provider) =>
-                provider &&
-                typeof provider === "object" &&
-                !Array.isArray(provider)
-                  ? Object.keys(provider)
-                  : [],
-              ),
-            ),
-          ],
-        }
-      : {}),
+    ...(providers === undefined ? {} : { genaiProviders: providers }),
     libraryPath,
     runtimePath,
   };

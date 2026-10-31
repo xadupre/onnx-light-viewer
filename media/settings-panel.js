@@ -17,14 +17,29 @@ function createSettingsPanel({
   let sidebarWidth;
   let pathHistory = { open: [], save: [] };
   let exportHistory = { models: [], directories: [] };
+  let deviceRequest;
+  let pendingDevices;
+  let devicePythonPath;
+  const editedDevices = new Set();
+  for (const provider of ["cuda", "dml"])
+    byId(`settings-device-${provider}`).addEventListener("change", () =>
+      editedDevices.add(provider),
+    );
+  byId("settings-inspect-devices").addEventListener("click", () => {
+    if (!trusted || deviceRequest) return;
+    deviceRequest = { requestId: ++nextRequestId, pythonPath };
+    byId("settings-inspect-devices").disabled = true;
+    byId("settings-device-status").textContent =
+      "CPU available. Probing GPU execution in the selected Python runtime…";
+    postMessage({ type: "inspect-devices", ...deviceRequest });
+  });
 
   const sessionPage = byId("prompt-session-page");
   byId("settings-engine-view").append(sessionPage);
   sessionPage.hidden = false;
-  const engines = ["onnxruntime", "pytorch", "onnx-light"];
+  const engines = ["onnxruntime", "onnx-light"];
   const engineViews = {
     onnxruntime: "prompt-settings-genai",
-    pytorch: "settings-pytorch-view",
     "onnx-light": "prompt-settings-light",
   };
   function selectEngine(selected) {
@@ -39,7 +54,6 @@ function createSettingsPanel({
       view.tabIndex = 0;
       view.hidden = !active;
     }
-    sessionPage.hidden = selected === "pytorch";
     byId("prompt-settings-title").textContent =
       selected === "onnx-light"
         ? "onnx-light session settings"
@@ -47,7 +61,7 @@ function createSettingsPanel({
   }
   selectEngine("onnxruntime");
 
-  const categories = ["app", "history", "engine", "generation"];
+  const categories = ["app", "history", "engine", "device", "generation"];
   function selectCategory(selected) {
     for (const category of categories) {
       const active = category === selected;
@@ -295,8 +309,64 @@ function createSettingsPanel({
     postMessage({ type: "check-latest-versions", ...checkingReleases });
   });
 
+  function applyDevices(message) {
+    const devices = message.devices ?? ["cpu"];
+    let changed = false;
+    for (const provider of ["cuda", "dml"]) {
+      const field = byId(`settings-device-${provider}`);
+      field.title = devices.includes(provider)
+        ? "Available: runtime execution probe succeeded."
+        : "Not detected. Select manually for a separately configured native SDK.";
+      if (!editedDevices.has(provider)) {
+        changed ||= field.checked !== devices.includes(provider);
+        field.checked = devices.includes(provider);
+      }
+    }
+    byId("settings-device-status").textContent =
+      `Detected devices: ${devices.map((name) => ({ cpu: "CPU", cuda: "CUDA", dml: "DirectML" })[name] ?? name).join(", ")}. Probed in the selected Python runtime; a separately configured native SDK may differ.`;
+    if (changed)
+      byId("prompt-device-fields").dispatchEvent(
+        new Event("change", { bubbles: true }),
+      );
+  }
+  byId("prompt-device-fields").addEventListener("prompt-idle", () => {
+    if (!pendingDevices) return;
+    const message = pendingDevices;
+    pendingDevices = undefined;
+    if (trusted && message.pythonPath === pythonPath) applyDevices(message);
+  });
+
   function receive(message) {
     if (!message || typeof message !== "object") return;
+    if (
+      message.type === "device-info" ||
+      (message.type === "device-error" && deviceRequest)
+    ) {
+      if (
+        !deviceRequest ||
+        message.requestId !== deviceRequest.requestId ||
+        message.pythonPath !== deviceRequest.pythonPath
+      )
+        return;
+      deviceRequest = undefined;
+      byId("settings-inspect-devices").disabled = !trusted;
+      if (message.pythonPath !== pythonPath) {
+        if (trusted) byId("settings-inspect-devices").click();
+        return;
+      }
+      pendingDevices = undefined;
+      if (message.type === "device-error") {
+        byId("settings-device-status").textContent =
+          `CPU available. GPU detection unavailable: ${message.error}`;
+        return;
+      }
+      if (byId("prompt-device-fields").disabled) {
+        pendingDevices = message;
+        byId("settings-device-status").textContent =
+          "Device probe completed. Defaults will apply when generation finishes.";
+      } else applyDevices(message);
+      return;
+    }
     if (
       message.type === "latest-versions-info" ||
       message.type === "latest-versions-error"
@@ -341,6 +411,12 @@ function createSettingsPanel({
       }
       pythonPath = message.application.pythonPath;
       trusted = message.trusted;
+      byId("settings-inspect-devices").disabled =
+        Boolean(deviceRequest) || !trusted;
+      if (trusted && devicePythonPath !== pythonPath) {
+        devicePythonPath = pythonPath;
+        byId("settings-inspect-devices").click();
+      }
       appVersion = message.appVersion;
       nativeVersion = message.nativeVersion;
       renderVersions();

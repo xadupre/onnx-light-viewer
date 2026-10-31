@@ -235,27 +235,29 @@ public:
       auto config = Own(raw_config, api.OgaDestroyConfig);
       api.Check(api.OgaConfigOverlay(
           config.get(), request.Get("genaiOverlay").As<Napi::String>().Utf8Value().c_str()));
-      if (settings.Has("provider")) {
-        const std::string provider = settings.Get("provider").As<Napi::String>();
-        api.Check(api.OgaConfigClearProviders(config.get()));
-        if (provider != "cpu") {
-          api.Check(api.OgaConfigAppendProvider(config.get(), provider.c_str()));
-          if (settings.Has("deviceId"))
-            api.Check(api.OgaConfigSetProviderOption(
-                config.get(), provider.c_str(), "device_id",
-                std::to_string(Integer(settings.Get("deviceId"), 0, 65535)).c_str()));
-          if (settings.Has("gpuMemoryMiB"))
-            api.Check(api.OgaConfigSetProviderOption(
-                config.get(), provider.c_str(), "gpu_mem_limit",
-                std::to_string(Integer(settings.Get("gpuMemoryMiB"), 1, 1'048'576) * 1024 * 1024)
-                    .c_str()));
-        }
-      } else if (request.Has("genaiProviders")) {
+      if (request.Has("genaiProviders")) {
         const auto providers = request.Get("genaiProviders").As<Napi::Array>();
         api.Check(api.OgaConfigClearProviders(config.get()));
         for (uint32_t index = 0; index < providers.Length(); ++index) {
           const std::string provider = providers.Get(index).As<Napi::String>();
+          // GenAI adds CPU as fallback; it is not an explicitly appended GPU provider.
+          if (provider == "cpu")
+            continue;
           api.Check(api.OgaConfigAppendProvider(config.get(), provider.c_str()));
+          const std::string device_key = provider == "cuda" ? "cudaDeviceId" : "dmlDeviceId";
+          if ((provider == "cuda" || provider == "dml") &&
+              (settings.Has(device_key) || settings.Has("deviceId"))) {
+            const auto device = settings.Has(device_key) ? settings.Get(device_key)
+                                                        : settings.Get("deviceId");
+            api.Check(api.OgaConfigSetProviderOption(
+                config.get(), provider.c_str(), "device_id",
+                std::to_string(Integer(device, 0, 65535)).c_str()));
+          }
+          if (provider == "cuda" && settings.Has("gpuMemoryMiB"))
+            api.Check(api.OgaConfigSetProviderOption(
+                config.get(), provider.c_str(), "gpu_mem_limit",
+                std::to_string(Integer(settings.Get("gpuMemoryMiB"), 1, 1'048'576) * 1024 * 1024)
+                    .c_str()));
         }
       }
       OgaModel *raw_model = nullptr;

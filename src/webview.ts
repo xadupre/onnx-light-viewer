@@ -596,42 +596,53 @@ export function webviewHtml(
           <div id="prompt-settings-light" class="prompt-settings-grid">
             <h3>onnx-light (CPU)</h3>
             <p>CPU kernels only. Automatic graph optimization is not exposed by Generate; use Optimize separately. The SDK recreates internal generation sessions, but reuses the loaded model, context and supported static preparations.</p>
-            <label>CPU threads (inference and loading preparation; 0 = automatic)<input data-setting="threads" type="number" min="0" max="4096" placeholder="SDK default"></label>
-            <h3>Parallel loading</h3>
-            <label>Model loader<select data-setting="sdkLoader" data-boolean data-loading><option value="">Standard ONNX loading</option><option value="true">SDK owning loader (parallel preparation)</option></select></label>
-            <p>The SDK overlaps one I/O worker with preparation on the CPU executor. CPU threads above also control parallel preparation; there is no separate I/O thread-count option.</p>
-            <label>Overlap reads and preparation<select data-setting="loadOverlap" data-boolean data-loading data-sdk-loader disabled><option value="">SDK default (enabled)</option><option value="true">Enabled</option><option value="false">Disabled (sequential)</option></select></label>
-            <label>Loading admission memory limit (MiB; 0 = unlimited, not process RSS)<input data-setting="loadMemoryMiB" data-loading data-sdk-loader type="number" min="0" max="1048576" placeholder="SDK default" disabled></label>
             <h3>Memory and diagnostics</h3>
             <label>Persistent tensor initial capacity (tokens)<input data-setting="initialCapacity" type="number" min="0" max="1048576" placeholder="SDK default (32)"></label>
-            <label>Release intermediates<select data-setting="releaseIntermediates" data-boolean><option value="">SDK default</option><option value="true">Enabled</option><option value="false">Disabled</option></select></label>
-            <label>Check shapes<select data-setting="checkShapes" data-boolean><option value="">SDK default</option><option value="true">Enabled</option><option value="false">Disabled</option></select></label>
             <label>Log verbosity<input data-setting="verbose" type="number" min="0" max="10" placeholder="SDK default (0)"></label>
             <label class="prompt-checkbox"><span>Record native kernel timings (additional memory/CPU cost)</span><input data-setting="profile" type="checkbox"></label>
           </div>
           <div id="prompt-settings-genai" class="prompt-settings-grid" hidden>
             <h3>ONNX Runtime GenAI</h3>
             <p>Leave a field blank or select "From genai_config.json" to use the exported GenAI configuration. If an option is absent from that file, the engine uses its built-in default. Enter a value or select another option to override it.</p>
-            <label>Intra-op threads (also used by initialization/prepacking; 0 = automatic)<input data-setting="intraOpThreads" type="number" min="0" max="4096" placeholder="From genai_config.json"></label>
-            <label>Inter-op threads (0 = automatic)<input data-setting="interOpThreads" type="number" min="0" max="4096" placeholder="From genai_config.json"></label>
             <label>Parallel graph execution<select data-setting="parallelExecution" data-boolean><option value="">From genai_config.json</option><option value="true">Parallel</option><option value="false">Sequential</option></select></label>
-            <h3>Loading and providers</h3>
+            <h3>Initialization</h3>
             <p>GenAI exposes session initialization/prepacking controls, not a separate parallel weight-reader thread count. Graph execution mode is not a parallel-loading setting.</p>
             <label>Weight prepacking during initialization<select data-setting="prepacking" data-boolean><option value="">From genai_config.json</option><option value="true">Enabled</option><option value="false">Disabled</option></select></label>
-            <label>Execution provider<select data-setting="provider"><option value="">From genai_config.json</option><option value="cpu">CPU</option><option value="cuda">CUDA</option><option value="dml">DirectML</option></select></label>
-            <label>GPU device ID<input data-setting="deviceId" data-gpu type="number" min="0" max="65535" placeholder="Provider default" disabled></label>
-            <label>CUDA memory limit (MiB)<input data-setting="gpuMemoryMiB" data-cuda type="number" min="1" max="1048576" placeholder="Provider default" disabled></label>
             <h3>Optimization, memory and diagnostics</h3>
             <label>Graph optimization<select data-setting="graphOptimization"><option value="">From genai_config.json</option><option>ORT_DISABLE_ALL</option><option>ORT_ENABLE_BASIC</option><option>ORT_ENABLE_EXTENDED</option><option>ORT_ENABLE_ALL</option></select></label>
-            <label>CPU memory arena<select data-setting="cpuArena" data-boolean><option value="">From genai_config.json</option><option value="true">Enabled</option><option value="false">Disabled</option></select></label>
             <label>Memory pattern<select data-setting="memoryPattern" data-boolean><option value="">From genai_config.json</option><option value="true">Enabled</option><option value="false">Disabled</option></select></label>
             <label>Log severity (0 verbose, 1 info, 2 warning, 3 error, 4 fatal)<input data-setting="logSeverity" type="number" min="0" max="4" placeholder="From genai_config.json"></label>
             <label>Log verbosity<input data-setting="logVerbosity" type="number" min="0" max="2147483647" placeholder="From genai_config.json"></label>
             <label>Log ID<input data-setting="logId" type="text" maxlength="4096" placeholder="From genai_config.json"></label>
             <label>Custom operators library<input data-setting="customOpsLibrary" type="text" maxlength="4096" placeholder="From genai_config.json"></label>
             <label class="prompt-checkbox"><span>Enable ONNX Runtime profiling</span><input data-setting="profile" type="checkbox"></label>
-            <h3>All session options</h3>
-            <p>Use the native GenAI session_options JSON format to override any option supported by your installed runtime, including provider_options and string-valued session configuration entries. Nonblank controls above take precedence over JSON. Leave blank to preserve the exported configuration. Runtime errors are reported on Prompt.</p>
+            <h3>Session configuration entries</h3>
+            <p>Add string-valued ONNX Runtime configuration keys. Suggestions cover common controls; arbitrary keys are accepted. Availability and value formats depend on the installed runtime. <a href="https://github.com/microsoft/onnxruntime/blob/main/include/onnxruntime/core/session/onnxruntime_session_options_config_keys.h">Official configuration keys and value documentation</a>.</p>
+            <div id="prompt-config-entries"></div>
+            <button id="prompt-config-add" type="button">Add configuration entry</button>
+            <datalist id="prompt-config-keys">
+              <option value="session.intra_op.allow_spinning"></option>
+              <option value="session.inter_op.allow_spinning"></option>
+              <option value="session.intra_op.spin_duration_us"></option>
+              <option value="session.inter_op.spin_duration_us"></option>
+              <option value="session.intra_op_thread_affinities"></option>
+              <option value="session.dynamic_block_base"></option>
+              <option value="session.disable_prepacking"></option>
+              <option value="session.prepack.enable_parallel"></option>
+              <option value="session.use_env_allocators"></option>
+              <option value="session.set_denormal_as_zero"></option>
+              <option value="session.disable_cpu_ep_fallback"></option>
+              <option value="session.disable_quant_qdq"></option>
+              <option value="session.disable_double_qdq_remover"></option>
+              <option value="session.disable_aot_function_inlining"></option>
+              <option value="session.enable_quant_qdq_cleanup"></option>
+              <option value="session.use_device_allocator_for_initializers"></option>
+              <option value="optimization.enable_gelu_approximation"></option>
+              <option value="optimization.disable_specified_optimizers"></option>
+              <option value="optimization.minimal_build_optimizations"></option>
+            </datalist>
+            <h3>All session options (advanced)</h3>
+            <p>Use native GenAI session_options JSON for any supported option. Nonblank Engine and Device controls and configuration entries take precedence over JSON. Device selections replace provider_options unless "Use providers from JSON / model" is enabled on Device. Runtime errors are reported on Prompt.</p>
             <label>Session options (JSON object)<textarea data-setting="sessionOptions" data-json rows="8" maxlength="65536" placeholder='{"session.intra_op.allow_spinning":"0","provider_options":[{"cuda":{"device_id":"0"}}]}'></textarea></label>
           </div>
         </fieldset>
@@ -714,6 +725,7 @@ export function webviewHtml(
         <button id="settings-app-tab" type="button" role="tab" aria-controls="settings-app-view" aria-selected="true">App</button>
         <button id="settings-history-tab" type="button" role="tab" aria-controls="settings-history-view" aria-selected="false" tabindex="-1">History</button>
         <button id="settings-engine-tab" type="button" role="tab" aria-controls="settings-engine-view" aria-selected="false" tabindex="-1">Engine</button>
+        <button id="settings-device-tab" type="button" role="tab" aria-controls="settings-device-view" aria-selected="false" tabindex="-1">Device</button>
         <button id="settings-generation-tab" type="button" role="tab" aria-controls="settings-generation-view" aria-selected="false" tabindex="-1">Generation</button>
       </nav>
       <section id="settings-app-view" role="tabpanel" aria-labelledby="settings-app-tab" tabindex="0">
@@ -777,19 +789,31 @@ export function webviewHtml(
         <section id="settings-engine-view" role="tabpanel" aria-labelledby="settings-engine-tab" tabindex="0" hidden>
           <nav class="settings-tabs" role="tablist" aria-label="Engine settings">
             <button id="settings-onnxruntime-tab" type="button" role="tab" aria-controls="prompt-settings-genai" aria-selected="true">onnxruntime</button>
-            <button id="settings-pytorch-tab" type="button" role="tab" aria-controls="settings-pytorch-view" aria-selected="false" tabindex="-1">pytorch</button>
             <button id="settings-onnx-light-tab" type="button" role="tab" aria-controls="prompt-settings-light" aria-selected="false" tabindex="-1">onnx-light</button>
           </nav>
-          <section id="settings-pytorch-view" role="tabpanel" aria-labelledby="settings-pytorch-tab" tabindex="0" hidden>
-            <h3>PyTorch / Hugging Face reference</h3>
-            <p>PyTorch is used only for validation, not as a standalone prompt engine. No configurable PyTorch session options are currently exposed. Select the reference model ID or local checkpoint and enable validation on Prompt.</p>
-            <dl class="status-details">
-              <dt>Device</dt><dd>CPU</dd>
-              <dt>Model mode</dt><dd>Evaluation with torch.inference_mode()</dd>
-              <dt>Model loading</dt><dd>Local files only; remote code disabled</dd>
-              <dt>Decode cache</dt><dd>Enabled</dd>
-            </dl>
-          </section>
+      </section>
+      <section id="settings-device-view" role="tabpanel" aria-labelledby="settings-device-tab" tabindex="0" hidden>
+        <h3>Execution devices</h3>
+        <p>Devices are not exclusive. ONNX Runtime GenAI uses selected GPUs in the order CUDA, DirectML, then implicit CPU fallback. onnx-light and Hugging Face reference validation use CPU only. Values apply to the next prompt run and are kept until this viewer closes.</p>
+        <p id="settings-device-status" role="status">CPU available. GPU support has not been checked; trust the workspace to probe the selected Python runtime.</p>
+        <button id="settings-inspect-devices" type="button" disabled>Detect available devices</button>
+        <fieldset id="prompt-device-fields" class="prompt-settings-grid">
+          <label class="prompt-checkbox"><span>CPU (implicit fallback)</span><input id="settings-device-cpu" type="checkbox" checked disabled></label>
+          <label class="prompt-checkbox"><span>CUDA</span><input id="settings-device-cuda" data-provider="cuda" type="checkbox"></label>
+          <label class="prompt-checkbox"><span>DirectML</span><input id="settings-device-dml" data-provider="dml" type="checkbox"></label>
+          <label class="prompt-checkbox"><span>Use providers from JSON / model (advanced)</span><input id="settings-device-model" type="checkbox"></label>
+          <p>GPU defaults are enabled only after a successful runtime device probe, not from the OS or installed package names. Manual choices are preserved during detection. Advanced JSON may disable CPU fallback; in that mode the device selections do not override providers.</p>
+          <h3>CPU</h3>
+          <label>onnx-light CPU threads (0 = automatic)<input data-setting="threads" data-engine="onnx-light" type="number" min="0" max="4096" placeholder="SDK default"></label>
+          <label>ONNX Runtime intra-op threads (0 = automatic)<input data-setting="intraOpThreads" data-engine="onnxruntime-genai" type="number" min="0" max="4096" placeholder="From genai_config.json"></label>
+          <label>ONNX Runtime inter-op threads (0 = automatic)<input data-setting="interOpThreads" data-engine="onnxruntime-genai" type="number" min="0" max="4096" placeholder="From genai_config.json"></label>
+          <label>ONNX Runtime CPU memory arena<select data-setting="cpuArena" data-engine="onnxruntime-genai" data-boolean><option value="">From genai_config.json</option><option value="true">Enabled</option><option value="false">Disabled</option></select></label>
+          <h3>CUDA</h3>
+          <label>CUDA device ID<input data-setting="cudaDeviceId" data-engine="onnxruntime-genai" data-device="cuda" type="number" min="0" max="65535" placeholder="Provider default" disabled></label>
+          <label>CUDA memory limit (MiB)<input data-setting="gpuMemoryMiB" data-engine="onnxruntime-genai" data-device="cuda" type="number" min="1" max="1048576" placeholder="Provider default" disabled></label>
+          <h3>DirectML</h3>
+          <label>DirectML device ID<input data-setting="dmlDeviceId" data-engine="onnxruntime-genai" data-device="dml" type="number" min="0" max="65535" placeholder="Provider default" disabled></label>
+        </fieldset>
       </section>
     </section>
     <section id="controls-view" role="tabpanel" aria-labelledby="controls-tab" tabindex="0" hidden>

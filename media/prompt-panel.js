@@ -13,6 +13,7 @@ function createPromptPanel({ byId, postMessage }) {
   let decodeCount = 0;
   let missingDecode = false;
   let validationRequiresReference = false;
+  let pendingDeviceRelease = false;
   const fields = byId("prompt-fields");
   const status = byId("prompt-status");
   const content = byId("prompt-results");
@@ -44,6 +45,7 @@ function createPromptPanel({ byId, postMessage }) {
   };
   const lifecycleStatus = byId("prompt-lifecycle");
   const sessionFields = byId("prompt-session-fields");
+  const deviceFields = byId("prompt-device-fields");
   const showSettingsEngine = () => {
     const light = byId("prompt-engine").value === "onnx-light";
     byId(`settings-${light ? "onnx-light" : "onnxruntime"}-tab`).click();
@@ -80,28 +82,54 @@ function createPromptPanel({ byId, postMessage }) {
   byId("prompt-keep-loaded").addEventListener("change", () => {
     if (!byId("prompt-keep-loaded").checked) release();
   });
-  sessionFields.addEventListener("change", () => {
-    const light = byId("prompt-settings-light");
-    const sdkLoader =
-      light.querySelector('[data-setting="sdkLoader"]').value === "true";
-    for (const field of light.querySelectorAll("[data-sdk-loader]"))
-      field.disabled = !sdkLoader;
-    const pane = byId("prompt-settings-genai");
-    const provider = pane.querySelector('[data-setting="provider"]').value;
-    for (const field of pane.querySelectorAll("[data-gpu]"))
-      field.disabled = !["cuda", "dml"].includes(provider);
-    for (const field of pane.querySelectorAll("[data-cuda]"))
-      field.disabled = provider !== "cuda";
-    release();
+  sessionFields.addEventListener("change", release);
+  deviceFields.addEventListener("change", () => {
+    for (const field of deviceFields.querySelectorAll("[data-device]"))
+      field.disabled =
+        byId("settings-device-model").checked ||
+        !byId(`settings-device-${field.dataset.device}`).checked;
+    if (busy) pendingDeviceRelease = true;
+    else release();
+  });
+  byId("prompt-config-add").addEventListener("click", () => {
+    const row = document.createElement("div");
+    row.className = "prompt-settings-grid";
+    for (const [name, maximum] of [
+      ["key", 1024],
+      ["value", 8192],
+    ]) {
+      const label = document.createElement("label");
+      label.textContent = `Configuration ${name}`;
+      const input = document.createElement("input");
+      input.dataset.config = name;
+      input.maxLength = maximum;
+      if (name === "key") input.setAttribute("list", "prompt-config-keys");
+      label.append(input);
+      row.append(label);
+    }
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.textContent = "Remove entry";
+    remove.addEventListener("click", () => {
+      row.remove();
+      release();
+    });
+    row.append(remove);
+    byId("prompt-config-entries").append(row);
+    row.querySelector("input").focus();
   });
   const readSettings = () => {
+    const engine = byId("prompt-engine").value;
     const pane = byId(
-      byId("prompt-engine").value === "onnx-light"
+      engine === "onnx-light"
         ? "prompt-settings-light"
         : "prompt-settings-genai",
     );
     const settings = {};
-    for (const field of pane.querySelectorAll("[data-setting]")) {
+    for (const field of [
+      ...pane.querySelectorAll("[data-setting]"),
+      ...deviceFields.querySelectorAll(`[data-engine="${engine}"]`),
+    ]) {
       if (field.hasAttribute("data-json")) {
         field.setCustomValidity("");
         if (!field.value.trim()) continue;
@@ -116,7 +144,10 @@ function createPromptPanel({ byId, postMessage }) {
       if (field.disabled || (field.value === "" && field.type !== "checkbox"))
         continue;
       if (!field.checkValidity()) {
-        byId("prompt-settings-open").click();
+        if (deviceFields.contains(field)) {
+          byId("settings-tab").click();
+          byId("settings-device-tab").click();
+        } else byId("prompt-settings-open").click();
         field.reportValidity();
         return;
       }
@@ -128,6 +159,49 @@ function createPromptPanel({ byId, postMessage }) {
             : field.hasAttribute("data-boolean")
               ? field.value === "true"
               : field.value;
+    }
+    if (engine === "onnxruntime-genai") {
+      if (!byId("settings-device-model").checked)
+        settings.providers = [
+          "cpu",
+          ...["cuda", "dml"].filter(
+            (provider) => byId(`settings-device-${provider}`).checked,
+          ),
+        ];
+      const entries = Object.create(null);
+      for (const row of byId("prompt-config-entries").children) {
+        const key = row.querySelector('[data-config="key"]');
+        const value = row.querySelector('[data-config="value"]');
+        const name = key.value.trim();
+        key.setCustomValidity("");
+        if (!name && !value.value) continue;
+        if (
+          !name ||
+          new Blob([key.value]).size > 1024 ||
+          ["__proto__", "prototype", "constructor"].includes(name) ||
+          name.includes("\0") ||
+          Object.hasOwn(entries, name)
+        )
+          key.setCustomValidity("Enter a unique, nonempty configuration key.");
+        value.setCustomValidity(
+          value.value.includes("\0")
+            ? "Null characters are not supported."
+            : new Blob([value.value]).size > 8192
+              ? "Configuration values cannot exceed 8192 UTF-8 bytes."
+              : "",
+        );
+        if (!key.checkValidity() || !value.checkValidity()) {
+          byId("prompt-settings-open").click();
+          (!key.checkValidity() ? key : value).reportValidity();
+          return;
+        }
+        entries[name] = value.value;
+      }
+      if (Object.keys(entries).length)
+        settings.sessionOptions = JSON.stringify({
+          ...JSON.parse(settings.sessionOptions || "{}"),
+          ...entries,
+        });
     }
     return settings;
   };
@@ -143,10 +217,16 @@ function createPromptPanel({ byId, postMessage }) {
     updateReference();
     byId("prompt-reference-source").disabled = value;
     sessionFields.disabled = value;
+    deviceFields.disabled = value;
     byId("prompt-generation-fields").disabled = value;
     byId("prompt-generation-open").disabled = value;
     byId("prompt-settings-open").disabled = value;
     byId("prompt-unload").disabled = value;
+    if (!value && pendingDeviceRelease) {
+      pendingDeviceRelease = false;
+      release();
+    }
+    if (!value) deviceFields.dispatchEvent(new Event("prompt-idle"));
   };
   const reset = () => {
     if (busy) postMessage({ type: "prompt-cancel" });
@@ -446,11 +526,6 @@ function createPromptPanel({ byId, postMessage }) {
         engine.value = message.info.engines.includes("onnxruntime-genai")
           ? "onnxruntime-genai"
           : (message.info.engines[0] ?? "onnx-light");
-        const light = byId("prompt-settings-light");
-        const sdkLoader =
-          light.querySelector('[data-setting="sdkLoader"]').value === "true";
-        for (const field of light.querySelectorAll("[data-loading]"))
-          field.disabled = field.hasAttribute("data-sdk-loader") && !sdkLoader;
         setBusy(false);
         status.textContent = available
           ? "Ready. ONNX engines and tokenization use native C++ libraries; Python can locate SDK libraries and run Hugging Face validation."
