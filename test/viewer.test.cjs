@@ -2,6 +2,7 @@ const assert = require("node:assert/strict");
 const { EventEmitter, once } = require("node:events");
 const { readFileSync } = require("node:fs");
 const { test } = require("node:test");
+const { runInNewContext } = require("node:vm");
 const { JSDOM } = require("jsdom");
 const {
   decodeGraph,
@@ -12461,6 +12462,142 @@ test("staggered carried-result labels avoid neighboring labels and follow a grou
     assert.ok(Math.abs(box.x - dragOrigins[index].x - 40) < 1e-8);
     assert.ok(Math.abs(box.y - dragOrigins[index].y - 25) < 1e-8);
   });
+});
+
+test("crowded label placement bounds spatial comparisons across candidate attempts", (t) => {
+  const { document, window } = openViewer(t);
+  for (const count of [256, 512, 1024]) {
+    let comparisons = 0;
+    const connections = Array.from({ length: count }, (_, index) => ({
+      name: "crowded_label",
+      from: { x: (count - index) / count, y: 0 },
+      to: { x: (count - index) / count, y: 80 },
+      fromHeight: 0,
+      toHeight: 0,
+    }));
+    const arrange = runInNewContext(
+      `(${window.arrangeConnectionLabels.toString()})`,
+      {
+        document,
+        getComputedStyle: window.getComputedStyle,
+        svg: document.getElementById("graph"),
+        connections,
+        nodeViews: new Map(),
+        camera: undefined,
+        shortName: window.shortName,
+        tensorDescription: window.tensorDescription,
+        connectionLabelPosition: window.connectionLabelPosition,
+        graphSpatialIndex(items) {
+          const index = window.graphSpatialIndex(items);
+          return {
+            update: index.update,
+            find(bounds, predicate, budget) {
+              return index.find(
+                bounds,
+                (item) => {
+                  comparisons++;
+                  return predicate(item);
+                },
+                budget,
+              );
+            },
+          };
+        },
+        updateConnection() {},
+      },
+    );
+    arrange();
+    assert.ok(
+      comparisons <= count * 256,
+      `${count} labels required ${comparisons} spatial comparisons`,
+    );
+    t.diagnostic(`${count} crowded labels: ${comparisons} spatial comparisons`);
+    assert.ok(
+      connections.every((connection) =>
+        Number.isFinite(connection.labelFraction),
+      ),
+    );
+  }
+});
+
+test("label re-placement refreshes connection visibility and crossing batches only after a camera exists", (t) => {
+  const { document, window } = openViewer(t);
+  const connection = {
+    name: "value",
+    from: { x: 0, y: 0 },
+    to: { x: 0, y: 80 },
+    fromHeight: 0,
+    toHeight: 0,
+  };
+  const events = [];
+  const context = {
+    document,
+    getComputedStyle: window.getComputedStyle,
+    svg: document.getElementById("graph"),
+    connections: [connection],
+    nodeViews: new Map(),
+    camera: undefined,
+    virtualized: true,
+    shortName: window.shortName,
+    tensorDescription: window.tensorDescription,
+    graphSpatialIndex: window.graphSpatialIndex,
+    connectionLabelPosition: window.connectionLabelPosition,
+    updateConnection() {
+      events.push("position");
+    },
+    updateConnectionVisibility() {
+      events.push("visibility");
+    },
+    drawCrossingConnections() {
+      events.push("crossing");
+    },
+  };
+  const arrange = runInNewContext(
+    `(${window.arrangeConnectionLabels.toString()})`,
+    context,
+  );
+  arrange();
+  assert.deepEqual(events.splice(0), ["position"]);
+  context.camera = { x: 0, y: 0, width: 100, height: 100 };
+  arrange();
+  assert.deepEqual(events.splice(0), ["position", "visibility", "crossing"]);
+  context.virtualized = false;
+  arrange();
+  assert.deepEqual(events, ["position", "visibility"]);
+});
+
+test("Fit drops initial label extents when refreshed tensor descriptions shrink", (t) => {
+  const { document, window, load, resize } = openViewer(t);
+  resize(350, 1060);
+  const name = "input";
+  const graph = {
+    ...demoGraph,
+    inputs: [name],
+    tensors: [{ name, type: "FLOAT", shape: ["long_dimension".repeat(8)] }],
+    nodes: [{ ...demoGraph.nodes[0], inputs: [name, name, name] }],
+  };
+  const fitted = () => {
+    document.getElementById("zoom-fit").click();
+    return document
+      .getElementById("graph")
+      .getAttribute("viewBox")
+      .split(" ")
+      .map(Number);
+  };
+  load(graph);
+  const initial = fitted();
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: {
+        type: "shape-info",
+        tensors: [{ name, type: "FLOAT", shape: [] }],
+      },
+    }),
+  );
+  const refreshed = fitted();
+  assert.ok(refreshed[2] < initial[2], `${initial[2]} -> ${refreshed[2]}`);
+  load({ ...graph, tensors: [{ name, type: "FLOAT", shape: [] }] });
+  assert.deepEqual(fitted(), refreshed);
 });
 
 test("draws native in-place decisions behind operator contents and clears stale estimates", async (t) => {

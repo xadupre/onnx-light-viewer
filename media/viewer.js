@@ -1822,15 +1822,18 @@ function arrangeConnectionLabels() {
   );
   for (const entry of entries) {
     const { connection } = entry;
+    const budget = { remaining: 256 };
     let placed = false;
     for (const fraction of [0.5, 0.25, 0.75, 0.125, 0.875]) {
+      if (budget.remaining <= 0) break;
       for (const offset of [0, -connection.labelWidth - 20]) {
+        if (budget.remaining <= 0) break;
         connection.labelFraction = fraction;
         connection.labelOffset = offset;
         const bounds = labelBounds(connection);
         if (
-          labels.find(bounds, (other) => other.placed) ||
-          nodes.find(bounds, () => true)
+          labels.find(bounds, (other) => other.placed, budget) ||
+          nodes.find(bounds, () => true, budget)
         )
           continue;
         entry.bounds = bounds;
@@ -1846,7 +1849,9 @@ function arrangeConnectionLabels() {
     entry.placed = true;
     labels.update(entry);
     updateConnection(connection);
+    if (camera) updateConnectionVisibility(connection);
   }
+  if (camera && virtualized) drawCrossingConnections();
 }
 
 function connectionPath(connection) {
@@ -2531,7 +2536,6 @@ function render(graph, metadata) {
   pan = { x: 0, y: 0 };
   if (graph.nodes.length) selected.add(graph.nodes[0].id);
   updateTensorInformation(graph.tensors ?? []);
-  layoutBounds = bounds;
   updateSelection(undefined, true);
   if (virtualized) readableZoom();
   else fit();
