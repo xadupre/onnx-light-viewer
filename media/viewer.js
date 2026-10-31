@@ -806,6 +806,11 @@ function operatorSizes(nodes) {
     nodes.map((node) => {
       const typeWidth = widths.get(node.opType);
       const nameWidth = context.measureText(node.name).width;
+      const indexLabel = node.pipelineModel ? "" : `#${node.id.slice(5)}`;
+      const indexWidth = context.measureText(indexLabel).width;
+      const storedInputs = node.pipelineModel
+        ? []
+        : tensorListPanel.storedInputs(node);
       const parameters = operatorParameters(node);
       const parameterRows = parameters.map((parameter, index) => {
         const displayDescription = (
@@ -815,7 +820,7 @@ function operatorSizes(nodes) {
           ...parameter,
           displayDescription,
           textWidth: context.measureText(displayDescription).width,
-          y: 68 + index * 16,
+          y: 58 + index * 14,
         };
       });
       const subgraphs = (node.attributes ?? []).flatMap((attribute) =>
@@ -847,26 +852,38 @@ function operatorSizes(nodes) {
           ...subgraphs.map((graph) => Math.ceil(graph.textWidth + 68)),
         ),
       );
+      const nameSpace =
+        width -
+        24 -
+        indexWidth -
+        (indexLabel ? 6 : 0) -
+        (storedInputs.length ? 26 : 0);
       let nameLength = node.name.length;
-      if (nameWidth > width - 24) {
+      if (nameWidth > nameSpace) {
         let low = 1;
         let high = nameLength;
         while (low < high) {
           const length = Math.ceil((low + high) / 2);
           const name = shortName(node.name, length, true);
-          if (context.measureText(name).width <= width - 24) low = length;
+          if (context.measureText(name).width <= nameSpace) low = length;
           else high = length - 1;
         }
         nameLength = low;
       }
+      const parameterHeight = parameterRows.length * 14;
+      const outputHeight = node.outputs.length ? 14 : 0;
       return [
         node.id,
         {
           width,
-          height: 88 + parameterRows.length * 16 + subgraphs.length * 20,
-          parameterHeight: parameterRows.length * 16,
+          height: 56 + parameterHeight + outputHeight + subgraphs.length * 20,
+          parameterHeight,
+          subgraphY: 52 + parameterHeight + outputHeight,
           parameterRows,
           subgraphs,
+          indexLabel,
+          indexWidth,
+          storedInputs,
           displayName: shortName(node.name, nameLength, true),
           typeFontSize: Math.min(16, (16 * (width - 24)) / (typeWidth || 1)),
         },
@@ -1102,10 +1119,11 @@ function addUnusedLabel(view, unusedOutputs = []) {
   if (!view?.group || !unusedOutputs.length) return;
   const text = label(
     view.group,
-    view.initial.x,
-    view.initial.y - view.halfHeight + 29,
+    view.initial.x + view.halfWidth - 12,
+    view.initial.y - view.halfHeight + 24,
     `Unused: ${unusedOutputs.length}`,
     "unused-label",
+    "end",
   );
   text.append(
     element("title", {}, `Unused outputs: ${unusedOutputs.join(", ")}`),
@@ -1739,7 +1757,7 @@ function drawOverview() {
     const text = label(
       labels,
       position.x,
-      position.y - halfHeight + 52,
+      position.y - halfHeight + 44,
       node.opType,
       "operator-label",
     );
@@ -2145,9 +2163,7 @@ function render(graph, metadata) {
   for (const node of graph.nodes) {
     const position = positions.get(node.id);
     const size = sizes.get(node.id);
-    const storedInputs = node.pipelineModel
-      ? []
-      : tensorListPanel.storedInputs(node);
+    const { storedInputs } = size;
     const create = (position) => {
       const top = position.y - size.height / 2;
       const group = element("g", {
@@ -2167,7 +2183,7 @@ function render(graph, metadata) {
       const typeLabel = label(
         group,
         position.x,
-        top + 52,
+        top + 44,
         node.opType,
         "operator-label",
       );
@@ -2175,13 +2191,27 @@ function render(graph, metadata) {
       const nameLabel = label(
         group,
         position.x + size.width / 2 - 12,
-        top + 15,
+        top + 14,
         size.displayName,
         "operator-name",
         "end",
       );
       nameLabel.style.fontSize = "10px";
       nameLabel.setAttribute("aria-label", node.name);
+      if (size.indexLabel) {
+        const index = label(
+          group,
+          position.x - size.width / 2 + 8,
+          top + 14,
+          size.indexLabel,
+          "operator-index",
+          "start",
+        );
+        index.setAttribute(
+          "aria-label",
+          `Node position: ${node.id.slice(5)} (zero-based)`,
+        );
+      }
       if (storedInputs.length) {
         const link = element("g", {
           class: "node-statistics-link",
@@ -2189,8 +2219,12 @@ function render(graph, metadata) {
           tabindex: "0",
           "aria-label": `Inspect stored tensors for ${node.opType}: ${node.name}`,
         });
-        const x = position.x - size.width / 2 + 8;
-        const y = top + 18;
+        const x =
+          position.x -
+          size.width / 2 +
+          8 +
+          (size.indexLabel ? size.indexWidth + 6 : 0);
+        const y = top + 3;
         link.append(
           element("title", {}, "Browse tensors and weight statistics"),
           element("rect", { x, y, width: 20, height: 20, rx: 4 }),
@@ -2209,7 +2243,7 @@ function render(graph, metadata) {
         const information = tensorLabel(
           group,
           position.x,
-          top + 78 + size.parameterHeight,
+          top + 58 + size.parameterHeight,
           node.outputs,
           26,
         );
@@ -2228,7 +2262,7 @@ function render(graph, metadata) {
         text.append(element("title", {}, parameter.description));
       });
       size.subgraphs.forEach((graph, index) => {
-        const y = top + 88 + size.parameterHeight + index * 20;
+        const y = top + size.subgraphY + index * 20;
         const link = element("g", {
           class: "subgraph-link",
           role: "button",

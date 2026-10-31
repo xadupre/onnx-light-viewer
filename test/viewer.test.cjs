@@ -9137,11 +9137,12 @@ test("sizes subgraph operators for their links and preserves dragging, selection
   pointer(graph, "pointermove", before[0].x + 30, top + 61);
   pointer(graph, "pointerup", before[0].x + 30, top + 61);
   assertMoved(before, nodePositions(document), [0], 30, 20);
+  const movedPath = document.querySelector(".edge").getAttribute("d");
   assert.ok(
-    document
-      .querySelector(".edge")
-      .getAttribute("d")
-      .endsWith(`,${top + 20}`),
+    Math.abs(
+      Number(movedPath.slice(movedPath.lastIndexOf(",") + 1)) - top - 20,
+    ) < 1e-9,
+    movedPath,
   );
   assert.equal(messages.filter(({ type }) => type === "navigate").length, 0);
   const left = Number(body.getAttribute("x")) + 30;
@@ -9759,12 +9760,12 @@ test("shows native metadata in the sidebar and marks released and never-used res
     const top = Number(group.querySelector("rect").getAttribute("y"));
     const badgeY = Number(badge.getAttribute("y"));
     assert.ok(Number(name.getAttribute("y")) >= top + 10);
-    assert.ok(badgeY - Number(name.getAttribute("y")) >= 14);
+    assert.ok(badgeY - Number(name.getAttribute("y")) >= 10);
     assert.ok(
       Number(type.getAttribute("y")) -
         parseFloat(type.style.fontSize) -
         badgeY >=
-        6,
+        4,
     );
     assert.equal(badge.getAttribute("visibility"), "visible");
   }
@@ -10003,6 +10004,58 @@ test("lists local definitions in model inspection and opens them using their but
   assert.equal(document.getElementById("function-count").textContent, "0");
 });
 
+test("shows graph-local operator positions in compact headers without overlapping names or tensor icons", (t) => {
+  const { document, load } = openViewer(t);
+  const graph = weightsGraph();
+  graph.nodes[0].id = "node-12345";
+  graph.nodes[0].name = "model.layers.attention.weighted_operator".repeat(3);
+  graph.nodes[1].id = "node-7";
+  graph.nodes[1].inputs = ["output"];
+  graph.nodes[1].parameters = [];
+  graph.nodes[1].outputs = [];
+  graph.outputs = [];
+  load(graph);
+  const first = document.querySelector('[data-id="node-12345"]');
+  const index = first.querySelector(".operator-index");
+  assert.ok(index);
+  assert.equal(index.textContent, "#12345");
+  assert.match(index.getAttribute("aria-label"), /12345.*zero-based/);
+  const body = first.querySelector("rect");
+  const name = first.querySelector(".operator-name");
+  const icon = first.querySelector(".node-statistics-link rect");
+  const fontWidth = 6;
+  assert.ok(
+    Number(index.getAttribute("x")) + index.textContent.length * fontWidth <
+      Number(icon.getAttribute("x")),
+  );
+  assert.ok(
+    Number(icon.getAttribute("x")) + Number(icon.getAttribute("width")) <
+      Number(name.getAttribute("x")) - name.textContent.length * fontWidth,
+  );
+  assert.ok(
+    Number(icon.getAttribute("y")) + Number(icon.getAttribute("height")) <
+      Number(first.querySelector(".operator-label").getAttribute("y")) - 16,
+  );
+  assert.ok(Number(body.getAttribute("height")) < 120);
+  const second = document.querySelector('[data-id="node-7"]');
+  assert.equal(second.querySelector(".operator-index").textContent, "#7");
+  assert.equal(second.querySelector(".node-tensor-info"), null);
+  assert.ok(Number(second.querySelector("rect").getAttribute("height")) < 66);
+});
+
+test("keeps graph-local operator positions when virtualized nodes are remounted", (t) => {
+  const { document, window, load } = openViewer(t);
+  load(chainGraph(300));
+  document.getElementById("node-search").value = "activation_200";
+  document
+    .getElementById("find-node")
+    .dispatchEvent(new window.Event("submit", { cancelable: true }));
+  assert.equal(
+    document.querySelector('[data-id="node-200"] .operator-index')?.textContent,
+    "#200",
+  );
+});
+
 test("opens local functions from the operator or inspector and returns using breadcrumbs", (t) => {
   const { document, window, messages, load } = openViewer(t);
   const model = loadModel(
@@ -10029,6 +10082,10 @@ test("opens local functions from the operator or inspector and returns using bre
   );
   load(model.graph(false, messages.at(-1).path));
   assert.equal(button.hidden, true);
+  assert.equal(
+    document.querySelector('[data-id="node-2"] .operator-index')?.textContent,
+    "#2",
+  );
   document
     .querySelector('[data-id="node-2"]')
     .dispatchEvent(
@@ -10039,6 +10096,10 @@ test("opens local functions from the operator or inspector and returns using bre
   button.click();
   load(model.graph(false, messages.at(-1).path));
   assert.equal(document.getElementById("node-title").textContent, "Sigmoid");
+  assert.equal(
+    document.querySelector('[data-id="node-0"] .operator-index')?.textContent,
+    "#0",
+  );
   assert.equal(button.hidden, true);
   const crumbs = document.querySelectorAll("#graph-navigation button");
   assert.equal(crumbs.length, 3);
@@ -10943,7 +11004,7 @@ test("shows attribute values above a separate initializer count and small values
     const body = group.querySelector("rect");
     assert.equal(
       Number(body.getAttribute("height")),
-      88 + expected.length * 16,
+      70 + expected.length * 14,
     );
     const bottom =
       Number(body.getAttribute("y")) + Number(body.getAttribute("height"));
@@ -10969,7 +11030,7 @@ test("shows attribute values above a separate initializer count and small values
   assert.equal(document.querySelector(".node-initializer"), null);
   assert.equal(
     document.querySelector(".graph-node > rect").getAttribute("height"),
-    "88",
+    "70",
   );
 });
 
@@ -10991,7 +11052,7 @@ test("stacks an explicit attribute above the initializer count without a large-w
   const group = document.querySelector(".graph-node");
   const body = group.querySelector("rect");
   assert.equal(body.getAttribute("width"), "140");
-  assert.equal(body.getAttribute("height"), "120");
+  assert.equal(body.getAttribute("height"), "98");
   const attribute = group.querySelector(".node-attribute");
   const initializer = group.querySelector(".node-parameter-summary");
   assert.ok(attribute);
@@ -11126,7 +11187,7 @@ test("keeps long and multiline attribute values visible while preserving inspect
     }
     assert.equal(
       group.querySelector("rect").getAttribute("height"),
-      String(88 + expected.length * 16),
+      String(70 + expected.length * 14),
     );
     assert.equal(
       document.querySelectorAll("#node-initializers li").length,
@@ -11177,13 +11238,13 @@ test("previews fewer than four initializers only when every tensor has at most t
     const rows = [...group.querySelectorAll(".node-parameter")];
     assert.equal(
       group.querySelector("rect").getAttribute("height"),
-      String(88 + rows.length * 16),
+      String(70 + rows.length * 14),
     );
     for (let index = 1; index < rows.length; index++)
       assert.equal(
         Number(rows[index].getAttribute("y")) -
           Number(rows[index - 1].getAttribute("y")),
-        16,
+        14,
       );
   }
 });
@@ -12483,7 +12544,7 @@ test("fits operator types and middle-truncates long names without reducing their
     );
     assert.equal(
       Number(name.getAttribute("y")),
-      Number(body.getAttribute("y")) + 15,
+      Number(body.getAttribute("y")) + 14,
     );
     assert.ok(
       Number(name.getAttribute("y")) <
