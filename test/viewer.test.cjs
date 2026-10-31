@@ -9387,7 +9387,7 @@ test("counts metadata changes and replaces cached analysis and graph markers on 
   assert.deepEqual(errors, []);
 });
 
-test("styles result arcs from native weight and shape tags and replaces styles on metadata refresh", (t) => {
+test("styles Shape input arcs independently of native result tags and refreshes other arc styles", (t) => {
   const { document, window, load } = openViewer(t);
   const model = loadModel(
     readFileSync(require.resolve("./models/analysis.onnx")),
@@ -9396,7 +9396,7 @@ test("styles result arcs from native weight and shape tags and replaces styles o
   const graph = model.graph();
   graph.outputs.push("dimensions");
   load(graph);
-  const weights = [
+  const [shapeInput, ...weights] = [
     ...document.querySelectorAll(
       '.connection[aria-label="Connection: shared;activation"] .edge',
     ),
@@ -9406,6 +9406,11 @@ test("styles result arcs from native weight and shape tags and replaces styles o
   );
   assert.ok(weights.length > 1);
   assert.ok(shape);
+  assert.equal(window.getComputedStyle(shapeInput).strokeDasharray, "4 3");
+  shapeInput.parentElement.dispatchEvent(
+    new window.MouseEvent("click", { bubbles: true }),
+  );
+  assert.ok(document.querySelector(".selected-edge.edge-shape"));
   const originalWidth = parseFloat(
     window.getComputedStyle(weights[0]).strokeWidth,
   );
@@ -9417,6 +9422,7 @@ test("styles result arcs from native weight and shape tags and replaces styles o
     );
   const metadata = model.metadata();
   send(metadata);
+  assert.equal(window.getComputedStyle(shapeInput).strokeDasharray, "4 3");
   assert.equal(document.getElementById("metadata-panel").hidden, true);
   for (const weight of weights) {
     assert.ok(weight.classList.contains("edge-weight"));
@@ -9444,9 +9450,9 @@ test("styles result arcs from native weight and shape tags and replaces styles o
   const cleared = structuredClone(metadata);
   for (const value of cleared.values) value.tag = null;
   send(cleared);
-  assert.equal(
-    document.querySelectorAll(".edge.edge-weight, .edge.edge-shape").length,
-    0,
+  assert.deepEqual(
+    [...document.querySelectorAll(".edge.edge-weight, .edge.edge-shape")],
+    [shapeInput],
   );
   assert.equal(
     document.querySelector(".selected-edge").getAttribute("class"),
@@ -9460,7 +9466,70 @@ test("styles result arcs from native weight and shape tags and replaces styles o
   load(graph);
   assert.equal(
     document.querySelectorAll(".edge.edge-weight, .edge.edge-shape").length,
-    0,
+    1,
+  );
+});
+
+test("dashes graph input arcs only for standard ONNX Shape consumers", (t) => {
+  const { document, window, load } = openViewer(t);
+  load({
+    ...demoGraph,
+    nodes: [
+      { opType: "Shape", domain: "", outputs: ["dimensions"] },
+      { opType: "Relu", domain: "ai.onnx", outputs: ["output"] },
+      { opType: "Shape", domain: "example", outputs: ["custom"] },
+    ].map((node, index) => ({
+      ...demoGraph.nodes[0],
+      ...node,
+      id: `node-${index}`,
+      inputs: ["input"],
+    })),
+    outputs: ["dimensions", "output", "custom"],
+  });
+  const inputs = [
+    ...document.querySelectorAll(
+      '.connection[aria-label="Connection: input"] .edge',
+    ),
+  ];
+  assert.equal(inputs.length, 3);
+  assert.equal(window.getComputedStyle(inputs[0]).strokeDasharray, "4 3");
+  for (const input of inputs.slice(1))
+    assert.equal(input.classList.contains("edge-shape"), false);
+  for (const output of document.querySelectorAll(
+    '.connection:not([aria-label="Connection: input"]) .edge',
+  ))
+    assert.equal(output.classList.contains("edge-shape"), false);
+});
+
+test("arc shape labels show twice the previous text budget and refresh without losing full descriptions", (t) => {
+  const { document, window, load } = openViewer(t);
+  const shape = ["batch", "head_count", "sequence_length", "head_dimension"];
+  const tensors = [{ name: "input", type: "FLOAT", shape }];
+  load({ ...demoGraph, tensors });
+  const information = document.querySelector(
+    '.connection[aria-label="Connection: input"] .tensor-info',
+  );
+  const description = `FLOAT [${shape.join(", ")}]`;
+  assert.ok(description.length > 34 && description.length <= 68);
+  assert.equal(information.querySelector("tspan").textContent, description);
+  const longerShape = [...shape, ...shape];
+  const fullDescription = `FLOAT [${longerShape.join(", ")}]`;
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: {
+        type: "shape-info",
+        tensors: [{ ...tensors[0], shape: longerShape }],
+      },
+    }),
+  );
+  assert.equal(
+    information.querySelector("tspan").textContent,
+    `${fullDescription.slice(0, 67)}…`,
+  );
+  assert.equal(information.getAttribute("aria-label"), fullDescription);
+  assert.equal(
+    information.querySelector("title").textContent,
+    `input: ${fullDescription}`,
   );
 });
 
@@ -12648,6 +12717,7 @@ test("preserves result arc tags in crossing batches, released paths, overview an
   const { document, window, load } = openViewer(t);
   const model = chainGraph(600);
   model.nodes[599].inputs.push("tensor_0", "tensor_1");
+  model.nodes[301].opType = "Shape";
   load(model);
   assert.equal(
     document.querySelector('.connection[aria-label="Connection: tensor_300"]'),
@@ -12672,7 +12742,7 @@ test("preserves result arc tags in crossing batches, released paths, overview an
           values: [
             { name: "tensor_0", entries: [], constant: false, tag: "weight" },
             { name: "tensor_1", entries: [], constant: false, tag: "shape" },
-            { name: "tensor_300", entries: [], constant: false, tag: "shape" },
+            { name: "tensor_300", entries: [], constant: false, tag: null },
           ],
         },
       },
