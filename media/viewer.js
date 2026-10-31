@@ -1354,7 +1354,7 @@ function updateConnection(connection) {
   if (selectedConnection === connection) updateConnectionHighlight();
   if (!connection.group) return;
   const { path, hit, text, information } = connection;
-  const { x, y } = connectionLabelPosition(connection);
+  const { x, y, angle } = connectionLabelPosition(connection);
   const data = connectionPath(connection);
   path.setAttribute("d", data);
   hit.setAttribute("d", data);
@@ -1362,6 +1362,8 @@ function updateConnection(connection) {
   text.setAttribute("y", y);
   information.setAttribute("x", x + 10);
   information.setAttribute("y", y + 14);
+  for (const label of [text, information])
+    label.setAttribute("transform", `rotate(${angle} ${x} ${y})`);
 }
 
 function selectConnection(connection) {
@@ -1492,16 +1494,16 @@ function updateConnectionVisibility(connection) {
     bottom = Math.max(bottom, y);
   }
   Object.assign(connection, { left, top, right, bottom });
-  const label = connectionLabelPosition(connection);
+  const label = connectionLabelBounds(connection);
   const visible = intersectsCamera(
-    Math.min(left, label.x),
-    Math.min(top, label.y),
-    Math.max(right, label.x + 480),
-    Math.max(bottom, label.y + 28),
+    Math.min(left, label.left),
+    Math.min(top, label.top),
+    Math.max(right, label.right),
+    Math.max(bottom, label.bottom),
   );
   const labelsVisible =
     !virtualized ||
-    intersectsCamera(label.x, label.y, label.x + 480, label.y + 28);
+    intersectsCamera(label.left, label.top, label.right, label.bottom);
   if (virtualized && !overviewVisible && visible && !labelsVisible)
     crossingConnections.add(connection);
   else crossingConnections.delete(connection);
@@ -1677,11 +1679,11 @@ function reframe() {
   }
   for (const connection of connections) {
     if (connection.labelWidth !== undefined) {
-      const point = connectionLabelPosition(connection);
-      x = Math.min(x, point.x);
-      y = Math.min(y, point.y - 20);
-      right = Math.max(right, point.x + connection.labelWidth + 20);
-      bottom = Math.max(bottom, point.y + 28);
+      const label = connectionLabelBounds(connection);
+      x = Math.min(x, label.left - 8);
+      y = Math.min(y, label.top - 8);
+      right = Math.max(right, label.right + 8);
+      bottom = Math.max(bottom, label.bottom + 8);
     }
     if (!connection.route) continue;
     for (const point of connectionPoints(connection)) {
@@ -1779,7 +1781,10 @@ function connectionPoints({
 }
 
 function connectionLabelPosition(connection) {
-  const points = connectionPoints(connection);
+  const points = flattenGraphPath(
+    connectionPoints(connection),
+    !!connection.route,
+  );
   let length = 0;
   for (let i = 1; i < points.length; i++)
     length += Math.hypot(
@@ -1793,31 +1798,46 @@ function connectionLabelPosition(connection) {
     const segment = Math.hypot(end.x - start.x, end.y - start.y);
     if (remaining <= segment && segment) {
       const fraction = remaining / segment;
+      let angle =
+        (Math.atan2(end.y - start.y, end.x - start.x) * 180) / Math.PI;
+      if (angle > 90) angle -= 180;
+      if (angle < -90) angle += 180;
+      const radians = (angle * Math.PI) / 180;
+      const offset = connection.labelOffset ?? 0;
       return {
-        x:
-          start.x +
-          (end.x - start.x) * fraction +
-          (connection.labelOffset ?? 0),
-        y: start.y + (end.y - start.y) * fraction,
+        x: start.x + (end.x - start.x) * fraction - Math.sin(radians) * offset,
+        y: start.y + (end.y - start.y) * fraction + Math.cos(radians) * offset,
+        angle,
       };
     }
     remaining -= segment;
   }
-  return points[0];
+  return { ...points[0], angle: 0 };
+}
+
+function connectionLabelBounds(connection) {
+  const { x, y, angle } = connectionLabelPosition(connection);
+  const radians = (angle * Math.PI) / 180;
+  const cosine = Math.cos(radians),
+    sine = Math.sin(radians);
+  const corners = [];
+  for (const dx of [8, 12 + (connection.labelWidth ?? 480)])
+    for (const dy of [-12, 18])
+      corners.push({
+        x: x + dx * cosine - dy * sine,
+        y: y + dx * sine + dy * cosine,
+      });
+  return {
+    left: Math.min(...corners.map((point) => point.x)),
+    top: Math.min(...corners.map((point) => point.y)),
+    right: Math.max(...corners.map((point) => point.x)),
+    bottom: Math.max(...corners.map((point) => point.y)),
+  };
 }
 
 function arrangeConnectionLabels() {
   const context = document.createElement("canvas").getContext("2d");
   context.font = `10px ${getComputedStyle(svg).fontFamily}`;
-  const labelBounds = (connection) => {
-    const { x, y } = connectionLabelPosition(connection);
-    return {
-      left: x + 8,
-      top: y - 12,
-      right: x + 12 + connection.labelWidth,
-      bottom: y + 18,
-    };
-  };
   const entries = connections.map((connection) => {
     connection.labelFraction = 0.5;
     connection.labelOffset = 0;
@@ -1826,7 +1846,11 @@ function arrangeConnectionLabels() {
       context.measureText(shortName(tensorDescription(connection.name), 68))
         .width,
     );
-    return { connection, bounds: labelBounds(connection), placed: false };
+    return {
+      connection,
+      bounds: connectionLabelBounds(connection),
+      placed: false,
+    };
   });
   const labels = graphSpatialIndex(entries);
   const nodes = graphSpatialIndex(
@@ -1845,11 +1869,11 @@ function arrangeConnectionLabels() {
     let placed = false;
     for (const fraction of [0.5, 0.25, 0.75, 0.125, 0.875]) {
       if (budget.remaining <= 0) break;
-      for (const offset of [0, -connection.labelWidth - 20]) {
+      for (const offset of [0, -32, 32, -64, 64, -128, 128, -256, 256]) {
         if (budget.remaining <= 0) break;
         connection.labelFraction = fraction;
         connection.labelOffset = offset;
-        const bounds = labelBounds(connection);
+        const bounds = connectionLabelBounds(connection);
         if (
           labels.find(bounds, (other) => other.placed, budget) ||
           nodes.find(bounds, () => true, budget)
@@ -1864,6 +1888,7 @@ function arrangeConnectionLabels() {
     if (!placed) {
       connection.labelFraction = 0.5;
       connection.labelOffset = 0;
+      entry.bounds = connectionLabelBounds(connection);
     }
     entry.placed = true;
     labels.update(entry);
