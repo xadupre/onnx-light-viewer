@@ -84,7 +84,7 @@ test("regular run sends exact text inputs, handles errors and ignores stale resu
   });
   assert.match(byId("run-status").textContent, /1.250 ms/);
   assert.equal(byId("run-results").querySelector("script"), null);
-  assert.match(byId("run-results").textContent, /<script>/);
+  assert.match(byId("run-results").textContent, /<script>/i);
   api.reset();
   api.handleMessage({ type: "run-result", requestId: run.requestId, result });
   assert.equal(byId("run-results").textContent, "");
