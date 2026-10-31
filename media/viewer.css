@@ -822,6 +822,13 @@ li > .tensor-info {
   stroke: #397363;
   stroke-width: 1.5;
 }
+.node-inplace-links {
+  fill: none;
+  stroke: #ffd166;
+  stroke-width: 3;
+  opacity: 0.35;
+  pointer-events: none;
+}
 .graph-node:hover rect {
   stroke: var(--mint);
   stroke-width: 2;

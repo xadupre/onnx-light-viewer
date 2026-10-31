@@ -10097,11 +10097,11 @@ test("shows graph-local operator positions in compact headers without overlappin
   const icon = first.querySelector(".node-statistics-link rect");
   const fontWidth = 6;
   assert.ok(
-    Number(index.getAttribute("x")) + index.textContent.length * fontWidth <
-      Number(icon.getAttribute("x")),
+    Number(icon.getAttribute("x")) + Number(icon.getAttribute("width")) <
+      Number(index.getAttribute("x")),
   );
   assert.ok(
-    Number(icon.getAttribute("x")) + Number(icon.getAttribute("width")) <
+    Number(index.getAttribute("x")) + index.textContent.length * fontWidth <
       Number(name.getAttribute("x")) - name.textContent.length * fontWidth,
   );
   assert.ok(
@@ -12340,6 +12340,251 @@ function chainGraph(length = 6) {
     })),
   };
 }
+
+test("shows longer carried-result names and complete hover information after shape refresh", (t) => {
+  const { document, window, load } = openViewer(t);
+  const name = "model.layers.attention.carried_result_with_a_long_name";
+  const shape = ["batch_dimension_with_a_long_name", "sequence_length", "128"];
+  load({
+    ...demoGraph,
+    nodes: [{ ...demoGraph.nodes[0], outputs: [name] }],
+    outputs: [name],
+    tensors: [{ name, type: "FLOAT", shape }],
+  });
+  const connection = document.querySelector(
+    `.connection[aria-label="Connection: ${name}"]`,
+  );
+  const text = connection.querySelector(".tensor-label");
+  assert.ok(text.textContent.length > 15);
+  assert.ok(text.textContent.length <= 36);
+  assert.equal(text.getAttribute("aria-label"), name);
+  assert.equal(
+    connection.querySelector(":scope > title").textContent,
+    `${name}: FLOAT [${shape.join(", ")}]`,
+  );
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: {
+        type: "shape-info",
+        tensors: [{ name, type: "INT64", shape: [] }],
+      },
+    }),
+  );
+  assert.equal(
+    connection.querySelector(":scope > title").textContent,
+    `${name}: INT64 []`,
+  );
+});
+
+test("staggered carried-result labels avoid neighboring labels and follow a group drag", (t) => {
+  const { document, load, pointer } = openViewer(t);
+  const name = "carried_tensor_with_a_long_name";
+  load({
+    ...demoGraph,
+    inputs: [name],
+    nodes: [{ ...demoGraph.nodes[0], inputs: [name, name, name] }],
+  });
+  const labels = [...document.querySelectorAll(".tensor-label")].filter(
+    (label) => label.textContent === name,
+  );
+  assert.equal(labels.length, 3);
+  const boxes = () =>
+    labels.map((label) => {
+      const info = label.parentElement.querySelector(".tensor-info tspan");
+      const x = Number(label.getAttribute("x"));
+      const y = Number(label.getAttribute("y"));
+      return {
+        x,
+        y,
+        right:
+          x + Math.max(label.textContent.length, info.textContent.length) * 6,
+        bottom: y + 14,
+      };
+    });
+  const before = boxes();
+  assert.ok(new Set(before.map(({ y }) => y)).size > 1);
+  for (let index = 0; index < before.length; index++)
+    for (const other of before.slice(index + 1)) {
+      const box = before[index];
+      assert.ok(
+        box.right < other.x ||
+          other.right < box.x ||
+          box.bottom < other.y - 10 ||
+          other.bottom < box.y - 10,
+      );
+    }
+  const graph = document.getElementById("graph");
+  document.getElementById("zoom-fit").click();
+  const fitted = graph.getAttribute("viewBox");
+  document.getElementById("zoom-fit").click();
+  assert.equal(graph.getAttribute("viewBox"), fitted);
+  document.defaultView.dispatchEvent(
+    new document.defaultView.MessageEvent("message", {
+      data: {
+        type: "shape-info",
+        tensors: [{ name, type: "FLOAT", shape: ["long_dimension".repeat(8)] }],
+      },
+    }),
+  );
+  for (const control of ["zoom-fit", "refresh-positions"]) {
+    document.getElementById(control).click();
+    const [left, , width] = graph
+      .getAttribute("viewBox")
+      .split(" ")
+      .map(Number);
+    for (const label of labels) {
+      const info = label.parentElement.querySelector(".tensor-info tspan");
+      const x = Number(label.getAttribute("x"));
+      assert.ok(x >= left);
+      assert.ok(x + info.textContent.length * 6 <= left + width);
+    }
+  }
+  document.defaultView.dispatchEvent(
+    new document.defaultView.MessageEvent("message", {
+      data: { type: "shape-info", tensors: [] },
+    }),
+  );
+  const dragOrigins = boxes();
+  const node = document.querySelector(".graph-node");
+  const position = nodePositions(document)[0];
+  document.getElementById("graph").dispatchEvent(
+    new document.defaultView.KeyboardEvent("keydown", {
+      key: "a",
+      ctrlKey: true,
+      bubbles: true,
+    }),
+  );
+  pointer(node, "pointerdown", position.x, position.y);
+  pointer(node, "pointermove", position.x + 40, position.y + 25);
+  pointer(node, "pointerup", position.x + 40, position.y + 25);
+  boxes().forEach((box, index) => {
+    assert.ok(Math.abs(box.x - dragOrigins[index].x - 40) < 1e-8);
+    assert.ok(Math.abs(box.y - dragOrigins[index].y - 25) < 1e-8);
+  });
+});
+
+test("draws native in-place decisions behind operator contents and clears stale estimates", async (t) => {
+  const { document, window, load, messages, pointer } = openViewer(t);
+  const model = loadModel(
+    readFileSync(require.resolve("./models/inference.onnx")),
+    "inference.onnx",
+  );
+  const graph = model.graph();
+  const profile = await model.memoryProfile({ "symbol:N": 2 });
+  load(graph);
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  const estimate = (profile, path = []) => {
+    document.getElementById("memory-tab").click();
+    send({
+      type: "memory-inputs",
+      requestId: messages.at(-1).requestId,
+      dimensions: [],
+      stages: [],
+      path,
+    });
+    document
+      .getElementById("memory-form")
+      .dispatchEvent(new window.Event("submit", { cancelable: true }));
+    send({
+      type: "memory-profile",
+      requestId: messages.at(-1).requestId,
+      profile,
+    });
+    document.getElementById("model-tab").click();
+  };
+  assert.equal(document.querySelector(".node-inplace-links"), null);
+  estimate(profile);
+  const node = document.querySelector('[data-id="node-1"]');
+  const links = node.querySelector(".node-inplace-links");
+  assert.ok(links);
+  assert.equal(node.querySelector("rect").nextElementSibling, links);
+  assert.equal(links.getAttribute("aria-hidden"), "true");
+  assert.equal(window.getComputedStyle(links).pointerEvents, "none");
+  const line = links.querySelector("path");
+  const coords = line
+    .getAttribute("d")
+    .match(/-?[\d.]+/g)
+    .map(Number);
+  const input = node.querySelector('.node-input[data-index="0"]');
+  const output = node.querySelector('.node-output[data-index="0"]');
+  assert.deepEqual(
+    coords.slice(0, 2),
+    input
+      .getAttribute("d")
+      .match(/-?[\d.]+/g)
+      .map(Number)
+      .slice(0, 2),
+  );
+  assert.deepEqual(
+    coords.slice(-2),
+    output
+      .getAttribute("d")
+      .match(/-?[\d.]+/g)
+      .map(Number)
+      .slice(0, 2),
+  );
+  const position = nodePositions(document)[1];
+  const before = line.getAttribute("d");
+  pointer(node, "pointerdown", position.x, position.y);
+  pointer(node, "pointermove", position.x + 40, position.y + 25);
+  pointer(node, "pointerup", position.x + 40, position.y + 25);
+  assert.equal(line.getAttribute("d"), before);
+  translationOffsets(node.getAttribute("transform")).forEach((value, index) => {
+    assert.ok(Math.abs(value - [40, 25][index]) < 1e-8);
+  });
+  estimate(profile);
+  assert.equal(node.querySelectorAll(".node-inplace-links").length, 1);
+  document
+    .getElementById("memory-dimensions")
+    .dispatchEvent(new window.Event("input", { bubbles: true }));
+  assert.equal(document.querySelector(".node-inplace-links"), null);
+  estimate(profile);
+  estimate(profile, [{ node: 0, attribute: 0, graph: 0 }]);
+  assert.equal(document.querySelector(".node-inplace-links"), null);
+  estimate(profile);
+  load(demoGraph);
+  assert.equal(document.querySelector(".node-inplace-links"), null);
+  load(chainGraph(300));
+  estimate({
+    ...profile,
+    events: Array.from({ length: 300 }, (_, index) => ({
+      ...profile.events[0],
+      index,
+      decisions:
+        index === 200
+          ? [
+              {
+                action: "inplace",
+                input: "tensor_199",
+                output: "tensor_200",
+                kind: "equal",
+                name: "",
+              },
+            ]
+          : [],
+    })),
+  });
+  const find = (index) => {
+    document.getElementById("node-search").value = `activation_${index}`;
+    document
+      .getElementById("find-node")
+      .dispatchEvent(new window.Event("submit", { cancelable: true }));
+  };
+  find(200);
+  assert.equal(
+    document.querySelectorAll('[data-id="node-200"] .node-inplace-links path')
+      .length,
+    1,
+  );
+  find(0);
+  find(200);
+  assert.equal(
+    document.querySelectorAll('[data-id="node-200"] .node-inplace-links path')
+      .length,
+    1,
+  );
+});
 
 function translationOffsets(transform) {
   return (

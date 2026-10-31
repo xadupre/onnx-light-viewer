@@ -16,6 +16,17 @@ Repeated input names use separate entry points. Empty optional outputs reserve
 their position with a short bottom line, without a connection or tensor label.
 Stored inputs and empty optional inputs also retain their entry-point slots.
 
+The stored-tensor histogram button precedes the node index in operator headers.
+Carried-result edges show longer tensor names; hover over an edge or its labels
+for the complete name, type and shape. Nearby labels are staggered along their
+connections, or placed on the other side, when space permits.
+
+.. figure:: ../_static/feature-edge-labels.png
+   :alt: Carried-result connections with longer tensor names and staggered labels around repeated input ports.
+   :width: 480px
+
+   Read carried results without placing every label on the same horizontal line.
+
 Features are grouped by theme:
 
 * **Navigation** includes Model, Statistics, Memory and Tensors, with Open,
