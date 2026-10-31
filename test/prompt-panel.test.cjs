@@ -560,7 +560,7 @@ test("engine settings pages retain independent controls, including parallel load
   assert.equal(field("prompt-settings-light", "threads").value, "2");
 });
 
-test("model replacement updates an open settings page to the available engine", (t) => {
+test("model replacement preserves the settings page until the session settings shortcut is opened", (t) => {
   const { dom, byId, api, messages } = panel(t);
   api.handleMessage({
     type: "prompt-info",
@@ -578,6 +578,10 @@ test("model replacement updates an open settings page to the available engine", 
     info: { available: true, engines: ["onnx-light"], pipeline: true },
   });
   assert.equal(byId("prompt-session-page").hidden, false);
+  assert.equal(byId("prompt-settings-genai").hidden, false);
+  assert.equal(byId("prompt-settings-light").hidden, true);
+  assert.match(byId("prompt-settings-title").textContent, /GenAI/);
+  byId("prompt-settings-open").click();
   assert.equal(byId("prompt-settings-genai").hidden, true);
   assert.equal(byId("prompt-settings-light").hidden, false);
   assert.match(byId("prompt-settings-title").textContent, /onnx-light/);

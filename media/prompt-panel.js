@@ -46,6 +46,7 @@ function createPromptPanel({ byId, postMessage }) {
   const sessionFields = byId("prompt-session-fields");
   const showSettingsEngine = () => {
     const light = byId("prompt-engine").value === "onnx-light";
+    byId(`settings-${light ? "onnx-light" : "onnxruntime"}-tab`).click();
     byId("prompt-settings-light").hidden = !light;
     byId("prompt-settings-genai").hidden = light;
     byId("prompt-settings-title").textContent = light
@@ -54,12 +55,12 @@ function createPromptPanel({ byId, postMessage }) {
   };
   byId("prompt-settings-open").addEventListener("click", () => {
     showSettingsEngine();
-    byId("prompt-run-page").hidden = true;
     byId("prompt-session-page").hidden = false;
+    byId("settings-tab").click();
+    byId("settings-engine-tab").click();
   });
   byId("prompt-settings-back").addEventListener("click", () => {
-    byId("prompt-run-page").hidden = false;
-    byId("prompt-session-page").hidden = true;
+    byId("prompt-tab").click();
   });
   const release = () => {
     postMessage({ type: "prompt-release", requestId });
@@ -95,9 +96,7 @@ function createPromptPanel({ byId, postMessage }) {
       if (field.disabled || (field.value === "" && field.type !== "checkbox"))
         continue;
       if (!field.checkValidity()) {
-        showSettingsEngine();
-        byId("prompt-run-page").hidden = true;
-        byId("prompt-session-page").hidden = false;
+        byId("prompt-settings-open").click();
         field.reportValidity();
         return;
       }
@@ -416,7 +415,6 @@ function createPromptPanel({ byId, postMessage }) {
         engine.value = message.info.engines.includes("onnxruntime-genai")
           ? "onnxruntime-genai"
           : (message.info.engines[0] ?? "onnx-light");
-        showSettingsEngine();
         const light = byId("prompt-settings-light");
         const sdkLoader =
           light.querySelector('[data-setting="sdkLoader"]').value === "true";

@@ -186,8 +186,8 @@ now**, cancellation, changing models/engines/settings and closing the panel
 release it. One panel retains at most one native model; keeping it during HF
 validation can hold two models in memory.
 
-Select the engine on **Run Prompt**, then open **Session settings** to configure
-that engine only. Controls preserve defaults unless changed and never edit the
+Select the engine on **Run Prompt**, then open **Session settings** to jump to
+its subtab in **Settings → Engine**. Controls preserve defaults unless changed and never edit the
 exported configuration. GenAI's **From genai_config.json** uses the exported
 configuration, or the engine default when the option is absent from that file.
 onnx-light exposes CPU threads, shape checks, allocation capacity, intermediate
@@ -490,7 +490,13 @@ Open **Settings → App** to configure download and Python paths, sidebar width
 and visible viewer panels, or reset viewer preferences.
 Open **Settings → History** to inspect cache locations and remove or clear Open,
 Save and conversion suggestions. Clearing history never deletes files.
-Use Left/Right arrows, Home or End to switch categories from the tab buttons.
+Open **Settings → Engine** for **onnxruntime**, **pytorch** and **onnx-light**
+subtabs. ONNX Runtime GenAI and onnx-light share the session controls used by
+Prompt; changes apply to the next run and remain in this viewer panel, without
+changing the selected execution engine. PyTorch lists the fixed CPU, local-only
+validation settings; reference selection and validation remain on Prompt.
+Use Left/Right arrows, Home or End to switch categories or engine subtabs from
+their tab buttons.
 
 .. figure:: _static/feature-settings-app.png
    :alt: Settings App tab with application paths and two-column viewer preferences.
@@ -503,6 +509,12 @@ Use Left/Right arrows, Home or End to switch categories from the tab buttons.
    :width: 100%
 
    Manage remembered suggestions separately in History.
+
+.. figure:: _static/feature-settings-engine.png
+   :alt: Settings Engine category with onnxruntime, pytorch and onnx-light subtabs and editable GenAI session options.
+   :width: 100%
+
+   Browse engine options independently of the engine selected for Prompt.
 
 Diagnostics and help
 ^^^^^^^^^^^^^^^^^^^^
