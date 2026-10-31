@@ -1027,7 +1027,13 @@ function markReleased({ path, text, name }, released) {
   );
 }
 
-function connectionTag({ name }) {
+function connectionTag({ name, to }) {
+  const consumer = viewsByPosition.get(to)?.node;
+  if (
+    consumer?.opType === "Shape" &&
+    (!consumer.domain || consumer.domain === "ai.onnx")
+  )
+    return "shape";
   const tag = valueMetadata.get(name)?.tag;
   return tag === "weight" || tag === "shape" ? tag : "";
 }
@@ -1397,12 +1403,12 @@ function updateConnectionVisibility(connection) {
   const visible = intersectsCamera(
     Math.min(left, label.x),
     Math.min(top, label.y),
-    Math.max(right, label.x + 240),
+    Math.max(right, label.x + 480),
     Math.max(bottom, label.y + 28),
   );
   const labelsVisible =
     !virtualized ||
-    intersectsCamera(label.x, label.y, label.x + 240, label.y + 28);
+    intersectsCamera(label.x, label.y, label.x + 480, label.y + 28);
   if (virtualized && !overviewVisible && visible && !labelsVisible)
     crossingConnections.add(connection);
   else crossingConnections.delete(connection);
@@ -2105,7 +2111,7 @@ function render(graph, metadata) {
           "tensor-label",
           "start",
         );
-        const information = tensorLabel(group, 0, 0, name, 34, "start");
+        const information = tensorLabel(group, 0, 0, name, 68, "start");
         Object.assign(connection, {
           group,
           from,
