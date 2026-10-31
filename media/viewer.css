@@ -2021,3 +2021,21 @@ button:disabled {
   white-space: pre;
   text-align: left;
 }
+
+.prompt-token-table caption {
+  text-align: left;
+  margin-bottom: 0.5rem;
+}
+
+.prompt-token-table .prompt-token-section th,
+.prompt-token-table .prompt-token-section td {
+  border-top-width: 3px;
+  background: var(--border);
+  font-weight: bold;
+}
+
+.prompt-token-table .prompt-token-mismatch {
+  color: var(--vscode-errorForeground, #f14c4c);
+  background: var(--vscode-inputValidation-errorBackground, #5a1d1d);
+  font-weight: bold;
+}
