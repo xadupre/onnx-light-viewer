@@ -17,6 +17,85 @@ function createExportPanel({ byId, postMessage, requestAction, revealPanel }) {
   let recipeRequest = 0;
   let recipeLoading = false;
   let recipeCatalog;
+  const modelIdOrder = new Intl.Collator("en").compare;
+  const modelIds = [
+    "THUDM/chatglm3-6b",
+    "deepseek-ai/DeepSeek-V3",
+    "baidu/ERNIE-4.5-0.3B-PT",
+    "google/gemma-2b",
+    "google/gemma-2-2b",
+    "google/gemma-3-1b-it",
+    "google/gemma-3-4b-it",
+    "openai-community/gpt2",
+    "openai/gpt-oss-20b",
+    "ibm-granite/granite-3.0-2b-base",
+    "internlm/internlm2-7b",
+    "LiquidAI/LFM2-350M",
+    "meta-llama/Llama-2-7b-hf",
+    "microsoft/Mage-Flow",
+    "mistralai/Mistral-7B-v0.1",
+    "mistralai/Ministral-3-3B-Instruct-2512",
+    "mistralai/Mixtral-8x7B-v0.1",
+    "nvidia/Minitron-8B-Base",
+    "allenai/OLMo-7B-hf",
+    "allenai/OLMo-2-1124-7B",
+    "microsoft/phi-2",
+    "microsoft/Phi-3-mini-4k-instruct",
+    "microsoft/Phi-3-small-8k-instruct",
+    "microsoft/Phi-3-vision-128k-instruct",
+    "microsoft/Phi-4-multimodal-instruct",
+    "microsoft/Phi-3.5-MoE-instruct",
+    "Qwen/Qwen2-0.5B",
+    "Qwen/Qwen2.5-Omni-3B",
+    "Qwen/Qwen2.5-VL-7B-Instruct",
+    "Qwen/Qwen3-0.6B",
+    "Qwen/Qwen3-VL-4B-Instruct",
+    "HuggingFaceTB/SmolLM3-3B",
+    "HuggingFaceTB/SmolVLM-256M-Instruct",
+    "OpenGVLab/VideoChat-Flash-Qwen2_5-7B_InternVideo2-1B",
+    "openai/whisper-tiny",
+  ].sort(modelIdOrder);
+  function modelPicker(inputId, pickerId, listId) {
+    const input = byId(inputId);
+    const picker = byId(pickerId);
+    const list = byId(listId);
+    picker.addEventListener("toggle", () => {
+      if (!picker.open) return;
+      if (input.matches(":disabled")) {
+        picker.open = false;
+        return;
+      }
+      list.selectedIndex = [...list.options].findIndex(
+        (option) => option.value === input.value,
+      );
+      list.focus({ preventScroll: true });
+    });
+    list.addEventListener("change", () => {
+      input.value = list.value;
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    picker.addEventListener("keydown", (event) => {
+      if (
+        event.key !== "Escape" &&
+        !(event.key === "Enter" && event.target === list)
+      )
+        return;
+      event.preventDefault();
+      picker.open = false;
+      input.focus({ preventScroll: true });
+    });
+    input.parentElement.addEventListener("focusout", (event) => {
+      if (!input.parentElement.contains(event.relatedTarget))
+        picker.open = false;
+    });
+  }
+  modelPicker("export-source", "export-source-picker", "export-source-history");
+  modelPicker(
+    "prompt-reference-source",
+    "prompt-reference-picker",
+    "prompt-model-suggestions",
+  );
   function recipeDetails() {
     const recipe = recipeCatalog?.recipes.find(
       (entry) => entry.id === byId("export-recipe").value,
@@ -167,16 +246,28 @@ function createExportPanel({ byId, postMessage, requestAction, revealPanel }) {
   }
   function historySuggestions(history) {
     for (const [id, entries] of [
-      ["export-source-history", history.models],
+      [
+        "export-source-history",
+        [...new Set([...history.models, ...modelIds])].sort(modelIdOrder),
+      ],
       ["export-directory-history", history.directories],
+      ["prompt-model-suggestions", modelIds],
     ]) {
-      byId(id).replaceChildren(
+      const list = byId(id);
+      if (
+        list.children.length === entries.length &&
+        entries.every((value, index) => list.children[index].value === value)
+      )
+        continue;
+      list.replaceChildren(
         ...entries.map((value) => {
           const option = byId(id).ownerDocument.createElement("option");
           option.value = value;
+          option.textContent = value;
           return option;
         }),
       );
+      if (list.tagName === "SELECT") list.selectedIndex = -1;
     }
   }
   const directoryChanged = () => {
@@ -253,6 +344,7 @@ function createExportPanel({ byId, postMessage, requestAction, revealPanel }) {
     requestAction("export", "Convert ONNX model", { exportOptions: options() });
   });
   updateAdvancedOptions();
+  historySuggestions({ models: [], directories: [] });
   return {
     setPythonPackages(packages) {
       const available = !!packages?.some(
