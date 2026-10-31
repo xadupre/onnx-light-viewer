@@ -109,6 +109,81 @@ function assertRouteAvoidsNodes(
   }
 }
 
+test("keeps port-adjusted shortcuts outside unrelated operators", () => {
+  const nodes = [
+    [["weight", "weight", "weight"], 1, 200, 120],
+    [["v0_0", "v0_0", "v0_0"], 5, 320, 120],
+    [["v1_4"], 3, 260, 184],
+    [["v0_0", "v1_4", "v2_1"], 1, 140, 88],
+    [["v3_0", "v1_4", "v2_0"], 2, 200, 120],
+    [["v2_0", "v0_0", "v3_0"], 4, 380, 184],
+    [["v4_0", "v5_2", "v4_0"], 4, 140, 152],
+    [["v3_0"], 5, 320, 120],
+    [["v1_1", "v5_3", "v2_1", "v1_0"], 5, 380, 120],
+    [["v1_0", "v1_0"], 1, 380, 184],
+  ].map(([inputs, count, width, height], index) => ({
+    id: `n${index}`,
+    inputs,
+    outputs: Array.from({ length: count }, (_, slot) => `v${index}_${slot}`),
+    width,
+    height,
+  }));
+  const large = [
+    ...nodes,
+    ...Array.from({ length: 2001 }, (_, index) => ({
+      id: `extra${index}`,
+      inputs: [],
+      outputs: [],
+      width: 140,
+      height: 88,
+    })),
+  ];
+  for (const graph of [nodes, large]) {
+    const result = layout(graph);
+    const producers = new Map(
+      nodes.flatMap((node) =>
+        node.outputs.map((name, index) => [name, { node, index }]),
+      ),
+    );
+    for (const target of nodes) {
+      for (const [index, name] of target.inputs.entries()) {
+        const producer = producers.get(name);
+        if (!producer) continue;
+        const source = producer.node;
+        const from = result.positions.get(source.id);
+        const to = result.positions.get(target.id);
+        const fromOffset =
+          source.width *
+          ((producer.index + 1) / (source.outputs.length + 1) - 0.5);
+        const toOffset =
+          target.width * ((index + 1) / (target.inputs.length + 1) - 0.5);
+        const start = { x: from.x + fromOffset, y: from.y + source.height / 2 };
+        const end = { x: to.x + toOffset, y: to.y - target.height / 2 };
+        const route = result.portRoutes.get(target.id)?.[index];
+        const points = flattenGraphPath(
+          [start, ...(route ?? []), end],
+          !!route?.length,
+        );
+        for (const obstacle of graph) {
+          if (obstacle === source || obstacle === target) continue;
+          for (let segment = 1; segment < points.length; segment++)
+            assert.equal(
+              segmentEntersBox(
+                points[segment - 1],
+                points[segment],
+                result.positions.get(obstacle.id),
+                obstacle.width,
+                obstacle.height,
+              ),
+              false,
+              `${source.id} -> ${target.id} slot ${index} crosses ${obstacle.id}`,
+            );
+        }
+      }
+    }
+  }
+});
+
 test("rounds detour corners without pulling the exterior run into operator rows", () => {
   const points = [
     { x: 0, y: 0 },

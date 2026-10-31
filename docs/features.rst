@@ -109,6 +109,16 @@ Zoom, pan, area zoom, readable-size views, multi-selection, dragging and sidebar
 node/operator search with live suggestions. See :doc:`features/navigation`.
 Moving a node changes only its display position.
 
+Connections attach left-to-right in each node's input and output order.
+Repeated inputs have separate entry points; empty outputs keep their slot as
+a short, unlabeled line below the rectangle.
+
+.. figure:: _static/feature-node-ports.png
+   :alt: Split with three output slots, an empty middle output stub, and connections to two ordered Add inputs.
+   :width: 100%
+
+   Tensor slots determine connection points, even when connections cross.
+
 .. figure:: _static/feature-navigation.png
    :alt: Selected Reshape node at readable zoom with graph navigation controls.
    :width: 100%
