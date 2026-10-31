@@ -91,7 +91,8 @@ const sidebar = createSidebar({
 const settingsPanel = createSettingsPanel({
   byId,
   postMessage: (message) => vscode.postMessage(message),
-  onPythonPackages: (packages) => exportPanel.setPythonPackages(packages),
+  onPythonPackages: (packages, pythonPath) =>
+    exportPanel.setPythonPackages(packages, pythonPath),
   onViewerSettings: (settings) => {
     sidebar.restoreSettings(settings);
     vscode.postMessage({ type: "viewer-settings", settings });

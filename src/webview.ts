@@ -135,6 +135,7 @@ export function webviewHtml(
                 <div id="export-source-options" class="export-option">
                 <label id="export-source-label" for="export-source">Hugging Face model ID or absolute local model directory</label>
                 <input id="export-source" required placeholder="Qwen/Qwen3-0.6B" autocomplete="off" list="export-source-history"><datalist id="export-source-history"></datalist>
+                <p id="export-model-suggestions-status" role="status">Install mbext in the selected Python environment for example model ID suggestions. You can also enter any model ID or local path.</p>
                 </div>
                 <div id="export-olive-quantization" class="export-option" hidden>
                   <div class="export-field">
@@ -557,7 +558,8 @@ export function webviewHtml(
           <input id="prompt-keep-loaded" type="checkbox">
           <p>Off by default to limit memory use and swapping. Changing engines, models or settings releases the previous session. Keeping a native model loaded during HF validation can hold two models in memory.</p>
           <label for="prompt-reference-source">Hugging Face reference (model ID or local checkpoint)</label>
-          <input id="prompt-reference-source" type="text" autocomplete="off" placeholder="e.g. Qwen/Qwen3-0.6B" aria-describedby="prompt-validation-status">
+          <input id="prompt-reference-source" type="text" autocomplete="off" placeholder="e.g. Qwen/Qwen3-0.6B" list="prompt-model-suggestions" aria-describedby="prompt-validation-status">
+          <datalist id="prompt-model-suggestions"></datalist>
           <p id="prompt-validation-status" role="status">Open a model to check whether its Hugging Face reference is identified.</p>
           <label for="prompt-validate-run">Validate with Hugging Face after generation</label>
           <input id="prompt-validate-run" type="checkbox">

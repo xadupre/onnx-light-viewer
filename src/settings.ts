@@ -287,3 +287,24 @@ print(json.dumps({
   );
   return JSON.parse(stdout);
 }
+
+export async function supportedModelIds(pythonPath: string): Promise<string[]> {
+  const { stdout } = await promisify(execFile)(
+    pythonPath,
+    [
+      "-c",
+      "import json; from modelbuilder.architectures import list_supported_model_ids; print(json.dumps(list_supported_model_ids()))",
+    ],
+    { cwd: homedir(), timeout: 10000, maxBuffer: 1024 * 1024 },
+  );
+  const ids: unknown = JSON.parse(stdout);
+  if (
+    !Array.isArray(ids) ||
+    !ids.every(
+      (id): id is string =>
+        typeof id === "string" && /^[\w.-]+\/[\w.-]+$/.test(id),
+    )
+  )
+    throw new Error("Invalid mbext model ID suggestions.");
+  return [...new Set(ids)].sort();
+}

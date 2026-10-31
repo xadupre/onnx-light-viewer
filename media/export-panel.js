@@ -17,6 +17,10 @@ function createExportPanel({ byId, postMessage, requestAction, revealPanel }) {
   let recipeRequest = 0;
   let recipeLoading = false;
   let recipeCatalog;
+  let modelSuggestionRequest = 0;
+  let modelSuggestionPython;
+  let modelIds = [];
+  let exportHistory = { models: [], directories: [] };
   function recipeDetails() {
     const recipe = recipeCatalog?.recipes.find(
       (entry) => entry.id === byId("export-recipe").value,
@@ -166,9 +170,11 @@ function createExportPanel({ byId, postMessage, requestAction, revealPanel }) {
     }
   }
   function historySuggestions(history) {
+    exportHistory = history;
     for (const [id, entries] of [
-      ["export-source-history", history.models],
+      ["export-source-history", [...new Set([...history.models, ...modelIds])]],
       ["export-directory-history", history.directories],
+      ["prompt-model-suggestions", modelIds],
     ]) {
       byId(id).replaceChildren(
         ...entries.map((value) => {
@@ -254,10 +260,23 @@ function createExportPanel({ byId, postMessage, requestAction, revealPanel }) {
   });
   updateAdvancedOptions();
   return {
-    setPythonPackages(packages) {
+    setPythonPackages(packages, pythonPath) {
+      modelSuggestionRequest++;
+      modelSuggestionPython = pythonPath;
+      modelIds = [];
+      historySuggestions(exportHistory);
       const available = !!packages?.some(
         (pkg) => pkg.name === "modelbuilder" && (pkg.version || pkg.source),
       );
+      byId("export-model-suggestions-status").textContent = available
+        ? "Loading example model IDs from mbext..."
+        : "Install mbext in the selected Python environment for example model ID suggestions. You can also enter any model ID or local path.";
+      if (available)
+        postMessage({
+          type: "model-id-suggestions",
+          requestId: modelSuggestionRequest,
+          pythonPath,
+        });
       byId("mbext-repository").hidden = !available;
       const tool = byId("export-tool");
       const previous = tool.value;
@@ -308,6 +327,19 @@ function createExportPanel({ byId, postMessage, requestAction, revealPanel }) {
       enabled();
     },
     handleMessage(data) {
+      if (data?.type === "model-id-suggestions") {
+        if (
+          data.requestId !== modelSuggestionRequest ||
+          data.pythonPath !== modelSuggestionPython
+        )
+          return true;
+        modelIds = data.error ? [] : data.ids;
+        historySuggestions(exportHistory);
+        byId("export-model-suggestions-status").textContent = data.error
+          ? `Model ID suggestions unavailable: ${data.error}. You can still enter a model ID or local path.`
+          : `${modelIds.length} example model IDs from mbext (non-exhaustive; checkpoint and exporter compatibility are not guaranteed).`;
+        return true;
+      }
       if (data?.type === "olive-recipes") {
         if (data.requestId !== recipeRequest) return true;
         recipeLoading = false;

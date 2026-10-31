@@ -1541,6 +1541,56 @@ print("Saved model.onnx", flush=True)
   assert.equal(extension.events.length, events);
 });
 
+test("model ID suggestions use the configured Python and enforce trust and request correlation", async (t) => {
+  const directory = await mkdtemp(
+    path.join(tmpdir(), "viewer-model-suggestions-"),
+  );
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  await mkdir(path.join(directory, "modelbuilder"));
+  await writeFile(path.join(directory, "modelbuilder", "__init__.py"), "");
+  await writeFile(
+    path.join(directory, "modelbuilder", "architectures.py"),
+    'def list_supported_model_ids():\n    return ["Qwen/Qwen3-0.6B"]\n',
+  );
+  const previous = process.env.PYTHONPATH;
+  process.env.PYTHONPATH = directory;
+  t.after(() => {
+    if (previous === undefined) delete process.env.PYTHONPATH;
+    else process.env.PYTHONPATH = previous;
+  });
+  const extension = await openExtension();
+  t.after(() => extension.dispose());
+  await extension.receive({ type: "get-settings" });
+  const request = {
+    type: "model-id-suggestions",
+    requestId: 1,
+    pythonPath: extension.messages.at(-1).application.pythonPath,
+  };
+  await extension.receive(request);
+  assert.deepEqual(extension.messages.at(-1), {
+    ...request,
+    ids: ["Qwen/Qwen3-0.6B"],
+  });
+  for (const invalid of [
+    { ...request, requestId: 0 },
+    { ...request, pythonPath: "/other/python" },
+  ]) {
+    await extension.receive(invalid);
+    assert.match(
+      extension.messages.at(-1).error,
+      /Invalid model ID suggestions request/,
+    );
+  }
+  extension.setTrusted(false);
+  await extension.receive(request);
+  assert.match(extension.messages.at(-1).error, /Trust this workspace/);
+  extension.setTrusted(true);
+  await writeFile(path.join(directory, "modelbuilder", "architectures.py"), "");
+  await extension.receive(request);
+  assert.match(extension.messages.at(-1).error, /ImportError/);
+  assert.equal(extension.messages.at(-1).requestId, request.requestId);
+});
+
 test("Settings reports defaults, versions and persisted paths without running Python", async (t) => {
   const preferences = new Map();
   const storage = await mkdtemp(path.join(tmpdir(), "viewer-settings-"));
