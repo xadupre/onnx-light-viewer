@@ -172,6 +172,23 @@ function createPromptPanel({ byId, postMessage }) {
       missingDecode,
     );
   };
+  const updateSectionHeading = (row, label, columnCount) => {
+    row.replaceChildren();
+    let remaining = columnCount;
+    const heading = document.createElement("th");
+    heading.colSpan = Math.min(remaining, 1000);
+    heading.scope = "rowgroup";
+    heading.textContent = label;
+    row.append(heading);
+    remaining -= heading.colSpan;
+    while (remaining > 0) {
+      const cell = document.createElement("td");
+      cell.colSpan = Math.min(remaining, 1000);
+      cell.setAttribute("aria-hidden", "true");
+      row.append(cell);
+      remaining -= cell.colSpan;
+    }
+  };
   const render = () => {
     liveRows = [];
     prefill = undefined;
@@ -181,21 +198,46 @@ function createPromptPanel({ byId, postMessage }) {
     const table = document.createElement("table");
     table.className = "prompt-token-table";
     table.setAttribute("aria-label", "Token-aligned generation and validation");
+    const tokens = result.tokens;
+    const referenceTokens = result.reference?.tokens;
+    const columnCount = Math.max(tokens.length, referenceTokens?.length ?? 0);
+    let group;
+    const section = (label) => {
+      group = document.createElement("tbody");
+      const tr = document.createElement("tr");
+      tr.className = "prompt-token-section";
+      updateSectionHeading(tr, label, columnCount + 1);
+      group.append(tr);
+      table.append(group);
+    };
+    if (referenceTokens) {
+      const caption = document.createElement("caption");
+      caption.textContent =
+        "Red columns indicate token ID disagreement or a missing token.";
+      table.append(caption);
+    }
     const row = (label, values) => {
       const tr = document.createElement("tr");
       const th = document.createElement("th");
       th.scope = "row";
       th.textContent = label;
       tr.append(th);
-      for (const value of values) {
+      for (let index = 0; index < columnCount; index++) {
         const td = document.createElement("td");
-        td.textContent = String(value);
+        td.textContent = index < values.length ? String(values[index]) : "—";
+        if (
+          referenceTokens &&
+          tokens[index]?.id !== referenceTokens[index]?.id
+        ) {
+          td.className = "prompt-token-mismatch";
+          td.title = `Token ${index + 1}: ONNX and Transformers token IDs disagree or a token is missing.`;
+        }
         tr.append(td);
       }
-      table.append(tr);
+      group.append(tr);
       return tr;
     };
-    const tokens = result.tokens;
+    section(result.engine ? `ONNX · ${result.engine}` : "ONNX");
     for (const [label, value] of [
       ["Output token", (_, index) => index + 1],
       ["Phase", (_, index) => (index === 0 ? "Prefill" : "Decode")],
@@ -207,6 +249,7 @@ function createPromptPanel({ byId, postMessage }) {
       liveRows.push({ row: row(label, tokens.map(value)), value });
     tokens.forEach(recordTiming);
     if (result.reference) {
+      section("Hugging Face · Transformers");
       row(
         "Hugging Face output",
         result.reference.tokens.map((token) => token.text),
@@ -225,6 +268,7 @@ function createPromptPanel({ byId, postMessage }) {
       );
     }
     if (result.discrepancies) {
+      section("ONNX / Transformers logit comparison");
       for (const [label, key, format = String] of [
         ["Maximum absolute distance", "maxAbsolute", formatDecimal],
         ["Relative error", "relative", formatDecimal],
@@ -397,6 +441,12 @@ function createPromptPanel({ byId, postMessage }) {
         if (!busy || !streaming || message.index !== result.tokens.length)
           return true;
         result.tokens.push(message.token);
+        const section = content.querySelector(".prompt-token-section");
+        updateSectionHeading(
+          section,
+          section.cells[0].textContent,
+          result.tokens.length + 1,
+        );
         for (const { row, value } of liveRows) {
           const cell = document.createElement("td");
           cell.textContent = String(value(message.token, message.index));

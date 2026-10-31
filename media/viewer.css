@@ -66,7 +66,8 @@ p {
 [hidden] {
   display: none !important;
 }
-.viewer-tabs {
+.viewer-tabs,
+.settings-tabs {
   display: flex;
   overflow-x: auto;
   border-bottom: 1px solid var(--border);
@@ -92,14 +93,16 @@ p {
 .viewer-tabs .feature-group + .feature-group {
   border-left: 1px solid var(--border);
 }
-.viewer-tabs button {
+.viewer-tabs button,
+.settings-tabs button {
   padding: 8px 20px;
   color: var(--muted);
   background: transparent;
   border: 0;
   border-bottom: 2px solid transparent;
 }
-.viewer-tabs [aria-selected="true"] {
+.viewer-tabs [aria-selected="true"],
+.settings-tabs [aria-selected="true"] {
   color: var(--text);
   border-bottom-color: var(--mint);
 }
@@ -829,7 +832,8 @@ li > .tensor-info {
   font-size: 16px;
   font-weight: 600;
 }
-.graph-node .operator-name {
+.graph-node .operator-name,
+.graph-node .operator-index {
   fill: #98c1b7;
   font-size: 10px;
 }
@@ -2026,4 +2030,22 @@ button:disabled {
   border: 1px solid var(--vscode-panel-border, #888);
   white-space: pre;
   text-align: left;
+}
+
+.prompt-token-table caption {
+  text-align: left;
+  margin-bottom: 0.5rem;
+}
+
+.prompt-token-table .prompt-token-section th,
+.prompt-token-table .prompt-token-section td {
+  border-top-width: 3px;
+  background: var(--border);
+  font-weight: bold;
+}
+
+.prompt-token-table .prompt-token-mismatch {
+  color: var(--vscode-errorForeground, #f14c4c);
+  background: var(--vscode-inputValidation-errorBackground, #5a1d1d);
+  font-weight: bold;
 }

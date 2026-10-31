@@ -87,13 +87,100 @@ test("prompt defaults, engine applicability and aligned validation results", (t)
     },
   });
   const rows = byId("prompt-results").querySelectorAll("tr");
-  assert.equal(rows.length, 17);
-  for (const row of rows) assert.equal(row.cells.length, 3);
+  assert.equal(rows.length, 20);
+  assert.equal(
+    byId("prompt-results").querySelector(".prompt-token-mismatch"),
+    null,
+  );
+  for (const row of rows)
+    assert.equal(
+      row.cells.length,
+      row.classList.contains("prompt-token-section") ? 1 : 3,
+    );
   assert.match(byId("prompt-results").textContent, /Coefficients Δ < 0.01/);
   assert.match(
     byId("prompt-results").textContent,
     /prefill 120.000 ms; decode mean 4.000 ms/,
   );
+});
+
+test("separates ONNX and Transformers and marks whole columns by token ID, not text or scores", (t) => {
+  const { byId, api, messages } = panel(t);
+  byId("prompt-form").querySelector('button[type="submit"]').click();
+  const requestId = messages.at(-1).requestId;
+  const tokens = [
+    { text: " same", id: 1, score: 2, timeMs: 3 },
+    { text: " same", id: 2, score: 2, timeMs: 3 },
+    { text: " last", id: 3, score: 2, timeMs: 3 },
+  ];
+  api.handleMessage({
+    type: "prompt-result",
+    requestId,
+    result: { prompt: "Hello", engine: "onnx-light", tokens },
+  });
+  assert.equal(byId("prompt-results").querySelector("caption"), null);
+  assert.equal(
+    byId("prompt-results").querySelector(".prompt-token-mismatch"),
+    null,
+  );
+  for (const referenceTokens of [
+    [],
+    [
+      { ...tokens[0], text: "different decoding", score: 9 },
+      { ...tokens[1], id: 99 },
+    ],
+    [
+      { ...tokens[0], text: "different decoding", score: 9 },
+      { ...tokens[1], id: 99 },
+      tokens[2],
+      { ...tokens[2], id: 4 },
+    ],
+  ]) {
+    byId("prompt-validate").click();
+    api.handleMessage({
+      type: "prompt-result",
+      requestId: messages.at(-1).requestId,
+      result: {
+        prompt: "Hello",
+        engine: "onnx-light",
+        tokens,
+        reference: { tokens: referenceTokens },
+        discrepancies: tokens.map(() => ({ maxAbsolute: 0 })),
+      },
+    });
+    const table = byId("prompt-results").querySelector("table");
+    assert.match(table.caption.textContent, /Red columns.*token ID/);
+    assert.deepEqual(
+      [...table.querySelectorAll('[scope="rowgroup"]')].map(
+        (cell) => cell.textContent,
+      ),
+      [
+        "ONNX · onnx-light",
+        "Hugging Face · Transformers",
+        "ONNX / Transformers logit comparison",
+      ],
+    );
+    const columnCount = Math.max(tokens.length, referenceTokens.length);
+    for (const row of table.querySelectorAll("tr:not(.prompt-token-section)")) {
+      assert.equal(row.cells.length, columnCount + 1);
+      assert.equal(
+        row.cells[0].classList.contains("prompt-token-mismatch"),
+        false,
+      );
+      for (let index = 0; index < columnCount; index++) {
+        const cell = row.cells[index + 1];
+        const mismatch = tokens[index]?.id !== referenceTokens[index]?.id;
+        assert.equal(
+          cell.classList.contains("prompt-token-mismatch"),
+          mismatch,
+        );
+        assert.equal(cell.hasAttribute("title"), mismatch);
+      }
+    }
+    const missingGroup =
+      table.tBodies[referenceTokens.length < tokens.length ? 1 : 0];
+    assert.equal(missingGroup.rows[1].cells[columnCount].textContent, "—");
+  }
 });
 
 test("rounds Prompt scores and validation metrics to three decimals without changing IDs, counts or raw values", (t) => {
@@ -342,7 +429,9 @@ test("appends tokens and updates decode mean before completion without replacing
       },
     });
     assert.equal(byId("prompt-results").querySelector("table"), table);
-    for (const row of table.rows) assert.equal(row.cells.length, index + 2);
+    assert.equal(table.rows[0].cells[0].colSpan, index + 2);
+    for (const row of [...table.rows].slice(1))
+      assert.equal(row.cells.length, index + 2);
     assert.equal(byId("prompt-validate").hidden, true);
   }
   assert.match(
@@ -360,6 +449,54 @@ test("appends tokens and updates decode mean before completion without replacing
     token: { text: "stale", id: 3, score: 1, timeMs: 1 },
   });
   assert.doesNotMatch(table.textContent, /stale/);
+});
+
+test("section headings stay aligned across the 1000-column boundary", (t) => {
+  const { dom, byId, api, messages } = panel(t);
+  const tokens = Array.from({ length: 1000 }, (_, index) => ({
+    text: ` token${index}`,
+    id: index,
+    score: 1,
+    timeMs: 1,
+  }));
+  api.handleMessage({
+    type: "prompt-result",
+    requestId: messages.at(-1).requestId,
+    result: { prompt: "Hello", engine: "onnx-light", tokens },
+  });
+  const renderedTable = byId("prompt-results").querySelector("table");
+  const renderedHeading = renderedTable.querySelector(".prompt-token-section");
+  assert.deepEqual(
+    [...renderedHeading.cells].map((cell) => cell.colSpan),
+    [1000, 1],
+  );
+  for (const row of renderedTable.querySelectorAll(
+    "tr:not(.prompt-token-section)",
+  ))
+    assert.equal(row.cells.length, tokens.length + 1);
+
+  byId("prompt-form").dispatchEvent(new dom.window.Event("submit"));
+  const requestId = messages.at(-1).requestId;
+  const streamingTable = byId("prompt-results").querySelector("table");
+  for (let index = 0; index <= 1000; index++)
+    api.handleMessage({
+      type: "prompt-token",
+      requestId,
+      index,
+      token: tokens[index % tokens.length],
+    });
+  const streamingHeading = streamingTable.querySelector(
+    ".prompt-token-section",
+  );
+  assert.deepEqual(
+    [...streamingHeading.cells].map((cell) => cell.colSpan),
+    [1000, 2],
+  );
+  assert.equal(streamingHeading.cells[0].textContent, "ONNX · onnx-light");
+  for (const row of streamingTable.querySelectorAll(
+    "tr:not(.prompt-token-section)",
+  ))
+    assert.equal(row.cells.length, 1002);
 });
 
 test("engine settings pages retain independent controls, including parallel loading", (t) => {

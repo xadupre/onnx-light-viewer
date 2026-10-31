@@ -679,47 +679,56 @@ export function webviewHtml(
     </section>
     <section id="settings-view" role="tabpanel" aria-labelledby="settings-tab" tabindex="0" hidden>
       <h2>Settings</h2>
-      <p>Settings are saved for this VS Code user. Existing downloads are not moved when the directory changes.</p>
-      <form id="application-settings-form" class="form-grid">
-        <label for="settings-download">Default download directory (Hugging Face cache)</label>
-        <input id="settings-download" type="text" required autocomplete="off">
-        <label for="settings-python">Python executable</label>
-        <input id="settings-python" type="text" required autocomplete="off">
-        <p>Python is not needed to view models. Save an executable name or absolute path to inspect optional packages on the Status page.</p>
-        <button type="submit">Save paths</button>
-      </form>
-      <p id="settings-feedback" role="status"></p>
-      <section id="settings-stored-data" aria-labelledby="settings-stored-title">
-        <h3 id="settings-stored-title">Stored data and histories</h3>
-        <p>Histories and preferences use VS Code globalState, shared across workspaces for this VS Code user. Removing entries only forgets suggestions: downloaded files and saved models are never deleted.</p>
-        <dl class="status-details">
-          <dt>Download cache</dt><dd id="settings-cache-download">Waiting for extension host</dd>
-          <dt>Default model saves</dt><dd id="settings-cache-saves">Waiting for extension host</dd>
-        </dl>
-        <h4>Open history (<span id="settings-open-count">0</span>)</h4>
-        <button id="settings-clear-open" type="button" disabled>Clear Open history</button>
-        <ul id="settings-open-history" aria-label="Open history"></ul>
-        <h4>Save history (<span id="settings-save-count">0</span>)</h4>
-        <button id="settings-clear-save" type="button" disabled>Clear Save history</button>
-        <ul id="settings-save-history" aria-label="Save history"></ul>
-        <h4>Conversion history (<span id="settings-export-count">0</span>)</h4>
-        <p>Last conversion tool: <span id="settings-exporter">None</span></p>
-        <button id="settings-clear-export" type="button" disabled>Clear conversion history</button>
-        <ul id="settings-export-history" aria-label="Conversion history"></ul>
-        <p id="settings-history-feedback" role="status"></p>
+      <nav class="settings-tabs" role="tablist" aria-label="Settings categories">
+        <button id="settings-app-tab" type="button" role="tab" aria-controls="settings-app-view" aria-selected="true">App</button>
+        <button id="settings-history-tab" type="button" role="tab" aria-controls="settings-history-view" aria-selected="false" tabindex="-1">History</button>
+      </nav>
+      <section id="settings-app-view" role="tabpanel" aria-labelledby="settings-app-tab" tabindex="0">
+        <h3>Application paths</h3>
+        <p>Settings are saved for this VS Code user. Existing downloads are not moved when the directory changes.</p>
+        <form id="application-settings-form" class="form-grid">
+          <label for="settings-download">Default download directory (Hugging Face cache)</label>
+          <input id="settings-download" type="text" required autocomplete="off">
+          <label for="settings-python">Python executable</label>
+          <input id="settings-python" type="text" required autocomplete="off">
+          <p>Python is not needed to view models. Save an executable name or absolute path to inspect optional packages on the Status page.</p>
+          <button type="submit">Save paths</button>
+        </form>
+        <p id="settings-feedback" role="status"></p>
+        <h3>Viewer preferences</h3>
+        <button id="settings-reset-viewer" type="button">Reset viewer preferences</button>
+        <p>Restores the default sidebar width and panels. Download and Python paths are unchanged.</p>
+        <div class="form-grid">
+          <label for="settings-width">Sidebar width (pixels; blank uses the default)</label>
+          <input id="settings-width" type="number" min="200" step="1">
+        </div>
+        <div id="settings-panels">
+          <label><span>Operator inspector</span><input id="settings-operator" type="checkbox" checked></label>
+          <label><span>Find panel</span><input id="settings-find" type="checkbox" checked></label>
+          <label><span>Data panel</span><input id="settings-metadata" type="checkbox"></label>
+        </div>
       </section>
-      <h3>Viewer preferences</h3>
-      <button id="settings-reset-viewer" type="button">Reset viewer preferences</button>
-      <p>Restores the default sidebar width and panels. Download and Python paths are unchanged.</p>
-      <div class="form-grid">
-        <label for="settings-width">Sidebar width (pixels; blank uses the default)</label>
-        <input id="settings-width" type="number" min="200" step="1">
-      </div>
-      <div id="settings-panels">
-        <label><span>Operator inspector</span><input id="settings-operator" type="checkbox" checked></label>
-        <label><span>Find panel</span><input id="settings-find" type="checkbox" checked></label>
-        <label><span>Data panel</span><input id="settings-metadata" type="checkbox"></label>
-      </div>
+      <section id="settings-history-view" role="tabpanel" aria-labelledby="settings-history-tab" tabindex="0" hidden>
+        <section id="settings-stored-data" aria-labelledby="settings-stored-title">
+          <h3 id="settings-stored-title">Stored data and histories</h3>
+          <p>Histories and preferences use VS Code globalState, shared across workspaces for this VS Code user. Removing entries only forgets suggestions: downloaded files and saved models are never deleted.</p>
+          <dl class="status-details">
+            <dt>Download cache</dt><dd id="settings-cache-download">Waiting for extension host</dd>
+            <dt>Default model saves</dt><dd id="settings-cache-saves">Waiting for extension host</dd>
+          </dl>
+          <h4>Open history (<span id="settings-open-count">0</span>)</h4>
+          <button id="settings-clear-open" type="button" disabled>Clear Open history</button>
+          <ul id="settings-open-history" aria-label="Open history"></ul>
+          <h4>Save history (<span id="settings-save-count">0</span>)</h4>
+          <button id="settings-clear-save" type="button" disabled>Clear Save history</button>
+          <ul id="settings-save-history" aria-label="Save history"></ul>
+          <h4>Conversion history (<span id="settings-export-count">0</span>)</h4>
+          <p>Last conversion tool: <span id="settings-exporter">None</span></p>
+          <button id="settings-clear-export" type="button" disabled>Clear conversion history</button>
+          <ul id="settings-export-history" aria-label="Conversion history"></ul>
+          <p id="settings-history-feedback" role="status"></p>
+        </section>
+      </section>
     </section>
     <section id="controls-view" role="tabpanel" aria-labelledby="controls-tab" tabindex="0" hidden>
       <h2>Keyboard and mouse controls</h2>

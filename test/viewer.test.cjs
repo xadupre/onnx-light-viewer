@@ -7646,6 +7646,76 @@ test("switches all tabs without logging clicks or changing graph, selection or c
   );
 });
 
+test("Settings categories support mouse and keyboard navigation without changing settings or graph state", (t) => {
+  const { document, window, messages, events, load } = openViewer(t);
+  const byId = (id) => document.getElementById(id);
+  load(demoGraph);
+  byId("zoom-in").click();
+  const camera = byId("graph").getAttribute("viewBox");
+  const graph = byId("nodes").innerHTML;
+  byId("settings-tab").click();
+  byId("settings-python").value = "/unsaved/python";
+  const messageCount = messages.length;
+  const eventCount = events.length;
+  const assertCategory = (selected) => {
+    for (const category of ["app", "history"]) {
+      const active = category === selected;
+      const tab = byId(`settings-${category}-tab`);
+      const panel = byId(`settings-${category}-view`);
+      assert.equal(tab.getAttribute("aria-selected"), String(active));
+      assert.equal(tab.tabIndex, active ? 0 : -1);
+      assert.equal(tab.getAttribute("aria-controls"), panel.id);
+      assert.equal(panel.getAttribute("aria-labelledby"), tab.id);
+      assert.equal(panel.hidden, !active);
+    }
+    assert.equal(byId("settings-view").hidden, false);
+  };
+  assertCategory("app");
+  for (const id of [
+    "application-settings-form",
+    "settings-reset-viewer",
+    "settings-panels",
+  ])
+    assert.ok(byId("settings-app-view").contains(byId(id)));
+  assert.ok(
+    byId("settings-history-view").contains(byId("settings-stored-data")),
+  );
+  byId("settings-history-tab").click();
+  assertCategory("history");
+  for (const [key, category] of [
+    ["ArrowRight", "app"],
+    ["ArrowLeft", "history"],
+    ["Home", "app"],
+    ["End", "history"],
+  ]) {
+    byId(
+      `settings-${key === "ArrowRight" || key === "Home" ? "history" : "app"}-tab`,
+    ).dispatchEvent(
+      new window.KeyboardEvent("keydown", {
+        key,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    assertCategory(category);
+    assert.equal(document.activeElement.id, `settings-${category}-tab`);
+  }
+  byId("settings-history-tab").dispatchEvent(
+    new window.KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
+  );
+  assertCategory("history");
+  assert.equal(messages.length, messageCount);
+  assert.equal(events.length, eventCount);
+  byId("model-tab").click();
+  byId("settings-tab").click();
+  assertCategory("history");
+  byId("settings-app-tab").click();
+  assertCategory("app");
+  assert.equal(byId("settings-python").value, "/unsaved/python");
+  assert.equal(byId("graph").getAttribute("viewBox"), camera);
+  assert.equal(byId("nodes").innerHTML, graph);
+});
+
 test("Settings exposes histories, removes selected entries, clears categories and resets viewer preferences", (t) => {
   const { document, window, messages } = openViewer(t);
   const byId = (id) => document.getElementById(id);
@@ -7673,6 +7743,7 @@ test("Settings exposes histories, removes selected entries, clears categories an
     trusted: true,
   };
   byId("settings-tab").click();
+  byId("settings-history-tab").click();
   send(settings);
   assert.equal(byId("settings-cache-download").textContent, "/downloads");
   assert.equal(
@@ -7717,6 +7788,7 @@ test("Settings exposes histories, removes selected entries, clears categories an
     byId("settings-history-feedback").textContent,
     "Could not persist history",
   );
+  byId("settings-app-tab").click();
   byId("settings-reset-viewer").click();
   assert.equal(messages.at(-1).type, "reset-viewer-settings");
   assert.equal(byId("settings-reset-viewer").disabled, true);
@@ -9137,11 +9209,12 @@ test("sizes subgraph operators for their links and preserves dragging, selection
   pointer(graph, "pointermove", before[0].x + 30, top + 61);
   pointer(graph, "pointerup", before[0].x + 30, top + 61);
   assertMoved(before, nodePositions(document), [0], 30, 20);
+  const movedPath = document.querySelector(".edge").getAttribute("d");
   assert.ok(
-    document
-      .querySelector(".edge")
-      .getAttribute("d")
-      .endsWith(`,${top + 20}`),
+    Math.abs(
+      Number(movedPath.slice(movedPath.lastIndexOf(",") + 1)) - top - 20,
+    ) < 1e-9,
+    movedPath,
   );
   assert.equal(messages.filter(({ type }) => type === "navigate").length, 0);
   const left = Number(body.getAttribute("x")) + 30;
@@ -9387,7 +9460,7 @@ test("counts metadata changes and replaces cached analysis and graph markers on 
   assert.deepEqual(errors, []);
 });
 
-test("styles result arcs from native weight and shape tags and replaces styles on metadata refresh", (t) => {
+test("styles Shape input arcs independently of native result tags and refreshes other arc styles", (t) => {
   const { document, window, load } = openViewer(t);
   const model = loadModel(
     readFileSync(require.resolve("./models/analysis.onnx")),
@@ -9396,7 +9469,7 @@ test("styles result arcs from native weight and shape tags and replaces styles o
   const graph = model.graph();
   graph.outputs.push("dimensions");
   load(graph);
-  const weights = [
+  const [shapeInput, ...weights] = [
     ...document.querySelectorAll(
       '.connection[aria-label="Connection: shared;activation"] .edge',
     ),
@@ -9406,6 +9479,11 @@ test("styles result arcs from native weight and shape tags and replaces styles o
   );
   assert.ok(weights.length > 1);
   assert.ok(shape);
+  assert.equal(window.getComputedStyle(shapeInput).strokeDasharray, "4 3");
+  shapeInput.parentElement.dispatchEvent(
+    new window.MouseEvent("click", { bubbles: true }),
+  );
+  assert.ok(document.querySelector(".selected-edge.edge-shape"));
   const originalWidth = parseFloat(
     window.getComputedStyle(weights[0]).strokeWidth,
   );
@@ -9417,6 +9495,7 @@ test("styles result arcs from native weight and shape tags and replaces styles o
     );
   const metadata = model.metadata();
   send(metadata);
+  assert.equal(window.getComputedStyle(shapeInput).strokeDasharray, "4 3");
   assert.equal(document.getElementById("metadata-panel").hidden, true);
   for (const weight of weights) {
     assert.ok(weight.classList.contains("edge-weight"));
@@ -9444,9 +9523,9 @@ test("styles result arcs from native weight and shape tags and replaces styles o
   const cleared = structuredClone(metadata);
   for (const value of cleared.values) value.tag = null;
   send(cleared);
-  assert.equal(
-    document.querySelectorAll(".edge.edge-weight, .edge.edge-shape").length,
-    0,
+  assert.deepEqual(
+    [...document.querySelectorAll(".edge.edge-weight, .edge.edge-shape")],
+    [shapeInput],
   );
   assert.equal(
     document.querySelector(".selected-edge").getAttribute("class"),
@@ -9460,7 +9539,70 @@ test("styles result arcs from native weight and shape tags and replaces styles o
   load(graph);
   assert.equal(
     document.querySelectorAll(".edge.edge-weight, .edge.edge-shape").length,
-    0,
+    1,
+  );
+});
+
+test("dashes graph input arcs only for standard ONNX Shape consumers", (t) => {
+  const { document, window, load } = openViewer(t);
+  load({
+    ...demoGraph,
+    nodes: [
+      { opType: "Shape", domain: "", outputs: ["dimensions"] },
+      { opType: "Relu", domain: "ai.onnx", outputs: ["output"] },
+      { opType: "Shape", domain: "example", outputs: ["custom"] },
+    ].map((node, index) => ({
+      ...demoGraph.nodes[0],
+      ...node,
+      id: `node-${index}`,
+      inputs: ["input"],
+    })),
+    outputs: ["dimensions", "output", "custom"],
+  });
+  const inputs = [
+    ...document.querySelectorAll(
+      '.connection[aria-label="Connection: input"] .edge',
+    ),
+  ];
+  assert.equal(inputs.length, 3);
+  assert.equal(window.getComputedStyle(inputs[0]).strokeDasharray, "4 3");
+  for (const input of inputs.slice(1))
+    assert.equal(input.classList.contains("edge-shape"), false);
+  for (const output of document.querySelectorAll(
+    '.connection:not([aria-label="Connection: input"]) .edge',
+  ))
+    assert.equal(output.classList.contains("edge-shape"), false);
+});
+
+test("arc shape labels show twice the previous text budget and refresh without losing full descriptions", (t) => {
+  const { document, window, load } = openViewer(t);
+  const shape = ["batch", "head_count", "sequence_length", "head_dimension"];
+  const tensors = [{ name: "input", type: "FLOAT", shape }];
+  load({ ...demoGraph, tensors });
+  const information = document.querySelector(
+    '.connection[aria-label="Connection: input"] .tensor-info',
+  );
+  const description = `FLOAT [${shape.join(", ")}]`;
+  assert.ok(description.length > 34 && description.length <= 68);
+  assert.equal(information.querySelector("tspan").textContent, description);
+  const longerShape = [...shape, ...shape];
+  const fullDescription = `FLOAT [${longerShape.join(", ")}]`;
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: {
+        type: "shape-info",
+        tensors: [{ ...tensors[0], shape: longerShape }],
+      },
+    }),
+  );
+  assert.equal(
+    information.querySelector("tspan").textContent,
+    `${fullDescription.slice(0, 67)}…`,
+  );
+  assert.equal(information.getAttribute("aria-label"), fullDescription);
+  assert.equal(
+    information.querySelector("title").textContent,
+    `input: ${fullDescription}`,
   );
 });
 
@@ -9690,12 +9832,12 @@ test("shows native metadata in the sidebar and marks released and never-used res
     const top = Number(group.querySelector("rect").getAttribute("y"));
     const badgeY = Number(badge.getAttribute("y"));
     assert.ok(Number(name.getAttribute("y")) >= top + 10);
-    assert.ok(badgeY - Number(name.getAttribute("y")) >= 14);
+    assert.ok(badgeY - Number(name.getAttribute("y")) >= 10);
     assert.ok(
       Number(type.getAttribute("y")) -
         parseFloat(type.style.fontSize) -
         badgeY >=
-        6,
+        4,
     );
     assert.equal(badge.getAttribute("visibility"), "visible");
   }
@@ -9934,6 +10076,58 @@ test("lists local definitions in model inspection and opens them using their but
   assert.equal(document.getElementById("function-count").textContent, "0");
 });
 
+test("shows graph-local operator positions in compact headers without overlapping names or tensor icons", (t) => {
+  const { document, load } = openViewer(t);
+  const graph = weightsGraph();
+  graph.nodes[0].id = "node-12345";
+  graph.nodes[0].name = "model.layers.attention.weighted_operator".repeat(3);
+  graph.nodes[1].id = "node-7";
+  graph.nodes[1].inputs = ["output"];
+  graph.nodes[1].parameters = [];
+  graph.nodes[1].outputs = [];
+  graph.outputs = [];
+  load(graph);
+  const first = document.querySelector('[data-id="node-12345"]');
+  const index = first.querySelector(".operator-index");
+  assert.ok(index);
+  assert.equal(index.textContent, "#12345");
+  assert.match(index.getAttribute("aria-label"), /12345.*zero-based/);
+  const body = first.querySelector("rect");
+  const name = first.querySelector(".operator-name");
+  const icon = first.querySelector(".node-statistics-link rect");
+  const fontWidth = 6;
+  assert.ok(
+    Number(index.getAttribute("x")) + index.textContent.length * fontWidth <
+      Number(icon.getAttribute("x")),
+  );
+  assert.ok(
+    Number(icon.getAttribute("x")) + Number(icon.getAttribute("width")) <
+      Number(name.getAttribute("x")) - name.textContent.length * fontWidth,
+  );
+  assert.ok(
+    Number(icon.getAttribute("y")) + Number(icon.getAttribute("height")) <
+      Number(first.querySelector(".operator-label").getAttribute("y")) - 16,
+  );
+  assert.ok(Number(body.getAttribute("height")) < 120);
+  const second = document.querySelector('[data-id="node-7"]');
+  assert.equal(second.querySelector(".operator-index").textContent, "#7");
+  assert.equal(second.querySelector(".node-tensor-info"), null);
+  assert.ok(Number(second.querySelector("rect").getAttribute("height")) < 66);
+});
+
+test("keeps graph-local operator positions when virtualized nodes are remounted", (t) => {
+  const { document, window, load } = openViewer(t);
+  load(chainGraph(300));
+  document.getElementById("node-search").value = "activation_200";
+  document
+    .getElementById("find-node")
+    .dispatchEvent(new window.Event("submit", { cancelable: true }));
+  assert.equal(
+    document.querySelector('[data-id="node-200"] .operator-index')?.textContent,
+    "#200",
+  );
+});
+
 test("opens local functions from the operator or inspector and returns using breadcrumbs", (t) => {
   const { document, window, messages, load } = openViewer(t);
   const model = loadModel(
@@ -9960,6 +10154,10 @@ test("opens local functions from the operator or inspector and returns using bre
   );
   load(model.graph(false, messages.at(-1).path));
   assert.equal(button.hidden, true);
+  assert.equal(
+    document.querySelector('[data-id="node-2"] .operator-index')?.textContent,
+    "#2",
+  );
   document
     .querySelector('[data-id="node-2"]')
     .dispatchEvent(
@@ -9970,6 +10168,10 @@ test("opens local functions from the operator or inspector and returns using bre
   button.click();
   load(model.graph(false, messages.at(-1).path));
   assert.equal(document.getElementById("node-title").textContent, "Sigmoid");
+  assert.equal(
+    document.querySelector('[data-id="node-0"] .operator-index')?.textContent,
+    "#0",
+  );
   assert.equal(button.hidden, true);
   const crumbs = document.querySelectorAll("#graph-navigation button");
   assert.equal(crumbs.length, 3);
@@ -10874,7 +11076,7 @@ test("shows attribute values above a separate initializer count and small values
     const body = group.querySelector("rect");
     assert.equal(
       Number(body.getAttribute("height")),
-      88 + expected.length * 16,
+      70 + expected.length * 14,
     );
     const bottom =
       Number(body.getAttribute("y")) + Number(body.getAttribute("height"));
@@ -10900,7 +11102,7 @@ test("shows attribute values above a separate initializer count and small values
   assert.equal(document.querySelector(".node-initializer"), null);
   assert.equal(
     document.querySelector(".graph-node > rect").getAttribute("height"),
-    "88",
+    "70",
   );
 });
 
@@ -10922,7 +11124,7 @@ test("stacks an explicit attribute above the initializer count without a large-w
   const group = document.querySelector(".graph-node");
   const body = group.querySelector("rect");
   assert.equal(body.getAttribute("width"), "140");
-  assert.equal(body.getAttribute("height"), "120");
+  assert.equal(body.getAttribute("height"), "98");
   const attribute = group.querySelector(".node-attribute");
   const initializer = group.querySelector(".node-parameter-summary");
   assert.ok(attribute);
@@ -11057,7 +11259,7 @@ test("keeps long and multiline attribute values visible while preserving inspect
     }
     assert.equal(
       group.querySelector("rect").getAttribute("height"),
-      String(88 + expected.length * 16),
+      String(70 + expected.length * 14),
     );
     assert.equal(
       document.querySelectorAll("#node-initializers li").length,
@@ -11108,13 +11310,13 @@ test("previews fewer than four initializers only when every tensor has at most t
     const rows = [...group.querySelectorAll(".node-parameter")];
     assert.equal(
       group.querySelector("rect").getAttribute("height"),
-      String(88 + rows.length * 16),
+      String(70 + rows.length * 14),
     );
     for (let index = 1; index < rows.length; index++)
       assert.equal(
         Number(rows[index].getAttribute("y")) -
           Number(rows[index - 1].getAttribute("y")),
-        16,
+        14,
       );
   }
 });
@@ -12548,7 +12750,7 @@ test("fits operator types and middle-truncates long names without reducing their
     );
     assert.equal(
       Number(name.getAttribute("y")),
-      Number(body.getAttribute("y")) + 15,
+      Number(body.getAttribute("y")) + 14,
     );
     assert.ok(
       Number(name.getAttribute("y")) <
@@ -12782,6 +12984,7 @@ test("preserves result arc tags in crossing batches, released paths, overview an
   const { document, window, load } = openViewer(t);
   const model = chainGraph(600);
   model.nodes[599].inputs.push("tensor_0", "tensor_1");
+  model.nodes[301].opType = "Shape";
   load(model);
   assert.equal(
     document.querySelector('.connection[aria-label="Connection: tensor_300"]'),
@@ -12806,7 +13009,7 @@ test("preserves result arc tags in crossing batches, released paths, overview an
           values: [
             { name: "tensor_0", entries: [], constant: false, tag: "weight" },
             { name: "tensor_1", entries: [], constant: false, tag: "shape" },
-            { name: "tensor_300", entries: [], constant: false, tag: "shape" },
+            { name: "tensor_300", entries: [], constant: false, tag: null },
           ],
         },
       },
