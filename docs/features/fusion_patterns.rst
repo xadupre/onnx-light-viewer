@@ -90,8 +90,7 @@ for creating a reusable native pattern without changing the graph.
    **Replacement** fields use the SDK textparser's function syntax. Edit either
    function, then click **Apply edits**. Invalid text leaves the saved definition
    unchanged and keeps your edits available to correct.
-4. Use each editor's top-right copy icon to copy its text. Python parses the
-   displayed function text and reflects the last successfully applied definition.
+4. Use each editor's top-right copy icon to copy its function text.
 5. Close the popup, open **Fuse**, select the pattern and click **Run Matching**
    to find occurrences throughout the model, then
    **Fuse selected**. Each occurrence becomes a call to a shared local function.
@@ -107,29 +106,69 @@ Matching preserves literal attributes and imported opset versions.
    In SDK 0.2.3, textparser can change Constant tensors from raw-data to typed-data
    storage. After applying such text, SDK matching may no longer recognize the
    original raw-data Constant. This SDK limitation is not normalized by the viewer.
+   Restoring a library into another model also uses textparser.
    Tracked upstream in `xadupre/onnx-light#5735 <https://github.com/xadupre/onnx-light/issues/5735>`_.
 
 Created patterns are opt-in: **Optimize → Selection patterns** is a separate
 bucket and named group. Enable individual patterns or the group before running
-global optimization. Pattern definitions and their Python code are session-local;
+global optimization. Pattern definitions are shared across models in the viewer session;
 saving the fused model retains its local function, not the viewer's pattern catalog.
-The exported code provides the pattern and a helper for optimizing a local
-``GraphBuilder``; it does not execute Python in the viewer.
-With onnx-light 0.2.3 or newer installed in Python, save the copied code as
-``selection_pattern.py`` and apply it to a model:
-
-.. code-block:: bash
-
-   python selection_pattern.py input.onnx output.onnx
-
-This writes a separate optimized model. Import ``apply_pattern`` from that file
-to reuse the same pattern in Python.
 
 .. figure:: ../_static/feature-selection-pattern.png
    :alt: Selected operators with editable textparser match and replacement functions, Apply edits and copy buttons.
    :width: 100%
 
    Edit both functions in textparser syntax, apply the definition, or copy it for reuse.
+
+Save, restore and edit reusable patterns
+----------------------------------------
+
+Open the **Patterns** application tab to find all created or restored templates.
+Choose a pattern, edit **Match pattern** or **Replacement**, then **Apply edits**.
+**Revert edits** reloads the applied definition. Invalid SDK text leaves the library
+unchanged and keeps the draft available to correct.
+
+**Save patterns...** writes the whole applied library to a versioned
+``*.patterns.json`` file. Apply or revert drafts before saving.
+**Restore patterns...** reads such a file, including when no model is loaded.
+It merges patterns into the current library and asks before replacing different
+definitions with the same name or discarding a draft. Cancelling or importing an
+invalid file leaves applied definitions unchanged.
+
+Templates become available in **Fuse** and **Optimize** across loaded models and
+pipeline stages. Changes invalidate obsolete matching previews. Library files are
+the only persistence across viewer sessions; restarting requires restoration.
+They contain native function text, not generated Python, registered SDK patterns
+or model functions.
+
+Editing a reusable template changes future matching and replacement, not function
+calls already saved or fused into a model. Use the existing model-function editor
+below and the model's **Save** for those changes.
+
+.. figure:: ../_static/feature-pattern-library.png
+   :alt: Patterns application page showing an editable reusable pattern and file-based Save patterns and Restore patterns controls.
+   :width: 100%
+
+   Reuse editable templates across models through a portable pattern library.
+
+Update an existing ONNX function
+--------------------------------
+
+The same popup lists functions already in the file under
+**Patterns / model functions**, including after reopening a saved model.
+Select a function and edit **Function body**. Keep its name, domain, overload
+and input/output/attribute interface unchanged.
+**Apply edits** replaces that function's body for every call in the in-memory
+model; it does not run fusion matching. **Save** persists the change.
+Invalid text leaves the model unchanged and remains available to correct.
+Existing fusion undo history and saved rewriting declarations retain the edited
+function body. Session-local match/replacement patterns remain separately editable.
+
+.. figure:: ../_static/feature-model-function-edit.png
+   :alt: FunctionPattern popup listing an existing ONNX function, its editable Function body and Apply edits.
+   :width: 100%
+
+   Update a saved ONNX function directly, then save the model.
 
 Why does a pattern not match?
 -----------------------------
@@ -201,11 +240,18 @@ presence does not mean optimization failed.
    Combine named sets, then refine individual patterns before running optimization.
 
 This runs onnx-light's complete native optimizer, not a single pattern batch:
-native canonicalization, repeated priority-ordered matching, evaluation of
+repeated priority-ordered matching, evaluation of
 constant replacements and unused-code cleanup.
 A replacement can enable another pattern in a later iteration.
-Final native canonicalization removes redundant identities by rewiring consumers,
-without inserting replacement Identity operators.
+Cleanup is governed by the SDK. The viewer does not add ``Canonicalize`` passes
+before or after optimization.
+
+.. note::
+
+   SDK 0.2.3 can fail to replay optimizer rewritings with
+   ``GraphBuilder: multiple definitions``. This was reproduced directly in C++
+   and is tracked in `xadupre/onnx-light#5756 <https://github.com/xadupre/onnx-light/issues/5756>`_.
+   The viewer does not restore extra canonicalization to mask that SDK defect.
 
 After each run, click **Show optimization report** to open a wide dialog outside
 the sidebar. Its tables show iteration and rewrite counters, elapsed and phase
@@ -218,7 +264,7 @@ Counters include nested graphs; phase timings marked **root** exclude them.
 Subgraph rows include their descendants and must not be summed.
 **Full native operation elapsed** is independently measured with a monotonic
 clock, from native worker construction until its result is ready. It includes
-preparation, worker queueing, optimization and final canonicalization.
+preparation, worker queueing, optimization and SDK finalization.
 **Total native phase time** covers only the instrumented optimizer phases.
 Neither includes graph transfer or rendering; these are not end-to-end UI timings.
 Reports belong to the current in-memory snapshot or pipeline stage.

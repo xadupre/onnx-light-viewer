@@ -362,6 +362,10 @@ export class PipelineModel implements NativeModel {
     return stage.model.createFunctionPattern(nodes, name);
   };
 
+  setFunctionPatterns = (patterns: FunctionPatternDefinition[]): void => {
+    for (const [, model] of this.stages()) model.setFunctionPatterns(patterns);
+  };
+
   updateFunctionPattern = (
     name: string,
     text: string,
@@ -377,6 +381,46 @@ export class PipelineModel implements NativeModel {
     const stage = this.select(path);
     this.fusionPatterns(path);
     return stage.model.optimizationPatterns();
+  };
+
+  modelFunctions = (path: GraphPath = []): FunctionPatternDefinition[] => {
+    const stage = this.select(path);
+    this.fusionPatterns(path);
+    return stage.model.modelFunctions();
+  };
+
+  updateModelFunction = (
+    functionIndex: number,
+    text: string,
+    path: GraphPath = [],
+  ): NativeModel => {
+    const stage = this.select(path);
+    this.fusionPatterns(path);
+    const definition = stage.model
+      .modelFunctions()
+      .find((entry) => entry.functionIndex === functionIndex);
+    if (!definition) throw new Error("Unknown model function.");
+    const update = (pipeline: PipelineModel): PipelineModel => {
+      const current = pipeline.models[stage.role];
+      if (!current) throw new Error("Invalid pipeline stage.");
+      const fn = current
+        .modelFunctions()
+        .find((entry) => entry.name === definition.name);
+      const edited =
+        fn?.functionIndex === undefined
+          ? current.clone()
+          : current.updateModelFunction(fn.functionIndex, text);
+      const replacement = pipeline.replace(stage.role, edited);
+      return new PipelineModel(
+        pipeline.data,
+        pipeline.fileName,
+        replacement.models,
+        pipeline.previous ? update(pipeline.previous) : undefined,
+        pipeline.fusionOrder,
+        pipeline.undoDimensionPrefixes,
+      );
+    };
+    return update(this);
   };
 
   optimizationReport = (path: GraphPath = []): OptimizationReport | null => {

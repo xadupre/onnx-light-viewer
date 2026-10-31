@@ -123,7 +123,8 @@ p {
 #status-view,
 #controls-view,
 #settings-view,
-#repositories-view {
+#repositories-view,
+#patterns-view {
   padding: 16px;
   overflow: auto;
   min-height: 0;
@@ -135,7 +136,8 @@ p {
 #status-view h2,
 #controls-view h2,
 #settings-view h2,
-#repositories-view h2 {
+#repositories-view h2,
+#patterns-view h2 {
   margin-top: 0;
 }
 #settings-stored-data ul {
@@ -1300,11 +1302,16 @@ button:disabled {
 .fusion-picker summary {
   cursor: pointer;
 }
+#fusion-diagnostics[aria-disabled="true"] summary {
+  cursor: default;
+  opacity: 0.5;
+}
 #rewriting-scenario,
 #diagnostic-pattern,
 #selection-pattern-text,
 #selection-pattern-replacement,
-#selection-pattern-python {
+#pattern-library-text,
+#pattern-library-replacement {
   width: 100%;
   margin-top: 4px;
 }
@@ -1353,7 +1360,8 @@ button:disabled {
 }
 #selection-pattern-text,
 #selection-pattern-replacement,
-#selection-pattern-python {
+#pattern-library-text,
+#pattern-library-replacement {
   box-sizing: border-box;
   color: var(--text);
   background: var(--bg);

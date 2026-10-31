@@ -1195,6 +1195,7 @@ Napi::Object ModelGraph(Napi::Env env, const ol::ModelProto &model, const std::s
       const auto &function = model.functions(index);
       auto link = Napi::Object::New(env);
       link.Set("name", FunctionName(function));
+      link.Set("functionName", Text(env, function.name()));
       link.Set("path", PathValue(env, {{-1, 0, 0, index}}));
       link.Set("nodeCount", function.node_size());
       local_functions.Set(local_functions.Length(), link);

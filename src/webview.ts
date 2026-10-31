@@ -28,8 +28,12 @@ export function webviewHtml(
     `<a class="repository-documentation" href="${url}" aria-label="${name} documentation" title="${name} documentation"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path d="M12 5v16M12 5C9 3 5 3 2 4v15c3-1 7-1 10 2 3-3 7-3 10-2V4c-3-1-7-1-10 1Z"/></svg></a>`;
   const refreshIcon = `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2 6M20 4v7h-7"/></svg>`;
   const fusionHourglass = `<svg class="fusion-hourglass" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M6 3h12M6 21h12M7 3v4l10 10v4M17 3v4L7 17v4M8 7h8M8 17h8"/></svg>`;
-  const copyPatternButton = (format: string, label: string): string =>
-    `<button id="copy-selection-pattern-${format}" class="icon-button selection-pattern-copy" type="button" aria-label="${label}" title="${label}"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>`;
+  const copyPatternButton = (
+    format: string,
+    label: string,
+    prefix = "selection-pattern",
+  ): string =>
+    `<button id="copy-${prefix}-${format}" class="icon-button selection-pattern-copy" type="button" aria-label="${label}" title="${label}"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>`;
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -60,6 +64,7 @@ export function webviewHtml(
           <button id="status-tab" role="tab" aria-controls="status-view" aria-selected="false" tabindex="-1">Status</button>
           <button id="controls-tab" role="tab" aria-controls="controls-view" aria-selected="false" tabindex="-1">Controls</button>
           <button id="repositories-tab" role="tab" aria-controls="repositories-view" aria-selected="false" tabindex="-1">ONNX</button>
+          <button id="patterns-tab" role="tab" aria-controls="patterns-view" aria-selected="false" tabindex="-1">Patterns</button>
           <button id="settings-tab" role="tab" aria-controls="settings-view" aria-selected="false" tabindex="-1">Settings</button>
         </div>
       </div>
@@ -371,8 +376,8 @@ export function webviewHtml(
               <ul id="fusion-matches" aria-label="Fusion candidates"></ul>
               <footer><button id="apply-fusion" class="primary" disabled>Fuse selected</button></footer>
             </details>
-            <details id="fusion-diagnostics" class="fusion-picker" open>
-              <summary>Why did matching fail?</summary>
+            <details id="fusion-diagnostics" class="fusion-picker" aria-disabled="true">
+              <summary tabindex="-1">Why did matching fail?</summary>
               <label for="diagnostic-pattern">Pattern</label><select id="diagnostic-pattern" disabled></select>
               <p id="diagnostic-node">Select exactly one operator in the graph.</p>
               <button id="explain-fusion" disabled>Explain failed match</button>
@@ -987,6 +992,31 @@ export function webviewHtml(
         </li>
       </ul>
     </section>
+    <section id="patterns-view" role="tabpanel" aria-labelledby="patterns-tab" tabindex="0" hidden>
+      <h2>Patterns</h2>
+      <p>Created and restored FunctionPatterns are available in Fuse and Optimize across models in this viewer session. Save the library to a file and restore it in another session or share it.</p>
+      <button id="save-pattern-library" disabled>Save patterns...</button>
+      <button id="restore-pattern-library">Restore patterns...</button>
+      <p id="pattern-library-status" role="status"></p>
+      <p id="pattern-library-empty">No created patterns. Select operators in a model and use Create / edit FunctionPattern, or restore a pattern library.</p>
+      <section id="pattern-library-editor" hidden>
+        <div class="selection-pattern-row">
+          <label for="pattern-library-picker">Created patterns</label>
+          <select id="pattern-library-picker" size="5"></select>
+        </div>
+        <p>Edit the match and replacement using onnx-light textparser syntax. Applying edits updates the reusable template, not functions already fused into a model.</p>
+        <div class="selection-pattern-editor">
+          <header><label for="pattern-library-text">Match pattern</label>${copyPatternButton("text", "Copy pattern", "pattern-library")}</header>
+          <textarea id="pattern-library-text" rows="12" spellcheck="false"></textarea>
+        </div>
+        <div class="selection-pattern-editor">
+          <header><label for="pattern-library-replacement">Replacement</label>${copyPatternButton("replacement", "Copy replacement", "pattern-library")}</header>
+          <textarea id="pattern-library-replacement" rows="12" spellcheck="false"></textarea>
+        </div>
+        <button id="update-library-pattern" disabled>Apply edits</button>
+        <button id="revert-library-pattern" disabled>Revert edits</button>
+      </section>
+    </section>
   </main>
   <div id="graph-context-menu" role="menu" aria-label="Selected operators" hidden>
     <button id="open-selection-pattern" role="menuitem" aria-haspopup="dialog" aria-controls="selection-pattern-dialog">Create / edit FunctionPattern...</button>
@@ -996,31 +1026,26 @@ export function webviewHtml(
     <p>The selected operators' inputs become function arguments; outputs used outside the selection remain outputs. Use the selected operators' context menu to reopen this window.</p>
     <div class="selection-pattern-row">
       <label for="selection-pattern-name">Function name</label>
-      <input id="selection-pattern-name" type="text" value="SelectedPattern" autocomplete="off" autofocus>
+      <input id="selection-pattern-name" type="text" value="SelectedPattern" autocomplete="off" autofocus aria-describedby="selection-pattern-name-feedback">
     </div>
+    <p id="selection-pattern-name-feedback" role="status" hidden></p>
     <button id="create-function-pattern" disabled>Create pattern</button>
     <p id="selection-pattern-status" role="status">Select one or more operators in the graph.</p>
     <section id="selection-pattern-result" hidden>
       <div class="selection-pattern-row">
-        <label for="selection-pattern-picker">Created patterns</label><select id="selection-pattern-picker"></select>
+        <label for="selection-pattern-picker">Patterns / model functions</label><select id="selection-pattern-picker"></select>
       </div>
       <details open><summary>Text representation (textparser)</summary>
-        <p>Edit the match and replacement functions using onnx-light textparser syntax, then apply the definition before matching or optimizing.</p>
-        <div class="selection-pattern-editor">
+        <p id="selection-pattern-edit-help">Edit the match and replacement functions using onnx-light textparser syntax, then apply the definition before matching or optimizing.</p>
+        <div id="selection-pattern-match" class="selection-pattern-editor">
           <header><label for="selection-pattern-text">Match pattern</label>${copyPatternButton("text", "Copy pattern")}</header>
           <textarea id="selection-pattern-text" rows="10" spellcheck="false"></textarea>
         </div>
         <div class="selection-pattern-editor">
-          <header><label for="selection-pattern-replacement">Replacement</label>${copyPatternButton("replacement", "Copy replacement")}</header>
+          <header><label id="selection-pattern-replacement-label" for="selection-pattern-replacement">Replacement</label>${copyPatternButton("replacement", "Copy replacement")}</header>
           <textarea id="selection-pattern-replacement" rows="10" spellcheck="false"></textarea>
         </div>
         <button id="update-function-pattern" disabled>Apply edits</button>
-      </details>
-      <details><summary>Python for a local GraphBuilder</summary><p>Copy this code into a Python file. Requires onnx-light 0.2.3 or newer in Python; pattern definitions are session-local in the viewer. Python reflects the last applied definition.</p>
-        <div class="selection-pattern-editor">
-          <header><label for="selection-pattern-python">Python</label>${copyPatternButton("python", "Copy Python")}</header>
-          <textarea id="selection-pattern-python" rows="12" readonly spellcheck="false"></textarea>
-        </div>
       </details>
     </section>
   </dialog>
@@ -1043,7 +1068,7 @@ export function webviewHtml(
   <dialog id="optimization-report" aria-labelledby="optimization-report-title">
     <header class="inspector-heading"><h2 id="optimization-report-title">Global optimization report</h2><button id="close-optimization-report" autofocus>Close</button></header>
     <p id="optimization-report-scope"></p>
-    <p>Counters include nested graphs. Phase timings marked root exclude them. All timings are in milliseconds. Full native operation elapsed is measured independently, including native preparation, queueing and final canonicalization, but excluding graph transfer and rendering. Native phase timings cover only the instrumented optimizer phases.</p>
+    <p>Counters include nested graphs. Phase timings marked root exclude them. All timings are in milliseconds. Full native operation elapsed is measured independently, including native preparation, queueing and SDK finalization, but excluding graph transfer and rendering. Native phase timings cover only the instrumented optimizer phases.</p>
     <div id="optimization-report-body"></div>
     <p>Each subgraph's counters and elapsed time include its descendants; subgraph rows are not additive.</p>
   </dialog>
@@ -1054,6 +1079,7 @@ export function webviewHtml(
   <script nonce="${nonce}" src="${resource("inspector.js")}"></script>
   <script nonce="${nonce}" src="${resource("metadata-panel.js")}"></script>
   <script nonce="${nonce}" src="${resource("fusion-panel.js")}"></script>
+  <script nonce="${nonce}" src="${resource("pattern-panel.js")}"></script>
   <script nonce="${nonce}" src="${resource("settings-panel.js")}"></script>
   <script nonce="${nonce}" src="${resource("memory-panel.js")}"></script>
   <script nonce="${nonce}" src="${resource("tensor-list-panel.js")}"></script>

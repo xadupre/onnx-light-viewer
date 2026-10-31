@@ -5011,7 +5011,141 @@ test("chooses saved rewriting scenarios, applies next or remaining steps and rec
   assert.equal(section.open, false);
 });
 
-test("creates a selection FunctionPattern, displays safe text and Python, and offers an opt-in optimization bucket", (t) => {
+test("Patterns page edits reusable templates, saves applied definitions and survives model changes", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const byId = (id) => document.getElementById(id);
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  byId("patterns-tab").click();
+  assert.equal(byId("patterns-view").hidden, false);
+  assert.equal(byId("patterns-tab").getAttribute("aria-selected"), "true");
+  assert.equal(byId("restore-pattern-library").disabled, false);
+  assert.equal(byId("save-pattern-library").disabled, true);
+  const definition = {
+    name: "CreatedPair",
+    text: "match",
+    replacement: "replacement",
+  };
+  send({ type: "pattern-library", revision: 1, patterns: [definition] });
+  assert.equal(byId("pattern-library-picker").value, definition.name);
+  byId("copy-pattern-library-text").click();
+  const copy = messages.at(-1);
+  assert.equal(copy.type, "copy-function-pattern");
+  assert.equal(copy.text, definition.text);
+  assert.equal(copy.actionId, undefined);
+  send({
+    type: "function-pattern-copied",
+    name: definition.name,
+    format: "text",
+  });
+  assert.equal(byId("pattern-library-text").disabled, false);
+  const replacement = byId("pattern-library-replacement");
+  replacement.value = "edited replacement";
+  replacement.dispatchEvent(new window.Event("input"));
+  assert.equal(byId("save-pattern-library").disabled, true);
+  byId("update-library-pattern").click();
+  const update = messages.at(-1);
+  assert.equal(update.type, "update-library-pattern");
+  assert.equal(update.libraryRevision, 1);
+  assert.equal(update.replacement, replacement.value);
+  send({
+    type: "pattern-library-result",
+    requestId: update.requestId - 1,
+    operation: update.type,
+    error: "stale",
+  });
+  assert.equal(replacement.disabled, true);
+  send({
+    type: "pattern-library-result",
+    requestId: update.requestId,
+    operation: update.type,
+    error: "Invalid SDK text",
+  });
+  assert.equal(replacement.value, "edited replacement");
+  assert.equal(replacement.disabled, false);
+  assert.match(byId("pattern-library-status").textContent, /Invalid SDK text/);
+  byId("update-library-pattern").click();
+  const retry = messages.at(-1);
+  const edited = { ...definition, replacement: replacement.value };
+  send({
+    type: "pattern-library",
+    revision: 2,
+    patterns: [edited],
+    invalidateFusion: true,
+  });
+  send({
+    type: "pattern-library-result",
+    requestId: retry.requestId,
+    operation: retry.type,
+    revision: 2,
+    patterns: [edited],
+  });
+  assert.equal(byId("save-pattern-library").disabled, false);
+  byId("save-pattern-library").click();
+  const save = messages.at(-1);
+  assert.equal(save.type, "save-pattern-library");
+  send({
+    type: "pattern-library-result",
+    operation: save.type,
+    requestId: save.requestId,
+    cancelled: true,
+  });
+  load(demoGraph);
+  assert.equal(byId("pattern-library-picker").value, definition.name);
+  assert.equal(replacement.value, edited.replacement);
+  byId("patterns-tab").click();
+  byId("restore-pattern-library").click();
+  const restore = messages.at(-1);
+  assert.equal(restore.type, "restore-pattern-library");
+  send({
+    type: "pattern-library-result",
+    operation: restore.type,
+    requestId: restore.requestId,
+    revision: 3,
+    patterns: [definition],
+  });
+  assert.equal(replacement.value, definition.replacement);
+  assert.match(byId("pattern-library-status").textContent, /restored/);
+});
+
+test("Patterns page retains drafts on library updates and reverts against the latest revision", (t) => {
+  const { document, window, messages } = openViewer(t);
+  const byId = (id) => document.getElementById(id);
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  const definition = {
+    name: "SharedPattern",
+    text: "initial",
+    replacement: "body",
+  };
+  send({ type: "pattern-library", revision: 1, patterns: [definition] });
+  const text = byId("pattern-library-text");
+  text.value = "unapplied draft";
+  text.dispatchEvent(new window.Event("input"));
+  send({
+    type: "pattern-library",
+    revision: 2,
+    patterns: [{ ...definition, text: "remote edit" }],
+    invalidateFusion: true,
+  });
+  assert.equal(text.value, "unapplied draft");
+  byId("update-library-pattern").click();
+  assert.equal(messages.at(-1).libraryRevision, 1);
+  send({
+    type: "pattern-library-result",
+    operation: "update-library-pattern",
+    requestId: messages.at(-1).requestId,
+    error: "library changed",
+  });
+  byId("revert-library-pattern").click();
+  assert.equal(text.value, "remote edit");
+  text.value = "new draft";
+  text.dispatchEvent(new window.Event("input"));
+  byId("update-library-pattern").click();
+  assert.equal(messages.at(-1).libraryRevision, 2);
+});
+
+test("creates an editable selection FunctionPattern and offers an opt-in optimization bucket", (t) => {
   const { document, window, messages, load } = openViewer(t);
   const model = loadModel(
     readFileSync(require.resolve("../examples/rewriting-scenarios.onnx")),
@@ -5099,7 +5233,6 @@ test("creates a selection FunctionPattern, displays safe text and Python, and of
     name: "TransposePair",
     text: "<script>not executable</script>\nTranspose → Transpose",
     replacement: "Transpose → Identity",
-    python: "def make_pattern():\n    return FunctionPattern(...)",
   };
   const catalog = {
     patterns: [pattern.name],
@@ -5135,9 +5268,24 @@ test("creates a selection FunctionPattern, displays safe text and Python, and of
     pattern.replacement,
   );
   assert.equal(byId("update-function-pattern").disabled, true);
-  assert.equal(byId("selection-pattern-python").value, pattern.python);
-  assert.equal(byId("selection-pattern-python").readOnly, true);
-  for (const format of ["text", "replacement", "python"]) {
+  assert.equal(byId("selection-pattern-python"), null);
+  assert.equal(byId("create-function-pattern").disabled, true);
+  assert.equal(byId("selection-pattern-name").validity.customError, true);
+  assert.match(
+    byId("selection-pattern-name-feedback").textContent,
+    /Pattern name already exists: TransposePair/,
+  );
+  const beforeDuplicate = messages.length;
+  byId("create-function-pattern").click();
+  assert.equal(messages.length, beforeDuplicate);
+  byId("selection-pattern-name").value = "AnotherTransposePair";
+  byId("selection-pattern-name").dispatchEvent(new window.Event("input"));
+  assert.equal(byId("create-function-pattern").disabled, false);
+  assert.equal(byId("selection-pattern-name-feedback").hidden, true);
+  assert.equal(byId("selection-pattern-name").validity.customError, false);
+  byId("selection-pattern-name").value = "TransposePair";
+  byId("selection-pattern-name").dispatchEvent(new window.Event("input"));
+  for (const format of ["text", "replacement"]) {
     const copy = byId(`copy-selection-pattern-${format}`);
     assert.equal(copy.textContent.trim(), "");
     assert.ok(copy.querySelector("svg[aria-hidden='true']"));
@@ -5163,9 +5311,9 @@ test("creates a selection FunctionPattern, displays safe text and Python, and of
   send({
     type: "function-pattern-copied",
     name: pattern.name,
-    format: "python",
+    format: "text",
   });
-  assert.match(byId("selection-pattern-status").textContent, /Copied python/);
+  assert.match(byId("selection-pattern-status").textContent, /Copied pattern/);
   byId("selection-pattern-replacement").value = "edited replacement";
   byId("selection-pattern-replacement").dispatchEvent(
     new window.Event("input"),
@@ -5179,6 +5327,7 @@ test("creates a selection FunctionPattern, displays safe text and Python, and of
   byId("open-selection-pattern").click();
   assert.equal(dialog.open, true);
   assert.equal(messages.at(-1), lastMessage);
+  assert.equal(byId("create-function-pattern").disabled, true);
   assert.equal(
     byId("selection-pattern-replacement").value,
     "edited replacement",
@@ -5204,7 +5353,6 @@ test("creates a selection FunctionPattern, displays safe text and Python, and of
   );
   assert.equal(byId("update-function-pattern").disabled, false);
   byId("update-function-pattern").click();
-  pattern.python = "updated Python";
   send({
     type: "function-pattern-created",
     requestId: messages.at(-1).requestId,
@@ -5215,7 +5363,6 @@ test("creates a selection FunctionPattern, displays safe text and Python, and of
     byId("selection-pattern-replacement").value,
     pattern.replacement,
   );
-  assert.equal(byId("selection-pattern-python").value, "updated Python");
   assert.equal(byId("update-function-pattern").disabled, true);
   assert.equal(byId("fusion-pattern").querySelector("input").checked, true);
   const bucket = byId("optimization-patterns").querySelector("details");
@@ -5251,7 +5398,68 @@ test("creates a selection FunctionPattern, displays safe text and Python, and of
     ],
   });
   assert.equal(byId("selection-pattern-result").hidden, false);
-  assert.equal(byId("selection-pattern-python").value, pattern.python);
+  assert.equal(byId("selection-pattern-text").value, pattern.text);
+});
+
+test("FunctionPattern creation recognizes functions already in the ONNX file on the first dialog opening", async (t) => {
+  const source = loadModel(
+    readFileSync(require.resolve("./models/fusion.onnx")),
+    "fusion",
+  );
+  source.createFunctionPattern([0, 1], "TTPattern");
+  const preview = await source.previewFusion("TTPattern");
+  const fused = await preview.model.applyFusion("TTPattern", [
+    preview.matches[0].anchor,
+  ]);
+  const reopened = loadModel(await fused.serialize(), "reopened");
+  assert.equal(
+    reopened.optimizationPatterns().some(({ definition }) => definition),
+    false,
+  );
+  const { document, window, messages, load } = openViewer(t);
+  load(reopened.graph());
+  const byId = (id) => document.getElementById(id);
+  document
+    .querySelector('[data-id="node-0"]')
+    .dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  byId("open-selection-pattern").click();
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: {
+        type: "fusion-patterns",
+        requestId: messages.at(-1).requestId,
+        patterns: reopened.fusionPatterns(),
+        optimizationPatterns: reopened.optimizationPatterns(),
+        functions: reopened.modelFunctions(),
+      },
+    }),
+  );
+  byId("selection-pattern-name").value = "TTPattern";
+  byId("selection-pattern-name").dispatchEvent(new window.Event("input"));
+  assert.equal(byId("selection-pattern-result").hidden, false);
+  assert.equal(byId("selection-pattern-match").hidden, true);
+  assert.equal(byId("selection-pattern-picker").value, "model-function:0");
+  assert.equal(byId("create-function-pattern").disabled, true);
+  assert.match(
+    byId("selection-pattern-name-feedback").textContent,
+    /loaded ONNX model already contains this function/,
+  );
+  const beforeCreate = messages.length;
+  byId("create-function-pattern").click();
+  assert.equal(messages.length, beforeCreate);
+  const text = byId("selection-pattern-replacement").value.replaceAll(
+    "[1, 0]",
+    "[0, 1]",
+  );
+  byId("selection-pattern-replacement").value = text;
+  byId("selection-pattern-replacement").dispatchEvent(
+    new window.Event("input"),
+  );
+  byId("update-function-pattern").click();
+  const request = messages.at(-1);
+  assert.equal(request.type, "update-model-function");
+  assert.equal(request.functionIndex, 0);
+  assert.equal(request.text, text);
 });
 
 test("selection FunctionPattern errors recover controls and obsolete replies are ignored", (t) => {
@@ -6080,6 +6288,8 @@ test("explains the selected pattern/node and distinguishes rejection, missing di
   const picker = document.getElementById("diagnostic-pattern");
   const explain = document.getElementById("explain-fusion");
   const feedback = document.getElementById("diagnostic-feedback");
+  const diagnostics = document.getElementById("fusion-diagnostics");
+  const summary = diagnostics.querySelector("summary");
   assert.equal(
     document.getElementById("fusion-panel").lastElementChild.id,
     "fusion-diagnostics",
@@ -6087,6 +6297,16 @@ test("explains the selected pattern/node and distinguishes rejection, missing di
   assert.equal(document.getElementById("diagnostic-source").tagName, "SECTION");
   assert.equal(document.querySelector("#diagnostic-source summary"), null);
   assert.equal(picker.options.length, 0);
+  assert.equal(diagnostics.getAttribute("aria-disabled"), "true");
+  assert.equal(diagnostics.open, false);
+  assert.equal(summary.tabIndex, -1);
+  assert.equal(window.getComputedStyle(summary).opacity, "0.5");
+  const click = new window.MouseEvent("click", {
+    bubbles: true,
+    cancelable: true,
+  });
+  summary.dispatchEvent(click);
+  assert.equal(click.defaultPrevented, true);
   assert.match(
     feedback.textContent,
     /Select one or more native patterns above/,
@@ -6098,6 +6318,15 @@ test("explains the selected pattern/node and distinguishes rejection, missing di
     [...picker.options].map((option) => option.value),
     ["TransposeTranspose"],
   );
+  assert.equal(diagnostics.getAttribute("aria-disabled"), "false");
+  assert.equal(summary.tabIndex, 0);
+  document.getElementById("clear-patterns").click();
+  assert.equal(diagnostics.getAttribute("aria-disabled"), "true");
+  assert.equal(diagnostics.open, false);
+  assert.equal(explain.disabled, true);
+  document
+    .querySelector('#fusion-pattern input[value="TransposeTranspose"]')
+    .click();
   document.querySelector('[data-id="node-0"]').dispatchEvent(
     new window.KeyboardEvent("keydown", {
       key: "Enter",
@@ -6903,6 +7132,7 @@ test("tab keyboard order follows the Navigation and Application themes", (t) => 
       "status-tab",
       "controls-tab",
       "repositories-tab",
+      "patterns-tab",
       "settings-tab",
     ],
   );
@@ -9125,9 +9355,11 @@ for (const initialTab of ["model", "logs"]) {
     });
     tab.focus();
     for (const [key, expected] of [
+      ["ArrowRight", "patterns"],
       ["ArrowRight", "settings"],
       ["ArrowRight", "model"],
       ["ArrowLeft", "settings"],
+      ["ArrowLeft", "patterns"],
       ["ArrowLeft", "repositories"],
       ["ArrowLeft", "controls"],
       ["ArrowRight", "repositories"],
@@ -9231,9 +9463,11 @@ for (const initialTab of ["model", "logs"]) {
     tab.focus();
     for (const [key, expected] of [
       ["ArrowRight", "repositories"],
+      ["ArrowRight", "patterns"],
       ["ArrowRight", "settings"],
       ["ArrowRight", "model"],
       ["ArrowLeft", "settings"],
+      ["ArrowLeft", "patterns"],
       ["ArrowLeft", "repositories"],
       ["ArrowLeft", "controls"],
       ["ArrowLeft", "status"],

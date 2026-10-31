@@ -114,6 +114,8 @@ async function openExtension(
 ) {
   const messages = [];
   const errors = [];
+  const warnings = [];
+  const warningChoices = [];
   const reads = [];
   const picks = [];
   const logs = [];
@@ -389,6 +391,10 @@ async function openExtension(
           await gate.wait;
         }
       },
+      showWarningMessage: async (message, options, ...choices) => {
+        warnings.push({ message, options, choices });
+        return warningChoices.shift();
+      },
     },
   };
   const filename = path.join(root, "dist", "extension.js");
@@ -478,6 +484,8 @@ async function openExtension(
   return {
     messages,
     errors,
+    warnings,
+    setWarningChoices: (...choices) => warningChoices.push(...choices),
     reads,
     picks,
     logs,
@@ -631,6 +639,10 @@ async function openExtension(
     },
     failNextSaveWrite: () => {
       failSaveWrite = true;
+    },
+    saveLibrary: async (filePath, requestId = 1) => {
+      saveDestination = filePath ? vscode.Uri.file(filePath) : undefined;
+      await receive({ type: "save-pattern-library", requestId });
     },
     failNextSaveRename: (after = 1) => {
       failSaveRename = after;
@@ -3361,7 +3373,6 @@ test("creates a native function pattern and retains it through preview, undo, re
   assert.equal(created.pattern.name, "HostTransposePair");
   assert.ok(created.pattern.text.length > 0);
   assert.match(created.pattern.text, /Transpose/);
-  assert.ok(created.pattern.python.length > 0);
   assert.ok(created.patterns.includes(created.pattern.name));
   assert.deepEqual(
     created.optimizationPatterns.find(
@@ -3443,13 +3454,400 @@ test("creates a native function pattern and retains it through preview, undo, re
   assert.ok(latest().file.fusionCount > 0);
 });
 
+test("pattern libraries save, restore without a model, edit and match in another model", async (t) => {
+  const directory = await mkdtemp(
+    path.join(tmpdir(), "viewer-pattern-library-"),
+  );
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const file = path.join(directory, "portable.patterns.json");
+  const source = await openExtension("fusion.onnx", undefined, true);
+  t.after(() => source.dispose());
+  await source.receive({
+    type: "create-function-pattern",
+    nodes: [0, 1],
+    name: "SharedPair",
+    requestId: 1,
+  });
+  const definition = source.messages.at(-1).pattern;
+  await source.saveLibrary(file, 2);
+  assert.equal(source.messages.at(-1).operation, "save-pattern-library");
+  assert.deepEqual(JSON.parse(await readFile(file, "utf8")).patterns, [
+    definition,
+  ]);
+  const target = await openExtension(
+    undefined,
+    "onnxLightViewer.showLogs",
+    true,
+  );
+  t.after(() => target.dispose());
+  await target.receive({ type: "ready" });
+  target.setOpenSelection(file);
+  await target.receive({ type: "restore-pattern-library", requestId: 3 });
+  assert.equal(target.messages.at(-1).operation, "restore-pattern-library");
+  assert.deepEqual(target.messages.at(-1).patterns, [definition]);
+  await target.open("fusion.onnx");
+  await target.receive({ type: "fusion-patterns", requestId: 4 });
+  assert.ok(target.messages.at(-1).patterns.includes(definition.name));
+  await target.receive({
+    type: "preview-fusion",
+    pattern: definition.name,
+    requestId: 40,
+  });
+  const stalePreview = target.messages.at(-1);
+  const replacement = definition.replacement.replaceAll("[1, 0]", "[0, 1]");
+  await target.receive({
+    type: "update-library-pattern",
+    name: definition.name,
+    text: definition.text,
+    replacement,
+    libraryRevision: 1,
+    requestId: 5,
+  });
+  assert.equal(target.messages.at(-1).patterns[0].replacement, replacement);
+  await target.receive({
+    type: "apply-fusion",
+    previewId: stalePreview.previewId,
+    candidates: [0],
+    requestId: 41,
+  });
+  assert.equal(target.messages.at(-1).type, "fusion-error");
+  await target.receive({
+    type: "preview-fusion",
+    pattern: definition.name,
+    requestId: 6,
+  });
+  const preview = target.messages.at(-1);
+  assert.equal(preview.type, "fusion-preview", target.errors.join("\n"));
+  assert.equal(preview.matches.length, 2);
+  await target.receive({
+    type: "apply-fusion",
+    previewId: preview.previewId,
+    candidates: [0],
+    requestId: 7,
+  });
+  assert.equal(
+    target.messages.at(-1).type,
+    "fusion-info",
+    target.errors.join("\n"),
+  );
+  const savedModel = path.join(directory, "edited.onnx");
+  await target.save(savedModel);
+  assert.match(
+    require("../dist/graph")
+      .loadModel(await readFile(savedModel), "edited")
+      .modelFunctions()[0].text,
+    /perm: ints = \[0, 1\]/,
+  );
+  await source.open("fusion.onnx");
+  await source.receive({ type: "fusion-patterns", requestId: 8 });
+  assert.deepEqual(
+    source.messages
+      .at(-1)
+      .optimizationPatterns.find(({ name }) => name === definition.name)
+      .definition,
+    definition,
+  );
+  assert.equal(source.preferences.has("patternLibrary"), false);
+});
+
+test("pattern-library restore conflicts, malformed files and failed saves preserve applied definitions", async (t) => {
+  const directory = await mkdtemp(
+    path.join(tmpdir(), "viewer-pattern-restore-"),
+  );
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const file = path.join(directory, "patterns.json");
+  const extension = await openExtension("fusion.onnx", undefined, true);
+  t.after(() => extension.dispose());
+  await extension.receive({
+    type: "create-function-pattern",
+    nodes: [0, 1],
+    name: "ExistingPair",
+  });
+  const definition = extension.messages.at(-1).pattern;
+  await extension.saveLibrary(file);
+  const originalFile = await readFile(file);
+  const modified = {
+    ...definition,
+    replacement: definition.replacement.replaceAll("[1, 0]", "[0, 1]"),
+  };
+  await writeFile(
+    file,
+    JSON.stringify({
+      format: "onnx-light-viewer.patterns",
+      version: 1,
+      patterns: [modified],
+    }),
+  );
+  extension.setOpenSelection(file);
+  await extension.receive({ type: "restore-pattern-library", requestId: 2 });
+  assert.equal(extension.messages.at(-1).cancelled, true);
+  assert.match(extension.warnings.at(-1).message, /ExistingPair/);
+  await extension.receive({ type: "fusion-patterns" });
+  assert.equal(
+    extension.messages
+      .at(-1)
+      .optimizationPatterns.find(({ name }) => name === definition.name)
+      .definition.replacement,
+    definition.replacement,
+  );
+  extension.setWarningChoices("Restore");
+  await extension.receive({ type: "restore-pattern-library", requestId: 3 });
+  assert.equal(
+    extension.messages.at(-1).patterns[0].replacement,
+    modified.replacement,
+  );
+  await writeFile(
+    file,
+    '{"format":"onnx-light-viewer.patterns","version":1,"patterns":[{"name":"Broken","text":"bad","replacement":"bad"}]}',
+  );
+  await extension.receive({ type: "restore-pattern-library", requestId: 4 });
+  assert.ok(extension.messages.at(-1).error);
+  await extension.receive({
+    type: "update-library-pattern",
+    name: definition.name,
+    text: "bad",
+    replacement: modified.replacement,
+    libraryRevision: 2,
+    requestId: 5,
+  });
+  assert.ok(extension.messages.at(-1).error);
+  await writeFile(file, originalFile);
+  extension.failNextSaveWrite();
+  await extension.saveLibrary(file, 6);
+  assert.ok(extension.messages.at(-1).error);
+  assert.deepEqual(await readFile(file), originalFile);
+  assert.deepEqual(await readdir(directory), ["patterns.json"]);
+  await extension.saveLibrary(undefined, 7);
+  assert.equal(extension.messages.at(-1).cancelled, true);
+  const gate = extension.pauseNextSaveWrite();
+  const saving = extension.saveLibrary(file, 8);
+  await gate.written;
+  await extension.receive({
+    type: "update-library-pattern",
+    name: definition.name,
+    text: definition.text,
+    replacement: definition.replacement,
+    libraryRevision: 2,
+    requestId: 9,
+  });
+  gate.release();
+  await saving;
+  assert.equal(extension.messages.at(-1).cancelled, true);
+  assert.deepEqual(await readFile(file), originalFile);
+  assert.deepEqual(await readdir(directory), ["patterns.json"]);
+  await extension.receive({ type: "fusion-patterns" });
+  assert.equal(
+    extension.messages
+      .at(-1)
+      .optimizationPatterns.find(({ name }) => name === definition.name)
+      .definition.replacement,
+    definition.replacement,
+  );
+});
+
+test("FunctionPattern creation prevents duplicate names through the real webview bridge", async (t) => {
+  const extension = await openExtension("fusion.onnx", undefined, true);
+  t.after(() => extension.dispose());
+  const dom = new JSDOM(extension.webview.html, { runScripts: "outside-only" });
+  t.after(() => dom.window.close());
+  const { window } = dom;
+  window.structuredClone = structuredClone;
+  window.HTMLDialogElement.prototype.showModal = function () {
+    this.open = true;
+  };
+  window.HTMLDialogElement.prototype.close = function () {
+    this.open = false;
+  };
+  window.HTMLCanvasElement.prototype.getContext = () => ({
+    font: "",
+    measureText: (text) => ({ width: text.length * 8 }),
+  });
+  const { document } = window;
+  const byId = (id) => document.getElementById(id);
+  byId("canvas").getBoundingClientRect = () =>
+    new window.DOMRect(0, 0, 1060, 350);
+  const requests = [];
+  const sent = [];
+  window.acquireVsCodeApi = () => ({
+    postMessage: (message) => {
+      sent.push(message);
+      requests.push(extension.receive(message));
+    },
+  });
+  extension.connect((data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data })),
+  );
+  for (const script of document.querySelectorAll("script[src]"))
+    window.eval(readFileSync(new URL(script.src), "utf8"));
+  const flush = async () => {
+    while (requests.length) await Promise.all(requests.splice(0));
+  };
+  await flush();
+  for (const index of [0, 1])
+    document
+      .querySelector(`[data-id="node-${index}"]`)
+      .dispatchEvent(
+        new window.MouseEvent("click", { bubbles: true, ctrlKey: true }),
+      );
+  byId("open-selection-pattern").click();
+  await flush();
+  assert.equal(
+    extension.messages.some(({ type }) => type === "function-pattern-created"),
+    false,
+  );
+  assert.equal(
+    extension.messages
+      .at(-1)
+      .optimizationPatterns.some(({ definition }) => definition),
+    false,
+  );
+  const name = byId("selection-pattern-name");
+  const create = byId("create-function-pattern");
+  const chooseName = (value) => {
+    name.value = value;
+    name.dispatchEvent(new window.Event("input"));
+  };
+  chooseName("TTPattern");
+  create.click();
+  await flush();
+  assert.equal(
+    extension.messages.at(-1).type,
+    "function-pattern-created",
+    extension.errors.join("\n"),
+  );
+  const definition = extension.messages.at(-1).pattern;
+  assert.equal(create.disabled, true);
+  assert.match(
+    byId("selection-pattern-name-feedback").textContent,
+    /Pattern name already exists: TTPattern.*To edit it/,
+  );
+  const beforeDuplicate = extension.messages.length;
+  create.click();
+  await flush();
+  assert.equal(extension.messages.length, beforeDuplicate);
+  chooseName("TransposeTranspose");
+  assert.equal(create.disabled, true);
+  chooseName("TTPattern2");
+  assert.equal(create.disabled, false);
+  create.click();
+  await flush();
+  assert.equal(extension.messages.at(-1).type, "function-pattern-created");
+  assert.equal(extension.messages.at(-1).pattern.name, "TTPattern2");
+  assert.deepEqual(
+    extension.messages
+      .at(-1)
+      .optimizationPatterns.find(({ name }) => name === "TTPattern").definition,
+    definition,
+  );
+  assert.deepEqual(extension.errors, []);
+  const native = extension.nativeModels.at(-1);
+  const preview = await native.previewFusion("TTPattern");
+  const fused = await preview.model.applyFusion(
+    "TTPattern",
+    preview.matches.map(({ anchor }) => anchor),
+  );
+  const directory = await mkdtemp(path.join(tmpdir(), "viewer-function-edit-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const file = path.join(directory, "fusion.onnx");
+  await writeFile(file, await fused.serialize());
+  await extension.resolveCustomEditor(file);
+  await extension.receive({ type: "ready" });
+  document
+    .querySelector('[data-id="node-0"]')
+    .dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  byId("open-selection-pattern").click();
+  await flush();
+  const picker = byId("selection-pattern-picker");
+  assert.equal(picker.value, "model-function:0");
+  assert.equal(byId("selection-pattern-match").hidden, true);
+  assert.equal(
+    byId("selection-pattern-replacement-label").textContent,
+    "Function body",
+  );
+  assert.equal(byId("selection-pattern-python"), null);
+  const body = byId("selection-pattern-replacement");
+  const originalText = body.value;
+  const reopenedNative = extension.nativeModels.at(-1);
+  const update = reopenedNative.updateModelFunction;
+  let updatedNative;
+  let retainedNative;
+  reopenedNative.updateModelFunction = (...args) => {
+    const updated = update(...args);
+    updatedNative = updated;
+    const clone = updated.clone;
+    updated.clone = () => {
+      retainedNative = clone();
+      return retainedNative;
+    };
+    return updated;
+  };
+  body.value = "invalid function text";
+  body.dispatchEvent(new window.Event("input"));
+  byId("update-function-pattern").click();
+  await flush();
+  assert.equal(extension.messages.at(-1).type, "function-pattern-error");
+  assert.equal(body.value, "invalid function text");
+  assert.equal(byId("selection-pattern-dialog").open, true);
+  body.value = originalText.replaceAll("[1, 0]", "[0, 1]");
+  body.dispatchEvent(new window.Event("input"));
+  byId("update-function-pattern").click();
+  await flush();
+  assert.equal(
+    extension.messages.at(-1).type,
+    "model-function-updated",
+    JSON.stringify(sent.filter(({ type }) => type === "update-model-function")),
+  );
+  assert.equal(byId("selection-pattern-dialog").open, true);
+  assert.equal(picker.value, "model-function:0");
+  assert.equal(byId("update-function-pattern").disabled, true);
+  assert.match(
+    byId("selection-pattern-status").textContent,
+    /all its calls.*Save/,
+  );
+  const savedFile = path.join(directory, "updated.onnx");
+  await extension.save(savedFile);
+  const saved = require("../dist/graph").loadModel(
+    await readFile(savedFile),
+    "saved",
+  );
+  assert.match(saved.modelFunctions()[0].text, /\[0, 1\]/);
+  let release;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  const reload = retainedNative.clone;
+  retainedNative.clone = () => gate.then(() => reload());
+  const graph = updatedNative.graph;
+  updatedNative.graph = (infer, ...args) => {
+    if (infer) throw new Error("Host test model invalidation");
+    return graph(infer, ...args);
+  };
+  await extension.receive({ type: "refresh-shapes" });
+  const errors = extension.errors.length;
+  const pending = extension.receive({
+    type: "update-model-function",
+    functionIndex: 0,
+    text: originalText,
+    requestId: 99,
+  });
+  await extension.receive({ type: "cancel-fusion" });
+  release();
+  await pending;
+  assert.equal(extension.errors.length, errors);
+  assert.equal(
+    extension.messages.some(({ requestId }) => requestId === 99),
+    false,
+  );
+  await extension.receive({ type: "fusion-patterns", requestId: 100 });
+  assert.match(extension.messages.at(-1).functions[0].text, /\[0, 1\]/);
+});
+
 test("function pattern copy uses the VS Code clipboard for current edits and reports validation and clipboard errors", async (t) => {
   const extension = await openExtension();
   t.after(() => extension.dispose());
   for (const [format, text] of [
     ["text", "UnsavedMatch (x) => (y) {\n y = Relu(x)\n}"],
     ["replacement", "UnsavedReplacement (x) => (y) {\n y = Identity(x)\n}"],
-    ["python", 'print("unsaved Python 🐍")\n'],
     ["text", ""],
   ]) {
     await extension.receive({
@@ -3478,6 +3876,7 @@ test("function pattern copy uses the VS Code clipboard for current edits and rep
     { text: undefined },
     { text: {} },
     { format: "unsupported" },
+    { format: "python" },
     { format: undefined },
     { format: ["text"] },
   ]) {
@@ -3785,7 +4184,7 @@ test("function pattern creation and updates recover native handles and suppress 
   }
 });
 
-test("function pattern creation is stage-local and rejects pipeline overviews and nested graphs", async (t) => {
+test("function patterns are shared across stage roots but reject pipeline overviews and nested graphs", async (t) => {
   const field = (number, bytes) => {
     let length = bytes.length;
     const prefix = [number * 8 + 2];
@@ -3870,13 +4269,12 @@ test("function pattern creation is stage-local and rejects pipeline overviews an
     ).definition;
   assert.equal(definition.name, "HostStageQueuedPair");
   assert.ok(definition.text.length > 0);
-  assert.ok(definition.python.length > 0);
   await extension.receive({ type: "navigate", path: [{ pipeline: "decode" }] });
   await extension.receive(update);
-  expect("function-pattern-error");
+  expect("function-pattern-created");
   await extension.receive({ type: "fusion-patterns", requestId: 29 });
   for (const name of ["HostStagePair", "HostStageQueuedPair"])
-    assert.equal(extension.messages.at(-1).patterns.includes(name), false);
+    assert.equal(extension.messages.at(-1).patterns.includes(name), true);
   await extension.receive({
     type: "navigate",
     path: [{ pipeline: "prefill" }],
@@ -7026,7 +7424,10 @@ test("keeps only the latest custom editor model when a panel is reused during lo
   const messageCount = extension.messages.length;
   await extension.receive({ type: "ready" });
   assert.deepEqual(
-    extension.messages.slice(messageCount).map(({ graph }) => graph.name),
+    extension.messages
+      .slice(messageCount)
+      .filter(({ type }) => type === "graph")
+      .map(({ graph }) => graph.name),
     ["Shape inference"],
   );
   await extension.receive({ type: "refresh-shapes" });
