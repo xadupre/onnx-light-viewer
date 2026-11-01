@@ -188,7 +188,11 @@ function createRunPanel({
                 : dimension !== null && /^\d+$/.test(dimension)
             )
               return;
-            dimensions.add(dimension ?? `${input.name}:${axis}`);
+            dimensions.add(
+              dimension === null
+                ? `axis:${input.name}:${axis}`
+                : `symbol:${dimension}`,
+            );
           }),
         );
         for (const dimension of dimensions) {

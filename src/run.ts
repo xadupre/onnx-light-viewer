@@ -57,7 +57,10 @@ export async function runModel(
           : dimension !== null && /^\d+$/.test(dimension)
       )
         return;
-      const key = dimension ?? `${input.name}:${axis}`;
+      const key =
+        dimension === null
+          ? `axis:${input.name}:${axis}`
+          : `symbol:${dimension}`;
       if (!Object.hasOwn(dimensions, key))
         throw new Error(`Specify dynamic dimension: ${key}`);
     });

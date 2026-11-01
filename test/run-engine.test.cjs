@@ -34,11 +34,73 @@ sys.stdout.buffer.write(model.SerializeToString())
   assert.deepEqual(model.runInputs()[0].dynamicAxes, [0]);
   for (const engine of ["onnx-light", "onnxruntime"]) {
     const request = { engine, inputs: [{ name: "x", source: "random" }] };
-    await assert.rejects(run(model, request), /Specify dynamic dimension: 3/);
+    await assert.rejects(
+      run(model, request),
+      /Specify dynamic dimension: symbol:3/,
+    );
     assert.equal(
-      (await run(model, { ...request, dimensions: { 3: 2 } })).outputs.length,
+      (
+        await run(model, {
+          ...request,
+          dimensions: { "symbol:3": 2 },
+        })
+      ).outputs.length,
       1,
     );
+  }
+});
+
+test("symbolic and unnamed dimensions remain independent for every input source", async (t) => {
+  const bytes = execFileSync(python, [
+    "-c",
+    `
+import onnx
+import sys
+from onnx import TensorProto, helper
+input = helper.make_tensor_value_info("X", TensorProto.FLOAT, ["X:1", None])
+output = helper.make_tensor_value_info("Y", TensorProto.FLOAT, ["X:1", None])
+graph = helper.make_graph([helper.make_node("Identity", ["X"], ["Y"])], "graph", [input], [output])
+model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 13)])
+model.ir_version = 10
+sys.stdout.buffer.write(model.SerializeToString())
+`,
+  ]);
+  const model = loadModel(bytes, "colliding-dimensions.onnx");
+  assert.deepEqual(model.runInputs()[0].shape, ["X:1", null]);
+  assert.deepEqual(model.runInputs()[0].dynamicAxes, [0, 1]);
+  const dimensions = { "symbol:X:1": 2, "axis:X:1": 3 };
+  const text = "float[2,3] X = {1, 2, 3, 4, 5, 6}";
+  const prepared = await model.prepareRun([text]);
+  const directory = await mkdtemp(path.join(tmpdir(), "viewer-run-test-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const file = path.join(directory, "input.pb");
+  await writeFile(file, prepared.inputs[0]);
+
+  for (const engine of ["onnx-light", "onnxruntime"]) {
+    const result = await run(model, {
+      engine,
+      dimensions,
+      inputs: [text],
+    });
+    assert.match(
+      result.outputs[0].text,
+      /Values: \[1(?:\.0)?, 2(?:\.0)?, 3(?:\.0)?, 4(?:\.0)?, 5(?:\.0)?, 6(?:\.0)?\]/,
+    );
+    const fromFile = await run(model, {
+      engine,
+      dimensions,
+      inputs: [{ name: "X", source: "protobuf", path: file }],
+    });
+    assert.match(
+      fromFile.outputs[0].text,
+      /Values: \[1(?:\.0)?, 2(?:\.0)?, 3(?:\.0)?, 4(?:\.0)?, 5(?:\.0)?, 6(?:\.0)?\]/,
+    );
+    const random = await run(model, {
+      engine,
+      dimensions,
+      inputs: [{ name: "X", source: "random" }],
+    });
+    assert.equal(random.outputs.length, 1);
   }
 });
 
@@ -75,19 +137,19 @@ test("Run validates engine logging, dimensions and input-source transport", asyn
   );
   await assert.rejects(
     run(model, { inputs: [] }),
-    /Specify dynamic dimension: N/,
+    /Specify dynamic dimension: symbol:N/,
   );
   await assert.rejects(
     run(
       { runInputs: () => [{ name: "x", shape: ["3"], dynamicAxes: [0] }] },
       { inputs: [] },
     ),
-    /Specify dynamic dimension: 3/,
+    /Specify dynamic dimension: symbol:3/,
   );
   await assert.rejects(
     run(model, {
       inputs: [{ name: "x", source: "protobuf", path: "relative.pb" }],
-      dimensions: { N: 2 },
+      dimensions: { "symbol:N": 2 },
     }),
     /absolute/,
   );

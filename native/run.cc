@@ -82,8 +82,8 @@ public:
             size_t axis = 0;
             for (const auto &dim : metadata->type().tensor_type().shape().dim()) {
               const auto key = dim.has_dim_param() && !dim.dim_param().empty()
-                                   ? std::string(dim.dim_param())
-                                   : input.name + ":" + std::to_string(axis);
+                                   ? "symbol:" + std::string(dim.dim_param())
+                                   : "axis:" + input.name + ":" + std::to_string(axis);
               if (dim.has_dim_value())
                 shape.push_back(dim.dim_value());
               else {
@@ -119,8 +119,8 @@ public:
           size_t axis = 0;
           for (const auto &dim : value.type().tensor_type().shape().dim()) {
             const auto key = dim.has_dim_param() && !dim.dim_param().empty()
-                                 ? std::string(dim.dim_param())
-                                 : std::string(value.name()) + ":" + std::to_string(axis);
+                                 ? "symbol:" + std::string(dim.dim_param())
+                                 : "axis:" + std::string(value.name()) + ":" + std::to_string(axis);
             const auto found = dimensions_.find(key);
             if (!dim.has_dim_value() &&
                 (input.random || !input.protobuf.empty() || !dimensions_.empty())) {

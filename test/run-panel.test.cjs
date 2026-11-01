@@ -155,7 +155,11 @@ test("Run requires dimensions, supports mixed input sources and retains engine l
   assert.equal(run.engine, "onnxruntime");
   assert.equal(
     JSON.stringify(run.dimensions),
-    JSON.stringify({ batch: 2, "X:1": 3, 3: 2 }),
+    JSON.stringify({
+      "symbol:batch": 2,
+      "axis:X:1": 3,
+      "symbol:3": 2,
+    }),
   );
   assert.equal(
     JSON.stringify(run.settings),
@@ -185,4 +189,36 @@ test("Run requires dimensions, supports mixed input sources and retains engine l
   byId("run-engine").dispatchEvent(new dom.window.Event("change"));
   assert.equal(byId("run-verbose").value, "4");
   assert.equal(byId("run-log-verbosity").value, "2");
+});
+
+test("symbolic and unnamed dynamic dimensions with colliding labels remain independent", (t) => {
+  const { byId, api, messages } = panel(t);
+  api.activate();
+  api.handleMessage({
+    type: "run-inputs",
+    requestId: messages.at(-1).requestId,
+    stages: [],
+    path: [],
+    inputs: [
+      {
+        name: "X",
+        text: "float[X:1,?] X = {}",
+        shape: ["X:1", null],
+        dynamicAxes: [0, 1],
+      },
+    ],
+  });
+  const fields = [...byId("run-dimensions").querySelectorAll("input")];
+  assert.equal(fields.length, 2);
+  assert.deepEqual(
+    fields.map((field) => field.dataset.dimension),
+    ["symbol:X:1", "axis:X:1"],
+  );
+  fields[0].value = "2";
+  fields[1].value = "3";
+  byId("run-form").querySelector('button[type="submit"]').click();
+  assert.equal(
+    JSON.stringify(messages.at(-1).dimensions),
+    JSON.stringify({ "symbol:X:1": 2, "axis:X:1": 3 }),
+  );
 });

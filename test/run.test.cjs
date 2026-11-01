@@ -118,14 +118,16 @@ test("dynamic random inputs require concrete dimensions without changing model m
   assert.deepEqual(model.runInputs()[0].dynamicAxes, [0]);
   await assert.rejects(
     model.run([{ name: "x", source: "random" }]),
-    /Specify dynamic dimension: N/,
+    /Specify dynamic dimension: symbol:N/,
   );
   const result = await model.run([{ name: "x", source: "random" }], [], {
-    dimensions: { N: 2 },
+    dimensions: { "symbol:N": 2 },
   });
   assert.match(result.outputs[0].text, /Values: \[/);
   await assert.rejects(
-    model.run(["float[1,3] x = {1, 2, 3}"], [], { dimensions: { N: 2 } }),
+    model.run(["float[1,3] x = {1, 2, 3}"], [], {
+      dimensions: { "symbol:N": 2 },
+    }),
     /does not match/,
   );
   assert.deepEqual(model.graph(), before);
