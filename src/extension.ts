@@ -24,7 +24,7 @@ import {
   tensorStatisticsFromProto,
 } from "./graph";
 import { webviewHtml } from "./webview";
-import { runModel } from "./run";
+import { runModel, RunSession } from "./run";
 import {
   applicationSettings,
   inspectPythonPackages,
@@ -605,6 +605,23 @@ async function configurePanel(
   const promptSession = new PromptSession((error) =>
     log.record("FAILED", "Prompt session", undefined, error.message),
   );
+  const runSession = new RunSession((error) => {
+    log.record("FAILED", "Run session", undefined, error.message);
+    void postMessage({ type: "run-session-lost", error: error.message });
+  });
+  const releaseRunSession = () => {
+    runController?.abort();
+    void runSession
+      .close()
+      .catch((error: unknown) =>
+        log.record(
+          "FAILED",
+          "Release Run session",
+          undefined,
+          error instanceof Error ? error.message : String(error),
+        ),
+      );
+  };
   const stopHistory = pathHistory.subscribe((history) => {
     void postMessage({ type: "path-history", history });
   });
@@ -818,7 +835,7 @@ async function configurePanel(
       ...(file.size === undefined ? {} : { size: file.size }),
     }));
   const sendGraph = (selectedNodes?: number[], fusionRequestId?: unknown) => {
-    runController?.abort();
+    releaseRunSession();
     runResult = undefined;
     fusionPreview = undefined;
     fusionRequest++;
@@ -899,6 +916,8 @@ async function configurePanel(
         maxExternalFileSize?: unknown;
         includeRewritings?: unknown;
         requestId?: unknown;
+        releaseId?: unknown;
+        keepLoaded?: unknown;
         reuseResult?: unknown;
         options?: unknown;
         name?: unknown;
@@ -1344,6 +1363,37 @@ async function configurePanel(
             index: message.index,
             path: uris[0].fsPath,
           });
+      } else if (message?.type === "run-release") {
+        if (
+          typeof message.requestId !== "number" ||
+          !Number.isSafeInteger(message.requestId) ||
+          message.requestId < 0 ||
+          typeof message.releaseId !== "number" ||
+          !Number.isSafeInteger(message.releaseId) ||
+          message.releaseId < 0 ||
+          message.requestId !== runResult?.requestId
+        )
+          return;
+        const owner = model;
+        const generation = runRequest;
+        try {
+          runController?.abort();
+          await log.run("Release Run session", () => runSession.close());
+          if (active && model === owner && generation === runRequest)
+            await postMessage({
+              type: "run-session-released",
+              requestId: message.requestId,
+              releaseId: message.releaseId,
+            });
+        } catch (error) {
+          if (active && model === owner && generation === runRequest)
+            await postMessage({
+              type: "run-session-error",
+              requestId: message.requestId,
+              releaseId: message.releaseId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+        }
       } else if (
         message?.type === "run-inputs" ||
         message?.type === "run-model"
@@ -1357,6 +1407,7 @@ async function configurePanel(
         runController = controller;
         const isCurrent = () =>
           active &&
+          !controller.signal.aborted &&
           model === owner &&
           graphRevision === revision &&
           runRequest === generation;
@@ -1383,6 +1434,8 @@ async function configurePanel(
               : (message.path ?? []);
           if (!isGraphPath(path)) throw new Error("Invalid model run path.");
           if (message.type === "run-inputs") {
+            await runSession.close();
+            if (!isCurrent()) return;
             const inputs = native.runInputs(path);
             if (isCurrent())
               await postMessage({
@@ -1411,6 +1464,7 @@ async function configurePanel(
                     });
                 },
                 controller.signal,
+                runSession,
               ),
             );
             if (isCurrent()) {
@@ -1433,6 +1487,7 @@ async function configurePanel(
                 requestId: message.requestId,
                 result: {
                   timeMs: result.timeMs,
+                  lifecycle: result.lifecycle,
                   inputs: result.inputs?.map(preview),
                   outputs: result.outputs.map(preview),
                 },
@@ -1440,12 +1495,15 @@ async function configurePanel(
             }
           }
         } catch (error) {
-          if (isCurrent())
+          if (isCurrent()) {
+            await runSession.close();
+            if (!isCurrent()) return;
             await postMessage({
               type: "run-error",
               requestId: message.requestId,
               error: error instanceof Error ? error.message : String(error),
             });
+          }
         }
       } else if (message?.type === "run-save") {
         const owner = model;
@@ -3911,7 +3969,7 @@ async function configurePanel(
             graphRevision !== requestedGraphRevision
           )
             return;
-          runController?.abort();
+          releaseRunSession();
           runRequest++;
           runResult = undefined;
           if (model) invalidateModel(model, log);
@@ -4005,7 +4063,7 @@ async function configurePanel(
                 current.graph.breadcrumbs.at(-1)?.path,
               );
               const retained = edited.model.clone();
-              runController?.abort();
+              releaseRunSession();
               runRequest++;
               runResult = undefined;
               model = {
@@ -4064,7 +4122,7 @@ async function configurePanel(
             graphRevision !== requestedGraphRevision
           )
             return;
-          runController?.abort();
+          releaseRunSession();
           runRequest++;
           runResult = undefined;
           if (model) invalidateModel(model, log);
@@ -4096,7 +4154,7 @@ async function configurePanel(
     active = false;
     releaseController?.abort();
     promptController?.abort();
-    runController?.abort();
+    releaseRunSession();
     runResult = undefined;
     void promptSession
       .close()

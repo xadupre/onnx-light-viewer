@@ -36,6 +36,9 @@ const roles: PipelineRole[] = ["embedding", "prefill", "decode"];
 
 /** Keeps stage models independent while saving the complete container. */
 export class PipelineModel implements NativeModel {
+  releaseRunSession = () => {
+    for (const [, model] of this.stages()) model.releaseRunSession();
+  };
   runInputs = (path: GraphPath = []) => {
     const stage = this.select(path);
     if (stage.path.length) throw new Error("Choose a pipeline stage root.");

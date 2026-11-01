@@ -168,6 +168,195 @@ test("regular run sends exact text inputs, handles errors and ignores stale resu
   assert.equal(byId("run-fields").disabled, true);
 });
 
+test("Run shows one-shot session lifecycle, actual inputs and save/reload controls", (t) => {
+  const { dom, byId, api, messages } = panel(t);
+  byId("run-engine").value = "onnxruntime";
+  byId("run-engine").dispatchEvent(new dom.window.Event("change"));
+  assert.match(
+    byId("run-lifecycle").textContent,
+    /ONNX Runtime.*no retained session/,
+  );
+  api.activate();
+  api.handleMessage({
+    type: "run-inputs",
+    requestId: messages.at(-1).requestId,
+    stages: [],
+    path: [],
+    inputs: [{ name: "X", text: "int64[1] X = {}", shape: ["1"] }],
+  });
+
+  assert.equal(byId("run-metadata-0").textContent, "int64[1] X = {}");
+  const submit = byId("run-form").querySelector('button[type="submit"]');
+  submit.click();
+  const requestId = messages.at(-1).requestId;
+  assert.match(byId("run-lifecycle").textContent, /run in progress/);
+  const text = "int64[1] X\nValues: [9007199254740993]";
+  api.handleMessage({
+    type: "run-result",
+    requestId,
+    result: {
+      timeMs: 1,
+      lifecycle: { loadMs: 2, reused: false, retained: false },
+      inputs: [{ name: "X", text, hasData: true }],
+      outputs: [{ name: "Y", text, hasData: true }],
+    },
+  });
+  assert.equal(byId("run-results").querySelector("pre").textContent, text);
+  assert.match(
+    byId("run-lifecycle").textContent,
+    /created.*released.*2\.000.*No session is kept alive/,
+  );
+  byId("run-results").querySelectorAll("button")[1].click();
+  assert.deepEqual(JSON.parse(JSON.stringify(messages.at(-1))), {
+    type: "run-save",
+    run: { requestId, kind: "inputs", index: 0 },
+    format: "protobuf",
+  });
+  api.handleMessage({
+    type: "run-save-info",
+    requestId,
+    status: "Saved X to /tmp/exact.pb.",
+  });
+  assert.match(byId("run-status").textContent, /Saved X/);
+  assert.equal(byId("run-load-0").hidden, false);
+  byId("run-results").querySelectorAll("button")[3].click();
+  assert.deepEqual(JSON.parse(JSON.stringify(messages.at(-1))), {
+    type: "run-save",
+    run: { requestId, kind: "outputs", index: 0 },
+    format: "protobuf",
+  });
+  api.handleMessage({
+    type: "run-save-info",
+    requestId,
+    status: "Saved output Y to /tmp/output.pb.",
+  });
+  assert.match(byId("run-status").textContent, /Saved output Y/);
+  byId("run-load-0").click();
+  assert.equal(messages.at(-1).type, "run-file");
+  api.handleMessage({ ...messages.at(-1), path: "/tmp/exact.pb" });
+  assert.equal(byId("run-source-0").value, "protobuf");
+  assert.equal(byId("run-file-0").disabled, false);
+  submit.click();
+  assert.deepEqual(JSON.parse(JSON.stringify(messages.at(-1).inputs)), [
+    { name: "X", source: "protobuf", path: "/tmp/exact.pb" },
+  ]);
+  assert.equal(byId("run-results").textContent, "");
+  api.handleMessage({
+    type: "run-save-info",
+    requestId,
+    status: "Stale save",
+  });
+  assert.equal(byId("run-file-0").value, "/tmp/exact.pb");
+  api.reset();
+  assert.equal(byId("run-results").textContent, "");
+  assert.match(byId("run-lifecycle").textContent, /no retained session/);
+});
+
+test("Run offers opt-in reuse, truthful session status and correlated unloading", (t) => {
+  const { dom, byId, api, messages } = panel(t);
+  api.activate();
+  api.handleMessage({
+    type: "run-inputs",
+    requestId: messages.at(-1).requestId,
+    stages: [],
+    path: [],
+    inputs: [{ name: "X", text: "float[1] X = {1}" }],
+  });
+  assert.equal(byId("run-keep-loaded").checked, false);
+  byId("run-keep-loaded").checked = true;
+  byId("run-keep-loaded").dispatchEvent(new dom.window.Event("change"));
+  const submit = byId("run-form").querySelector('button[type="submit"]');
+  for (const reused of [false, true]) {
+    submit.click();
+    assert.equal(messages.at(-1).keepLoaded, true);
+    api.handleMessage({
+      type: "run-result",
+      requestId: messages.at(-1).requestId,
+      result: {
+        timeMs: 1,
+        inputs: [],
+        outputs: [],
+        lifecycle: { loadMs: 2, reused, retained: true },
+      },
+    });
+    assert.match(byId("run-lifecycle").textContent, /still loaded.*next run/);
+    assert.match(
+      byId("run-lifecycle").textContent,
+      reused ? /reused from the previous run/ : /created for this run/,
+    );
+    assert.equal(byId("run-unload").disabled, false);
+  }
+  byId("run-unload").click();
+  const release = messages.at(-1);
+  assert.equal(release.type, "run-release");
+  api.handleMessage({ ...release, type: "run-session-released" });
+  assert.match(byId("run-lifecycle").textContent, /no retained session/);
+  assert.equal(byId("run-unload").disabled, true);
+  submit.click();
+  api.handleMessage({
+    ...release,
+    type: "run-session-error",
+    error: "stale release",
+  });
+  assert.doesNotMatch(byId("run-status").textContent, /stale release/);
+});
+
+for (const control of [
+  "run-engine",
+  "run-verbose",
+  "run-log-severity",
+  "run-log-verbosity",
+  "run-keep-loaded",
+])
+  test(`Run releases the retained session when ${control} changes`, (t) => {
+    const { dom, byId, api, messages } = panel(t);
+    api.activate();
+    api.handleMessage({
+      type: "run-inputs",
+      requestId: messages.at(-1).requestId,
+      stages: [],
+      path: [],
+      inputs: [],
+    });
+    api.handleMessage({
+      type: "run-result",
+      requestId: messages.at(-1).requestId,
+      result: {
+        timeMs: 1,
+        outputs: [],
+        lifecycle: { loadMs: 1, reused: false, retained: true },
+      },
+    });
+    byId(control).dispatchEvent(new dom.window.Event("change"));
+    assert.equal(messages.at(-1).type, "run-release");
+    assert.equal(byId("run-unload").disabled, true);
+  });
+
+test("Run updates the retained session status after an idle worker stops", (t) => {
+  const { byId, api, messages } = panel(t);
+  api.activate();
+  api.handleMessage({
+    type: "run-inputs",
+    requestId: messages.at(-1).requestId,
+    stages: [],
+    path: [],
+    inputs: [],
+  });
+  api.handleMessage({
+    type: "run-result",
+    requestId: messages.at(-1).requestId,
+    result: {
+      timeMs: 1,
+      outputs: [],
+      lifecycle: { loadMs: 1, reused: true, retained: true },
+    },
+  });
+  api.handleMessage({ type: "run-session-lost", error: "Worker exited." });
+  assert.match(byId("run-lifecycle").textContent, /no retained session/);
+  assert.equal(byId("run-unload").disabled, true);
+  assert.match(byId("run-status").textContent, /Worker exited/);
+});
+
 for (const type of ["metadata-error", "shape-error"])
   test(`Run recovers from ${type} without stale messages or lost input drafts`, (t) => {
     const { byId, api, messages, statisticsResets } = panel(t);

@@ -1,17 +1,21 @@
-"""One-shot ONNX Runtime execution of a viewer-owned model snapshot."""
+"""ONNX Runtime execution with optional worker-owned session retention."""
 
 import json
-from pathlib import Path
 import sys
+import traceback
+from pathlib import Path
 from time import perf_counter
+
+sys.stdin.reconfigure(encoding="utf-8")
+sys.stdout.reconfigure(encoding="utf-8")
 
 if sys.platform == "win32":
     # Match ONNX Runtime's wide-character stderr, including Python tracebacks.
     sys.stderr.reconfigure(encoding="utf-16-le", errors="backslashreplace")
 
 import onnx
-from onnx import numpy_helper
 import onnxruntime as ort
+from onnx import numpy_helper
 
 
 def preview_values(value):
@@ -25,17 +29,28 @@ def preview_values(value):
     return str(preview)
 
 
-def main(directory):
+def main(directory, cache=None, key=None):
     directory = Path(directory)
     settings = json.loads((directory / "settings.json").read_text(encoding="utf-8"))
-    options = ort.SessionOptions()
-    options.log_severity_level = settings["logSeverity"]
-    options.log_verbosity_level = settings["logVerbosity"]
-    session = ort.InferenceSession(
-        str(directory / "model.onnx"),
-        sess_options=options,
-        providers=["CPUExecutionProvider"],
-    )
+    reused = cache is not None and cache.get("key") == key
+    if reused:
+        session, load_ms = cache["session"], cache["load_ms"]
+    else:
+        options = ort.SessionOptions()
+        options.log_severity_level = settings["logSeverity"]
+        options.log_verbosity_level = settings["logVerbosity"]
+        load_start = perf_counter()
+        session = ort.InferenceSession(
+            str(directory / "model.onnx"),
+            sess_options=options,
+            providers=["CPUExecutionProvider"],
+        )
+        load_ms = (perf_counter() - load_start) * 1000
+    retained = settings.get("keepLoaded", False)
+    if cache is not None:
+        cache.clear()
+        if retained:
+            cache.update(key=key, session=session, load_ms=load_ms)
     inputs = {}
     for index in range(settings["inputs"]):
         tensor = onnx.TensorProto()
@@ -52,10 +67,12 @@ def main(directory):
             if value.size <= 32
             else "Omitted (preview limit: 32 elements)."
         )
-        previews.append({
-            "name": name,
-            "text": f"{value.dtype}{list(value.shape)} {name}\nValues: {preview}",
-        })
+        previews.append(
+            {
+                "name": name,
+                "text": f"{value.dtype}{list(value.shape)} {name}\nValues: {preview}",
+            }
+        )
     for index, (metadata, value) in enumerate(zip(session.get_outputs(), values)):
         if hasattr(value, "dtype"):
             preview = (
@@ -63,17 +80,48 @@ def main(directory):
                 if value.size <= 32
                 else "Omitted (preview limit: 32 elements)."
             )
-            text = f"{value.dtype}{list(value.shape)} {metadata.name}\nValues: {preview}"
+            text = (
+                f"{value.dtype}{list(value.shape)} {metadata.name}\nValues: {preview}"
+            )
             (directory / f"output-{index}.pb").write_bytes(
                 numpy_helper.from_array(value, metadata.name).SerializeToString()
             )
         else:
             text = "Non-tensor output (no tensor preview)."
-        outputs.append({"name": metadata.name, "text": text, "hasData": hasattr(value, "dtype")})
+        outputs.append(
+            {"name": metadata.name, "text": text, "hasData": hasattr(value, "dtype")}
+        )
     (directory / "result.json").write_text(
-        json.dumps({"timeMs": time_ms, "inputs": previews, "outputs": outputs}), encoding="utf-8"
+        json.dumps(
+            {
+                "timeMs": time_ms,
+                "inputs": previews,
+                "outputs": outputs,
+                "lifecycle": {
+                    "loadMs": load_ms,
+                    "reused": reused,
+                    "retained": retained,
+                },
+            }
+        ),
+        encoding="utf-8",
     )
 
 
 if __name__ == "__main__":
-    main(sys.argv[1])
+    if sys.argv[1] == "--worker":
+        cache = {}
+        for line in sys.stdin:
+            try:
+                request = json.loads(line)
+                main(request["input"], cache, request["key"])
+                print("\x1e" + json.dumps({"type": "done"}), flush=True)
+            except Exception as error:  # noqa: BLE001 - report worker request failures to the host
+                cache.clear()
+                traceback.print_exc()
+                print(
+                    "\x1e" + json.dumps({"type": "error", "error": str(error)}),
+                    flush=True,
+                )
+    else:
+        main(sys.argv[1])

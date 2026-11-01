@@ -28,7 +28,7 @@ function panel(t) {
   return { dom, byId, api, messages };
 }
 
-test("ONNX Runtime settings send diagnostics and arbitrary native session options", (t) => {
+test("ONNX Runtime settings send diagnostics and predefined session options", (t) => {
   const { dom, byId, api, messages } = panel(t);
   api.handleMessage({
     type: "prompt-info",
@@ -40,16 +40,15 @@ test("ONNX Runtime settings send diagnostics and arbitrary native session option
   field("logVerbosity").value = "2";
   field("logId").value = "viewer-session";
   field("customOpsLibrary").value = "/tmp/custom-ops.so";
-  const sessionOptions = JSON.stringify({
-    "session.intra_op.allow_spinning": "0",
-    provider_options: [{ cuda: { device_id: "0" } }],
-    use_deterministic_compute: true,
-  });
-  field("sessionOptions").value = sessionOptions;
-  byId("settings-device-model").checked = true;
-  field("sessionOptions").dispatchEvent(
-    new dom.window.Event("change", { bubbles: true }),
+  const spinning = pane.querySelector(
+    '[data-config="session.intra_op.allow_spinning"]',
   );
+  spinning.value = "0";
+  pane.querySelector(
+    '[data-session-option="use_deterministic_compute"]',
+  ).value = "false";
+  byId("settings-device-model").checked = true;
+  spinning.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
   assert.equal(messages.at(-1).type, "prompt-release");
   byId("prompt-form").querySelector('button[type="submit"]').click();
   assert.deepEqual(
@@ -59,120 +58,60 @@ test("ONNX Runtime settings send diagnostics and arbitrary native session option
       logId: "viewer-session",
       customOpsLibrary: "/tmp/custom-ops.so",
       profile: false,
-      sessionOptions,
+      sessionOptions: JSON.stringify({
+        use_deterministic_compute: false,
+        "session.intra_op.allow_spinning": "0",
+      }),
     },
   );
   assert.equal(byId("prompt-session-fields").disabled, true);
 });
 
-test("configuration entry editor validates duplicate and empty keys and retains unknown string-valued keys", (t) => {
-  const { dom, byId, api, messages } = panel(t);
+test("session options are already listed, explained and omitted while blank", (t) => {
+  const { byId, api, messages } = panel(t);
   api.handleMessage({
     type: "prompt-info",
     requestId: messages.at(-1).requestId,
     info: { available: true, engines: ["onnxruntime-genai"] },
   });
-  const submit = byId("prompt-form").querySelector('button[type="submit"]');
-  byId("prompt-config-add").click();
-  const first = byId("prompt-config-entries").firstElementChild;
-  const key = first.querySelector('[data-config="key"]');
-  const value = first.querySelector('[data-config="value"]');
-  value.value = "0";
-  submit.click();
-  assert.equal(key.checkValidity(), false);
-  assert.equal(
-    messages.some(({ type }) => type === "run-prompt"),
-    false,
+  const pane = byId("prompt-settings-genai");
+  assert.equal(byId("prompt-config-add"), null);
+  assert.equal(pane.querySelector("[data-json]"), null);
+  assert.equal(pane.querySelector('[data-config="key"]'), null);
+  const controls = pane.querySelectorAll(
+    "[data-setting], [data-config], [data-session-option]",
   );
-  key.value = "custom.runtime.option";
-  value.value = "x".repeat(8193);
-  submit.click();
-  assert.equal(value.checkValidity(), false);
-  value.value = "é".repeat(4097);
-  submit.click();
-  assert.equal(value.checkValidity(), false);
-  value.value = "0";
-  key.value = "x".repeat(1025);
-  submit.click();
-  assert.equal(key.checkValidity(), false);
-  key.value = "é".repeat(513);
-  submit.click();
-  assert.equal(key.checkValidity(), false);
-  key.value = "custom.runtime.option";
-  byId("prompt-config-add").click();
-  const second = byId("prompt-config-entries").lastElementChild;
-  second.querySelector('[data-config="key"]').value = key.value;
-  submit.click();
+  assert.ok(controls.length > 0);
+  for (const field of controls) {
+    if (field.type !== "checkbox") {
+      assert.equal(field.value, "");
+      assert.equal(
+        field.tagName === "SELECT"
+          ? field.selectedOptions[0].textContent
+          : field.placeholder,
+        "-",
+      );
+    }
+    const row = field.closest("label");
+    assert.equal(row.children[0].tagName, "SPAN");
+    assert.equal(row.children[1], field);
+    assert.equal(row.children[2].tagName, "SMALL");
+    assert.ok(row.children[2].textContent.trim());
+    if (field.dataset.config) {
+      const help = byId(field.getAttribute("aria-describedby"));
+      assert.ok(help.textContent.trim());
+      assert.equal(field.labels[0].htmlFor, field.id);
+    }
+  }
+  byId("prompt-form").querySelector('button[type="submit"]').click();
+  assert.equal(messages.at(-1).type, "run-prompt");
   assert.equal(
-    second.querySelector('[data-config="key"]').checkValidity(),
-    false,
-  );
-  second.querySelector("button").click();
-  assert.equal(messages.at(-1).type, "prompt-release");
-  value.value = "bad\0value";
-  submit.click();
-  assert.equal(value.checkValidity(), false);
-  value.value = "";
-  key.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
-  submit.click();
-  assert.deepEqual(
-    JSON.parse(messages.at(-1).options.sessionSettings.sessionOptions),
-    { "custom.runtime.option": "" },
+    messages.at(-1).options.sessionSettings.sessionOptions,
+    undefined,
   );
 });
 
-for (const advanced of [false, true])
-  test(`configuration entries validate the final serialized size${advanced ? " including advanced JSON" : ""} and allow the exact limit`, (t) => {
-    const { dom, byId, api, messages } = panel(t);
-    api.handleMessage({
-      type: "prompt-info",
-      requestId: messages.at(-1).requestId,
-      info: { available: true, engines: ["onnxruntime-genai"] },
-    });
-    const field = byId("prompt-settings-genai").querySelector(
-      '[data-setting="sessionOptions"]',
-    );
-    const entries = advanced ? { base: "x".repeat(8192) } : {};
-    if (advanced) field.value = JSON.stringify(entries);
-    let last;
-    for (let index = 0; index < (advanced ? 7 : 8); index++) {
-      byId("prompt-config-add").click();
-      const row = byId("prompt-config-entries").lastElementChild;
-      const name = `custom.option.${index}`;
-      row.querySelector('[data-config="key"]').value = name;
-      last = row.querySelector('[data-config="value"]');
-      last.value = entries[name] = "x".repeat(8192);
-      assert.equal(last.checkValidity(), true);
-    }
-    const submit = byId("prompt-form").querySelector('button[type="submit"]');
-    submit.click();
-    assert.equal(
-      messages.some(({ type }) => type === "run-prompt"),
-      false,
-    );
-    assert.equal(byId("prompt-fields").disabled, false);
-    assert.equal(byId("prompt-settings-genai").hidden, false);
-    assert.equal(field.checkValidity(), false);
-    assert.match(field.validationMessage, /65536.*Remove.*shorten/);
-    last.value = "x".repeat(8192 - (JSON.stringify(entries).length - 65536));
-    last.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
-    submit.click();
-    assert.equal(field.checkValidity(), true);
-    const run = messages.at(-1);
-    assert.equal(run.type, "run-prompt");
-    assert.equal(run.options.sessionSettings.sessionOptions.length, 65536);
-    assert.equal(
-      JSON.parse(run.options.sessionSettings.sessionOptions)["custom.option.0"],
-      entries["custom.option.0"],
-    );
-    if (advanced)
-      assert.equal(
-        JSON.parse(run.options.sessionSettings.sessionOptions).base,
-        entries.base,
-      );
-  });
-
-test("invalid session JSON stops generation and corrected or blank JSON clears validity", (t) => {
+test("incomplete numeric settings are validated rather than omitted as blank defaults", (t) => {
   const { byId, api, messages } = panel(t);
   api.handleMessage({
     type: "prompt-info",
@@ -180,35 +119,149 @@ test("invalid session JSON stops generation and corrected or blank JSON clears v
     info: { available: true, engines: ["onnxruntime-genai"] },
   });
   const field = byId("prompt-settings-genai").querySelector(
-    '[data-setting="sessionOptions"]',
+    '[data-setting="logVerbosity"]',
+  );
+  // jsdom sanitizes incomplete numbers without exposing the browser's badInput state.
+  Object.defineProperty(field.validity, "badInput", {
+    configurable: true,
+    value: true,
+  });
+  field.setCustomValidity("Enter a number.");
+  byId("prompt-form").querySelector('button[type="submit"]').click();
+  assert.equal(
+    messages.some(({ type }) => type === "run-prompt"),
+    false,
+  );
+  assert.equal(byId("prompt-fields").disabled, false);
+  Object.defineProperty(field.validity, "badInput", { value: false });
+  field.setCustomValidity("");
+  byId("prompt-form").querySelector('button[type="submit"]').click();
+  assert.equal(messages.at(-1).type, "run-prompt");
+  assert.equal(messages.at(-1).options.sessionSettings.logVerbosity, undefined);
+});
+
+test("predefined configuration values validate UTF-8 size, nulls and numeric ranges", (t) => {
+  const { dom, byId, api, messages } = panel(t);
+  api.handleMessage({
+    type: "prompt-info",
+    requestId: messages.at(-1).requestId,
+    info: { available: true, engines: ["onnxruntime-genai"] },
+  });
+  const submit = byId("prompt-form").querySelector('button[type="submit"]');
+  const value = byId("prompt-config-entries").querySelector(
+    '[data-config="session.intra_op_thread_affinities"]',
+  );
+  value.value = "x".repeat(8193);
+  submit.click();
+  assert.equal(value.checkValidity(), false);
+  value.value = "é".repeat(4097);
+  submit.click();
+  assert.equal(value.checkValidity(), false);
+  value.value = "bad\0value";
+  submit.click();
+  assert.equal(value.checkValidity(), false);
+  value.value = "  ";
+  const duration = byId("prompt-config-entries").querySelector(
+    '[data-config="session.intra_op.spin_duration_us"]',
+  );
+  for (const invalid of ["-1", "1.5", "2147483648"]) {
+    duration.value = invalid;
+    submit.click();
+    assert.equal(duration.checkValidity(), false);
+  }
+  assert.equal(
+    messages.some(({ type }) => type === "run-prompt"),
+    false,
+  );
+  duration.value = "0";
+  duration.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+  assert.equal(messages.at(-1).type, "prompt-release");
+  submit.click();
+  assert.equal(value.checkValidity(), true);
+  assert.deepEqual(
+    JSON.parse(messages.at(-1).options.sessionSettings.sessionOptions),
+    { "session.intra_op.spin_duration_us": "0" },
+  );
+});
+
+test("clearing a predefined option restores defaults on the next run", (t) => {
+  const { byId, api, messages } = panel(t);
+  api.handleMessage({
+    type: "prompt-info",
+    requestId: messages.at(-1).requestId,
+    info: { available: true, engines: ["onnxruntime-genai"] },
+  });
+  const field = byId("prompt-config-entries").querySelector(
+    '[data-config="session.intra_op.allow_spinning"]',
   );
   const submit = byId("prompt-form").querySelector('button[type="submit"]');
-  for (const invalid of ["{", "null", "[]", '"text"', "true"]) {
-    field.value = invalid;
-    submit.click();
-    assert.equal(field.checkValidity(), false);
-    assert.equal(byId("prompt-fields").disabled, false);
-    assert.equal(byId("prompt-settings-genai").hidden, false);
-    assert.equal(
-      messages.some((message) => message.type === "run-prompt"),
-      false,
-    );
-  }
-  field.value = " \n ";
+  field.value = "0";
   submit.click();
-  assert.equal(field.checkValidity(), true);
-  assert.equal(
-    messages.at(-1).options.sessionSettings.sessionOptions,
-    undefined,
+  assert.deepEqual(
+    JSON.parse(messages.at(-1).options.sessionSettings.sessionOptions),
+    {
+      "session.intra_op.allow_spinning": "0",
+    },
   );
   api.handleMessage({
     type: "prompt-error",
     requestId: messages.at(-1).requestId,
     error: "test error",
   });
-  field.value = "{}";
+  field.value = "";
   submit.click();
-  assert.equal(messages.at(-1).options.sessionSettings.sessionOptions, "{}");
+  assert.equal(messages.at(-1).type, "run-prompt");
+  assert.equal(
+    messages.at(-1).options.sessionSettings.sessionOptions,
+    undefined,
+  );
+});
+
+test("numeric configuration values are serialized as decimal strings", (t) => {
+  const { byId, api, messages } = panel(t);
+  api.handleMessage({
+    type: "prompt-info",
+    requestId: messages.at(-1).requestId,
+    info: { available: true, engines: ["onnxruntime-genai"] },
+  });
+  byId("prompt-config-entries").querySelector(
+    '[data-config="session.intra_op.spin_duration_us"]',
+  ).value = "1e3";
+  byId("prompt-form").querySelector('button[type="submit"]').click();
+  assert.deepEqual(
+    JSON.parse(messages.at(-1).options.sessionSettings.sessionOptions),
+    { "session.intra_op.spin_duration_us": "1000" },
+  );
+});
+
+test("configuration options validate serialized size and clear errors when corrected", (t) => {
+  const { byId, api, messages } = panel(t);
+  api.handleMessage({
+    type: "prompt-info",
+    requestId: messages.at(-1).requestId,
+    info: { available: true, engines: ["onnxruntime-genai"] },
+  });
+  const fields = byId("prompt-config-entries").querySelectorAll(
+    'input[type="text"]',
+  );
+  for (const field of fields) field.value = "\x01".repeat(8192);
+  const submit = byId("prompt-form").querySelector('button[type="submit"]');
+  submit.click();
+  const last = fields[fields.length - 1];
+  assert.equal(last.checkValidity(), false);
+  assert.match(last.validationMessage, /65536/);
+  assert.equal(
+    messages.some(({ type }) => type === "run-prompt"),
+    false,
+  );
+  last.value = "";
+  submit.click();
+  assert.equal(last.checkValidity(), true);
+  assert.equal(messages.at(-1).type, "run-prompt");
+  assert.deepEqual(
+    JSON.parse(messages.at(-1).options.sessionSettings.sessionOptions),
+    { [fields[0].dataset.config]: fields[0].value },
+  );
 });
 
 test("prompt defaults, engine applicability and aligned validation results", (t) => {

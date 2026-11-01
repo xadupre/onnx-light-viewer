@@ -8493,6 +8493,200 @@ test("Generation settings validate inputs and apply to both prompt engines", (t)
   }
 });
 
+test("Settings Back is shown only when entering from Prompt or Run and preserves the execution mode", (t) => {
+  const { document } = openViewer(t);
+  const byId = (id) => document.getElementById(id);
+  const backButtons = ["prompt-settings-back", "prompt-generation-back"];
+  const assertBack = (hidden) => {
+    for (const id of backButtons) {
+      assert.equal(byId(id).textContent, "Back");
+      assert.equal(byId(id).hidden, hidden);
+    }
+  };
+  assertBack(true);
+  byId("settings-tab").click();
+  byId("settings-engine-tab").click();
+  assertBack(true);
+  for (const mode of ["prompt", "run"])
+    for (const [category, back] of [
+      ["engine", "prompt-settings-back"],
+      ["generation", "prompt-generation-back"],
+    ]) {
+      byId("prompt-tab").click();
+      byId(`execution-${mode}-tab`).click();
+      if (mode === "prompt")
+        byId(
+          category === "engine"
+            ? "prompt-settings-open"
+            : "prompt-generation-open",
+        ).click();
+      else if (category === "engine") byId("run-settings-open").click();
+      else {
+        byId("settings-tab").click();
+        byId(`settings-${category}-tab`).click();
+      }
+      assertBack(false);
+      byId("settings-tab").click();
+      assertBack(false);
+      byId(back).click();
+      assert.equal(byId("prompt-view").hidden, false);
+      assert.equal(byId(`execution-${mode}-view`).hidden, false);
+      assert.equal(
+        byId(`execution-${mode}-tab`).getAttribute("aria-selected"),
+        "true",
+      );
+      byId("settings-tab").click();
+      assertBack(false);
+      byId("model-tab").click();
+      byId("settings-tab").click();
+      assertBack(true);
+    }
+});
+
+test("Run Settings edits only regular execution controls and releases its retained session", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const byId = (id) => document.getElementById(id);
+  const receive = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  load(demoGraph);
+  byId("prompt-tab").click();
+  byId("execution-run-tab").click();
+  receive({
+    type: "run-inputs",
+    requestId: messages.findLast(({ type }) => type === "run-inputs").requestId,
+    inputs: [],
+    stages: [],
+    path: [],
+  });
+  byId("run-engine").value = "onnxruntime";
+  byId("run-engine").dispatchEvent(new window.Event("change"));
+  byId("run-keep-loaded").checked = true;
+  byId("run-form").dispatchEvent(new window.Event("submit"));
+  receive({
+    type: "run-result",
+    requestId: messages.at(-1).requestId,
+    result: {
+      timeMs: 1,
+      outputs: [],
+      lifecycle: { loadMs: 2, reused: false, retained: true },
+    },
+  });
+  const promptVerbosity = byId("prompt-settings-genai").querySelector(
+    '[data-setting="logVerbosity"]',
+  );
+  promptVerbosity.value = "7";
+  byId("run-settings-open").click();
+  assert.equal(byId("run-session-page").hidden, false);
+  assert.equal(byId("prompt-session-page").hidden, true);
+  assert.ok(byId("run-session-fields").contains(byId("run-log-severity")));
+  assert.ok(byId("settings-engine-view").contains(byId("run-session-page")));
+  byId("run-log-severity").value = "3";
+  byId("run-log-severity").dispatchEvent(
+    new window.Event("change", { bubbles: true }),
+  );
+  assert.equal(messages.at(-1).type, "run-release");
+  byId("run-log-verbosity").value = "2";
+  byId("prompt-settings-back").click();
+  assert.ok(byId("run-form").contains(byId("run-log-severity")));
+  byId("run-form").dispatchEvent(new window.Event("submit"));
+  assert.deepEqual(JSON.parse(JSON.stringify(messages.at(-1).settings)), {
+    logSeverity: 3,
+    logVerbosity: 2,
+  });
+  assert.equal(promptVerbosity.value, "7");
+  receive({
+    type: "run-result",
+    requestId: messages.at(-1).requestId,
+    result: {
+      timeMs: 1,
+      outputs: [],
+      lifecycle: { loadMs: 2, reused: false, retained: true },
+    },
+  });
+  byId("run-settings-open").click();
+  byId("settings-onnx-light-tab").click();
+  assert.equal(byId("run-engine").value, "onnx-light");
+  assert.equal(byId("run-logging-light").hidden, false);
+  assert.equal(messages.at(-1).type, "run-release");
+  byId("run-verbose").value = "1";
+  byId("prompt-settings-back").click();
+  byId("run-form").dispatchEvent(new window.Event("submit"));
+  assert.deepEqual(JSON.parse(JSON.stringify(messages.at(-1).settings)), {
+    verbose: 1,
+  });
+});
+
+for (const outcome of [
+  "run-result",
+  "run-error",
+  "metadata-error",
+  "shape-error",
+  "reset",
+])
+  test(`Run Settings keeps the executing engine and synchronizes disabled controls after ${outcome}`, (t) => {
+    const { document, window, messages, load } = openViewer(t);
+    const byId = (id) => document.getElementById(id);
+    const receive = (data) =>
+      window.dispatchEvent(new window.MessageEvent("message", { data }));
+    load(demoGraph);
+    byId("prompt-tab").click();
+    byId("execution-run-tab").click();
+    receive({
+      type: "run-inputs",
+      requestId: messages.at(-1).requestId,
+      inputs: [],
+      stages: [],
+      path: [],
+    });
+    byId("run-engine").value = "onnxruntime";
+    byId("run-engine").dispatchEvent(new window.Event("change"));
+    byId("run-keep-loaded").checked = true;
+    byId("run-form").dispatchEvent(new window.Event("submit"));
+    const requestId = messages.at(-1).requestId;
+    assert.equal(byId("run-session-fields").disabled, true);
+    byId("settings-tab").click();
+    byId("settings-engine-tab").click();
+    assert.ok(byId("run-session-fields").contains(byId("run-log-verbosity")));
+    assert.ok(byId("run-log-verbosity").matches(":disabled"));
+    const before = messages.length;
+    byId("settings-onnx-light-tab").click();
+    byId("settings-onnxruntime-tab").dispatchEvent(
+      new window.KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }),
+    );
+    assert.equal(byId("run-engine").value, "onnxruntime");
+    assert.equal(
+      byId("settings-onnxruntime-tab").getAttribute("aria-selected"),
+      "true",
+    );
+    assert.equal(byId("run-logging-ort").hidden, false);
+    assert.equal(messages.length, before);
+    if (outcome === "reset") load(demoGraph);
+    else
+      receive({
+        type: outcome,
+        requestId,
+        error: "Execution stopped.",
+        result: {
+          timeMs: 1,
+          outputs: [],
+          lifecycle: { loadMs: 2, reused: false, retained: true },
+        },
+      });
+    const disabled = outcome === "reset";
+    assert.equal(byId("run-fields").disabled, disabled);
+    assert.equal(byId("run-session-fields").disabled, disabled);
+    assert.equal(byId("run-log-verbosity").matches(":disabled"), disabled);
+    if (outcome === "run-result")
+      assert.match(
+        byId("run-lifecycle").textContent,
+        /ONNX Runtime session: created.*still loaded/,
+      );
+    if (!disabled) {
+      byId("settings-onnx-light-tab").click();
+      assert.equal(byId("run-engine").value, "onnx-light");
+    }
+  });
+
 test("Engine settings subtabs reuse prompt controls without changing the execution engine", (t) => {
   const { document, window, messages } = openViewer(t);
   const byId = (id) => document.getElementById(id);
@@ -8554,7 +8748,8 @@ test("Engine settings subtabs reuse prompt controls without changing the executi
   byId("model-tab").click();
   byId("settings-tab").click();
   assertEngine("onnxruntime");
-  byId("prompt-settings-back").click();
+  assert.equal(byId("prompt-settings-back").hidden, true);
+  byId("prompt-tab").click();
   assert.equal(byId("prompt-view").hidden, false);
   assert.equal(byId("prompt-run-page").hidden, false);
   byId("prompt-settings-open").click();
@@ -8892,7 +9087,7 @@ test("unchanged and failed device probes never invalidate an active or retained 
   assert.match(byId("prompt-lifecycle").textContent, /Kept loaded/);
 });
 
-test("Device multi-selection and string configuration editor travel with GenAI while CPU settings serve onnx-light", (t) => {
+test("Device multi-selection and predefined configuration options travel with GenAI while CPU settings serve onnx-light", (t) => {
   const { document, window, messages, load } = openViewer(t);
   const byId = (id) => document.getElementById(id);
   const receive = (data) =>
@@ -8918,22 +9113,10 @@ test("Device multi-selection and string configuration editor travel with GenAI w
     ["threads", "4"],
   ])
     document.querySelector(`[data-setting="${name}"]`).value = value;
-  const json = document.querySelector('[data-setting="sessionOptions"]');
-  json.value = '{"session.intra_op.allow_spinning":"1","custom.key":"old"}';
-  byId("prompt-config-add").click();
-  let row = byId("prompt-config-entries").firstElementChild;
-  row.querySelector('[data-config="key"]').value =
-    "session.intra_op.allow_spinning";
-  row.querySelector('[data-config="value"]').value = "0";
-  byId("prompt-config-add").click();
-  row = byId("prompt-config-entries").lastElementChild;
-  row.querySelector('[data-config="key"]').value = "custom.key";
-  row.querySelector('[data-config="value"]').value = "";
-  assert.ok(
-    byId("prompt-config-keys").querySelector(
-      '[value="session.intra_op.allow_spinning"]',
-    ),
+  const spinning = byId("prompt-config-entries").querySelector(
+    '[data-config="session.intra_op.allow_spinning"]',
   );
+  spinning.value = "0";
   byId("prompt-form").dispatchEvent(new window.Event("submit"));
   let run = messages.findLast(({ type }) => type === "run-prompt");
   assert.deepEqual(Array.from(run.options.sessionSettings.providers), [
@@ -8947,7 +9130,6 @@ test("Device multi-selection and string configuration editor travel with GenAI w
   assert.equal(run.options.sessionSettings.threads, undefined);
   assert.deepEqual(JSON.parse(run.options.sessionSettings.sessionOptions), {
     "session.intra_op.allow_spinning": "0",
-    "custom.key": "",
   });
   assert.equal(byId("prompt-device-fields").disabled, true);
   byId("prompt-cancel").click();

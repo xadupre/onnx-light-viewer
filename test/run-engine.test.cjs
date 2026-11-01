@@ -11,13 +11,278 @@ const {
   listBackendTests,
   loadBackendTest,
 } = require("../dist/graph");
-const { runModel } = require("../dist/run");
+const { runModel, RunSession } = require("../dist/run");
 const { runProcess } = require("../dist/export");
+const { runInNewContext } = require("node:vm");
 
 const python = process.platform === "win32" ? "python" : "python3";
 const runner = path.resolve(__dirname, "../media/run_model.py");
 const run = (model, request, progress = () => {}) =>
   runModel(model, [], request, python, runner, progress);
+
+for (const engine of ["onnx-light", "onnxruntime"])
+  test(`${engine} Run retains real sessions with fresh inputs and invalidates ownership/settings`, async (t) => {
+    const session = new RunSession();
+    t.after(() => session.close());
+    const directory = await mkdtemp(
+      path.join(tmpdir(), "viewer-run-preflight-"),
+    );
+    t.after(() => rm(directory, { recursive: true, force: true }));
+    const model = loadModel(
+      readFileSync(require.resolve("./models/inference.onnx")),
+      "inference.onnx",
+    );
+    const request = {
+      engine,
+      keepLoaded: true,
+      dimensions: { "symbol:N": 1 },
+      inputs: ["float[1,3] x = {-1, 0, 2}"],
+    };
+    const predict = (
+      owner = model,
+      options = request,
+      signal = new AbortController().signal,
+    ) =>
+      runModel(owner, [], options, python, runner, () => {}, signal, session);
+    const first = await predict();
+    assert.equal(first.lifecycle.reused, false);
+    assert.equal(first.lifecycle.retained, true);
+    const fresh = await predict(model, {
+      ...request,
+      dimensions: { "symbol:N": 2 },
+      inputs: ["float[2,3] x = {3, 4, 5, 6, 7, 8}"],
+    });
+    assert.equal(fresh.lifecycle.reused, true);
+    assert.equal(fresh.lifecycle.retained, true);
+    assert.notDeepEqual(fresh.outputs, first.outputs);
+    assert.equal(fresh.lifecycle.loadMs, first.lifecycle.loadMs);
+    await session.close();
+    assert.equal((await predict()).lifecycle.reused, false);
+    const settings =
+      engine === "onnx-light" ? { verbose: 1 } : { logSeverity: 3 };
+    const configured = { ...request, settings };
+    assert.equal((await predict(model, configured)).lifecycle.reused, false);
+    assert.equal((await predict(model, configured)).lifecycle.reused, true);
+    const changed = model.clone();
+    assert.equal((await predict(changed, configured)).lifecycle.reused, false);
+    assert.equal((await predict(changed, configured)).lifecycle.reused, true);
+    const oneShot = await predict(changed, {
+      ...configured,
+      keepLoaded: false,
+    });
+    assert.equal(oneShot.lifecycle.retained, false);
+    assert.equal(oneShot.lifecycle.reused, false);
+    assert.equal((await predict(changed, configured)).lifecycle.reused, false);
+    await assert.rejects(
+      predict(changed, { ...configured, inputs: ["float[1,3] x = {1}"] }),
+      /./,
+    );
+    assert.equal((await predict(changed, configured)).lifecycle.reused, false);
+    for (const invalid of [
+      { ...configured, settings: { verbose: -1, logSeverity: -1 } },
+      {
+        ...configured,
+        inputs: [
+          {
+            name: "x",
+            source: "protobuf",
+            path: path.join(directory, "missing.pb"),
+          },
+        ],
+      },
+    ]) {
+      await assert.rejects(predict(changed, invalid));
+      assert.equal(
+        (await predict(changed, configured)).lifecycle.reused,
+        false,
+      );
+      assert.equal((await predict(changed, configured)).lifecycle.reused, true);
+    }
+    const controller = new AbortController();
+    const pending = predict(changed, configured, controller.signal);
+    queueMicrotask(() => controller.abort());
+    await assert.rejects(pending, { name: "AbortError" });
+    assert.equal((await predict(changed, configured)).lifecycle.reused, false);
+  });
+
+test(
+  "a Python worker exiting during result cleanup cannot restore a retained session",
+  { timeout: 10000 },
+  async (t) => {
+    const directory = await mkdtemp(path.join(tmpdir(), "viewer-run-exit-"));
+    const stop = path.join(directory, "stop");
+    const worker = path.join(directory, "worker.py");
+    await writeFile(
+      worker,
+      `
+import json
+import pathlib
+import sys
+import time
+
+request = json.loads(sys.stdin.readline())
+directory = pathlib.Path(request["input"])
+(directory / "output-0.pb").write_bytes((directory / "input-0.pb").read_bytes())
+(directory / "result.json").write_text(json.dumps({
+    "timeMs": 1,
+    "inputs": [{"name": "input", "text": "Input"}],
+    "outputs": [{"name": "output", "text": "Output", "hasData": True}],
+    "lifecycle": {"loadMs": 1, "reused": False, "retained": True}
+}))
+print("\\x1e" + json.dumps({"type": "done"}), flush=True)
+while not pathlib.Path(${JSON.stringify(stop)}).exists():
+    time.sleep(0.01)
+`,
+    );
+    let exited;
+    const lost = new Promise((resolve) => (exited = resolve));
+    const errors = [];
+    const session = new RunSession((error) => {
+      errors.push(error);
+      exited();
+    });
+    t.after(async () => {
+      await writeFile(stop, "");
+      await session.close();
+      await rm(directory, { recursive: true, force: true });
+    });
+    // The real worker exits after output reads, while temporary-file cleanup awaits it.
+    const delayed = {};
+    runInNewContext(readFileSync(require.resolve("../dist/run"), "utf8"), {
+      exports: delayed,
+      require(name) {
+        if (name === "node:fs/promises")
+          return {
+            ...require(name),
+            async rm(directory, options) {
+              assert.equal(session.alive, true);
+              await writeFile(stop, "");
+              await lost;
+              await rm(directory, options);
+            },
+          };
+        return require(
+          name.startsWith(".")
+            ? path.resolve(__dirname, "../dist", name)
+            : name,
+        );
+      },
+    });
+    const model = loadModel(
+      readFileSync(require.resolve("./models/relu.onnx")),
+      "relu.onnx",
+    );
+    const result = await delayed.runModel(
+      model,
+      [],
+      {
+        engine: "onnxruntime",
+        keepLoaded: true,
+        inputs: ["float[1,3] input = {-1, 0, 2}"],
+      },
+      python,
+      worker,
+      () => {},
+      new AbortController().signal,
+      session,
+    );
+    assert.equal(errors.length, 1);
+    assert.match(errors[0].message, /ONNX Runtime exited/);
+    assert.equal(result.lifecycle.retained, false);
+    assert.equal(session.alive, false);
+    assert.deepEqual(result.outputs[0].data, result.inputs[0].data);
+  },
+);
+
+test("a failed pending input read does not unload a newer Run session", async (t) => {
+  const session = new RunSession();
+  t.after(() => session.close());
+  const directory = await mkdtemp(path.join(tmpdir(), "viewer-run-preflight-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const model = loadModel(
+    readFileSync(require.resolve("./models/relu.onnx")),
+    "relu.onnx",
+  );
+  const request = {
+    keepLoaded: true,
+    inputs: ["float[1,3] input = {-1, 0, 2}"],
+  };
+  const predict = (owner, options = request) =>
+    runModel(
+      owner,
+      [],
+      options,
+      python,
+      runner,
+      () => {},
+      new AbortController().signal,
+      session,
+    );
+  await predict(model);
+  const failure = assert.rejects(
+    predict(model, {
+      ...request,
+      inputs: [
+        {
+          name: "input",
+          source: "protobuf",
+          path: path.join(directory, "missing.pb"),
+        },
+      ],
+    }),
+    { code: "ENOENT" },
+  );
+  const replacement = model.clone();
+  const generation = await session.ensure(
+    replacement,
+    [],
+    "onnx-light",
+    {},
+    python,
+    runner,
+    new AbortController().signal,
+  );
+  await failure;
+  assert.equal(session.generation, generation);
+  assert.equal((await predict(replacement)).lifecycle.reused, false);
+  assert.equal((await predict(replacement)).lifecycle.reused, true);
+});
+
+for (const engine of ["onnx-light", "onnxruntime"])
+  test(`${engine} retained pipeline sessions invalidate when switching stages`, async (t) => {
+    const session = new RunSession();
+    t.after(() => session.close());
+    const model = await loadModelFile(
+      require.resolve("./models/tiny.pipe-onnx"),
+      "tiny.pipe-onnx",
+    );
+    for (const stage of ["embedding", "prefill", "embedding"]) {
+      const request = {
+        engine,
+        keepLoaded: true,
+        dimensions: { "symbol:batch": 1, "symbol:sequence": 1 },
+        inputs: [
+          stage === "embedding"
+            ? "int64[1,1] input_ids = {0}"
+            : "float[1,1,3] inputs_embeds = {1, 2, 3}",
+        ],
+      };
+      for (const reused of [false, true]) {
+        const result = await runModel(
+          model,
+          [{ pipeline: stage }],
+          request,
+          python,
+          runner,
+          () => {},
+          new AbortController().signal,
+          session,
+        );
+        assert.equal(result.lifecycle.reused, reused);
+        assert.equal(result.lifecycle.retained, true);
+      }
+    }
+  });
 
 test("numeric-looking symbolic dimensions remain required for both engines", async () => {
   const bytes = execFileSync(python, [
@@ -231,7 +496,20 @@ test("both engines execute protobuf and random inputs from independent current-m
       inputs: [{ name: "input", source: "random" }],
     });
     assert.equal(random.outputs[0].name, "output");
+    assert.equal(random.inputs[0].name, "input");
+    assert.match(random.inputs[0].text, /Values: \[/);
+    assert.equal(random.lifecycle.reused, false);
+    assert.equal(random.lifecycle.retained, false);
+    assert.ok(random.lifecycle.loadMs >= 0);
+    await writeFile(file, random.inputs[0].data);
+    const replay = await run(model, {
+      engine,
+      inputs: [{ name: "input", source: "protobuf", path: file }],
+    });
+    assert.deepEqual(replay.inputs, random.inputs);
+    assert.deepEqual(replay.outputs, random.outputs);
     assert.deepEqual(model.graph(), before);
+    await writeFile(file, prepared.inputs[0]);
   }
 });
 
@@ -279,6 +557,7 @@ test("onnx-light forwards SDK event diagnostics only when verbosity is enabled",
   const quiet = await run(model, request, (output) => {
     quietLogs = output;
   });
+
   assert.equal(quietLogs, "");
   let logs = "";
   const verbose = await run(
@@ -291,6 +570,67 @@ test("onnx-light forwards SDK event diagnostics only when verbosity is enabled",
   assert.match(logs, /Relu/);
   assert.match(logs, /run.?node/i);
   assert.deepEqual(verbose.outputs, quiet.outputs);
+});
+
+test("saved inputs replay exact int64 values beyond JavaScript precision in both engines", async (t) => {
+  const model = loadBackendTest(
+    listBackendTests().find((item) => item.name === "test_cc_identity_int64")
+      .id,
+  );
+  const directory = await mkdtemp(path.join(tmpdir(), "viewer-exact-input-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const file = path.join(directory, "input.pb");
+  const text = model
+    .runInputs()[0]
+    .text.replace("{}", "{9007199254740993, -9007199254740993, 0, 1, 2, 3}");
+  for (const engine of ["onnx-light", "onnxruntime"]) {
+    const result = await run(model, { engine, inputs: [text] });
+    assert.match(result.inputs[0].text, /9007199254740993, -9007199254740993/);
+    await writeFile(file, result.inputs[0].data);
+    const replay = await run(model, {
+      engine,
+      inputs: [{ name: result.inputs[0].name, source: "protobuf", path: file }],
+    });
+    assert.deepEqual(replay.inputs, result.inputs);
+    assert.deepEqual(replay.outputs, result.outputs);
+    assert.deepEqual(
+      Buffer.from(replay.inputs[0].data),
+      Buffer.from(result.inputs[0].data),
+    );
+    assert.equal(!!result.outputs[0].data, true);
+    await writeFile(file, result.outputs[0].data);
+    const fromOutput = await run(model, {
+      engine,
+      inputs: [{ name: result.inputs[0].name, source: "protobuf", path: file }],
+    });
+    assert.deepEqual(fromOutput.outputs, result.outputs);
+  }
+});
+
+test("output export retains complete tensors beyond the preview limit in both engines", async () => {
+  const model = loadModel(
+    readFileSync(require.resolve("./models/inference.onnx")),
+    "inference.onnx",
+  );
+  for (const engine of ["onnx-light", "onnxruntime"]) {
+    const result = await run(model, {
+      engine,
+      dimensions: { "symbol:N": 64 },
+      inputs: [{ name: "x", source: "random" }],
+    });
+    assert.match(result.outputs[0].text, /preview limit: 32/);
+    const size = Number(
+      execFileSync(
+        python,
+        [
+          "-c",
+          "import sys, onnx; from onnx import numpy_helper; t = onnx.TensorProto(); t.ParseFromString(sys.stdin.buffer.read()); print(numpy_helper.to_array(t).size)",
+        ],
+        { input: result.outputs[0].data, encoding: "utf8" },
+      ),
+    );
+    assert.ok(size > 32);
+  }
 });
 
 test("ONNX Runtime transport decodes UTF-16 stderr while preserving UTF-8 stdout and failure details", async () => {
