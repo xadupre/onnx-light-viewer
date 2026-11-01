@@ -1448,49 +1448,58 @@ async function configurePanel(
             });
         }
       } else if (message?.type === "run-save") {
-        const savedRun = runResult;
+        const owner = model;
+        const revision = graphRevision;
+        const generation = runRequest;
         const isCurrent = () =>
           active &&
-          runResult === savedRun &&
-          savedRun?.owner === model &&
-          savedRun?.revision === graphRevision &&
-          savedRun?.generation === runRequest;
+          model === owner &&
+          graphRevision === revision &&
+          runRequest === generation &&
+          runResult !== undefined &&
+          runResult.owner === owner &&
+          runResult.revision === revision &&
+          runResult.generation === generation;
         try {
-          const tensor = executedTensor(message.run);
           if (message.format !== "protobuf" && message.format !== "statistics")
             throw new Error("Choose TensorProto or statistics JSON.");
-          const statistics =
-            message.format === "statistics"
-              ? await tensorStatisticsFromProto(tensor.data!)
-              : undefined;
-          if (!isCurrent()) return;
+          const tensorName = executedTensor(message.run).name;
           const uri = await vscode.window.showSaveDialog({
-            saveLabel: statistics ? "Save statistics" : "Save tensor",
-            filters: statistics
-              ? { "Tensor statistics": ["json"] }
-              : { TensorProto: ["pb"] },
+            saveLabel:
+              message.format === "statistics"
+                ? "Save statistics"
+                : "Save tensor",
+            filters:
+              message.format === "statistics"
+                ? { "Tensor statistics": ["json"] }
+                : { TensorProto: ["pb"] },
           });
           if (!isCurrent()) return;
           if (uri) {
-            const source = savedRun?.owner.source?.uri;
+            const source = owner?.source?.uri;
             const sources = source
               ? [
                   source,
-                  ...(savedRun?.owner.sourceWeightLocations ?? []).map(
-                    (location) => vscode.Uri.joinPath(source, "..", location),
+                  ...(owner?.sourceWeightLocations ?? []).map((location) =>
+                    vscode.Uri.joinPath(source, "..", location),
                   ),
                 ]
               : [];
             await assertSaveDestination(sources, uri);
             if (!isCurrent()) return;
-            const published = await writeModelFile(
-              uri,
-              statistics
-                ? Buffer.from(JSON.stringify(statistics, null, 2) + "\n")
-                : tensor.data!,
-              true,
-              isCurrent,
-            );
+            const tensor = executedTensor(message.run);
+            const bytes =
+              message.format === "statistics"
+                ? Buffer.from(
+                    JSON.stringify(
+                      await tensorStatisticsFromProto(tensor.data!),
+                      null,
+                      2,
+                    ) + "\n",
+                  )
+                : tensor.data!;
+            if (!isCurrent()) return;
+            const published = await writeModelFile(uri, bytes, true, isCurrent);
             if (!published) return;
           }
           if (isCurrent())
@@ -1498,7 +1507,7 @@ async function configurePanel(
               type: "run-save-info",
               requestId: message.run?.requestId,
               status: uri
-                ? `Saved ${tensor.name} to ${locationText(uri)}.`
+                ? `Saved ${tensorName} to ${locationText(uri)}.`
                 : "Save cancelled.",
             });
         } catch (error) {
