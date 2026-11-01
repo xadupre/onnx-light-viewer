@@ -1472,6 +1472,17 @@ async function configurePanel(
           });
           if (!isCurrent()) return;
           if (uri) {
+            const source = savedRun?.owner.source?.uri;
+            const sources = source
+              ? [
+                  source,
+                  ...(savedRun?.owner.sourceWeightLocations ?? []).map(
+                    (location) => vscode.Uri.joinPath(source, "..", location),
+                  ),
+                ]
+              : [];
+            await assertSaveDestination(sources, uri);
+            if (!isCurrent()) return;
             await vscode.workspace.fs.writeFile(
               uri,
               statistics
@@ -1614,6 +1625,7 @@ async function configurePanel(
       } else if (message?.type === "tensor-statistics") {
         const requestedModel = model;
         const revision = graphRevision;
+        const runGeneration = runRequest;
         const execution = message.run ? runResult : undefined;
         const generation = ++tensorStatisticsRequest;
         const isCurrent = () =>
@@ -1622,7 +1634,9 @@ async function configurePanel(
           graphRevision === revision &&
           tensorStatisticsRequest === generation &&
           (!message.run ||
-            (runResult === execution && execution?.generation === runRequest));
+            (runRequest === runGeneration &&
+              runResult === execution &&
+              (!execution || execution.generation === runGeneration)));
         try {
           const statistics = await log.run("Inspect tensor data", async () => {
             if (
@@ -3980,6 +3994,8 @@ async function configurePanel(
               );
               const retained = edited.model.clone();
               runController?.abort();
+              runRequest++;
+              runResult = undefined;
               model = {
                 ...current,
                 native: edited.model,

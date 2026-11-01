@@ -179,6 +179,53 @@ test("Run inspection and saving use host-owned execution tensors for both engine
   }
 });
 
+test("Run exports cannot overwrite a loaded model, its external weights, or an alias", async (t) => {
+  const directory = await mkdtemp(
+    path.join(tmpdir(), "viewer-run-save-source-"),
+  );
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const { loadModel } = require("../dist/graph");
+  const native = loadModel(
+    readFileSync(require.resolve("./models/fusion.onnx")),
+    "fusion",
+  );
+  const files = await native.serializeFiles(1024, "original.data");
+  const source = path.join(directory, "source.onnx");
+  await writeFile(source, files.model);
+  for (const weight of files.weights)
+    await writeFile(path.join(directory, weight.name), weight.bytes);
+  const alias = path.join(directory, "source-alias.onnx");
+  await link(source, alias);
+
+  const extension = await openExtension(
+    undefined,
+    "onnxLightViewer.open",
+    true,
+  );
+  t.after(() => extension.dispose());
+  await extension.openFile(source);
+  const model = extension.nativeModels.at(-1);
+  await extension.receive({
+    type: "run-model",
+    requestId: 1,
+    inputs: model.runInputs().map(({ name }) => ({ name, source: "random" })),
+  });
+  assert.equal(extension.messages.at(-1).type, "run-result");
+  const run = { requestId: 1, kind: "outputs", index: 0 };
+  for (const file of [
+    source,
+    alias,
+    ...files.weights.map(({ name }) => path.join(directory, name)),
+  ]) {
+    const before = await readFile(file);
+    extension.setSaveDestination(file);
+    await extension.receive({ type: "run-save", run, format: "protobuf" });
+    assert.equal(extension.messages.at(-1).type, "run-save-error");
+    assert.match(extension.messages.at(-1).error, /different destination/);
+    assert.deepEqual(await readFile(file), before);
+  }
+});
+
 test("Run saving discards a stale destination after a new run request", async (t) => {
   const extension = await openExtension("relu.onnx");
   t.after(() => extension.dispose());
@@ -203,6 +250,47 @@ test("Run saving discards a stale destination after a new run request", async (t
   await save;
   await assert.rejects(readFile(file), { code: "ENOENT" });
 });
+
+test("expired run statistics report an error and later invalidations suppress stale replies", async (t) => {
+  const extension = await openExtension("relu.onnx");
+  t.after(() => extension.dispose());
+  await extension.receive({
+    type: "run-model",
+    requestId: 1,
+    inputs: ["float[1,3] input = {-1, 0, 2}"],
+  });
+  const result = extension.messages.at(-1).result;
+  const run = { requestId: 1, kind: "outputs", index: 0 };
+  extension.nativeModels.at(-1).metadata = () => {
+    throw new Error("Metadata refresh failed.");
+  };
+  await extension.receive({ type: "metadata" });
+  assert.equal(extension.messages.at(-1).type, "metadata-error");
+
+  const request = {
+    type: "tensor-statistics",
+    requestId: 2,
+    path: [],
+    run,
+    name: result.outputs[0].name,
+  };
+  await extension.receive(request);
+  assert.equal(extension.messages.at(-1).type, "tensor-statistics-error");
+  assert.match(extension.messages.at(-1).error, /no longer available/);
+
+  const errors = extension.messages.filter(
+    ({ type }) => type === "tensor-statistics-error",
+  ).length;
+  const stale = extension.receive({ ...request, requestId: 3 });
+  await extension.receive({ type: "run-inputs", requestId: 4 });
+  await stale;
+  assert.equal(
+    extension.messages.filter(({ type }) => type === "tensor-statistics-error")
+      .length,
+    errors,
+  );
+});
+
 test("regular run host cancels ONNX Runtime preparation on panel disposal", async (t) => {
   const extension = await openExtension("relu.onnx");
   t.after(() => extension.dispose());

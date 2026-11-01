@@ -15,6 +15,7 @@ function panel(t) {
   const messages = [];
   let promptActivations = 0;
   const inspections = [];
+  let statisticsResets = 0;
   dom.window.eval(
     readFileSync(require.resolve("../media/run-panel.js"), "utf8"),
   );
@@ -23,6 +24,7 @@ function panel(t) {
     postMessage: (message) => messages.push(message),
     activatePrompt: () => ++promptActivations,
     openStatistics: (...args) => inspections.push(args),
+    resetStatistics: () => ++statisticsResets,
   });
   return {
     dom,
@@ -30,6 +32,7 @@ function panel(t) {
     api,
     messages,
     inspections,
+    statisticsResets: () => statisticsResets,
     activations: () => promptActivations,
   };
 }
@@ -167,7 +170,7 @@ test("regular run sends exact text inputs, handles errors and ignores stale resu
 
 for (const type of ["metadata-error", "shape-error"])
   test(`Run recovers from ${type} without stale messages or lost input drafts`, (t) => {
-    const { byId, api, messages } = panel(t);
+    const { byId, api, messages, statisticsResets } = panel(t);
     const failure = { type, error: "Model analysis failed." };
     api.activate();
     const pendingInputs = messages.at(-1);
@@ -215,6 +218,21 @@ for (const type of ["metadata-error", "shape-error"])
     assert.equal(messages.at(-1).type, "run-model");
     assert.ok(messages.at(-1).requestId > run.requestId);
     assert.equal(messages.at(-1).inputs[0], draft);
+    const resetsBeforeCompletedResult = statisticsResets();
+    const completed = messages.at(-1);
+    api.handleMessage({
+      type: "run-result",
+      requestId: completed.requestId,
+      result: {
+        timeMs: 1,
+        outputs: [{ name: "Y", text: "result", hasData: true }],
+      },
+    });
+    assert.ok(byId("run-results").querySelector("button"));
+    api.handleMessage(failure);
+    assert.equal(byId("run-results").textContent, "");
+    assert.equal(byId("run-input-0").value, draft);
+    assert.equal(statisticsResets(), resetsBeforeCompletedResult + 1);
   });
 
 test("pipeline stage changes reload input forms without changing execution mode", (t) => {

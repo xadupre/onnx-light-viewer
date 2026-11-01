@@ -14,6 +14,17 @@ from onnx import numpy_helper
 import onnxruntime as ort
 
 
+def preview_values(value):
+    preview = []
+    for item in value.reshape(-1).tolist():
+        if isinstance(item, str) and len(item) > 128:
+            item = item[:128] + "…"
+        elif isinstance(item, bytes) and len(item) > 128:
+            item = item[:128] + b"..."
+        preview.append(item)
+    return str(preview)
+
+
 def main(directory):
     directory = Path(directory)
     settings = json.loads((directory / "settings.json").read_text(encoding="utf-8"))
@@ -37,7 +48,7 @@ def main(directory):
     previews = []
     for name, value in inputs.items():
         preview = (
-            str(value.reshape(-1).tolist())
+            preview_values(value)
             if value.size <= 32
             else "Omitted (preview limit: 32 elements)."
         )
@@ -48,7 +59,7 @@ def main(directory):
     for index, (metadata, value) in enumerate(zip(session.get_outputs(), values)):
         if hasattr(value, "dtype"):
             preview = (
-                str(value.reshape(-1).tolist())
+                preview_values(value)
                 if value.size <= 32
                 else "Omitted (preview limit: 32 elements)."
             )

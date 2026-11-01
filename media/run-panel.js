@@ -3,6 +3,7 @@ function createRunPanel({
   postMessage,
   activatePrompt,
   openStatistics = () => {},
+  resetStatistics = () => {},
   canActivate = () => true,
 }) {
   let requestId = 0;
@@ -144,11 +145,13 @@ function createRunPanel({
     },
     handleMessage(message) {
       if (["metadata-error", "shape-error"].includes(message?.type)) {
-        if (busy || (requested && !available)) {
+        if (busy || requested) {
           ++requestId;
           requested = available;
           busy = false;
           fields.disabled = !available;
+          results.replaceChildren();
+          resetStatistics();
           status.textContent = `Run cancelled: ${message.error}`;
         }
         return false;
