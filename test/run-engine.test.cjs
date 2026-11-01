@@ -139,7 +139,7 @@ graph = oh.make_graph([oh.make_node("Identity", ["X"], ["Y"])], "strings", [inpu
 model = oh.make_model(graph, opset_imports=[oh.make_opsetid("", 13)])
 model.ir_version = 10
 onnx.save(model, directory / "model.onnx")
-tensor = oh.make_tensor("X", TensorProto.STRING, [1], [${JSON.stringify(long)}])
+tensor = oh.make_tensor("X", TensorProto.STRING, [1], ["x" * ${long.length}])
 (directory / "input-0.pb").write_bytes(tensor.SerializeToString())
 (directory / "settings.json").write_text(json.dumps({"logSeverity": 3, "logVerbosity": 0, "inputs": 1}))
 `,
