@@ -14,6 +14,12 @@ function createRunPanel({
   let releaseId = 0;
   let inputs = [];
   const fields = byId("run-fields");
+  const sessionFields = byId("run-session-fields");
+  const setDisabled = (disabled) => {
+    fields.disabled = disabled;
+    sessionFields.disabled = disabled;
+  };
+  setDisabled(fields.disabled);
   const status = byId("run-status");
   const results = byId("run-results");
   const stage = byId("run-stage");
@@ -103,7 +109,7 @@ function createRunPanel({
     release();
     requested = true;
     available = false;
-    fields.disabled = true;
+    setDisabled(true);
     results.replaceChildren();
     byId("run-log").textContent = "";
     status.textContent = "Loading model inputs…";
@@ -132,7 +138,7 @@ function createRunPanel({
     }
     busy = true;
     showLifecycle();
-    fields.disabled = true;
+    setDisabled(true);
     results.replaceChildren();
     byId("run-log").textContent = "";
     status.textContent = "Running model…";
@@ -170,7 +176,7 @@ function createRunPanel({
       retained = false;
       inputs = [];
       showLifecycle();
-      fields.disabled = true;
+      setDisabled(true);
       stage.replaceChildren(new Option("Root graph", "[]"));
       byId("run-inputs").replaceChildren();
       byId("run-dimensions").replaceChildren();
@@ -202,7 +208,7 @@ function createRunPanel({
           busy = false;
           retained = false;
           showLifecycle();
-          fields.disabled = !available;
+          setDisabled(!available);
           results.replaceChildren();
           resetStatistics();
           status.textContent = `Run cancelled: ${message.error}`;
@@ -422,7 +428,7 @@ function createRunPanel({
           });
         }
       }
-      fields.disabled = !available;
+      setDisabled(!available);
       return true;
     },
   };

@@ -8616,6 +8616,77 @@ test("Run Settings edits only regular execution controls and releases its retain
   });
 });
 
+for (const outcome of [
+  "run-result",
+  "run-error",
+  "metadata-error",
+  "shape-error",
+  "reset",
+])
+  test(`Run Settings keeps the executing engine and synchronizes disabled controls after ${outcome}`, (t) => {
+    const { document, window, messages, load } = openViewer(t);
+    const byId = (id) => document.getElementById(id);
+    const receive = (data) =>
+      window.dispatchEvent(new window.MessageEvent("message", { data }));
+    load(demoGraph);
+    byId("prompt-tab").click();
+    byId("execution-run-tab").click();
+    receive({
+      type: "run-inputs",
+      requestId: messages.at(-1).requestId,
+      inputs: [],
+      stages: [],
+      path: [],
+    });
+    byId("run-engine").value = "onnxruntime";
+    byId("run-engine").dispatchEvent(new window.Event("change"));
+    byId("run-keep-loaded").checked = true;
+    byId("run-form").dispatchEvent(new window.Event("submit"));
+    const requestId = messages.at(-1).requestId;
+    assert.equal(byId("run-session-fields").disabled, true);
+    byId("settings-tab").click();
+    byId("settings-engine-tab").click();
+    assert.ok(byId("run-session-fields").contains(byId("run-log-verbosity")));
+    assert.ok(byId("run-log-verbosity").matches(":disabled"));
+    const before = messages.length;
+    byId("settings-onnx-light-tab").click();
+    byId("settings-onnxruntime-tab").dispatchEvent(
+      new window.KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }),
+    );
+    assert.equal(byId("run-engine").value, "onnxruntime");
+    assert.equal(
+      byId("settings-onnxruntime-tab").getAttribute("aria-selected"),
+      "true",
+    );
+    assert.equal(byId("run-logging-ort").hidden, false);
+    assert.equal(messages.length, before);
+    if (outcome === "reset") load(demoGraph);
+    else
+      receive({
+        type: outcome,
+        requestId,
+        error: "Execution stopped.",
+        result: {
+          timeMs: 1,
+          outputs: [],
+          lifecycle: { loadMs: 2, reused: false, retained: true },
+        },
+      });
+    const disabled = outcome === "reset";
+    assert.equal(byId("run-fields").disabled, disabled);
+    assert.equal(byId("run-session-fields").disabled, disabled);
+    assert.equal(byId("run-log-verbosity").matches(":disabled"), disabled);
+    if (outcome === "run-result")
+      assert.match(
+        byId("run-lifecycle").textContent,
+        /ONNX Runtime session: created.*still loaded/,
+      );
+    if (!disabled) {
+      byId("settings-onnx-light-tab").click();
+      assert.equal(byId("run-engine").value, "onnx-light");
+    }
+  });
+
 test("Engine settings subtabs reuse prompt controls without changing the execution engine", (t) => {
   const { document, window, messages } = openViewer(t);
   const byId = (id) => document.getElementById(id);

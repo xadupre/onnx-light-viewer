@@ -45,6 +45,12 @@ function createSettingsPanel({
   function selectEngine(selected) {
     const regularRun =
       !byId("settings-view").hidden && !byId("run-session-page").hidden;
+    if (
+      regularRun &&
+      byId("run-fields").disabled &&
+      byId("run-engine").value !== selected
+    )
+      return;
     for (const engine of engines) {
       const active = engine === selected;
       const tab = byId(`settings-${engine}-tab`);

@@ -267,7 +267,6 @@ function showTab(name, focus = false) {
       !byId("prompt-view").hidden && !byId("execution-run-view").hidden;
     byId("run-session-page").hidden = !regularRun;
     byId("prompt-session-page").hidden = regularRun;
-    byId("run-session-fields").disabled = byId("run-fields").disabled;
     if (regularRun) byId("run-session-fields").append(byId("run-logging"));
     for (const id of ["prompt-settings-back", "prompt-generation-back"])
       byId(id).hidden = byId("prompt-view").hidden;
