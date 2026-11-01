@@ -46,6 +46,7 @@ test("ONNX Runtime settings send diagnostics and arbitrary native session option
     use_deterministic_compute: true,
   });
   field("sessionOptions").value = sessionOptions;
+  byId("settings-device-model").checked = true;
   field("sessionOptions").dispatchEvent(
     new dom.window.Event("change", { bubbles: true }),
   );
@@ -63,6 +64,113 @@ test("ONNX Runtime settings send diagnostics and arbitrary native session option
   );
   assert.equal(byId("prompt-session-fields").disabled, true);
 });
+
+test("configuration entry editor validates duplicate and empty keys and retains unknown string-valued keys", (t) => {
+  const { dom, byId, api, messages } = panel(t);
+  api.handleMessage({
+    type: "prompt-info",
+    requestId: messages.at(-1).requestId,
+    info: { available: true, engines: ["onnxruntime-genai"] },
+  });
+  const submit = byId("prompt-form").querySelector('button[type="submit"]');
+  byId("prompt-config-add").click();
+  const first = byId("prompt-config-entries").firstElementChild;
+  const key = first.querySelector('[data-config="key"]');
+  const value = first.querySelector('[data-config="value"]');
+  value.value = "0";
+  submit.click();
+  assert.equal(key.checkValidity(), false);
+  assert.equal(
+    messages.some(({ type }) => type === "run-prompt"),
+    false,
+  );
+  key.value = "custom.runtime.option";
+  value.value = "x".repeat(8193);
+  submit.click();
+  assert.equal(value.checkValidity(), false);
+  value.value = "é".repeat(4097);
+  submit.click();
+  assert.equal(value.checkValidity(), false);
+  value.value = "0";
+  key.value = "x".repeat(1025);
+  submit.click();
+  assert.equal(key.checkValidity(), false);
+  key.value = "é".repeat(513);
+  submit.click();
+  assert.equal(key.checkValidity(), false);
+  key.value = "custom.runtime.option";
+  byId("prompt-config-add").click();
+  const second = byId("prompt-config-entries").lastElementChild;
+  second.querySelector('[data-config="key"]').value = key.value;
+  submit.click();
+  assert.equal(
+    second.querySelector('[data-config="key"]').checkValidity(),
+    false,
+  );
+  second.querySelector("button").click();
+  assert.equal(messages.at(-1).type, "prompt-release");
+  value.value = "bad\0value";
+  submit.click();
+  assert.equal(value.checkValidity(), false);
+  value.value = "";
+  key.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+  submit.click();
+  assert.deepEqual(
+    JSON.parse(messages.at(-1).options.sessionSettings.sessionOptions),
+    { "custom.runtime.option": "" },
+  );
+});
+
+for (const advanced of [false, true])
+  test(`configuration entries validate the final serialized size${advanced ? " including advanced JSON" : ""} and allow the exact limit`, (t) => {
+    const { dom, byId, api, messages } = panel(t);
+    api.handleMessage({
+      type: "prompt-info",
+      requestId: messages.at(-1).requestId,
+      info: { available: true, engines: ["onnxruntime-genai"] },
+    });
+    const field = byId("prompt-settings-genai").querySelector(
+      '[data-setting="sessionOptions"]',
+    );
+    const entries = advanced ? { base: "x".repeat(8192) } : {};
+    if (advanced) field.value = JSON.stringify(entries);
+    let last;
+    for (let index = 0; index < (advanced ? 7 : 8); index++) {
+      byId("prompt-config-add").click();
+      const row = byId("prompt-config-entries").lastElementChild;
+      const name = `custom.option.${index}`;
+      row.querySelector('[data-config="key"]').value = name;
+      last = row.querySelector('[data-config="value"]');
+      last.value = entries[name] = "x".repeat(8192);
+      assert.equal(last.checkValidity(), true);
+    }
+    const submit = byId("prompt-form").querySelector('button[type="submit"]');
+    submit.click();
+    assert.equal(
+      messages.some(({ type }) => type === "run-prompt"),
+      false,
+    );
+    assert.equal(byId("prompt-fields").disabled, false);
+    assert.equal(byId("prompt-settings-genai").hidden, false);
+    assert.equal(field.checkValidity(), false);
+    assert.match(field.validationMessage, /65536.*Remove.*shorten/);
+    last.value = "x".repeat(8192 - (JSON.stringify(entries).length - 65536));
+    last.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+    submit.click();
+    assert.equal(field.checkValidity(), true);
+    const run = messages.at(-1);
+    assert.equal(run.type, "run-prompt");
+    assert.equal(run.options.sessionSettings.sessionOptions.length, 65536);
+    assert.equal(
+      JSON.parse(run.options.sessionSettings.sessionOptions)["custom.option.0"],
+      entries["custom.option.0"],
+    );
+    if (advanced)
+      assert.equal(
+        JSON.parse(run.options.sessionSettings.sessionOptions).base,
+        entries.base,
+      );
+  });
 
 test("invalid session JSON stops generation and corrected or blank JSON clears validity", (t) => {
   const { byId, api, messages } = panel(t);
@@ -574,7 +682,7 @@ test("section headings stay aligned across the 1000-column boundary", (t) => {
     assert.equal(row.cells.length, 1002);
 });
 
-test("engine settings pages retain independent controls, including parallel loading", (t) => {
+test("engine settings pages retain independent controls with devices configured separately", (t) => {
   const { dom, byId, api, messages } = panel(t);
   const field = (page, name) =>
     byId(page).querySelector(`[data-setting="${name}"]`);
@@ -584,13 +692,7 @@ test("engine settings pages retain independent controls, including parallel load
   assert.equal(byId("prompt-settings-genai").hidden, true);
   assert.equal(byId("prompt-settings-engine"), null);
   assert.match(byId("prompt-settings-title").textContent, /onnx-light/);
-  field("prompt-settings-light", "threads").value = "2";
-  field("prompt-settings-light", "sdkLoader").value = "true";
-  field("prompt-settings-light", "sdkLoader").dispatchEvent(
-    new dom.window.Event("change", { bubbles: true }),
-  );
-  field("prompt-settings-light", "loadOverlap").value = "false";
-  field("prompt-settings-light", "loadMemoryMiB").value = "512";
+  field("prompt-device-fields", "threads").value = "2";
   byId("prompt-keep-loaded").checked = true;
   byId("prompt-settings-back").click();
   byId("prompt-form").dispatchEvent(new dom.window.Event("submit"));
@@ -598,9 +700,6 @@ test("engine settings pages retain independent controls, including parallel load
   assert.equal(first.options.keepLoaded, true);
   assert.deepEqual(JSON.parse(JSON.stringify(first.options.sessionSettings)), {
     threads: 2,
-    sdkLoader: true,
-    loadOverlap: false,
-    loadMemoryMiB: 512,
     profile: false,
   });
   assert.equal(byId("prompt-session-fields").disabled, true);
@@ -617,22 +716,25 @@ test("engine settings pages retain independent controls, including parallel load
   assert.equal(byId("prompt-settings-genai").hidden, false);
   assert.equal(byId("prompt-settings-light").hidden, true);
   assert.match(byId("prompt-settings-title").textContent, /GenAI/);
-  const provider = field("prompt-settings-genai", "provider");
-  provider.value = "cuda";
+  const provider = byId("settings-device-cuda");
+  provider.checked = true;
   provider.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
-  assert.equal(field("prompt-settings-genai", "deviceId").disabled, false);
-  field("prompt-settings-genai", "deviceId").value = "1";
-  field("prompt-settings-genai", "gpuMemoryMiB").value = "256";
+  assert.equal(field("prompt-device-fields", "cudaDeviceId").disabled, false);
+  field("prompt-device-fields", "cudaDeviceId").value = "1";
+  field("prompt-device-fields", "gpuMemoryMiB").value = "256";
   field("prompt-settings-genai", "prepacking").value = "false";
   byId("prompt-settings-back").click();
   byId("prompt-form").dispatchEvent(new dom.window.Event("submit"));
   const second = messages.at(-1);
   assert.equal(second.options.engine, "onnxruntime-genai");
-  assert.equal(second.options.sessionSettings.provider, "cuda");
-  assert.equal(second.options.sessionSettings.deviceId, 1);
+  assert.deepEqual(Array.from(second.options.sessionSettings.providers), [
+    "cpu",
+    "cuda",
+  ]);
+  assert.equal(second.options.sessionSettings.cudaDeviceId, 1);
   assert.equal(second.options.sessionSettings.prepacking, false);
   assert.equal(second.options.sessionSettings.threads, undefined);
-  assert.equal(field("prompt-settings-light", "threads").value, "2");
+  assert.equal(field("prompt-device-fields", "threads").value, "2");
 });
 
 test("model replacement preserves the settings page until the session settings shortcut is opened", (t) => {
@@ -690,9 +792,9 @@ test("loading and warmup appear before tokens, and unloading updates retained st
   assert.doesNotMatch(byId("prompt-lifecycle").textContent, /999/);
 });
 
-test("invalid settings stop generation and pipelines expose SDK owning-loader controls", (t) => {
+test("invalid device settings stop generation and pipelines preserve SDK loading defaults", (t) => {
   const { dom, byId, api, messages } = panel(t);
-  const threads = byId("prompt-settings-light").querySelector(
+  const threads = byId("prompt-device-fields").querySelector(
     '[data-setting="threads"]',
   );
   threads.value = "-1";
@@ -701,7 +803,7 @@ test("invalid settings stop generation and pipelines expose SDK owning-loader co
     messages.some((message) => message.type === "run-prompt"),
     false,
   );
-  assert.equal(byId("prompt-session-page").hidden, false);
+  assert.equal(byId("prompt-session-page").hidden, true);
   threads.value = "1";
   api.handleMessage({
     type: "prompt-info",
@@ -709,33 +811,27 @@ test("invalid settings stop generation and pipelines expose SDK owning-loader co
     info: { available: true, engines: ["onnx-light"], pipeline: true },
   });
   const light = byId("prompt-settings-light");
-  const overlap = light.querySelector('[data-setting="loadOverlap"]');
-  const loader = light.querySelector('[data-setting="sdkLoader"]');
-  assert.equal(overlap.disabled, true);
-  assert.equal(loader.disabled, false);
+  for (const name of [
+    "loadOverlap",
+    "sdkLoader",
+    "loadMemoryMiB",
+    "checkShapes",
+    "releaseIntermediates",
+  ])
+    assert.equal(light.querySelector(`[data-setting="${name}"]`), null);
   assert.equal(byId("prompt-settings-light").hidden, false);
   assert.equal(byId("prompt-settings-genai").hidden, true);
-  loader.value = "true";
-  loader.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
   for (const field of light.querySelectorAll("[data-setting]"))
     assert.equal(field.matches(":disabled"), false, field.dataset.setting);
-  overlap.value = "false";
-  light.querySelector('[data-setting="loadMemoryMiB"]').value = "512";
   byId("prompt-settings-back").click();
   byId("prompt-form").dispatchEvent(new dom.window.Event("submit"));
   assert.deepEqual(
     JSON.parse(JSON.stringify(messages.at(-1).options.sessionSettings)),
     {
       threads: 1,
-      sdkLoader: true,
-      loadOverlap: false,
-      loadMemoryMiB: 512,
       profile: false,
     },
   );
-  loader.value = "false";
-  loader.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
-  assert.equal(overlap.disabled, true);
 });
 
 test("a single prefill token has no decode mean and missing SDK timings are not fabricated", (t) => {

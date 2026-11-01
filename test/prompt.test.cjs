@@ -746,6 +746,15 @@ test("GenAI applies advanced session options without changing the exported confi
       ),
       [1, 1, 1],
     );
+    const selectedCpu = await run(unsupportedProvider, { providers: ["cpu"] });
+    assert.deepEqual(
+      selectedCpu.tokens.map((token) => token.id),
+      [1, 1, 1],
+    );
+    assert.equal(
+      (await run(unsupportedProvider, { providers: ["cpu"] })).lifecycle.reused,
+      true,
+    );
     await assert.rejects(
       run("{}", { customOpsLibrary: path.join(root, "missing-ops.so") }),
       /ONNX Runtime GenAI/,
@@ -1321,6 +1330,21 @@ test("rejects malformed options, tampering, changed assets and cancellation", as
     { ...options, sessionSettings: { intraOpThreads: -1 } },
     { ...options, sessionSettings: { threads: 2 } },
     { ...options, sessionSettings: { provider: "unknown" } },
+    ...[[], ["cpu", "cpu"], ["unknown"], "cuda", ["cpu", 1]].map(
+      (providers) => ({ ...options, sessionSettings: { providers } }),
+    ),
+    { ...options, sessionSettings: { providers: ["cpu"], provider: "cpu" } },
+    { ...options, sessionSettings: { providers: ["cpu"], cudaDeviceId: 0 } },
+    { ...options, sessionSettings: { providers: ["cpu"], dmlDeviceId: 0 } },
+    {
+      ...options,
+      sessionSettings: { providers: ["cpu", "cuda"], cudaDeviceId: 65536 },
+    },
+    {
+      ...options,
+      engine: "onnx-light",
+      sessionSettings: { providers: ["cpu"] },
+    },
     { ...options, sessionSettings: { gpuMemoryMiB: 128 } },
     { ...options, sessionSettings: { logVerbosity: -1 } },
     { ...options, sessionSettings: { logVerbosity: 2147483648 } },
@@ -1334,6 +1358,10 @@ test("rejects malformed options, tampering, changed assets and cancellation", as
       "true",
       '{"__proto__":{"polluted":true}}',
       '{"log_id":"bad\\u0000id"}',
+      JSON.stringify({ ["x".repeat(1025)]: "0" }),
+      JSON.stringify({ "custom.key": "x".repeat(8193) }),
+      JSON.stringify({ ["é".repeat(513)]: "0" }),
+      JSON.stringify({ "custom.key": "é".repeat(4097) }),
       '{"number":1e400}',
       '{"x":'.repeat(18) + "0" + "}".repeat(18),
       " ".repeat(65537),

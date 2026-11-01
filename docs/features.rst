@@ -221,20 +221,26 @@ Select the engine on **Run → Prompt**, then open **Session settings** to jump 
 its subtab in **Settings → Engine**. Controls preserve defaults unless changed and never edit the
 exported configuration. GenAI's **From genai_config.json** uses the exported
 configuration, or the engine default when the option is absent from that file.
-onnx-light exposes CPU threads, shape checks, allocation capacity, intermediate
-release, logging and native kernel profiles. GenAI exposes CPU threads,
-CPU/CUDA/DirectML providers and GPU limits, graph optimization, memory options,
+onnx-light exposes allocation capacity, logging and native kernel profiles.
+GenAI exposes graph optimization, memory options,
 prepacking, graph execution mode, log ID/verbosity, custom operator libraries and ORT profiling. Unsupported
 providers/options raise runtime errors, without switching engines.
 
 **Settings → Engine → onnxruntime → All session options** accepts a JSON object
 in the native GenAI ``session_options`` format, exposing all options supported by
 the installed runtime, including ``provider_options`` and string-valued ORT
-configuration entries. For example, ``{"session.intra_op.allow_spinning":"0"}``
+configuration entries listed in the `ONNX Runtime configuration keys
+<https://github.com/microsoft/onnxruntime/blob/main/include/onnxruntime/core/session/onnxruntime_session_options_config_keys.h>`_.
+For example, ``{"session.intra_op.allow_spinning":"0"}``
 disables intra-op spinning. Nonblank individual controls override matching JSON
 keys; blank JSON preserves the exported configuration. Provider selection and GPU
-controls also take precedence over JSON provider options. Invalid JSON blocks
+controls also take precedence over JSON provider options unless **Use providers
+from JSON / model** is enabled on Device. Invalid JSON blocks
 generation; unsupported runtime options are reported on Prompt.
+
+Use **Session configuration entries** to add string-valued keys and values
+without editing JSON. Common keys are suggested; entries override matching JSON
+keys. Leave both fields empty or remove the entry to preserve the runtime default.
 
 .. figure:: _static/feature-ort-session-options.png
    :alt: ONNX Runtime settings with log verbosity, log ID, custom operator library and a JSON editor for all native session options.
@@ -256,13 +262,8 @@ at the generated prefixes, not a second sampled sequence.
 
    Generation settings shared by the onnx-light and ONNX Runtime GenAI engines.
 
-For **parallel loading**, select onnx-light's **SDK owning loader**, then
-configure read/preparation overlap and its admission memory limit. One SDK I/O
-worker overlaps preparation on the CPU executor; CPU threads also apply to
-preparation. Standard ONNX loading remains the default. Both loaders support
-external tensors without explicit lengths. The same controls support owning pipeline
-loading with SDK 0.2.3; its stages share one loading admission budget and prepared
-static store.
+onnx-light loading, shape checking and intermediate release use their defaults;
+these controls are not exposed in Settings.
 GenAI exposes initialization/prepacking and session-thread controls, not a
 separate parallel weight-reader thread count. Parallel graph execution is not
 parallel loading. Profiles add overhead and are written under
@@ -296,13 +297,13 @@ sampling settings, while pipeline interface names and EOS defaults are preserved
    Real native GenAI timings on a tiny deterministic test model, not an LLM benchmark.
 
 .. figure:: _static/feature-prompt-settings-light.png
-   :alt: onnx-light session settings page with CPU threads, owning-loader overlap and memory admission controls.
+   :alt: onnx-light session settings page with allocation capacity, logging and native profiling controls.
    :width: 100%
 
-   onnx-light session and parallel-loading controls, backed by supported SDK APIs.
+   Focused onnx-light session controls, backed by supported SDK APIs.
 
 .. figure:: _static/feature-prompt-settings-genai.png
-   :alt: GenAI session settings page with thread counts, providers, initialization, graph optimization, memory and profiling controls.
+   :alt: GenAI session settings page with initialization, graph optimization, memory and profiling controls.
    :width: 100%
 
    GenAI session options are overlaid in memory; the exported configuration is unchanged.
@@ -573,11 +574,18 @@ Open **Settings → App** to configure download and Python paths, sidebar width
 and visible viewer panels, or reset viewer preferences.
 Open **Settings → History** to inspect cache locations and remove or clear Open,
 Save and conversion suggestions. Clearing history never deletes files.
-Open **Settings → Engine** for **onnxruntime**, **pytorch** and **onnx-light**
+Open **Settings → Device** to select devices independently; CPU and GPU selections
+can coexist. Supported devices are selected by default after capability detection.
+CPU fallback is always enabled; GPU selections use CUDA then DirectML priority.
+CPU thread counts, the CPU memory arena and GPU limits are separate from engine
+options. Detection requires workspace trust and the configured Python runtime;
+it does not overwrite manual selections. onnx-light and Hugging Face validation
+remain CPU-only.
+Open **Settings → Engine** for **onnxruntime** and **onnx-light**
 subtabs. ONNX Runtime GenAI and onnx-light share the session controls used by
 Prompt; changes apply to the next run and remain in this viewer panel, without
-changing the selected execution engine. PyTorch lists the fixed CPU, local-only
-validation settings; reference selection and validation remain on Prompt.
+changing the selected execution engine. Reference selection and validation remain
+on Prompt.
 Open **Settings → Generation** for temperature and maximum new tokens, shared
 by both prompt engines.
 Use Left/Right arrows, Home or End to switch categories or engine subtabs from
@@ -596,10 +604,16 @@ their tab buttons.
    Manage remembered suggestions separately in History.
 
 .. figure:: _static/feature-settings-engine.png
-   :alt: Settings Engine category with onnxruntime, pytorch and onnx-light subtabs and editable GenAI session options.
+   :alt: Settings Engine category with onnxruntime and onnx-light subtabs and editable GenAI session options.
    :width: 100%
 
    Browse engine options independently of the engine selected for Prompt.
+
+.. figure:: _static/feature-settings-device.png
+   :alt: Settings Device category with independent CPU, CUDA and DirectML selections and GPU limits.
+   :width: 100%
+
+   Select devices separately from engine session options.
 
 Diagnostics and help
 ^^^^^^^^^^^^^^^^^^^^

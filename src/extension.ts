@@ -25,6 +25,7 @@ import { webviewHtml } from "./webview";
 import {
   applicationSettings,
   inspectPythonPackages,
+  inspectPythonDevices,
   latestPackageVersions,
 } from "./settings";
 import {
@@ -734,6 +735,7 @@ async function configurePanel(
     );
   };
   let inspectingPackages = false;
+  let inspectingDevices = false;
   let exporting: AbortController | undefined;
   const locationUri = (value: unknown) => {
     if (typeof value !== "string" || !value.trim() || value.includes("\0"))
@@ -1102,7 +1104,8 @@ async function configurePanel(
         message?.type === "application-settings" ||
         message?.type === "export-history-edit" ||
         message?.type === "reset-viewer-settings" ||
-        message?.type === "inspect-python"
+        message?.type === "inspect-python" ||
+        message?.type === "inspect-devices"
       ) {
         try {
           if (message.type === "reset-viewer-settings") {
@@ -1125,7 +1128,10 @@ async function configurePanel(
             await mkdir(settings.downloadDirectory, { recursive: true });
             await context.globalState.update("applicationSettings", settings);
           }
-          if (message.type === "inspect-python") {
+          if (
+            message.type === "inspect-python" ||
+            message.type === "inspect-devices"
+          ) {
             if (!vscode.workspace.isTrusted)
               throw new Error("Trust this workspace before running Python.");
             if (
@@ -1138,21 +1144,38 @@ async function configurePanel(
               ...getApplicationSettings(),
               pythonPath: message.pythonPath,
             });
-            if (inspectingPackages)
-              throw new Error(
-                "A Python package inspection is already running. Try again when it finishes.",
-              );
-            inspectingPackages = true;
-            try {
-              const python = await inspectPythonPackages(pythonPath);
-              await postMessage({
-                type: "python-info",
-                requestId: message.requestId,
-                pythonPath,
-                python,
-              });
-            } finally {
-              inspectingPackages = false;
+            if (message.type === "inspect-devices") {
+              if (inspectingDevices)
+                throw new Error("A device inspection is already running.");
+              inspectingDevices = true;
+              try {
+                const devices = await inspectPythonDevices(pythonPath);
+                await postMessage({
+                  type: "device-info",
+                  requestId: message.requestId,
+                  pythonPath,
+                  devices,
+                });
+              } finally {
+                inspectingDevices = false;
+              }
+            } else {
+              if (inspectingPackages)
+                throw new Error(
+                  "A Python package inspection is already running. Try again when it finishes.",
+                );
+              inspectingPackages = true;
+              try {
+                const python = await inspectPythonPackages(pythonPath);
+                await postMessage({
+                  type: "python-info",
+                  requestId: message.requestId,
+                  pythonPath,
+                  python,
+                });
+              } finally {
+                inspectingPackages = false;
+              }
             }
           } else if (message.type !== "export-history-edit")
             await sendSettings(
@@ -1164,8 +1187,11 @@ async function configurePanel(
           const detail = error instanceof Error ? error.message : String(error);
           log.record("FAILED", `Settings: ${detail}`);
           await postMessage({
-            type: "settings-error",
-            ...(message.type === "inspect-python"
+            type:
+              message.type === "inspect-devices"
+                ? "device-error"
+                : "settings-error",
+            ...(["inspect-python", "inspect-devices"].includes(message.type)
               ? { requestId: message.requestId, pythonPath: message.pythonPath }
               : {}),
             error: detail,

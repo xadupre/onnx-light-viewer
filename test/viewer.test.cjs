@@ -8277,7 +8277,13 @@ test("Settings categories support mouse and keyboard navigation without changing
   const messageCount = messages.length;
   const eventCount = events.length;
   const assertCategory = (selected) => {
-    for (const category of ["app", "history", "engine", "generation"]) {
+    for (const category of [
+      "app",
+      "history",
+      "engine",
+      "device",
+      "generation",
+    ]) {
       const active = category === selected;
       const tab = byId(`settings-${category}-tab`);
       const panel = byId(`settings-${category}-view`);
@@ -8303,7 +8309,8 @@ test("Settings categories support mouse and keyboard navigation without changing
   assertCategory("history");
   for (const [from, key, category] of [
     ["history", "ArrowRight", "engine"],
-    ["engine", "ArrowRight", "generation"],
+    ["engine", "ArrowRight", "device"],
+    ["device", "ArrowRight", "generation"],
     ["generation", "ArrowRight", "app"],
     ["app", "ArrowLeft", "generation"],
     ["engine", "Home", "app"],
@@ -8418,7 +8425,6 @@ test("Engine settings subtabs reuse prompt controls without changing the executi
   const byId = (id) => document.getElementById(id);
   const views = {
     onnxruntime: "prompt-settings-genai",
-    pytorch: "settings-pytorch-view",
     "onnx-light": "prompt-settings-light",
   };
   byId("settings-tab").click();
@@ -8444,18 +8450,16 @@ test("Engine settings subtabs reuse prompt controls without changing the executi
     assert.equal(byId("prompt-engine").value, executionEngine);
   };
   assertEngine("onnxruntime");
-  const threads = byId("prompt-settings-genai").querySelector(
+  const threads = byId("prompt-device-fields").querySelector(
     '[data-setting="intraOpThreads"]',
   );
   threads.value = "4";
   const count = messages.length;
-  byId("settings-pytorch-tab").click();
-  assertEngine("pytorch");
-  assert.match(byId("settings-pytorch-view").textContent, /validation/);
-  assert.match(byId("settings-pytorch-view").textContent, /CPU/);
-  assert.equal(byId("prompt-session-page").hidden, true);
+  assert.equal(byId("settings-pytorch-tab"), null);
+  assert.equal(byId("settings-pytorch-view"), null);
+  assert.equal(byId("prompt-session-page").hidden, false);
   for (const [from, key, selected] of [
-    ["pytorch", "ArrowRight", "onnx-light"],
+    ["onnxruntime", "ArrowRight", "onnx-light"],
     ["onnx-light", "ArrowRight", "onnxruntime"],
     ["onnxruntime", "ArrowLeft", "onnx-light"],
     ["onnx-light", "Home", "onnxruntime"],
@@ -8495,10 +8499,9 @@ test("async Prompt discovery preserves the user's selected Settings engine subta
   byId("settings-engine-tab").click();
   const views = {
     onnxruntime: "prompt-settings-genai",
-    pytorch: "settings-pytorch-view",
     "onnx-light": "prompt-settings-light",
   };
-  for (const selected of ["pytorch", "onnx-light", "onnxruntime"]) {
+  for (const selected of ["onnx-light", "onnxruntime"]) {
     byId(`settings-${selected}-tab`).click();
     const engines =
       selected === "onnxruntime"
@@ -8521,7 +8524,7 @@ test("async Prompt discovery preserves the user's selected Settings engine subta
     );
     assert.equal(byId("settings-view").hidden, false);
     assert.equal(byId("settings-engine-view").hidden, false);
-    assert.equal(byId("prompt-session-page").hidden, selected === "pytorch");
+    assert.equal(byId("prompt-session-page").hidden, false);
     for (const [engine, view] of Object.entries(views)) {
       assert.equal(
         byId(`settings-${engine}-tab`).getAttribute("aria-selected"),
@@ -8538,7 +8541,7 @@ test("async Prompt discovery preserves the user's selected Settings engine subta
   assert.equal(byId("prompt-settings-light").hidden, false);
 });
 
-test("Prompt applies Engine settings and opens the correct subtab for invalid values", (t) => {
+test("Prompt applies CPU settings and opens Device for invalid values", (t) => {
   const { document, window, messages, load } = openViewer(t);
   const byId = (id) => document.getElementById(id);
   load(demoGraph);
@@ -8556,7 +8559,7 @@ test("Prompt applies Engine settings and opens the correct subtab for invalid va
   byId("prompt-engine").value = "onnx-light";
   byId("prompt-engine").dispatchEvent(new window.Event("change"));
   byId("prompt-settings-open").click();
-  const threads = byId("prompt-settings-light").querySelector(
+  const threads = byId("prompt-device-fields").querySelector(
     '[data-setting="threads"]',
   );
   threads.value = "-1";
@@ -8567,7 +8570,7 @@ test("Prompt applies Engine settings and opens the correct subtab for invalid va
     false,
   );
   assert.equal(byId("settings-view").hidden, false);
-  assert.equal(byId("settings-engine-view").hidden, false);
+  assert.equal(byId("settings-device-view").hidden, false);
   assert.equal(
     byId("settings-onnx-light-tab").getAttribute("aria-selected"),
     "true",
@@ -8583,6 +8586,321 @@ test("Prompt applies Engine settings and opens the correct subtab for invalid va
   assert.equal(run.options.sessionSettings.threads, 3);
   assert.equal(run.options.sessionSettings.intraOpThreads, undefined);
   assert.equal(byId("prompt-session-fields").disabled, true);
+});
+
+test("Device defaults require real detection and preserve edits across delayed results and Python changes", (t) => {
+  const { document, window, messages } = openViewer(t);
+  const byId = (id) => document.getElementById(id);
+  const receive = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  const settings = (pythonPath, trusted = true) =>
+    receive({
+      type: "settings-info",
+      application: { downloadDirectory: "/downloads", pythonPath },
+      trusted,
+      platform: "win32",
+      viewer: { panels: { operator: true, find: true, metadata: false } },
+      pathHistory: { open: [], save: [] },
+      exportHistory: { models: [], directories: [] },
+    });
+  assert.equal(byId("settings-device-cpu").checked, true);
+  assert.equal(byId("settings-device-cpu").disabled, true);
+  assert.equal(byId("settings-device-cuda").checked, false);
+  assert.equal(byId("settings-device-dml").checked, false);
+  settings("python3", false);
+  assert.equal(
+    messages.some(({ type }) => type === "inspect-devices"),
+    false,
+  );
+  settings("python3");
+  const first = messages.findLast(({ type }) => type === "inspect-devices");
+  assert.ok(first);
+  // An explicit off choice while a probe is running must not become on.
+  byId("settings-device-cuda").dispatchEvent(
+    new window.Event("change", { bubbles: true }),
+  );
+  receive({ ...first, type: "device-info", devices: ["cpu", "cuda", "dml"] });
+  assert.equal(byId("settings-device-cuda").checked, false);
+  assert.equal(byId("settings-device-dml").checked, true);
+  assert.match(byId("settings-device-status").textContent, /CUDA, DirectML/);
+  assert.equal(
+    document.querySelector('[data-setting="dmlDeviceId"]').disabled,
+    false,
+  );
+  settings("/different/python");
+  const second = messages.findLast(({ type }) => type === "inspect-devices");
+  receive({ ...first, type: "device-info", devices: ["cpu"] });
+  assert.equal(byId("settings-device-dml").checked, true);
+  receive({ ...second, type: "device-info", devices: ["cpu"] });
+  assert.equal(byId("settings-device-dml").checked, false);
+  assert.equal(byId("settings-device-cuda").checked, false);
+  byId("settings-inspect-devices").click();
+  const third = messages.findLast(({ type }) => type === "inspect-devices");
+  receive({ ...third, type: "device-error", error: "Probe timed out" });
+  assert.match(byId("settings-device-status").textContent, /CPU.*timed out/);
+});
+
+test("initial settings start device detection without visiting Settings and preserve pending Prompt discovery", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const byId = (id) => document.getElementById(id);
+  const receive = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  assert.equal(byId("settings-view").hidden, true);
+  assert.ok(messages.some(({ type }) => type === "get-settings"));
+  load(demoGraph);
+  byId("prompt-tab").click();
+  const discovery = messages.findLast(({ type }) => type === "prompt-info");
+  assert.ok(discovery);
+  assert.equal(byId("prompt-fields").disabled, true);
+  const releases = messages.filter(
+    ({ type }) => type === "prompt-release",
+  ).length;
+  receive({
+    type: "settings-info",
+    application: { downloadDirectory: "/downloads", pythonPath: "python3" },
+    trusted: true,
+    viewer: { panels: { operator: true, find: true, metadata: false } },
+    pathHistory: { open: [], save: [] },
+    exportHistory: { models: [], directories: [] },
+  });
+  const probe = messages.findLast(({ type }) => type === "inspect-devices");
+  assert.ok(probe);
+  receive({ ...probe, type: "device-info", devices: ["cpu", "cuda", "dml"] });
+  assert.equal(byId("settings-view").hidden, true);
+  assert.equal(byId("settings-device-cuda").checked, true);
+  assert.equal(byId("settings-device-dml").checked, true);
+  assert.equal(
+    messages.filter(({ type }) => type === "prompt-release").length,
+    releases,
+  );
+  assert.equal(byId("prompt-fields").disabled, true);
+  receive({
+    type: "prompt-info",
+    requestId: discovery.requestId,
+    info: { available: true, engines: ["onnxruntime-genai"] },
+  });
+  assert.equal(byId("prompt-fields").disabled, false);
+  byId("prompt-form").dispatchEvent(new window.Event("submit"));
+  const run = messages.at(-1);
+  assert.equal(run.type, "run-prompt");
+  assert.deepEqual(Array.from(run.options.sessionSettings.providers), [
+    "cpu",
+    "cuda",
+    "dml",
+  ]);
+});
+
+test("late device detection applies to the next session without cancelling active generation", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const byId = (id) => document.getElementById(id);
+  const receive = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  receive({
+    type: "settings-info",
+    application: { downloadDirectory: "/downloads", pythonPath: "python3" },
+    trusted: true,
+    viewer: { panels: { operator: true, find: true, metadata: false } },
+    pathHistory: { open: [], save: [] },
+    exportHistory: { models: [], directories: [] },
+  });
+  const probe = messages.findLast(({ type }) => type === "inspect-devices");
+  load(demoGraph);
+  byId("prompt-tab").click();
+  receive({
+    type: "prompt-info",
+    requestId: messages.findLast(({ type }) => type === "prompt-info")
+      .requestId,
+    info: { available: true, engines: ["onnxruntime-genai"] },
+  });
+  byId("prompt-form").dispatchEvent(new window.Event("submit"));
+  const run = messages.findLast(({ type }) => type === "run-prompt");
+  const releases = messages.filter(
+    ({ type }) => type === "prompt-release",
+  ).length;
+  receive({ ...probe, type: "device-info", devices: ["cpu", "cuda"] });
+  assert.equal(byId("settings-device-cuda").checked, false);
+  assert.equal(
+    messages.filter(({ type }) => type === "prompt-release").length,
+    releases,
+  );
+  assert.equal(byId("prompt-fields").disabled, true);
+  receive({
+    type: "prompt-result",
+    requestId: run.requestId,
+    result: {
+      prompt: run.options.prompt,
+      engine: "onnxruntime-genai",
+      tokens: [],
+      lifecycle: { loadMs: 1, warmupMs: 1, reused: false, retained: true },
+    },
+  });
+  assert.equal(byId("settings-device-cuda").checked, true);
+  assert.equal(
+    messages.filter(({ type }) => type === "prompt-release").length,
+    releases + 1,
+  );
+  assert.match(byId("prompt-lifecycle").textContent, /Unloaded/);
+});
+
+test("unchanged and failed device probes never invalidate an active or retained prompt session", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const byId = (id) => document.getElementById(id);
+  const receive = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  receive({
+    type: "settings-info",
+    application: { downloadDirectory: "/downloads", pythonPath: "python3" },
+    trusted: true,
+    viewer: { panels: { operator: true, find: true, metadata: false } },
+    pathHistory: { open: [], save: [] },
+    exportHistory: { models: [], directories: [] },
+  });
+  const initial = messages.findLast(({ type }) => type === "inspect-devices");
+  receive({ ...initial, type: "device-info", devices: ["cpu", "cuda"] });
+  load(demoGraph);
+  byId("prompt-tab").click();
+  receive({
+    type: "prompt-info",
+    requestId: messages.findLast(({ type }) => type === "prompt-info")
+      .requestId,
+    info: { available: true, engines: ["onnxruntime-genai"] },
+  });
+  byId("prompt-form").dispatchEvent(new window.Event("submit"));
+  const run = messages.findLast(({ type }) => type === "run-prompt");
+  const releases = messages.filter(
+    ({ type }) => type === "prompt-release",
+  ).length;
+  let changes = 0;
+  byId("prompt-device-fields").addEventListener("change", () => ++changes);
+  for (const type of ["device-info", "device-error"]) {
+    byId("settings-inspect-devices").click();
+    const probe = messages.findLast(({ type }) => type === "inspect-devices");
+    receive({
+      ...probe,
+      type,
+      devices: ["cpu", "cuda"],
+      error: type === "device-error" ? "Probe failed" : undefined,
+    });
+    assert.equal(byId("settings-device-cuda").checked, true);
+    assert.equal(byId("prompt-fields").disabled, true);
+    assert.equal(changes, 0);
+    assert.equal(
+      messages.filter(({ type }) => type === "prompt-release").length,
+      releases,
+    );
+  }
+  receive({
+    type: "prompt-result",
+    requestId: run.requestId,
+    result: {
+      prompt: run.options.prompt,
+      engine: "onnxruntime-genai",
+      tokens: [],
+      lifecycle: { loadMs: 1, warmupMs: 1, reused: false, retained: true },
+    },
+  });
+  for (const type of ["device-info", "device-error"]) {
+    byId("settings-inspect-devices").click();
+    const probe = messages.findLast(({ type }) => type === "inspect-devices");
+    receive({
+      ...probe,
+      type,
+      devices: ["cpu", "cuda"],
+      error: type === "device-error" ? "Probe failed" : undefined,
+    });
+    assert.equal(byId("settings-device-cuda").checked, true);
+    assert.equal(changes, 0);
+    assert.equal(
+      messages.filter(({ type }) => type === "prompt-release").length,
+      releases,
+    );
+  }
+  assert.equal(byId("prompt-fields").disabled, false);
+  assert.match(byId("prompt-lifecycle").textContent, /Kept loaded/);
+});
+
+test("Device multi-selection and string configuration editor travel with GenAI while CPU settings serve onnx-light", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const byId = (id) => document.getElementById(id);
+  const receive = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  load(demoGraph);
+  byId("prompt-tab").click();
+  receive({
+    type: "prompt-info",
+    requestId: messages.findLast(({ type }) => type === "prompt-info")
+      .requestId,
+    info: { available: true, engines: ["onnx-light", "onnxruntime-genai"] },
+  });
+  for (const provider of ["cuda", "dml"]) {
+    const field = byId(`settings-device-${provider}`);
+    field.checked = true;
+    field.dispatchEvent(new window.Event("change", { bubbles: true }));
+  }
+  for (const [name, value] of [
+    ["cudaDeviceId", "1"],
+    ["dmlDeviceId", "2"],
+    ["gpuMemoryMiB", "64"],
+    ["intraOpThreads", "3"],
+    ["threads", "4"],
+  ])
+    document.querySelector(`[data-setting="${name}"]`).value = value;
+  const json = document.querySelector('[data-setting="sessionOptions"]');
+  json.value = '{"session.intra_op.allow_spinning":"1","custom.key":"old"}';
+  byId("prompt-config-add").click();
+  let row = byId("prompt-config-entries").firstElementChild;
+  row.querySelector('[data-config="key"]').value =
+    "session.intra_op.allow_spinning";
+  row.querySelector('[data-config="value"]').value = "0";
+  byId("prompt-config-add").click();
+  row = byId("prompt-config-entries").lastElementChild;
+  row.querySelector('[data-config="key"]').value = "custom.key";
+  row.querySelector('[data-config="value"]').value = "";
+  assert.ok(
+    byId("prompt-config-keys").querySelector(
+      '[value="session.intra_op.allow_spinning"]',
+    ),
+  );
+  byId("prompt-form").dispatchEvent(new window.Event("submit"));
+  let run = messages.findLast(({ type }) => type === "run-prompt");
+  assert.deepEqual(Array.from(run.options.sessionSettings.providers), [
+    "cpu",
+    "cuda",
+    "dml",
+  ]);
+  assert.equal(run.options.sessionSettings.cudaDeviceId, 1);
+  assert.equal(run.options.sessionSettings.dmlDeviceId, 2);
+  assert.equal(run.options.sessionSettings.gpuMemoryMiB, 64);
+  assert.equal(run.options.sessionSettings.threads, undefined);
+  assert.deepEqual(JSON.parse(run.options.sessionSettings.sessionOptions), {
+    "session.intra_op.allow_spinning": "0",
+    "custom.key": "",
+  });
+  assert.equal(byId("prompt-device-fields").disabled, true);
+  byId("prompt-cancel").click();
+  byId("settings-device-model").checked = true;
+  byId("settings-device-model").dispatchEvent(
+    new window.Event("change", { bubbles: true }),
+  );
+  byId("prompt-form").dispatchEvent(new window.Event("submit"));
+  run = messages.findLast(({ type }) => type === "run-prompt");
+  assert.equal(run.options.sessionSettings.providers, undefined);
+  assert.equal(run.options.sessionSettings.cudaDeviceId, undefined);
+  byId("prompt-cancel").click();
+  byId("prompt-engine").value = "onnx-light";
+  byId("prompt-form").dispatchEvent(new window.Event("submit"));
+  run = messages.findLast(({ type }) => type === "run-prompt");
+  assert.equal(run.options.sessionSettings.threads, 4);
+  assert.equal(run.options.sessionSettings.providers, undefined);
+  assert.equal(run.options.sessionSettings.sessionOptions, undefined);
+  for (const name of [
+    "sdkLoader",
+    "loadOverlap",
+    "loadMemoryMiB",
+    "checkShapes",
+    "releaseIntermediates",
+  ])
+    assert.equal(document.querySelector(`[data-setting="${name}"]`), null);
 });
 
 test("Settings exposes histories, removes selected entries, clears categories and resets viewer preferences", (t) => {
@@ -9763,6 +10081,7 @@ for (const initialTab of ["model", "logs"]) {
     assert.deepEqual(
       messages.map(({ type }) => type),
       [
+        "get-settings",
         "ready",
         "get-settings",
         "get-settings",
@@ -9872,6 +10191,7 @@ for (const initialTab of ["model", "logs"]) {
     assert.deepEqual(
       messages.map(({ type }) => type),
       [
+        "get-settings",
         "ready",
         "get-settings",
         "get-settings",
@@ -11215,7 +11535,10 @@ test("opens local functions from the operator or inspector and returns using bre
 
 test("renders the demo, inspects its operator and requests a real file", (t) => {
   const { document, messages, load, window } = openViewer(t);
-  assert.equal(messages[0].type, "ready");
+  assert.deepEqual(
+    messages.map(({ type }) => type),
+    ["get-settings", "ready"],
+  );
   const errors = [];
   window.addEventListener("error", (event) => errors.push(event.error));
   document

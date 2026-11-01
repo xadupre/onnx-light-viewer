@@ -61,7 +61,7 @@ interface PromptOptions {
   validate: boolean;
   keepLoaded: boolean;
   referenceSource?: string;
-  sessionSettings: Record<string, string | number | boolean>;
+  sessionSettings: Record<string, string | number | boolean | string[]>;
 }
 
 const signingKey = randomBytes(32);
@@ -167,6 +167,8 @@ function sessionSettingsFrom(
           intraOpThreads: 4096,
           interOpThreads: 4096,
           deviceId: 65535,
+          cudaDeviceId: 65535,
+          dmlDeviceId: 65535,
           gpuMemoryMiB: 1048576,
           logSeverity: 4,
           logVerbosity: 2147483647,
@@ -201,7 +203,18 @@ function sessionSettingsFrom(
         };
   const result: PromptOptions["sessionSettings"] = {};
   for (const [key, setting] of Object.entries(value)) {
-    if (Object.hasOwn(numeric, key)) {
+    if (engine === "onnxruntime-genai" && key === "providers") {
+      if (
+        !Array.isArray(setting) ||
+        !setting.length ||
+        setting.length > 3 ||
+        setting.some(
+          (provider) => !["cpu", "cuda", "dml"].includes(provider),
+        ) ||
+        new Set(setting).size !== setting.length
+      )
+        throw new Error("Invalid session setting: providers.");
+    } else if (Object.hasOwn(numeric, key)) {
       if (
         typeof setting !== "number" ||
         !Number.isSafeInteger(setting) ||
@@ -240,6 +253,14 @@ function sessionSettingsFrom(
           if (typeof entry === "string" && entry.includes("\0"))
             throw new Error("Session options cannot contain null characters.");
           if (
+            depth === 1 &&
+            typeof entry === "string" &&
+            Buffer.byteLength(entry, "utf8") > 8192
+          )
+            throw new Error(
+              "Session configuration values cannot exceed 8192 UTF-8 bytes.",
+            );
+          if (
             typeof entry === "number" &&
             (!Number.isFinite(entry) ||
               (Number.isInteger(entry) && !Number.isSafeInteger(entry)))
@@ -251,6 +272,7 @@ function sessionSettingsFrom(
             for (const [name, child] of Object.entries(entry)) {
               if (
                 ["__proto__", "prototype", "constructor"].includes(name) ||
+                (depth === 0 && Buffer.byteLength(name, "utf8") > 1024) ||
                 name.includes("\0")
               )
                 throw new Error("Invalid session options key.");
@@ -260,14 +282,23 @@ function sessionSettingsFrom(
         check(parsed, 0);
       }
     } else throw new Error(`Unsupported ${engine} session setting: ${key}.`);
-    result[key] = setting;
+    result[key] = setting as string | number | boolean | string[];
   }
+  const providers = Array.isArray(result.providers)
+    ? result.providers
+    : [String(result.provider)];
+  if (result.providers !== undefined && result.provider !== undefined)
+    throw new Error("Use providers or the legacy provider, not both.");
   if (
     "deviceId" in result &&
-    !["cuda", "dml"].includes(String(result.provider))
+    !providers.some((provider) => ["cuda", "dml"].includes(provider))
   )
     throw new Error("A GPU device requires an explicit GPU provider.");
-  if ("gpuMemoryMiB" in result && result.provider !== "cuda")
+  if ("cudaDeviceId" in result && !providers.includes("cuda"))
+    throw new Error("A CUDA device requires the CUDA provider.");
+  if ("dmlDeviceId" in result && !providers.includes("dml"))
+    throw new Error("A DirectML device requires the DirectML provider.");
+  if ("gpuMemoryMiB" in result && !providers.includes("cuda"))
     throw new Error("The GPU memory limit requires the CUDA provider.");
   if (
     ("loadOverlap" in result || "loadMemoryMiB" in result) &&
