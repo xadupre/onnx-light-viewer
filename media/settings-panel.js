@@ -475,5 +475,6 @@ function createSettingsPanel({
     }
   }
 
+  postMessage({ type: "get-settings" });
   return { receive, restoreViewer };
 }

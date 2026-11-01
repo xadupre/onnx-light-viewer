@@ -328,7 +328,10 @@ else:
     ["-I", "-c", script],
     { cwd: homedir(), timeout: 20000, maxBuffer: 1024 * 1024 },
   );
-  const devices: unknown = JSON.parse(stdout);
+  const output = stdout.trim();
+  const devices: unknown = JSON.parse(
+    output.slice(output.lastIndexOf("\n") + 1),
+  );
   if (
     !Array.isArray(devices) ||
     !devices.includes("cpu") ||

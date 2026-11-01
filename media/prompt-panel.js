@@ -89,7 +89,7 @@ function createPromptPanel({ byId, postMessage }) {
         byId("settings-device-model").checked ||
         !byId(`settings-device-${field.dataset.device}`).checked;
     if (busy) pendingDeviceRelease = true;
-    else release();
+    else if (available) release();
   });
   byId("prompt-config-add").addEventListener("click", () => {
     const row = document.createElement("div");

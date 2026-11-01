@@ -8064,6 +8064,56 @@ test("Device defaults require real detection and preserve edits across delayed r
   assert.match(byId("settings-device-status").textContent, /CPU.*timed out/);
 });
 
+test("initial settings start device detection without visiting Settings and preserve pending Prompt discovery", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const byId = (id) => document.getElementById(id);
+  const receive = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  assert.equal(byId("settings-view").hidden, true);
+  assert.ok(messages.some(({ type }) => type === "get-settings"));
+  load(demoGraph);
+  byId("prompt-tab").click();
+  const discovery = messages.findLast(({ type }) => type === "prompt-info");
+  assert.ok(discovery);
+  assert.equal(byId("prompt-fields").disabled, true);
+  const releases = messages.filter(
+    ({ type }) => type === "prompt-release",
+  ).length;
+  receive({
+    type: "settings-info",
+    application: { downloadDirectory: "/downloads", pythonPath: "python3" },
+    trusted: true,
+    viewer: { panels: { operator: true, find: true, metadata: false } },
+    pathHistory: { open: [], save: [] },
+    exportHistory: { models: [], directories: [] },
+  });
+  const probe = messages.findLast(({ type }) => type === "inspect-devices");
+  assert.ok(probe);
+  receive({ ...probe, type: "device-info", devices: ["cpu", "cuda", "dml"] });
+  assert.equal(byId("settings-view").hidden, true);
+  assert.equal(byId("settings-device-cuda").checked, true);
+  assert.equal(byId("settings-device-dml").checked, true);
+  assert.equal(
+    messages.filter(({ type }) => type === "prompt-release").length,
+    releases,
+  );
+  assert.equal(byId("prompt-fields").disabled, true);
+  receive({
+    type: "prompt-info",
+    requestId: discovery.requestId,
+    info: { available: true, engines: ["onnxruntime-genai"] },
+  });
+  assert.equal(byId("prompt-fields").disabled, false);
+  byId("prompt-form").dispatchEvent(new window.Event("submit"));
+  const run = messages.at(-1);
+  assert.equal(run.type, "run-prompt");
+  assert.deepEqual(Array.from(run.options.sessionSettings.providers), [
+    "cpu",
+    "cuda",
+    "dml",
+  ]);
+});
+
 test("late device detection applies to the next session without cancelling active generation", (t) => {
   const { document, window, messages, load } = openViewer(t);
   const byId = (id) => document.getElementById(id);

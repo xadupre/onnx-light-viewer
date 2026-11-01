@@ -24,6 +24,7 @@ const {
 test("device inspection guarantees CPU and uses isolated runtime execution rather than package/platform guesses", async () => {
   let args;
   let options;
+  let stdout = '["cpu","cuda","dml"]';
   const module = { exports: {} };
   const file = require.resolve("../dist/settings");
   const execute = vm.runInThisContext(
@@ -38,7 +39,7 @@ test("device inspection guarantees CPU and uses isolated runtime execution rathe
               assert.equal(executable, "/selected/python");
               args = arguments_;
               options = options_;
-              callback(null, { stdout: '["cpu","cuda","dml"]' });
+              callback(null, { stdout });
             },
           }
         : realRequire(name),
@@ -63,6 +64,9 @@ class Options:
     def add_session_config_entry(self, *a): pass
 class Session:
     def __init__(self, *a, **k):
+        if CUDA_FAILS and "CUDAExecutionProvider" in k["providers"]:
+            print("EP Error: CUDA unavailable; falling back to CPUExecutionProvider.")
+            raise RuntimeError("CUDA provider initialization failed")
         self.providers = k["providers"] if SUCCESS else ["CPUExecutionProvider"]
     def disable_fallback(self): pass
     def get_providers(self): return self.providers
@@ -71,19 +75,39 @@ sys.modules["onnxruntime"] = types.SimpleNamespace(
     get_available_providers=lambda: ["CPUExecutionProvider", "CUDAExecutionProvider", "DmlExecutionProvider"],
     SessionOptions=Options, InferenceSession=Session)
 `;
-  for (const success of [false, true]) {
-    const result = execFileSync(
+  for (const [success, cudaFails] of [
+    [false, false],
+    [true, false],
+    [true, true],
+  ]) {
+    stdout = execFileSync(
       process.platform === "win32" ? "python" : "python3",
       [
         "-I",
         "-c",
-        `SUCCESS = ${success ? "True" : "False"}\n${prefix}\n${args[2]}`,
+        `SUCCESS = ${success ? "True" : "False"}\nCUDA_FAILS = ${cudaFails ? "True" : "False"}\n${prefix}\n${args[2]}`,
       ],
       { encoding: "utf8" },
     );
     assert.deepEqual(
-      JSON.parse(result),
-      success ? ["cpu", "cuda", "dml"] : ["cpu"],
+      await module.exports.inspectPythonDevices("/selected/python"),
+      success ? (cudaFails ? ["cpu", "dml"] : ["cpu", "cuda", "dml"]) : ["cpu"],
+    );
+  }
+  stdout = 'EP Error: GPU initialization failed\r\n["cpu", "dml"]\r\n';
+  assert.deepEqual(
+    await module.exports.inspectPythonDevices("/selected/python"),
+    ["cpu", "dml"],
+  );
+  for (const invalid of [
+    'EP Error: GPU initialization failed\n["cuda"]',
+    'EP Error: GPU initialization failed\n["cpu", "unknown"]',
+    '["cpu", "cuda"]\ninvalid final record',
+    "",
+  ]) {
+    stdout = invalid;
+    await assert.rejects(
+      module.exports.inspectPythonDevices("/selected/python"),
     );
   }
   const devices = await inspectPythonDevices(
