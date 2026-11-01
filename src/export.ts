@@ -865,9 +865,10 @@ export async function terminateExport(child: ChildProcess): Promise<void> {
     });
     return;
   }
-  const killGroup = (signal: NodeJS.Signals) => {
+  const killGroup = (signal: NodeJS.Signals | 0) => {
     try {
       process.kill(-pid, signal);
+      return true;
     } catch (error) {
       if (!(
         error instanceof Error &&
@@ -875,11 +876,35 @@ export async function terminateExport(child: ChildProcess): Promise<void> {
         error.code === "ESRCH"
       ))
         throw error;
+      return false;
     }
   };
   killGroup("SIGTERM");
   await delay(2000);
   killGroup("SIGKILL");
+  const deadline = Date.now() + 5000;
+  while (killGroup(0)) {
+    const processes = await new Promise<string>((resolve, reject) => {
+      execFile(
+        "ps",
+        ["-A", "-o", "pid=,pgid=,stat="],
+        { timeout: 1000 },
+        (error, stdout) => {
+          if (error) reject(error);
+          else resolve(stdout);
+        },
+      );
+    });
+    const workers = processes.split("\n").filter((line) => {
+      const [, group, state] = line.trim().split(/\s+/);
+      return Number(group) === pid && !state?.startsWith("Z");
+    });
+    // Orphan zombies can remain in the group, but can no longer execute or write.
+    if (!workers.length) return;
+    if (Date.now() >= deadline)
+      throw new Error(`Exporter workers did not stop:\n${workers.join("\n")}`);
+    await delay(25);
+  }
 }
 
 export async function runProcess(

@@ -1623,6 +1623,125 @@ test("cancelling terminates the actual exporter before returning and keeps its r
   assert.match(await readFile(plan.script, "utf8"), /subprocess.run/);
 });
 
+for (const platform of ["darwin", "linux"]) {
+  for (const state of ["stopped", "missing", "probe-error", "timeout"]) {
+    test(
+      `POSIX cancellation on ${platform} waits for closed-output workers: ${state}`,
+      { timeout: 1000 },
+      async () => {
+        const child = Object.assign(new EventEmitter(), {
+          pid: 12345,
+          stdout: new PassThrough(),
+          stderr: new PassThrough(),
+        });
+        const probeError = new Error("Cannot inspect exporter workers.");
+        const requests = [];
+        let requested;
+        let nextRequest = new Promise((resolve) => (requested = resolve));
+        let killed = false;
+        let clock = 0;
+        const posix = {};
+        runInNewContext(
+          readFileSync(require.resolve("../dist/export"), "utf8"),
+          {
+            exports: posix,
+            require(name) {
+              if (name === "node:timers/promises")
+                return { setTimeout: async () => {} };
+              if (name !== "node:child_process") return require(name);
+              return {
+                spawn: () => child,
+                execFile(command, args, options, callback) {
+                  assert.equal(command, "ps");
+                  assert.deepEqual(Array.from(args), [
+                    "-A",
+                    "-o",
+                    "pid=,pgid=,stat=",
+                  ]);
+                  assert.equal(options.timeout, 1000);
+                  requests.push(callback);
+                  requested();
+                },
+              };
+            },
+            process: {
+              platform,
+              env: process.env,
+              kill(pid, signal) {
+                assert.equal(pid, -child.pid);
+                if (signal === "SIGTERM") {
+                  queueMicrotask(() => {
+                    child.emit("close", null, "SIGTERM");
+                  });
+                } else if (signal === "SIGKILL") {
+                  killed = true;
+                } else {
+                  assert.equal(signal, 0);
+                  assert.equal(killed, true);
+                  if (state === "missing")
+                    throw Object.assign(new Error("No process group"), {
+                      code: "ESRCH",
+                    });
+                }
+              },
+            },
+            Date: {
+              now: () => {
+                clock += state === "timeout" ? 6000 : 1;
+                return clock;
+              },
+            },
+            Error,
+            DOMException,
+            setTimeout,
+            clearTimeout,
+          },
+          { filename: require.resolve("../dist/export") },
+        );
+        const controller = new AbortController();
+        const operation = posix.runProcess(
+          { executable: python, args: [] },
+          controller.signal,
+          () => {},
+          {},
+          "Exporter",
+        );
+        let settled = false;
+        void operation.then(
+          () => (settled = true),
+          () => (settled = true),
+        );
+        controller.abort();
+        if (state !== "missing") {
+          await nextRequest;
+          assert.equal(settled, false);
+          if (state === "probe-error") {
+            requests.shift()(probeError);
+          } else {
+            nextRequest = new Promise((resolve) => (requested = resolve));
+            requests.shift()(null, "12346 12345 R+\n12347 99999 S\n");
+            if (state === "stopped") {
+              await nextRequest;
+              assert.equal(settled, false);
+              requests.shift()(null, "12346 12345 Z+\n12347 99999 R\n");
+            }
+          }
+        }
+        await assert.rejects(
+          operation,
+          state === "probe-error"
+            ? (error) => error === probeError
+            : state === "timeout"
+              ? /Exporter workers did not stop:\n12346 12345 R\+/
+              : { name: "AbortError" },
+        );
+        assert.equal(killed, true);
+        assert.equal(requests.length, 0);
+      },
+    );
+  }
+}
+
 for (const inheritedOutput of [true, false]) {
   test(
     `cancelling stops exporter workers with ${inheritedOutput ? "inherited" : "closed"} output before returning`,
@@ -1683,6 +1802,18 @@ time.sleep(30)
       assert.equal(pids.length, 2);
       assert.ok(pids.every((pid) => Number.isSafeInteger(pid) && pid > 0));
       const stopped = await readFile(heartbeat, "utf8");
+      if (process.platform !== "win32") {
+        const { stdout } = await promisify(execFile)("ps", [
+          "-A",
+          "-o",
+          "pid=,pgid=,stat=",
+        ]);
+        const workers = stdout.split("\n").filter((line) => {
+          const [, group, state] = line.trim().split(/\s+/);
+          return Number(group) === pids[0] && !state?.startsWith("Z");
+        });
+        assert.deepEqual(workers, [], stdout);
+      }
       await new Promise((resolve) => setTimeout(resolve, 250));
       assert.equal(await readFile(heartbeat, "utf8"), stopped);
     },
