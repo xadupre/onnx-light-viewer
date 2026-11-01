@@ -47,6 +47,48 @@ test("regular execution works with asynchronously loaded models", async () => {
   assert.match(result.outputs[0].text, /Values: \[1, 2, 3\]/);
 });
 
+test("native retained sessions serialize predictions, use fresh inputs and release independently", async () => {
+  const model = loadModel(
+    readFileSync(require.resolve("./models/relu.onnx")),
+    "relu.onnx",
+  );
+  const texts = [
+    "float[1,3] input = {-1, 0, 2}",
+    "float[1,3] input = {3, -4, 5}",
+    "float[1,3] input = {6, 7, -8}",
+  ];
+  const results = await Promise.all(
+    texts.map((text) => model.run([text], [], { keepLoaded: true })),
+  );
+  assert.equal(results.filter((result) => !result.lifecycle.reused).length, 1);
+  assert.ok(results.every((result) => result.lifecycle.retained));
+  for (const [index, expected] of [
+    "[0, 0, 2]",
+    "[3, 0, 5]",
+    "[6, 7, 0]",
+  ].entries())
+    assert.ok(results[index].outputs[0].text.includes(expected));
+  const clone = model.clone();
+  assert.equal(
+    (await clone.run([texts[0]], [], { keepLoaded: true })).lifecycle.reused,
+    false,
+  );
+  clone.releaseRunSession();
+  assert.equal(
+    (await model.run([texts[0]], [], { keepLoaded: true })).lifecycle.reused,
+    true,
+  );
+  model.releaseRunSession();
+  const pending = model.run([texts[0]], [], { keepLoaded: true });
+  model.releaseRunSession();
+  assert.equal((await pending).lifecycle.retained, false);
+  const afterRelease = await model.run([texts[0]], [], { keepLoaded: true });
+  assert.equal(afterRelease.lifecycle.reused, false);
+  const oneShot = await model.run([texts[0]]);
+  assert.equal(oneShot.lifecycle.reused, false);
+  assert.equal(oneShot.lifecycle.retained, false);
+});
+
 test("regular execution supports no-input models and scalar integer/string outputs", async () => {
   const cases = listBackendTests();
   for (const [name, expected] of [

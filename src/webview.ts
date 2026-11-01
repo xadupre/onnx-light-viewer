@@ -34,6 +34,113 @@ export function webviewHtml(
     prefix = "selection-pattern",
   ): string =>
     `<button id="copy-${prefix}-${format}" class="icon-button selection-pattern-copy" type="button" aria-label="${label}" title="${label}"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>`;
+  const sessionOption = (
+    key: string,
+    description: string,
+    kind: "boolean" | "number" | "text" | "minimal",
+  ): string => {
+    const id = `prompt-config-${key.replaceAll(".", "-")}`;
+    const attributes = `id="${id}" data-config="${key}" aria-describedby="${id}-help"`;
+    const control =
+      kind === "boolean"
+        ? `<select ${attributes}><option value="">-</option><option value="0">0 - No</option><option value="1">1 - Yes</option></select>`
+        : kind === "minimal"
+          ? `<select ${attributes}><option value="">-</option><option value="apply">Apply minimal-build optimizations only</option><option value="save">Save runtime optimizations (ORT format)</option></select>`
+          : `<input ${attributes} type="${kind}" ${kind === "number" ? 'min="0" max="2147483647"' : 'maxlength="8192"'} placeholder="-">`;
+    return `<label for="${id}"><span>${key}</span>${control}<small id="${id}-help" class="prompt-option-help">${description}</small></label>`;
+  };
+  const sessionConfiguration = [
+    sessionOption(
+      "session.intra_op.allow_spinning",
+      "Let threads executing one operator spin while waiting for work. Disabling reduces idle CPU use but may increase latency.",
+      "boolean",
+    ),
+    sessionOption(
+      "session.inter_op.allow_spinning",
+      "Let threads executing different operators spin while waiting for work. Applies to parallel graph execution.",
+      "boolean",
+    ),
+    sessionOption(
+      "session.intra_op.spin_duration_us",
+      "Time in microseconds to spin inside an operator before blocking. Requires intra-op spinning; 0 stops spinning.",
+      "number",
+    ),
+    sessionOption(
+      "session.inter_op.spin_duration_us",
+      "Time in microseconds to spin between operators before blocking. Requires inter-op spinning; 0 stops spinning.",
+      "number",
+    ),
+    sessionOption(
+      "session.intra_op_thread_affinities",
+      "Pin worker threads to logical CPUs, e.g. 1,2;3,4. Use one semicolon-separated group per intra-op worker (thread count minus one).",
+      "text",
+    ),
+    sessionOption(
+      "session.dynamic_block_base",
+      "Split parallel work into progressively smaller blocks to balance threads. 0 disables dynamic sizing; try 4 to enable it.",
+      "number",
+    ),
+    sessionOption(
+      "session.prepack.enable_parallel",
+      "Prepack constant weights across intra-op threads during initialization. Requires prepacking and multiple intra-op threads; runtime-version dependent.",
+      "boolean",
+    ),
+    sessionOption(
+      "session.use_env_allocators",
+      "Share allocators registered in the runtime environment instead of creating session-local allocators.",
+      "boolean",
+    ),
+    sessionOption(
+      "session.set_denormal_as_zero",
+      "Treat very small floating-point values as zero. May improve speed but change accuracy.",
+      "boolean",
+    ),
+    sessionOption(
+      "session.disable_cpu_ep_fallback",
+      "Fail if selected GPU providers cannot execute every node, instead of assigning unsupported nodes to CPU. Device selection including CPU takes precedence.",
+      "boolean",
+    ),
+    sessionOption(
+      "session.disable_quant_qdq",
+      "Disable QuantizeLinear/DequantizeLinear graph fusions.",
+      "boolean",
+    ),
+    sessionOption(
+      "session.disable_double_qdq_remover",
+      "Keep redundant adjacent QDQ pairs instead of removing them during optimization.",
+      "boolean",
+    ),
+    sessionOption(
+      "session.disable_aot_function_inlining",
+      "Disable ahead-of-time expansion of model-local functions before graph optimization.",
+      "boolean",
+    ),
+    sessionOption(
+      "session.enable_quant_qdq_cleanup",
+      "Remove remaining QDQ pairs after quantization optimizations. Can improve speed but change accuracy.",
+      "boolean",
+    ),
+    sessionOption(
+      "session.use_device_allocator_for_initializers",
+      "Use device allocators for weight tensors instead of arena allocation.",
+      "boolean",
+    ),
+    sessionOption(
+      "optimization.enable_gelu_approximation",
+      "Replace GELU with an approximation during graph optimization. May change inference results.",
+      "boolean",
+    ),
+    sessionOption(
+      "optimization.disable_specified_optimizers",
+      "Comma-separated optimizer names to skip, e.g. GeluApproximation. Can reduce loading time; not available in minimal builds.",
+      "text",
+    ),
+    sessionOption(
+      "optimization.minimal_build_optimizations",
+      "Restrict full-runtime optimizations to those available in minimal builds, or save them for an ORT-format model.",
+      "minimal",
+    ),
+  ].join("");
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -595,7 +702,7 @@ export function webviewHtml(
       </div>
       <div id="prompt-session-page" hidden>
         <h2 id="prompt-settings-title">Engine session settings</h2>
-        <button id="prompt-settings-back" type="button">Back to Prompt</button>
+        <button id="prompt-settings-back" type="button" hidden>Back</button>
         <p>Applied on the next prompt run, without modifying the model or its exported configuration. A change unloads the retained session. Blank values preserve SDK/model defaults. Profiling adds overhead and writes to .prompt-profiles beside the model; GenAI finalizes its profile when unloaded.</p>
         <fieldset id="prompt-session-fields">
           <div id="prompt-settings-light" class="prompt-settings-grid">
@@ -608,59 +715,39 @@ export function webviewHtml(
           </div>
           <div id="prompt-settings-genai" class="prompt-settings-grid" hidden>
             <h3>ONNX Runtime GenAI</h3>
-            <p>Leave a field blank or select "From genai_config.json" to use the exported GenAI configuration. If an option is absent from that file, the engine uses its built-in default. Enter a value or select another option to override it.</p>
-            <label>Parallel graph execution<select data-setting="parallelExecution" data-boolean><option value="">From genai_config.json</option><option value="true">Parallel</option><option value="false">Sequential</option></select></label>
+            <p>Leave a field blank or select "-" to use genai_config.json. If an option is absent from that file, the engine uses its built-in default. Enter a value or select another option to override it.</p>
+            <label><span>Parallel graph execution</span><select data-setting="parallelExecution" data-boolean><option value="">-</option><option value="true">Parallel</option><option value="false">Sequential</option></select><small class="prompt-option-help">Execute independent graph nodes concurrently rather than sequentially. This is not a weight-loading thread count.</small></label>
             <h3>Initialization</h3>
             <p>GenAI exposes session initialization/prepacking controls, not a separate parallel weight-reader thread count. Graph execution mode is not a parallel-loading setting.</p>
-            <label>Weight prepacking during initialization<select data-setting="prepacking" data-boolean><option value="">From genai_config.json</option><option value="true">Enabled</option><option value="false">Disabled</option></select></label>
+            <label><span>Weight prepacking during initialization</span><select data-setting="prepacking" data-boolean><option value="">-</option><option value="true">Enabled</option><option value="false">Disabled</option></select><small class="prompt-option-help">Prepare constant weights for optimized kernels while loading. Disabling can reduce preparation costs but slow inference.</small></label>
             <h3>Optimization, memory and diagnostics</h3>
-            <label>Graph optimization<select data-setting="graphOptimization"><option value="">From genai_config.json</option><option>ORT_DISABLE_ALL</option><option>ORT_ENABLE_BASIC</option><option>ORT_ENABLE_EXTENDED</option><option>ORT_ENABLE_ALL</option></select></label>
-            <label>Memory pattern<select data-setting="memoryPattern" data-boolean><option value="">From genai_config.json</option><option value="true">Enabled</option><option value="false">Disabled</option></select></label>
-            <label>Log severity (0 verbose, 1 info, 2 warning, 3 error, 4 fatal)<input data-setting="logSeverity" type="number" min="0" max="4" placeholder="From genai_config.json"></label>
-            <label>Log verbosity<input data-setting="logVerbosity" type="number" min="0" max="2147483647" placeholder="From genai_config.json"></label>
-            <label>Log ID<input data-setting="logId" type="text" maxlength="4096" placeholder="From genai_config.json"></label>
-            <label>Custom operators library<input data-setting="customOpsLibrary" type="text" maxlength="4096" placeholder="From genai_config.json"></label>
-            <label class="prompt-checkbox"><span>Enable ONNX Runtime profiling</span><input data-setting="profile" type="checkbox"></label>
+            <label><span>Graph optimization</span><select data-setting="graphOptimization"><option value="">-</option><option>ORT_DISABLE_ALL</option><option>ORT_ENABLE_BASIC</option><option>ORT_ENABLE_EXTENDED</option><option>ORT_ENABLE_ALL</option></select><small class="prompt-option-help">Choose how extensively the runtime rewrites the graph for inference, from no optimization to all supported optimizations.</small></label>
+            <label><span>Memory pattern</span><select data-setting="memoryPattern" data-boolean><option value="">-</option><option value="true">Enabled</option><option value="false">Disabled</option></select><small class="prompt-option-help">Reuse an allocation plan when input shapes repeat to reduce allocation overhead.</small></label>
+            <label><span>Deterministic compute</span><select data-session-option="use_deterministic_compute" data-boolean><option value="">-</option><option value="true">Enabled</option><option value="false">Disabled</option></select><small class="prompt-option-help">Request deterministic kernels where supported. May reduce performance; does not make token sampling deterministic.</small></label>
+            <label><span>Log severity (0 verbose, 1 info, 2 warning, 3 error, 4 fatal)</span><input data-setting="logSeverity" type="number" min="0" max="4" placeholder="-"><small class="prompt-option-help">Only emit messages at this severity or higher.</small></label>
+            <label><span>Log verbosity</span><input data-setting="logVerbosity" type="number" min="0" max="2147483647" placeholder="-"><small class="prompt-option-help">Control the detail of verbose logs; relevant when severity is 0.</small></label>
+            <label><span>Log ID</span><input data-setting="logId" type="text" maxlength="4096" placeholder="-"><small class="prompt-option-help">Identify this session in runtime log messages.</small></label>
+            <label><span>Custom operators library</span><input data-setting="customOpsLibrary" type="text" maxlength="4096" placeholder="-"><small class="prompt-option-help">Load a native shared library that registers additional ONNX Runtime operators.</small></label>
+            <label class="prompt-checkbox"><span>Enable ONNX Runtime profiling</span><input data-setting="profile" type="checkbox"><small class="prompt-option-help">Record execution timings in .prompt-profiles beside the model. Adds overhead; the profile is finalized when the session is unloaded.</small></label>
             <h3>Session configuration entries</h3>
-            <p>Add string-valued ONNX Runtime configuration keys. Suggestions cover common controls; arbitrary keys are accepted. Availability and value formats depend on the installed runtime. <a href="https://github.com/microsoft/onnxruntime/blob/main/include/onnxruntime/core/session/onnxruntime_session_options_config_keys.h">Official configuration keys and value documentation</a>.</p>
-            <div id="prompt-config-entries"></div>
-            <button id="prompt-config-add" type="button">Add configuration entry</button>
-            <datalist id="prompt-config-keys">
-              <option value="session.intra_op.allow_spinning"></option>
-              <option value="session.inter_op.allow_spinning"></option>
-              <option value="session.intra_op.spin_duration_us"></option>
-              <option value="session.inter_op.spin_duration_us"></option>
-              <option value="session.intra_op_thread_affinities"></option>
-              <option value="session.dynamic_block_base"></option>
-              <option value="session.disable_prepacking"></option>
-              <option value="session.prepack.enable_parallel"></option>
-              <option value="session.use_env_allocators"></option>
-              <option value="session.set_denormal_as_zero"></option>
-              <option value="session.disable_cpu_ep_fallback"></option>
-              <option value="session.disable_quant_qdq"></option>
-              <option value="session.disable_double_qdq_remover"></option>
-              <option value="session.disable_aot_function_inlining"></option>
-              <option value="session.enable_quant_qdq_cleanup"></option>
-              <option value="session.use_device_allocator_for_initializers"></option>
-              <option value="optimization.enable_gelu_approximation"></option>
-              <option value="optimization.disable_specified_optimizers"></option>
-              <option value="optimization.minimal_build_optimizations"></option>
-            </datalist>
-            <h3>All session options (advanced)</h3>
-            <p>Use native GenAI session_options JSON for any supported option. Nonblank Engine and Device controls and configuration entries take precedence over JSON. Device selections replace provider_options unless "Use providers from JSON / model" is enabled on Device. Runtime errors are reported on Prompt.</p>
-            <label>Session options (JSON object)<textarea data-setting="sessionOptions" data-json rows="8" maxlength="65536" placeholder='{"session.intra_op.allow_spinning":"0","provider_options":[{"cuda":{"device_id":"0"}}]}'></textarea></label>
+            <p>Options are listed below with their purpose; no configuration keys or JSON need to be entered. Blank values leave the exported configuration unchanged. Availability depends on the installed runtime; runtime errors are reported on Prompt. <a href="https://github.com/microsoft/onnxruntime/blob/main/include/onnxruntime/core/session/onnxruntime_session_options_config_keys.h">Official configuration keys and value documentation</a>.</p>
+            <div id="prompt-config-entries" class="prompt-settings-grid">${sessionConfiguration}</div>
           </div>
         </fieldset>
       </div>
       </section>
       <section id="execution-run-view" role="tabpanel" aria-labelledby="execution-run-tab" tabindex="0" hidden>
-        <p>Execute the current model once, including unsaved graph edits. Both engines use CPU; ONNX Runtime requires onnx, numpy and onnxruntime in the Settings Python environment. For pipelines, select a stage. Specify every dynamic dimension, then use random inputs, inline TensorProto files (.pb), or ONNX tensor text such as <code>float[3] X = {-1, 0, 2}</code>. Integer values remain exact. Outputs show type, shape and values for tensors up to 32 elements.</p>
+        <p>Execute the current model once, including unsaved graph edits. Both engines use CPU; ONNX Runtime requires onnx, numpy and onnxruntime in the Settings Python environment. For pipelines, select a stage. Specify every dynamic dimension, then use random inputs, inline TensorProto files (.pb), or ONNX tensor text such as <code>float[3] X = {-1, 0, 2}</code>. Integer values remain exact. Inputs and outputs show type, shape and values for tensors up to 32 elements.</p>
+        <p id="run-lifecycle" role="status"></p>
+        <button id="run-settings-open" type="button">Settings</button>
         <form id="run-form">
           <fieldset id="run-fields" class="form-grid" disabled>
             <label for="run-stage">Model</label>
             <select id="run-stage"><option value="[]">Root graph</option></select>
             <label for="run-engine">Engine</label>
             <select id="run-engine"><option value="onnx-light">onnx-light</option><option value="onnxruntime">ONNX Runtime</option></select>
+            <label for="run-keep-loaded">Session lifetime</label>
+            <label><input id="run-keep-loaded" type="checkbox"> Keep session loaded between runs (reuse the model and session, with fresh inputs)</label>
             <div id="run-logging-light" class="form-grid">
               <label for="run-verbose">Logging verbosity</label>
               <input id="run-verbose" type="number" min="0" max="10" step="1" value="0" required>
@@ -676,8 +763,14 @@ export function webviewHtml(
             <button type="submit">Run model</button>
           </fieldset>
         </form>
+        <button id="run-unload" type="button" disabled>Unload session</button>
         <p id="run-status" role="status">Open a model to run it.</p>
         <pre id="run-log" aria-label="Engine logs"></pre>
+        <section id="run-used-inputs" hidden>
+          <h2>Inputs used by the last run</h2>
+          <p>Previews show up to 32 elements. Save the complete input as an inline TensorProto (.pb), then use Load input (.pb) to reload it. Random values are regenerated on every run unless reloaded from a saved file.</p>
+          <div id="run-input-previews"></div>
+        </section>
         <div id="run-results" aria-live="polite"></div>
       </section>
     </section>
@@ -803,7 +896,7 @@ export function webviewHtml(
           <input id="prompt-max-tokens" type="number" min="1" max="4096" step="1" value="32" required>
           <p>Positive temperatures enable sampling. The token limit excludes the input prompt; generation can stop earlier at an end-of-sequence token. HF validation still compares argmax predictions and logits at the generated prefixes.</p>
         </fieldset>
-        <button id="prompt-generation-back" type="button">Back to Prompt</button>
+        <button id="prompt-generation-back" type="button" hidden>Back</button>
        </section>
         <section id="settings-engine-view" role="tabpanel" aria-labelledby="settings-engine-tab" tabindex="0" hidden>
           <nav class="settings-tabs" role="tablist" aria-label="Engine settings">
@@ -820,13 +913,13 @@ export function webviewHtml(
           <label class="prompt-checkbox"><span>CPU (implicit fallback)</span><input id="settings-device-cpu" type="checkbox" checked disabled></label>
           <label class="prompt-checkbox"><span>CUDA</span><input id="settings-device-cuda" data-provider="cuda" type="checkbox"></label>
           <label class="prompt-checkbox"><span>DirectML</span><input id="settings-device-dml" data-provider="dml" type="checkbox"></label>
-          <label class="prompt-checkbox"><span>Use providers from JSON / model (advanced)</span><input id="settings-device-model" type="checkbox"></label>
+          <label class="prompt-checkbox"><span>Use providers from genai_config.json</span><input id="settings-device-model" type="checkbox"></label>
           <p>GPU defaults are enabled only after a successful runtime device probe, not from the OS or installed package names. Manual choices are preserved during detection. Advanced JSON may disable CPU fallback; in that mode the device selections do not override providers.</p>
           <h3>CPU</h3>
           <label>onnx-light CPU threads (0 = automatic)<input data-setting="threads" data-engine="onnx-light" type="number" min="0" max="4096" placeholder="SDK default"></label>
-          <label>ONNX Runtime intra-op threads (0 = automatic)<input data-setting="intraOpThreads" data-engine="onnxruntime-genai" type="number" min="0" max="4096" placeholder="From genai_config.json"></label>
-          <label>ONNX Runtime inter-op threads (0 = automatic)<input data-setting="interOpThreads" data-engine="onnxruntime-genai" type="number" min="0" max="4096" placeholder="From genai_config.json"></label>
-          <label>ONNX Runtime CPU memory arena<select data-setting="cpuArena" data-engine="onnxruntime-genai" data-boolean><option value="">From genai_config.json</option><option value="true">Enabled</option><option value="false">Disabled</option></select></label>
+          <label>ONNX Runtime intra-op threads (0 = automatic)<input data-setting="intraOpThreads" data-engine="onnxruntime-genai" type="number" min="0" max="4096" placeholder="-"></label>
+          <label>ONNX Runtime inter-op threads (0 = automatic)<input data-setting="interOpThreads" data-engine="onnxruntime-genai" type="number" min="0" max="4096" placeholder="-"></label>
+          <label>ONNX Runtime CPU memory arena<select data-setting="cpuArena" data-engine="onnxruntime-genai" data-boolean><option value="">-</option><option value="true">Enabled</option><option value="false">Disabled</option></select></label>
           <h3>CUDA</h3>
           <label>CUDA device ID<input data-setting="cudaDeviceId" data-engine="onnxruntime-genai" data-device="cuda" type="number" min="0" max="65535" placeholder="Provider default" disabled></label>
           <label>CUDA memory limit (MiB)<input data-setting="gpuMemoryMiB" data-engine="onnxruntime-genai" data-device="cuda" type="number" min="1" max="1048576" placeholder="Provider default" disabled></label>

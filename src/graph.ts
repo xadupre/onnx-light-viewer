@@ -354,6 +354,7 @@ export type TensorInspection = TensorStatistics | TensorValues;
 export interface RunTensor {
   name: string;
   text: string;
+  canSave?: boolean;
 }
 
 export interface RunInput extends RunTensor {
@@ -368,17 +369,27 @@ export type RunInputSource =
 
 export interface RunOptions {
   verbose?: number;
+  keepLoaded?: boolean;
   dimensions?: Record<string, number>;
 }
 
 export interface PreparedRun {
   model: Uint8Array;
   inputs: Uint8Array[];
+  inputPreviews: RunTensor[];
 }
 
 export interface RunResult {
   timeMs: number;
+  inputs: RunTensor[];
+  inputData: Uint8Array[];
   outputs: RunTensor[];
+  outputData: (Uint8Array | null)[];
+  lifecycle: {
+    loadMs: number;
+    reused: boolean;
+    retained: boolean;
+  };
   log?: string;
 }
 
@@ -407,6 +418,7 @@ export interface TensorStatistics {
  * Analysis methods do not execute the model; run explicitly executes a snapshot.
  */
 export interface NativeModel {
+  releaseRunSession(): void;
   runInputs(path?: GraphPath): RunInput[];
   run(
     inputs: RunInputSource[],

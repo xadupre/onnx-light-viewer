@@ -8420,6 +8420,56 @@ test("Generation settings validate inputs and apply to both prompt engines", (t)
   }
 });
 
+test("Settings Back is shown only when entering from Prompt or Run and preserves the execution mode", (t) => {
+  const { document } = openViewer(t);
+  const byId = (id) => document.getElementById(id);
+  const backButtons = ["prompt-settings-back", "prompt-generation-back"];
+  const assertBack = (hidden) => {
+    for (const id of backButtons) {
+      assert.equal(byId(id).textContent, "Back");
+      assert.equal(byId(id).hidden, hidden);
+    }
+  };
+  assertBack(true);
+  byId("settings-tab").click();
+  byId("settings-engine-tab").click();
+  assertBack(true);
+  for (const mode of ["prompt", "run"])
+    for (const [category, back] of [
+      ["engine", "prompt-settings-back"],
+      ["generation", "prompt-generation-back"],
+    ]) {
+      byId("prompt-tab").click();
+      byId(`execution-${mode}-tab`).click();
+      if (mode === "prompt")
+        byId(
+          category === "engine"
+            ? "prompt-settings-open"
+            : "prompt-generation-open",
+        ).click();
+      else if (category === "engine") byId("run-settings-open").click();
+      else {
+        byId("settings-tab").click();
+        byId(`settings-${category}-tab`).click();
+      }
+      assertBack(false);
+      byId("settings-tab").click();
+      assertBack(false);
+      byId(back).click();
+      assert.equal(byId("prompt-view").hidden, false);
+      assert.equal(byId(`execution-${mode}-view`).hidden, false);
+      assert.equal(
+        byId(`execution-${mode}-tab`).getAttribute("aria-selected"),
+        "true",
+      );
+      byId("settings-tab").click();
+      assertBack(false);
+      byId("model-tab").click();
+      byId("settings-tab").click();
+      assertBack(true);
+    }
+});
+
 test("Engine settings subtabs reuse prompt controls without changing the execution engine", (t) => {
   const { document, window, messages } = openViewer(t);
   const byId = (id) => document.getElementById(id);
@@ -8481,7 +8531,8 @@ test("Engine settings subtabs reuse prompt controls without changing the executi
   byId("model-tab").click();
   byId("settings-tab").click();
   assertEngine("onnxruntime");
-  byId("prompt-settings-back").click();
+  assert.equal(byId("prompt-settings-back").hidden, true);
+  byId("prompt-tab").click();
   assert.equal(byId("prompt-view").hidden, false);
   assert.equal(byId("prompt-run-page").hidden, false);
   byId("prompt-settings-open").click();
@@ -8819,7 +8870,7 @@ test("unchanged and failed device probes never invalidate an active or retained 
   assert.match(byId("prompt-lifecycle").textContent, /Kept loaded/);
 });
 
-test("Device multi-selection and string configuration editor travel with GenAI while CPU settings serve onnx-light", (t) => {
+test("Device multi-selection and predefined configuration options travel with GenAI while CPU settings serve onnx-light", (t) => {
   const { document, window, messages, load } = openViewer(t);
   const byId = (id) => document.getElementById(id);
   const receive = (data) =>
@@ -8845,22 +8896,10 @@ test("Device multi-selection and string configuration editor travel with GenAI w
     ["threads", "4"],
   ])
     document.querySelector(`[data-setting="${name}"]`).value = value;
-  const json = document.querySelector('[data-setting="sessionOptions"]');
-  json.value = '{"session.intra_op.allow_spinning":"1","custom.key":"old"}';
-  byId("prompt-config-add").click();
-  let row = byId("prompt-config-entries").firstElementChild;
-  row.querySelector('[data-config="key"]').value =
-    "session.intra_op.allow_spinning";
-  row.querySelector('[data-config="value"]').value = "0";
-  byId("prompt-config-add").click();
-  row = byId("prompt-config-entries").lastElementChild;
-  row.querySelector('[data-config="key"]').value = "custom.key";
-  row.querySelector('[data-config="value"]').value = "";
-  assert.ok(
-    byId("prompt-config-keys").querySelector(
-      '[value="session.intra_op.allow_spinning"]',
-    ),
+  const spinning = byId("prompt-config-entries").querySelector(
+    '[data-config="session.intra_op.allow_spinning"]',
   );
+  spinning.value = "0";
   byId("prompt-form").dispatchEvent(new window.Event("submit"));
   let run = messages.findLast(({ type }) => type === "run-prompt");
   assert.deepEqual(Array.from(run.options.sessionSettings.providers), [
@@ -8874,7 +8913,6 @@ test("Device multi-selection and string configuration editor travel with GenAI w
   assert.equal(run.options.sessionSettings.threads, undefined);
   assert.deepEqual(JSON.parse(run.options.sessionSettings.sessionOptions), {
     "session.intra_op.allow_spinning": "0",
-    "custom.key": "",
   });
   assert.equal(byId("prompt-device-fields").disabled, true);
   byId("prompt-cancel").click();

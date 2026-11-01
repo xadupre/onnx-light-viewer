@@ -137,7 +137,7 @@ labels stagger when space permits.
 Running a model
 ^^^^^^^^^^^^^^^
 
-Open **Run** next to **Tensors**, then select its **Run** subtab for one-shot
+Open **Run** next to **Tensors**, then select its **Run** subtab for regular
 CPU inference with **onnx-light** or **ONNX Runtime**. The **Prompt** subtab preserves language-model
 generation. Regular execution uses the current model, including unsaved edits;
 for a pipeline, choose a stage in **Model**.
@@ -146,6 +146,14 @@ Choose an **Engine** and its logging settings: onnx-light verbosity, or ONNX Run
 severity and verbosity. Each engine retains its own values while switching.
 ONNX Runtime requires ``onnx``, ``numpy`` and ``onnxruntime`` in the Python
 environment selected in **Settings → App**; onnx-light uses the bundled native SDK.
+**Settings** opens the selected engine's settings; **Back** returns to the Run subtab.
+Check **Keep session loaded between runs** to reuse the actual model session
+with either engine. Inputs are read or regenerated on each execution, including
+changed dynamic dimensions. The status distinguishes a newly created session
+from a reused one and says whether it is still loaded. **Unload session**, unchecking
+the option, changing engine/logging/model/stage, cancellation or an error releases
+the retained session. With the option off (the default), sessions are recreated
+and released for every run. Initialization time is separate from execution time.
 
 Every symbolic or unnamed dynamic dimension needs an explicit non-negative size.
 Shared symbolic names use one field; unnamed dimensions are labeled ``input:axis``.
@@ -157,11 +165,19 @@ selected input name. For text, a three-element float input named ``X`` is
 ``float[3] X = {-1, 0, 2}``; its concrete shape must match the dimension fields.
 Integer values are parsed natively without JavaScript rounding.
 A trusted workspace is required.
+**Inputs used by the last run** shows the actual input type, concrete shape and
+values (up to 32 elements), including generated random values. **Save input (.pb)…**
+saves the complete tensor, not the bounded preview. **Load input (.pb)…** is always
+visible next to each input source and automatically switches that input to file mode.
+Use it to reload a saved input exactly, including integers beyond JavaScript's
+exact-number range. Random inputs are otherwise regenerated on every run.
 **Run model** displays execution time and output type, shape and values for
 tensors up to 32 elements. Larger tensors show metadata only. Native errors
 appear in the status; ONNX Runtime logs appear below it. Neither engine modifies
-the graph or saves user files. ONNX Runtime executes a temporary snapshot that is
+the graph or automatically saves user files. ONNX Runtime executes a temporary snapshot that is
 removed after execution.
+**Save output (.pb)…** saves each tensor output in full, including values omitted
+from the preview. Non-tensor outputs cannot be saved as TensorProto.
 
 .. figure:: _static/feature-run-model.png
    :alt: Run window with onnx-light logging, an explicit dynamic dimension and SDK-generated random input.
@@ -170,10 +186,10 @@ removed after execution.
    Execute a regular model independently of language-model prompting.
 
 .. figure:: _static/feature-run-protobuf.png
-   :alt: ONNX Runtime logging settings and a TensorProto input file in the Run window.
+   :alt: Run window showing session retention and unloading, Settings, Load input, Save input and Save output alongside actual values.
    :width: 100%
 
-   Choose engine-specific logging and a saved input tensor.
+   Load saved inputs directly and save complete inputs and outputs.
 
 Running language-model prompts
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -238,34 +254,31 @@ validation can hold two models in memory.
 
 Select the engine on **Run → Prompt**, then open **Session settings** to jump to
 its subtab in **Settings → Engine**. Controls preserve defaults unless changed and never edit the
-exported configuration. GenAI's **From genai_config.json** uses the exported
+exported configuration. GenAI's **-** uses the exported
 configuration, or the engine default when the option is absent from that file.
 onnx-light exposes allocation capacity, logging and native kernel profiles.
 GenAI exposes graph optimization, memory options,
 prepacking, graph execution mode, log ID/verbosity, custom operator libraries and ORT profiling. Unsupported
 providers/options raise runtime errors, without switching engines.
 
-**Settings → Engine → onnxruntime → All session options** accepts a JSON object
-in the native GenAI ``session_options`` format, exposing all options supported by
-the installed runtime, including ``provider_options`` and string-valued ORT
-configuration entries listed in the `ONNX Runtime configuration keys
-<https://github.com/microsoft/onnxruntime/blob/main/include/onnxruntime/core/session/onnxruntime_session_options_config_keys.h>`_.
-For example, ``{"session.intra_op.allow_spinning":"0"}``
-disables intra-op spinning. Nonblank individual controls override matching JSON
-keys; blank JSON preserves the exported configuration. Provider selection and GPU
-controls also take precedence over JSON provider options unless **Use providers
-from JSON / model** is enabled on Device. Invalid JSON blocks
-generation; unsupported runtime options are reported on Prompt.
-
-Use **Session configuration entries** to add string-valued keys and values
-without editing JSON. Common keys are suggested; entries override matching JSON
-keys. Leave both fields empty or remove the entry to preserve the runtime default.
+**Settings → Engine → onnxruntime** lists each option, a compact value control
+and its explanation in three columns. **Session configuration entries** already lists the keys: choose
+a value or fill in its value field, without entering option names or JSON.
+Blank values preserve ``genai_config.json`` and runtime defaults; clearing a
+value removes its override. For example, select **0 - No** for
+``session.intra_op.allow_spinning`` to reduce idle CPU use.
+See the `ONNX Runtime configuration keys
+<https://github.com/microsoft/onnxruntime/blob/main/include/onnxruntime/core/session/onnxruntime_session_options_config_keys.h>`_
+for runtime-version requirements. Invalid values block generation; unsupported
+runtime options are reported on Prompt. **Device** controls choose providers and
+GPU settings; **Use providers from genai_config.json** preserves the exported
+provider selection.
 
 .. figure:: _static/feature-ort-session-options.png
-   :alt: ONNX Runtime settings with log verbosity, log ID, custom operator library and a JSON editor for all native session options.
+   :alt: ONNX Runtime settings in three columns: option name, compact value control and explanation.
    :width: 100%
 
-   Advanced session options supplement the shared Prompt controls without editing exported files.
+   Compact controls use - to preserve defaults; explanations appear on the right.
 
 Open **Generation settings** from Prompt, or **Settings → Generation**, to set
 **Temperature** (default **0**, greedy decoding) and **Maximum new tokens**

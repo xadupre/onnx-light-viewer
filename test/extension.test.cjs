@@ -116,6 +116,112 @@ test("regular run host selects a pipeline stage root", async (t) => {
   assert.match(extension.messages.at(-1).error, /stage root/);
 });
 
+test("regular run host reuses sessions, explicitly unloads and invalidates stages/models", async (t) => {
+  const extension = await openExtension("relu.onnx");
+  t.after(() => extension.dispose());
+  const request = {
+    type: "run-model",
+    keepLoaded: true,
+    inputs: ["float[1,3] input = {-1, 0, 2}"],
+  };
+  await extension.receive({ ...request, requestId: 1 });
+  assert.equal(extension.messages.at(-1).result.lifecycle.retained, true);
+  await extension.receive({ ...request, requestId: 2 });
+  assert.equal(extension.messages.at(-1).result.lifecycle.reused, true);
+  await extension.receive({ type: "run-release", requestId: 1, releaseId: 0 });
+  await extension.receive({ ...request, requestId: 2 });
+  assert.equal(extension.messages.at(-1).result.lifecycle.reused, true);
+  await extension.receive({
+    type: "run-release",
+    requestId: 2,
+    releaseId: 1,
+  });
+  assert.equal(extension.messages.at(-1).type, "run-session-released");
+  await extension.receive({ ...request, requestId: 3 });
+  assert.equal(extension.messages.at(-1).result.lifecycle.reused, false);
+  await extension.receive({ type: "run-inputs", requestId: 4 });
+  await extension.receive({ ...request, requestId: 5 });
+  assert.equal(extension.messages.at(-1).result.lifecycle.reused, false);
+  await extension.receive({
+    type: "open",
+    source: "local",
+    location: require.resolve("./models/relu.onnx"),
+    password: "",
+  });
+  await extension.receive({ ...request, requestId: 6 });
+  assert.equal(extension.messages.at(-1).result.lifecycle.reused, false);
+});
+
+test("regular run inputs save complete TensorProto data, reload and reject stale saves", async (t) => {
+  const extension = await openExtension("relu.onnx");
+  const directory = await mkdtemp(path.join(tmpdir(), "viewer-input-save-"));
+  t.after(() => extension.dispose());
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const file = path.join(directory, "input.pb");
+  await extension.receive({
+    type: "run-model",
+    requestId: 1,
+    inputs: ["float[1,3] input = {-1, 0, 2}"],
+  });
+  const first = extension.messages.at(-1);
+  assert.equal(first.type, "run-result");
+  assert.match(first.result.inputs[0].text, /Values: \[-1, 0, 2\]/);
+  assert.equal(first.result.inputData, undefined);
+  assert.equal(first.result.outputData, undefined);
+  assert.equal(first.result.outputs[0].canSave, true);
+  const outputFile = path.join(directory, "output.pb");
+  extension.setSaveDestination(outputFile);
+  await extension.receive({ type: "run-save-output", requestId: 1, index: 0 });
+  assert.equal(extension.messages.at(-1).type, "run-output-saved");
+  const { loadModel } = require("../dist/graph");
+  const replayOutput = await loadModel(
+    readFileSync(require.resolve("./models/relu.onnx")),
+    "relu.onnx",
+  ).run([
+    { name: "input", source: "protobuf", data: await readFile(outputFile) },
+  ]);
+  assert.deepEqual(replayOutput.outputs, first.result.outputs);
+  extension.setSaveDestination(file);
+  await extension.receive({ type: "run-save-input", requestId: 1, index: 0 });
+  assert.equal(extension.messages.at(-1).type, "run-input-saved");
+  assert.equal(extension.messages.at(-1).path, file);
+  assert.ok((await readFile(file)).length);
+  await extension.receive({
+    type: "run-model",
+    requestId: 2,
+    inputs: [{ name: "input", source: "protobuf", path: file }],
+  });
+  assert.deepEqual(
+    extension.messages.at(-1).result.inputs,
+    first.result.inputs,
+  );
+  assert.deepEqual(
+    extension.messages.at(-1).result.outputs,
+    first.result.outputs,
+  );
+  const dialogs = extension.saveDialogs.length;
+  await extension.receive({ type: "run-save-input", requestId: 1, index: 0 });
+  assert.equal(extension.messages.at(-1).type, "run-input-error");
+  assert.equal(extension.saveDialogs.length, dialogs);
+  extension.setTrusted(false);
+  await extension.receive({ type: "run-save-input", requestId: 2, index: 0 });
+  assert.match(extension.messages.at(-1).error, /Trust this workspace/);
+  extension.setTrusted(true);
+  const late = path.join(directory, "late.pb");
+  extension.setSaveDestination(late);
+  const gate = extension.pauseNextSaveDialog();
+  const saving = extension.receive({
+    type: "run-save-input",
+    requestId: 2,
+    index: 0,
+  });
+  await gate.opened;
+  await extension.receive({ type: "run-inputs", requestId: 3 });
+  gate.release();
+  await saving;
+  await assert.rejects(readFile(late), { code: "ENOENT" });
+});
+
 test("regular run host cancels ONNX Runtime preparation on panel disposal", async (t) => {
   const extension = await openExtension("relu.onnx");
   t.after(() => extension.dispose());
@@ -734,6 +840,9 @@ async function openExtension(
     },
     passwordPrompts,
     saveDialogs,
+    setSaveDestination: (filePath) => {
+      saveDestination = filePath ? vscode.Uri.file(filePath) : undefined;
+    },
     openDialogs,
     setOpenSelection: (filePath) => {
       selection = filePath ? [vscode.Uri.file(filePath)] : undefined;

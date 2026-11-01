@@ -20,9 +20,10 @@ import {
   GraphPath,
   FusionMatch,
   FusionOperation,
+  RunTensor,
 } from "./graph";
 import { webviewHtml } from "./webview";
-import { runModel } from "./run";
+import { runModel, RunSession } from "./run";
 import {
   applicationSettings,
   inspectPythonPackages,
@@ -525,6 +526,17 @@ async function configurePanel(
   let memoryRequest = 0;
   let runRequest = 0;
   let runController: AbortController | undefined;
+  let lastRunTensors:
+    | {
+        requestId: number;
+        generation: number;
+        revision: number;
+        inputs: RunTensor[];
+        inputData: Uint8Array[];
+        outputs: RunTensor[];
+        outputData: (Uint8Array | null)[];
+      }
+    | undefined;
   let fusionRequest = 0;
   let diagnosticRequest = 0;
   let undoRequest = 0;
@@ -568,6 +580,23 @@ async function configurePanel(
   const promptSession = new PromptSession((error) =>
     log.record("FAILED", "Prompt session", undefined, error.message),
   );
+  const runSession = new RunSession((error) => {
+    log.record("FAILED", "Run session", undefined, error.message);
+    void postMessage({ type: "run-session-lost", error: error.message });
+  });
+  const releaseRunSession = () => {
+    runController?.abort();
+    void runSession
+      .close()
+      .catch((error: unknown) =>
+        log.record(
+          "FAILED",
+          "Release Run session",
+          undefined,
+          error instanceof Error ? error.message : String(error),
+        ),
+      );
+  };
   const stopHistory = pathHistory.subscribe((history) => {
     void postMessage({ type: "path-history", history });
   });
@@ -781,7 +810,8 @@ async function configurePanel(
       ...(file.size === undefined ? {} : { size: file.size }),
     }));
   const sendGraph = (selectedNodes?: number[], fusionRequestId?: unknown) => {
-    runController?.abort();
+    releaseRunSession();
+    lastRunTensors = undefined;
     fusionPreview = undefined;
     fusionRequest++;
     diagnosticRequest++;
@@ -860,6 +890,8 @@ async function configurePanel(
         maxExternalFileSize?: unknown;
         includeRewritings?: unknown;
         requestId?: unknown;
+        releaseId?: unknown;
+        keepLoaded?: unknown;
         reuseResult?: unknown;
         options?: unknown;
         name?: unknown;
@@ -1282,6 +1314,82 @@ async function configurePanel(
             `Could not estimate ONNX memory: ${detail}`,
           );
         }
+      } else if (
+        message?.type === "run-save-input" ||
+        message?.type === "run-save-output"
+      ) {
+        const kind = message.type === "run-save-output" ? "output" : "input";
+        const saved = lastRunTensors;
+        const data = kind === "output" ? saved?.outputData : saved?.inputData;
+        const owner = model;
+        const isCurrent = () =>
+          active &&
+          model === owner &&
+          saved === lastRunTensors &&
+          saved?.revision === graphRevision &&
+          saved?.generation === runRequest &&
+          vscode.workspace.isTrusted;
+        try {
+          if (!vscode.workspace.isTrusted)
+            throw new Error(
+              "Trust this workspace before saving model tensors.",
+            );
+          if (
+            !saved ||
+            !data ||
+            message.requestId !== saved.requestId ||
+            typeof message.index !== "number" ||
+            !Number.isSafeInteger(message.index) ||
+            message.index < 0 ||
+            message.index >= data.length ||
+            !isCurrent()
+          )
+            throw new Error(`Run the model again before saving this ${kind}.`);
+          const bytes = data[message.index];
+          if (!bytes)
+            throw new Error("Only tensor outputs can be saved as TensorProto.");
+          const tensor = (kind === "output" ? saved.outputs : saved.inputs)[
+            message.index
+          ];
+          const destination = await vscode.window.showSaveDialog({
+            title: `Save ${kind} ${tensor.name}`,
+            saveLabel: "Save TensorProto",
+            filters: { "ONNX TensorProto": ["pb"] },
+          });
+          if (!destination || !isCurrent()) return;
+          const source = owner?.source?.uri;
+          await assertSaveDestination(
+            source
+              ? [
+                  source,
+                  ...(owner.sourceWeightLocations ?? []).map((location) =>
+                    vscode.Uri.joinPath(source, "..", location),
+                  ),
+                ]
+              : [],
+            destination,
+          );
+          const written = await writeModelFile(
+            destination,
+            bytes,
+            true,
+            isCurrent,
+          );
+          if (written && isCurrent())
+            await postMessage({
+              type: `run-${kind}-saved`,
+              requestId: saved.requestId,
+              name: tensor.name,
+              path: destination.fsPath,
+            });
+        } catch (error) {
+          if (!active || model !== owner || saved !== lastRunTensors) return;
+          await postMessage({
+            type: `run-${kind}-error`,
+            requestId: message.requestId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
       } else if (message?.type === "run-file") {
         const owner = model;
         const generation = runRequest;
@@ -1305,6 +1413,37 @@ async function configurePanel(
             index: message.index,
             path: uris[0].fsPath,
           });
+      } else if (message?.type === "run-release") {
+        if (
+          typeof message.requestId !== "number" ||
+          !Number.isSafeInteger(message.requestId) ||
+          message.requestId < 0 ||
+          typeof message.releaseId !== "number" ||
+          !Number.isSafeInteger(message.releaseId) ||
+          message.releaseId < 0 ||
+          message.requestId !== lastRunTensors?.requestId
+        )
+          return;
+        const owner = model;
+        const generation = runRequest;
+        try {
+          runController?.abort();
+          await log.run("Release Run session", () => runSession.close());
+          if (active && model === owner && generation === runRequest)
+            await postMessage({
+              type: "run-session-released",
+              requestId: message.requestId,
+              releaseId: message.releaseId,
+            });
+        } catch (error) {
+          if (active && model === owner && generation === runRequest)
+            await postMessage({
+              type: "run-session-error",
+              requestId: message.requestId,
+              releaseId: message.releaseId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+        }
       } else if (
         message?.type === "run-inputs" ||
         message?.type === "run-model"
@@ -1312,11 +1451,13 @@ async function configurePanel(
         const owner = model;
         const revision = graphRevision;
         const generation = ++runRequest;
+        lastRunTensors = undefined;
         runController?.abort();
         const controller = new AbortController();
         runController = controller;
         const isCurrent = () =>
           active &&
+          !controller.signal.aborted &&
           model === owner &&
           graphRevision === revision &&
           runRequest === generation;
@@ -1343,6 +1484,8 @@ async function configurePanel(
               : (message.path ?? []);
           if (!isGraphPath(path)) throw new Error("Invalid model run path.");
           if (message.type === "run-inputs") {
+            await runSession.close();
+            if (!isCurrent()) return;
             const inputs = native.runInputs(path);
             if (isCurrent())
               await postMessage({
@@ -1371,22 +1514,37 @@ async function configurePanel(
                     });
                 },
                 controller.signal,
+                runSession,
               ),
             );
-            if (isCurrent())
+            if (isCurrent()) {
+              const { inputData, outputData, ...display } = result;
+              lastRunTensors = {
+                requestId: message.requestId,
+                generation,
+                revision,
+                inputs: result.inputs,
+                inputData,
+                outputs: result.outputs,
+                outputData,
+              };
               await postMessage({
                 type: "run-result",
                 requestId: message.requestId,
-                result,
+                result: display,
               });
+            }
           }
         } catch (error) {
-          if (isCurrent())
+          if (isCurrent()) {
+            await runSession.close();
+            if (!isCurrent()) return;
             await postMessage({
               type: "run-error",
               requestId: message.requestId,
               error: error instanceof Error ? error.message : String(error),
             });
+          }
         }
       } else if (message?.type === "prompt-cancel") {
         promptController?.abort();
@@ -3769,7 +3927,7 @@ async function configurePanel(
             graphRevision !== requestedGraphRevision
           )
             return;
-          runController?.abort();
+          releaseRunSession();
           runRequest++;
           if (model) invalidateModel(model, log);
           const detail = error instanceof Error ? error.message : String(error);
@@ -3862,7 +4020,7 @@ async function configurePanel(
                 current.graph.breadcrumbs.at(-1)?.path,
               );
               const retained = edited.model.clone();
-              runController?.abort();
+              releaseRunSession();
               model = {
                 ...current,
                 native: edited.model,
@@ -3919,7 +4077,7 @@ async function configurePanel(
             graphRevision !== requestedGraphRevision
           )
             return;
-          runController?.abort();
+          releaseRunSession();
           runRequest++;
           if (model) invalidateModel(model, log);
           const detail = error instanceof Error ? error.message : String(error);
@@ -3950,7 +4108,7 @@ async function configurePanel(
     active = false;
     releaseController?.abort();
     promptController?.abort();
-    runController?.abort();
+    releaseRunSession();
     void promptSession
       .close()
       .catch((error: unknown) =>

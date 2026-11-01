@@ -1,10 +1,12 @@
-/** @file One-shot execution of retained models through the native SDK. */
+/** @file Execution of independent model snapshots through the native SDK. */
 #include "model_io.h"
 #include "model_storage.h"
 #include "tensor_preview.h"
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <map>
+#include <mutex>
 #include <onnx_core/runtime/kernels/random.h>
 #include <onnx_core/runtime/runtime_session.h>
 #include <onnx_manipulations/printer.h>
@@ -29,6 +31,17 @@ struct InputSource {
   bool random = false;
 };
 
+struct RunState {
+  explicit RunState(const StoredModel &source, int verbosity)
+      : model(source.model->SharedCopy()), verbose(verbosity) {}
+  ol::ModelProto model;
+  std::unique_ptr<rt::RuntimeSession> session;
+  std::mutex mutex;
+  std::atomic<bool> retained = false;
+  int verbose;
+  double load_ms = 0;
+};
+
 int64_t Dimension(const Napi::Value &value) {
   if (!value.IsNumber())
     throw std::runtime_error("Expected a non-negative safe integer dimension.");
@@ -42,16 +55,19 @@ int64_t Dimension(const Napi::Value &value) {
 class RunWorker : public Napi::AsyncWorker {
 public:
   RunWorker(Napi::Env env, std::shared_ptr<StoredModel> source, std::vector<InputSource> inputs,
-            std::map<std::string, int64_t> dimensions, int verbose, bool prepare)
+            std::map<std::string, int64_t> dimensions, int verbose, bool prepare,
+            std::shared_ptr<RunState> state)
       : Napi::AsyncWorker(env), deferred_(Napi::Promise::Deferred::New(env)),
-        source_(std::move(source)), snapshot_(source_->model->SharedCopy()),
-        inputs_(std::move(inputs)), dimensions_(std::move(dimensions)), verbose_(verbose),
-        prepare_(prepare) {}
+        source_(std::move(source)),
+        state_(state ? std::move(state) : std::make_shared<RunState>(*source_, verbose)),
+        snapshot_(state_->model), inputs_(std::move(inputs)), dimensions_(std::move(dimensions)),
+        verbose_(verbose), prepare_(prepare) {}
 
   Napi::Promise Promise() const { return deferred_.Promise(); }
 
   void Execute() override {
     try {
+      std::lock_guard lock(state_->mutex);
       std::vector<ol::TensorProto> input_storage;
       input_storage.reserve(inputs_.size());
       rt::RuntimeContext context(
@@ -133,32 +149,49 @@ public:
             ++axis;
           }
         }
-        if (prepare_) {
-          std::string bytes;
-          if (!tensor.SerializeToString(bytes))
-            throw std::runtime_error("Could not serialize input tensor.");
-          prepared_inputs_.push_back(std::move(bytes));
-        } else
-          context.Set(std::string(tensor.name()), rt::TensorFromProto(tensor));
+        std::string bytes;
+        if (!tensor.SerializeToString(bytes))
+          throw std::runtime_error("Could not serialize input tensor.");
+        prepared_inputs_.push_back(std::move(bytes));
+        const auto values = TinyTensorValues(tensor, 33);
+        auto runtime_tensor = rt::TensorFromProto(tensor);
+        ol::ValueInfoProto metadata;
+        rt::FillValueInfo(runtime_tensor, metadata);
+        metadata.set_name(tensor.name());
+        input_previews_.emplace_back(std::string(tensor.name()),
+                                     ol::ProtoToString(metadata) + "\nValues: " +
+                                         values.value_or("Omitted (preview limit: 32 elements)."));
+        if (!prepare_)
+          context.Set(std::string(tensor.name()), std::move(runtime_tensor));
       }
-      RestoreModelPayloads(snapshot_, *source_, source_->file_path);
-      std::vector<ol::EncodedValueProto *> encoded;
-      const auto tensors = ModelSaveTensors(snapshot_, &encoded);
-      const auto directory = ModelFilePath(source_->file_path).parent_path();
-      for (auto *tensor : tensors)
-        if (tensor->data_location() == ol::TensorProto::EXTERNAL)
-          LoadExternalTensor(*tensor, directory);
-      for (auto *tensor : encoded)
-        if (tensor->data_location() == ol::TensorProto::EXTERNAL)
-          LoadExternalTensor(*tensor, directory);
+      if (!state_->session) {
+        RestoreModelPayloads(snapshot_, *source_, source_->file_path);
+        std::vector<ol::EncodedValueProto *> encoded;
+        const auto tensors = ModelSaveTensors(snapshot_, &encoded);
+        const auto directory = ModelFilePath(source_->file_path).parent_path();
+        for (auto *tensor : tensors)
+          if (tensor->data_location() == ol::TensorProto::EXTERNAL)
+            LoadExternalTensor(*tensor, directory);
+        for (auto *tensor : encoded)
+          if (tensor->data_location() == ol::TensorProto::EXTERNAL)
+            LoadExternalTensor(*tensor, directory);
+      }
       if (prepare_) {
         if (!snapshot_.SerializeToString(model_bytes_))
           throw std::runtime_error("Could not serialize execution model.");
         return;
       }
-      rt::RuntimeSession session(snapshot_, verbose_);
+      reused_ = state_->session != nullptr;
+      if (!state_->session) {
+        const auto load_start = std::chrono::steady_clock::now();
+        state_->session = std::make_unique<rt::RuntimeSession>(snapshot_, verbose_);
+        state_->load_ms =
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - load_start)
+                .count();
+      }
+      load_ms_ = state_->load_ms;
       const auto start = std::chrono::steady_clock::now();
-      session.Run(context);
+      state_->session->Run(context);
       time_ms_ = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
                      .count();
       if (verbose_ > 0) {
@@ -178,6 +211,7 @@ public:
         const std::string name = output.name();
         if (!context.Has(name)) {
           outputs_.emplace_back(name, "Non-tensor output (no tensor preview).");
+          output_data_.emplace_back();
           continue;
         }
         const auto &tensor = context.Get(name);
@@ -187,12 +221,15 @@ public:
         for (const auto dimension : tensor.shape)
           proto.add_dims(dimension);
         if (tensor.data_type == ol::TensorProto::STRING) {
-          if (tensor.AsStrings().size() <= 32)
-            for (const auto &value : tensor.AsStrings())
-              proto.add_string_data(value);
+          for (const auto &value : tensor.AsStrings())
+            proto.add_string_data(value);
         } else {
           proto.ref_raw_data().assign_borrowed(tensor.bytes(), tensor.size_bytes());
         }
+        std::string bytes;
+        if (!proto.SerializeToString(bytes))
+          throw std::runtime_error("Could not serialize output tensor.");
+        output_data_.push_back(std::move(bytes));
         const auto values = TinyTensorValues(proto, 33);
         ol::ValueInfoProto metadata;
         rt::FillValueInfo(tensor, metadata);
@@ -207,26 +244,46 @@ public:
 
   void OnOK() override {
     auto result = Napi::Object::New(Env());
+    auto previews = Napi::Array::New(Env(), input_previews_.size());
+    for (size_t index = 0; index < input_previews_.size(); ++index) {
+      auto preview = Napi::Object::New(Env());
+      preview.Set("name", Text(Env(), input_previews_[index].first));
+      preview.Set("text", Text(Env(), input_previews_[index].second));
+      previews.Set(index, preview);
+    }
+    result.Set(prepare_ ? "inputPreviews" : "inputs", previews);
+    auto inputs = Napi::Array::New(Env(), prepared_inputs_.size());
+    for (size_t index = 0; index < prepared_inputs_.size(); ++index)
+      inputs.Set(index, Napi::Buffer<char>::Copy(Env(), prepared_inputs_[index].data(),
+                                                 prepared_inputs_[index].size()));
+    result.Set(prepare_ ? "inputs" : "inputData", inputs);
     if (prepare_) {
       result.Set("model",
                  Napi::Buffer<char>::Copy(Env(), model_bytes_.data(), model_bytes_.size()));
-      auto inputs = Napi::Array::New(Env(), prepared_inputs_.size());
-      for (size_t index = 0; index < prepared_inputs_.size(); ++index)
-        inputs.Set(index, Napi::Buffer<char>::Copy(Env(), prepared_inputs_[index].data(),
-                                                   prepared_inputs_[index].size()));
-      result.Set("inputs", inputs);
       deferred_.Resolve(result);
       return;
     }
     result.Set("timeMs", time_ms_);
+    auto lifecycle = Napi::Object::New(Env());
+    lifecycle.Set("loadMs", load_ms_);
+    lifecycle.Set("reused", reused_);
+    lifecycle.Set("retained", state_->retained.load());
+    result.Set("lifecycle", lifecycle);
     auto outputs = Napi::Array::New(Env(), outputs_.size());
+    auto output_data = Napi::Array::New(Env(), output_data_.size());
     for (size_t index = 0; index < outputs_.size(); ++index) {
       auto output = Napi::Object::New(Env());
       output.Set("name", Text(Env(), outputs_[index].first));
       output.Set("text", Text(Env(), outputs_[index].second));
+      output.Set("canSave", !output_data_[index].empty());
       outputs.Set(index, output);
+      output_data.Set(index, output_data_[index].empty()
+                                 ? Napi::Value(Env().Null())
+                                 : Napi::Buffer<char>::Copy(Env(), output_data_[index].data(),
+                                                            output_data_[index].size()));
     }
     result.Set("outputs", outputs);
+    result.Set("outputData", output_data);
     if (!log_.empty())
       result.Set("log", Text(Env(), log_));
     deferred_.Resolve(result);
@@ -237,20 +294,33 @@ public:
 private:
   Napi::Promise::Deferred deferred_;
   std::shared_ptr<StoredModel> source_;
-  ol::ModelProto snapshot_;
+  std::shared_ptr<RunState> state_;
+  ol::ModelProto &snapshot_;
   std::vector<InputSource> inputs_;
   std::map<std::string, int64_t> dimensions_;
   int verbose_;
   bool prepare_;
   std::string model_bytes_;
   std::vector<std::string> prepared_inputs_;
+  std::vector<std::pair<std::string, std::string>> input_previews_;
   std::vector<std::pair<std::string, std::string>> outputs_;
+  std::vector<std::string> output_data_;
   std::string log_;
   double time_ms_ = 0;
+  double load_ms_ = 0;
+  bool reused_ = false;
 };
 } // namespace
 
 void AddRunMethods(Napi::Env env, Napi::Object result, std::shared_ptr<StoredModel> model) {
+  auto retained = std::make_shared<std::shared_ptr<RunState>>();
+  result.Set("releaseRunSession",
+             Napi::Function::New(env, [retained](const Napi::CallbackInfo &call) {
+               if (*retained)
+                 (*retained)->retained = false;
+               retained->reset();
+               return call.Env().Undefined();
+             }));
   result.Set("runInputs",
              Napi::Function::New(env, [model](const Napi::CallbackInfo &call) -> Napi::Value {
                try {
@@ -297,73 +367,95 @@ void AddRunMethods(Napi::Env env, Napi::Object result, std::shared_ptr<StoredMod
                }
              }));
   for (const bool prepare : {false, true})
-    result.Set(
-        prepare ? "prepareRun" : "run",
-        Napi::Function::New(env, [model, prepare](const Napi::CallbackInfo &call) -> Napi::Value {
-          try {
-            RootPath(call, 1);
-            if (call.Length() < 1 || !call[0].IsArray())
-              throw std::runtime_error("Expected input tensor text.");
-            const auto values = call[0].As<Napi::Array>();
-            std::vector<InputSource> inputs;
-            for (uint32_t index = 0; index < values.Length(); ++index) {
-              const auto value = values.Get(index);
-              if (value.IsString()) {
-                inputs.push_back({{}, value.As<Napi::String>().Utf8Value(), {}, false});
-                continue;
-              }
-              if (!value.IsObject() || value.IsArray())
-                throw std::runtime_error("Expected input tensor text.");
-              const auto input = value.As<Napi::Object>();
-              if (!input.Get("name").IsString() || !input.Get("source").IsString())
-                throw std::runtime_error("Expected a named input source.");
-              InputSource source;
-              source.name = input.Get("name").As<Napi::String>().Utf8Value();
-              const auto kind = input.Get("source").As<Napi::String>().Utf8Value();
-              source.random = kind == "random";
-              if (!source.random) {
-                if (kind != "protobuf" || !input.Get("data").IsTypedArray() ||
-                    input.Get("data").As<Napi::TypedArray>().TypedArrayType() != napi_uint8_array)
-                  throw std::runtime_error("Expected a TensorProto buffer or random input.");
-                const auto bytes = input.Get("data").As<Napi::Uint8Array>();
-                source.protobuf.assign(reinterpret_cast<const char *>(bytes.Data()),
-                                       bytes.ByteLength());
-              }
-              inputs.push_back(std::move(source));
-            }
-            int verbose = 0;
-            std::map<std::string, int64_t> dimensions;
-            if (call.Length() > 2 && !call[2].IsUndefined()) {
-              if (!call[2].IsObject() || call[2].IsArray())
-                throw std::runtime_error("Expected run options.");
-              const auto options = call[2].As<Napi::Object>();
-              if (options.Has("verbose") && !options.Get("verbose").IsUndefined()) {
-                const auto number = Dimension(options.Get("verbose"));
-                if (number > 10)
-                  throw std::runtime_error("Verbosity must be between 0 and 10.");
-                verbose = static_cast<int>(number);
-              }
-              if (options.Has("dimensions")) {
-                const auto value = options.Get("dimensions");
-                if (!value.IsObject() || value.IsArray())
-                  throw std::runtime_error("Expected dynamic dimensions.");
-                const auto values = value.As<Napi::Object>();
-                const auto keys = values.GetPropertyNames();
-                for (uint32_t index = 0; index < keys.Length(); ++index) {
-                  const auto key = keys.Get(index).As<Napi::String>();
-                  dimensions.emplace(key.Utf8Value(), Dimension(values.Get(key)));
-                }
-              }
-            }
-            auto *worker = new RunWorker(call.Env(), model, std::move(inputs),
-                                         std::move(dimensions), verbose, prepare);
-            const auto promise = worker->Promise();
-            worker->Queue();
-            return promise;
-          } catch (const std::exception &error) {
-            Napi::Error::New(call.Env(), error.what()).ThrowAsJavaScriptException();
-            return call.Env().Undefined();
-          }
-        }));
+    result.Set(prepare ? "prepareRun" : "run",
+               Napi::Function::New(
+                   env, [model, prepare, retained](const Napi::CallbackInfo &call) -> Napi::Value {
+                     try {
+                       RootPath(call, 1);
+                       if (call.Length() < 1 || !call[0].IsArray())
+                         throw std::runtime_error("Expected input tensor text.");
+                       const auto values = call[0].As<Napi::Array>();
+                       std::vector<InputSource> inputs;
+                       for (uint32_t index = 0; index < values.Length(); ++index) {
+                         const auto value = values.Get(index);
+                         if (value.IsString()) {
+                           inputs.push_back({{}, value.As<Napi::String>().Utf8Value(), {}, false});
+                           continue;
+                         }
+                         if (!value.IsObject() || value.IsArray())
+                           throw std::runtime_error("Expected input tensor text.");
+                         const auto input = value.As<Napi::Object>();
+                         if (!input.Get("name").IsString() || !input.Get("source").IsString())
+                           throw std::runtime_error("Expected a named input source.");
+                         InputSource source;
+                         source.name = input.Get("name").As<Napi::String>().Utf8Value();
+                         const auto kind = input.Get("source").As<Napi::String>().Utf8Value();
+                         source.random = kind == "random";
+                         if (!source.random) {
+                           if (kind != "protobuf" || !input.Get("data").IsTypedArray() ||
+                               input.Get("data").As<Napi::TypedArray>().TypedArrayType() !=
+                                   napi_uint8_array)
+                             throw std::runtime_error(
+                                 "Expected a TensorProto buffer or random input.");
+                           const auto bytes = input.Get("data").As<Napi::Uint8Array>();
+                           source.protobuf.assign(reinterpret_cast<const char *>(bytes.Data()),
+                                                  bytes.ByteLength());
+                         }
+                         inputs.push_back(std::move(source));
+                       }
+                       int verbose = 0;
+                       bool keep_loaded = false;
+                       std::map<std::string, int64_t> dimensions;
+                       if (call.Length() > 2 && !call[2].IsUndefined()) {
+                         if (!call[2].IsObject() || call[2].IsArray())
+                           throw std::runtime_error("Expected run options.");
+                         const auto options = call[2].As<Napi::Object>();
+                         if (options.Has("keepLoaded")) {
+                           if (!options.Get("keepLoaded").IsBoolean())
+                             throw std::runtime_error("Expected a boolean keepLoaded option.");
+                           keep_loaded = options.Get("keepLoaded").As<Napi::Boolean>();
+                         }
+                         if (options.Has("verbose") && !options.Get("verbose").IsUndefined()) {
+                           const auto number = Dimension(options.Get("verbose"));
+                           if (number > 10)
+                             throw std::runtime_error("Verbosity must be between 0 and 10.");
+                           verbose = static_cast<int>(number);
+                         }
+                         if (options.Has("dimensions")) {
+                           const auto value = options.Get("dimensions");
+                           if (!value.IsObject() || value.IsArray())
+                             throw std::runtime_error("Expected dynamic dimensions.");
+                           const auto values = value.As<Napi::Object>();
+                           const auto keys = values.GetPropertyNames();
+                           for (uint32_t index = 0; index < keys.Length(); ++index) {
+                             const auto key = keys.Get(index).As<Napi::String>();
+                             dimensions.emplace(key.Utf8Value(), Dimension(values.Get(key)));
+                           }
+                         }
+                       }
+                       std::shared_ptr<RunState> state;
+                       if (!prepare) {
+                         if (*retained && (!keep_loaded || (*retained)->verbose != verbose)) {
+                           (*retained)->retained = false;
+                           retained->reset();
+                         }
+                         if (keep_loaded) {
+                           if (!*retained)
+                             *retained = std::make_shared<RunState>(*model, verbose);
+                           (*retained)->retained = true;
+                           state = *retained;
+                         }
+                       }
+                       auto *worker =
+                           new RunWorker(call.Env(), model, std::move(inputs),
+                                         std::move(dimensions), verbose, prepare, std::move(state));
+                       const auto promise = worker->Promise();
+                       worker->Queue();
+                       return promise;
+                     } catch (const std::exception &error) {
+                       Napi::Error::New(call.Env(), error.what()).ThrowAsJavaScriptException();
+                       return call.Env().Undefined();
+                     }
+                   }));
 }
 } // namespace onnx_light_viewer

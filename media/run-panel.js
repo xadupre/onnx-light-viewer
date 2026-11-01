@@ -8,12 +8,51 @@ function createRunPanel({
   let requested = false;
   let available = false;
   let busy = false;
+  let retained = false;
+  let releaseId = 0;
   let inputs = [];
   const fields = byId("run-fields");
   const status = byId("run-status");
   const results = byId("run-results");
   const stage = byId("run-stage");
   const engine = byId("run-engine");
+  const keepLoaded = byId("run-keep-loaded");
+  byId("run-settings-open").addEventListener("click", () => {
+    byId("settings-tab").click();
+    byId("settings-engine-tab").click();
+    byId(
+      `settings-${engine.value === "onnx-light" ? "onnx-light" : "onnxruntime"}-tab`,
+    ).click();
+  });
+  const showLifecycle = (value) => {
+    if (value) retained = value.retained;
+    byId("run-unload").disabled = busy || !retained;
+    const name = engine.value === "onnxruntime" ? "ONNX Runtime" : "onnx-light";
+    byId("run-lifecycle").textContent = value
+      ? `${name} session: ${value.reused ? "reused from the previous run" : "created for this run"}, ${value.retained ? "still loaded and available for the next run" : "released after execution"}. Initialization: ${value.loadMs.toFixed(3)} ms.${value.retained ? "" : " No session is kept alive between runs."}`
+      : busy
+        ? `${name}: run in progress. ${keepLoaded.checked ? "The session will stay loaded for the next run." : "A new session is created for this run and released when it finishes."}`
+        : retained
+          ? `${name}: session still loaded and available for the next run.`
+          : `${name}: no retained session. ${keepLoaded.checked ? "The next Run model creates a session and keeps it loaded." : "A new session is created on every Run model; it is never reused between runs."}`;
+  };
+  const release = () => {
+    if (retained)
+      postMessage({ type: "run-release", requestId, releaseId: ++releaseId });
+    retained = false;
+    showLifecycle();
+  };
+  byId("run-unload").addEventListener("click", release);
+  keepLoaded.addEventListener("change", () => {
+    if (!keepLoaded.checked) release();
+    else showLifecycle();
+  });
+  for (const id of ["run-verbose", "run-log-severity", "run-log-verbosity"])
+    byId(id).addEventListener("change", release);
+  const clearInputPreviews = () => {
+    byId("run-input-previews").replaceChildren();
+    byId("run-used-inputs").hidden = true;
+  };
   const selectEngine = () => {
     const light = engine.value === "onnx-light";
     byId("run-logging-light").hidden = !light;
@@ -21,8 +60,12 @@ function createRunPanel({
     byId("run-logging-ort").hidden = light;
     byId("run-log-severity").disabled = light;
     byId("run-log-verbosity").disabled = light;
+    showLifecycle();
   };
-  engine.addEventListener("change", selectEngine);
+  engine.addEventListener("change", () => {
+    release();
+    selectEngine();
+  });
   selectEngine();
   const modes = ["prompt", "run"];
   const selectMode = (mode, focus = false) => {
@@ -58,10 +101,12 @@ function createRunPanel({
     });
   }
   const load = () => {
+    release();
     requested = true;
     available = false;
     fields.disabled = true;
     results.replaceChildren();
+    clearInputPreviews();
     byId("run-log").textContent = "";
     status.textContent = "Loading model inputs…";
     postMessage({
@@ -88,8 +133,10 @@ function createRunPanel({
       return;
     }
     busy = true;
+    showLifecycle();
     fields.disabled = true;
     results.replaceChildren();
+    clearInputPreviews();
     byId("run-log").textContent = "";
     status.textContent = "Running model…";
     postMessage({
@@ -97,6 +144,7 @@ function createRunPanel({
       requestId: ++requestId,
       path: JSON.parse(stage.value),
       engine: engine.value,
+      keepLoaded: keepLoaded.checked,
       settings:
         engine.value === "onnx-light"
           ? { verbose: Number(byId("run-verbose").value) }
@@ -122,7 +170,10 @@ function createRunPanel({
     reset() {
       ++requestId;
       requested = available = busy = false;
+      retained = false;
       inputs = [];
+      showLifecycle();
+      clearInputPreviews();
       fields.disabled = true;
       stage.replaceChildren(new Option("Root graph", "[]"));
       byId("run-inputs").replaceChildren();
@@ -142,11 +193,20 @@ function createRunPanel({
       selectMode("prompt");
     },
     handleMessage(message) {
+      if (message?.type === "run-session-lost") {
+        retained = false;
+        showLifecycle();
+        status.textContent = `Session stopped: ${message.error}`;
+        return true;
+      }
       if (["metadata-error", "shape-error"].includes(message?.type)) {
         if (busy || (requested && !available)) {
           ++requestId;
           requested = available;
           busy = false;
+          retained = false;
+          showLifecycle();
+          clearInputPreviews();
           fields.disabled = !available;
           status.textContent = `Run cancelled: ${message.error}`;
         }
@@ -159,18 +219,53 @@ function createRunPanel({
           "run-error",
           "run-log",
           "run-file",
+          "run-input-saved",
+          "run-input-error",
+          "run-output-saved",
+          "run-output-error",
+          "run-session-released",
+          "run-session-error",
         ].includes(message?.type)
       )
         return false;
       if (message.requestId !== requestId) return true;
+      if (
+        ["run-session-released", "run-session-error"].includes(message.type)
+      ) {
+        if (message.releaseId !== releaseId) return true;
+        retained = false;
+        showLifecycle();
+        if (message.type === "run-session-error")
+          status.textContent = `Could not unload session: ${message.error}`;
+        return true;
+      }
       if (message.type === "run-log") {
         byId("run-log").textContent = message.output;
         return true;
       }
       if (message.type === "run-file") {
         const field = byId(`run-file-${message.index}`);
-        if (field && typeof message.path === "string")
+        if (field && typeof message.path === "string") {
           field.value = message.path;
+          const source = byId(`run-source-${message.index}`);
+          source.value = "protobuf";
+          source.dispatchEvent(new Event("change"));
+        }
+        return true;
+      }
+      if (message.type === "run-input-saved") {
+        const index = inputs.findIndex((input) => input.name === message.name);
+        const field = byId(`run-file-${index}`);
+        if (field) field.value = message.path;
+        status.textContent = `Saved input ${message.name} to ${message.path}. Use Load input (.pb) to reload it.`;
+        return true;
+      }
+      if (message.type === "run-output-saved") {
+        status.textContent = `Saved output ${message.name} to ${message.path}.`;
+        return true;
+      }
+      if (["run-input-error", "run-output-error"].includes(message.type)) {
+        status.textContent = `Could not save ${message.type === "run-output-error" ? "output" : "input"}: ${message.error}`;
         return true;
       }
       busy = false;
@@ -220,6 +315,13 @@ function createRunPanel({
           dimensionFields.append(label, field);
         }
         message.inputs.forEach((input, index) => {
+          const metadataLabel = document.createElement("span");
+          const metadata = document.createElement("pre");
+          metadata.id = `run-metadata-${index}`;
+          metadataLabel.id = `run-metadata-label-${index}`;
+          metadata.setAttribute("aria-labelledby", metadataLabel.id);
+          metadataLabel.textContent = `${input.name} type / shape`;
+          metadata.textContent = input.text;
           const label = document.createElement("label");
           label.htmlFor = `run-input-${index}`;
           label.textContent = input.name;
@@ -239,6 +341,16 @@ function createRunPanel({
             new Option("Tensor text", "text"),
           );
           source.value = input.shape ? "random" : "text";
+          const sourceControls = document.createElement("div");
+          sourceControls.className = "run-file-controls";
+          const loadInput = document.createElement("button");
+          loadInput.id = `run-load-${index}`;
+          loadInput.type = "button";
+          loadInput.textContent = "Load input (.pb)…";
+          loadInput.addEventListener("click", () =>
+            postMessage({ type: "run-file", requestId, index }),
+          );
+          sourceControls.append(source, loadInput);
           const fileLabel = document.createElement("label");
           const fileControls = document.createElement("div");
           fileControls.className = "run-file-controls";
@@ -266,8 +378,10 @@ function createRunPanel({
           source.addEventListener("change", selectSource);
           selectSource();
           container.append(
+            metadataLabel,
+            metadata,
             sourceLabel,
-            source,
+            sourceControls,
             fileLabel,
             fileControls,
             label,
@@ -278,14 +392,41 @@ function createRunPanel({
           "Ready. Specify dynamic dimensions and input sources, then Run model.";
       } else if (message.type === "run-error") {
         status.textContent = message.error;
+        retained = false;
+        showLifecycle();
       } else {
         status.textContent = `Completed in ${message.result.timeMs.toFixed(3)} ms (execution only).`;
-        for (const output of message.result.outputs) {
+        showLifecycle(message.result.lifecycle);
+        const previews = byId("run-input-previews");
+        for (const [index, input] of (message.result.inputs ?? []).entries()) {
+          const heading = document.createElement("h3");
+          heading.textContent = input.name;
+          const values = document.createElement("pre");
+          values.textContent = input.text;
+          const save = document.createElement("button");
+          save.type = "button";
+          save.textContent = "Save input (.pb)…";
+          save.addEventListener("click", () =>
+            postMessage({ type: "run-save-input", requestId, index }),
+          );
+          previews.append(heading, values, save);
+        }
+        byId("run-used-inputs").hidden = !previews.childElementCount;
+        for (const [index, output] of message.result.outputs.entries()) {
           const heading = document.createElement("h3");
           heading.textContent = output.name;
           const values = document.createElement("pre");
           values.textContent = output.text;
           results.append(heading, values);
+          if (output.canSave) {
+            const save = document.createElement("button");
+            save.type = "button";
+            save.textContent = "Save output (.pb)…";
+            save.addEventListener("click", () =>
+              postMessage({ type: "run-save-output", requestId, index }),
+            );
+            results.append(save);
+          }
         }
       }
       fields.disabled = !available;

@@ -2030,14 +2030,18 @@ button:disabled {
   gap: 0.5rem;
 }
 
-.run-file-controls input {
+.run-file-controls input,
+.run-file-controls select {
   flex: 1;
   min-width: 0;
 }
 
-#run-results pre {
+#run-results pre,
+#run-input-previews pre,
+#run-inputs pre {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+  min-width: 0;
 }
 
 .form-grid > button {
@@ -2066,6 +2070,26 @@ button:disabled {
   display: grid;
   gap: 0.75rem;
   max-width: 48rem;
+}
+
+.prompt-option-help {
+  display: block;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+#prompt-settings-genai,
+#prompt-config-entries {
+  max-width: 72rem;
+}
+
+#prompt-settings-genai label {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 10rem) minmax(0, 1.5fr);
+  max-width: 72rem;
+}
+
+.prompt-settings-grid label > span {
+  overflow-wrap: anywhere;
 }
 
 .history-pipeline-status {

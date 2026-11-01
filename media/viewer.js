@@ -259,6 +259,9 @@ function focusNodes(nodes) {
 
 function showTab(name, focus = false) {
   endGesture();
+  if (name === "settings" && byId("settings-view").hidden)
+    for (const id of ["prompt-settings-back", "prompt-generation-back"])
+      byId(id).hidden = byId("prompt-view").hidden;
   for (const tab of tabs) {
     const active = tab === name;
     byId(`${tab}-view`).hidden = !active;
