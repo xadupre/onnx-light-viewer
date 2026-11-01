@@ -142,6 +142,16 @@ function createRunPanel({
       selectMode("prompt");
     },
     handleMessage(message) {
+      if (["metadata-error", "shape-error"].includes(message?.type)) {
+        if (busy || (requested && !available)) {
+          ++requestId;
+          requested = available;
+          busy = false;
+          fields.disabled = !available;
+          status.textContent = `Run cancelled: ${message.error}`;
+        }
+        return false;
+      }
       if (
         ![
           "run-inputs",

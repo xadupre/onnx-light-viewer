@@ -7,6 +7,7 @@ const path = require("node:path");
 const { test } = require("node:test");
 const {
   loadModel,
+  loadModelFile,
   listBackendTests,
   loadBackendTest,
 } = require("../dist/graph");
@@ -181,6 +182,37 @@ test("both engines execute protobuf and random inputs from independent current-m
     });
     assert.equal(random.outputs[0].name, "output");
     assert.deepEqual(model.graph(), before);
+  }
+});
+
+test("both engines execute unsaved function edits without mutating the retained model or original file", async () => {
+  const file = require.resolve("./models/relu.onnx");
+  const originalBytes = readFileSync(file);
+  const source = await loadModelFile(file, "relu.onnx");
+  source.createFunctionPattern([0], "EditableRun");
+  const preview = await source.previewFusion("EditableRun");
+  const fused = await preview.model.applyFusion("EditableRun", [
+    preview.matches[0].anchor,
+  ]);
+  const definition = fused.modelFunction(0);
+  const edited = fused.updateModelFunction(
+    0,
+    definition.text.replace("Relu", "Neg"),
+  );
+  const graph = edited.graph();
+  const bytes = Buffer.from(await edited.serialize());
+  for (const engine of ["onnx-light", "onnxruntime"]) {
+    const result = await run(edited, {
+      engine,
+      inputs: ["float[1,3] input = {-1, 0, 2}"],
+    });
+    assert.match(
+      result.outputs[0].text,
+      /Values: \[1(?:\.0)?, -?0(?:\.0)?, -2(?:\.0)?\]/,
+    );
+    assert.deepEqual(edited.graph(), graph);
+    assert.deepEqual(Buffer.from(await edited.serialize()), bytes);
+    assert.deepEqual(readFileSync(file), originalBytes);
   }
 });
 

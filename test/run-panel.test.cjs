@@ -91,6 +91,58 @@ test("regular run sends exact text inputs, handles errors and ignores stale resu
   assert.equal(byId("run-fields").disabled, true);
 });
 
+for (const type of ["metadata-error", "shape-error"])
+  test(`Run recovers from ${type} without stale messages or lost input drafts`, (t) => {
+    const { byId, api, messages } = panel(t);
+    const failure = { type, error: "Model analysis failed." };
+    api.activate();
+    const pendingInputs = messages.at(-1);
+    assert.equal(api.handleMessage(failure), false);
+    api.activate();
+    const freshInputs = messages.at(-1);
+    assert.ok(freshInputs.requestId > pendingInputs.requestId);
+    api.handleMessage({
+      ...pendingInputs,
+      stages: [],
+      path: [],
+      inputs: [],
+    });
+    assert.equal(byId("run-fields").disabled, true);
+    api.handleMessage({
+      ...freshInputs,
+      stages: [],
+      path: [],
+      inputs: [{ name: "X", text: "float[1] X = {}" }],
+    });
+    const draft = "float[1] X = {-1}";
+    byId("run-input-0").value = draft;
+    const submit = byId("run-form").querySelector('button[type="submit"]');
+    submit.click();
+    const run = messages.at(-1);
+    assert.equal(run.type, "run-model");
+    assert.equal(byId("run-fields").disabled, true);
+    assert.equal(api.handleMessage(failure), false);
+    assert.equal(byId("run-fields").disabled, false);
+    assert.equal(byId("run-input-0").value, draft);
+    const status = byId("run-status").textContent;
+    assert.match(status, /cancelled.*Model analysis failed/);
+    for (const type of ["run-result", "run-error", "run-log"])
+      api.handleMessage({
+        type,
+        requestId: run.requestId,
+        result: { timeMs: 1, outputs: [{ name: "old", text: "old" }] },
+        error: "old",
+        output: "old",
+      });
+    assert.equal(byId("run-status").textContent, status);
+    assert.equal(byId("run-results").textContent, "");
+    assert.equal(byId("run-log").textContent, "");
+    submit.click();
+    assert.equal(messages.at(-1).type, "run-model");
+    assert.ok(messages.at(-1).requestId > run.requestId);
+    assert.equal(messages.at(-1).inputs[0], draft);
+  });
+
 test("pipeline stage changes reload input forms without changing execution mode", (t) => {
   const { dom, byId, api, messages } = panel(t);
   byId("execution-run-tab").click();

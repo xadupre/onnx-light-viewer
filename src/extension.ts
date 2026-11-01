@@ -3769,6 +3769,8 @@ async function configurePanel(
             graphRevision !== requestedGraphRevision
           )
             return;
+          runController?.abort();
+          runRequest++;
           if (model) invalidateModel(model, log);
           const detail = error instanceof Error ? error.message : String(error);
           await postMessage({
@@ -3917,6 +3919,8 @@ async function configurePanel(
             graphRevision !== requestedGraphRevision
           )
             return;
+          runController?.abort();
+          runRequest++;
           if (model) invalidateModel(model, log);
           const detail = error instanceof Error ? error.message : String(error);
           await postMessage({

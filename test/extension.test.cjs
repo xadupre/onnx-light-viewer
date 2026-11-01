@@ -141,6 +141,81 @@ test("regular run host cancels ONNX Runtime preparation on panel disposal", asyn
   );
 });
 
+for (const refresh of ["metadata", "refresh-shapes"])
+  for (const engine of ["onnx-light", "onnxruntime"])
+    test(`regular run host invalidates ${engine} work when ${refresh} fails`, async (t) => {
+      const extension = await openExtension("relu.onnx");
+      t.after(() => extension.dispose());
+      const native = extension.nativeModels.at(-1);
+      let finish;
+      const started = new Promise((resolve) => {
+        native[engine === "onnxruntime" ? "prepareRun" : "run"] = () =>
+          new Promise((complete) => {
+            finish = complete;
+            resolve();
+          });
+      });
+      const pending = extension.receive({
+        type: "run-model",
+        requestId: 31,
+        engine,
+        inputs: [],
+      });
+      await started;
+      const failure = new Error("Run test refresh failure");
+      if (refresh === "metadata")
+        native.metadata = () => {
+          throw failure;
+        };
+      else {
+        const graph = native.graph;
+        native.graph = (infer, ...args) => {
+          if (infer) throw failure;
+          return graph.call(native, infer, ...args);
+        };
+      }
+      await extension.receive({ type: refresh });
+      assert.equal(
+        extension.messages.at(-1).type,
+        refresh === "metadata" ? "metadata-error" : "shape-error",
+      );
+      assert.equal(extension.messages.at(-1).error, failure.message);
+      let readSnapshot = false;
+      finish(
+        engine === "onnxruntime"
+          ? {
+              get model() {
+                readSnapshot = true;
+                return new Uint8Array();
+              },
+              inputs: [],
+            }
+          : { timeMs: 1, outputs: [] },
+      );
+      await pending;
+      assert.equal(readSnapshot, false);
+      assert.deepEqual(
+        extension.messages.filter(
+          ({ type, requestId }) =>
+            requestId === 31 &&
+            ["run-log", "run-error", "run-result"].includes(type),
+        ),
+        [],
+      );
+      await extension.receive({
+        type: "run-model",
+        requestId: 32,
+        engine,
+        inputs: ["float[1,3] input = {-1, 0, 2}"],
+      });
+      assert.equal(extension.messages.at(-1).type, "run-result");
+      assert.equal(extension.messages.at(-1).requestId, 32);
+      assert.match(
+        extension.messages.at(-1).result.outputs[0].text,
+        /Values: \[0(?:\.0)?, 0(?:\.0)?, 2(?:\.0)?\]/,
+      );
+    });
+
 test("regular run host discards results after replacing the model", async (t) => {
   const extension = await openExtension("relu.onnx");
   t.after(() => extension.dispose());
