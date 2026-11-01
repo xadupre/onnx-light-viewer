@@ -356,9 +356,30 @@ export interface RunTensor {
   text: string;
 }
 
+export interface RunInput extends RunTensor {
+  shape?: (string | null)[];
+  dynamicAxes?: number[];
+}
+
+export type RunInputSource =
+  | string
+  | { name: string; source: "random" }
+  | { name: string; source: "protobuf"; data: Uint8Array };
+
+export interface RunOptions {
+  verbose?: number;
+  dimensions?: Record<string, number>;
+}
+
+export interface PreparedRun {
+  model: Uint8Array;
+  inputs: Uint8Array[];
+}
+
 export interface RunResult {
   timeMs: number;
   outputs: RunTensor[];
+  log?: string;
 }
 
 /** SDK statistics; integer metadata and nonfinite numbers survive webview transport exactly. */
@@ -386,8 +407,17 @@ export interface TensorStatistics {
  * Analysis methods do not execute the model; run explicitly executes a snapshot.
  */
 export interface NativeModel {
-  runInputs(path?: GraphPath): RunTensor[];
-  run(inputs: string[], path?: GraphPath): Promise<RunResult>;
+  runInputs(path?: GraphPath): RunInput[];
+  run(
+    inputs: RunInputSource[],
+    path?: GraphPath,
+    options?: RunOptions,
+  ): Promise<RunResult>;
+  prepareRun(
+    inputs: RunInputSource[],
+    path?: GraphPath,
+    options?: RunOptions,
+  ): Promise<PreparedRun>;
   /** Common namespace prefix; null for static models, empty when none is shared. */
   dimensionPrefix(): string | null;
   /** Edits dimension labels on an independent snapshot, retaining edits through undo and Save. */

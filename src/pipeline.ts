@@ -18,7 +18,6 @@ import type {
   OptimizationReport,
   PipelineRole,
   RewritingScenario,
-  RunTensor,
   RunResult,
   TensorInspection,
 } from "./graph";
@@ -37,16 +36,30 @@ const roles: PipelineRole[] = ["embedding", "prefill", "decode"];
 
 /** Keeps stage models independent while saving the complete container. */
 export class PipelineModel implements NativeModel {
-  runInputs = (path: GraphPath = []): RunTensor[] => {
+  runInputs = (path: GraphPath = []) => {
     const stage = this.select(path);
     if (stage.path.length) throw new Error("Choose a pipeline stage root.");
     return stage.model.runInputs();
   };
 
-  run = (inputs: string[], path: GraphPath = []): Promise<RunResult> => {
+  run = (
+    inputs: Parameters<NativeModel["run"]>[0],
+    path: GraphPath = [],
+    options?: Parameters<NativeModel["run"]>[2],
+  ): Promise<RunResult> => {
     const stage = this.select(path);
     if (stage.path.length) throw new Error("Choose a pipeline stage root.");
-    return stage.model.run(inputs);
+    return stage.model.run(inputs, [], options);
+  };
+
+  prepareRun = (
+    inputs: Parameters<NativeModel["run"]>[0],
+    path: GraphPath = [],
+    options?: Parameters<NativeModel["run"]>[2],
+  ) => {
+    const stage = this.select(path);
+    if (stage.path.length) throw new Error("Choose a pipeline stage root.");
+    return stage.model.prepareRun(inputs, [], options);
   };
 
   tensorStatistics = (

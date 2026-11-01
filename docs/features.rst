@@ -138,23 +138,42 @@ Running a model
 ^^^^^^^^^^^^^^^
 
 Open **Run** next to **Tensors**, then select its **Run** subtab for one-shot
-CPU inference with onnx-light. The **Prompt** subtab preserves language-model
+CPU inference with **onnx-light** or **ONNX Runtime**. The **Prompt** subtab preserves language-model
 generation. Regular execution uses the current model, including unsaved edits;
 for a pipeline, choose a stage in **Model**.
 
-Fill each input's ONNX tensor text, replacing symbolic dimensions with concrete
-sizes. For example, a three-element float input named ``X`` is
-``float[3] X = {-1, 0, 2}``. Names, types and shapes are prefilled; integer values
-are parsed natively without JavaScript rounding. A trusted workspace is required.
+Choose an **Engine** and its logging settings: onnx-light verbosity, or ONNX Runtime
+severity and verbosity. Each engine retains its own values while switching.
+ONNX Runtime requires ``onnx``, ``numpy`` and ``onnxruntime`` in the Python
+environment selected in **Settings → App**; onnx-light uses the bundled native SDK.
+
+Every symbolic or unnamed dynamic dimension needs an explicit non-negative size.
+Shared symbolic names use one field; unnamed dimensions are labeled ``input:axis``.
+For each input, choose **Random** (SDK-generated normal samples), **TensorProto
+file (.pb)** (inline binary protobuf, selected with **Browse…**) or **Tensor text**.
+Random generation requires a tensor with known rank and an SDK-supported element
+type; SDK errors are shown without a fallback. File tensors are bound to the
+selected input name. For text, a three-element float input named ``X`` is
+``float[3] X = {-1, 0, 2}``; its concrete shape must match the dimension fields.
+Integer values are parsed natively without JavaScript rounding.
+A trusted workspace is required.
 **Run model** displays execution time and output type, shape and values for
 tensors up to 32 elements. Larger tensors show metadata only. Native errors
-appear in the status; execution does not modify the graph or save files.
+appear in the status; ONNX Runtime logs appear below it. Neither engine modifies
+the graph or saves user files. ONNX Runtime executes a temporary snapshot that is
+removed after execution.
 
 .. figure:: _static/feature-run-model.png
-   :alt: Run window with Prompt and Run subtabs, editable ReLU input and native tensor output.
+   :alt: Run window with onnx-light logging, an explicit dynamic dimension and SDK-generated random input.
    :width: 100%
 
    Execute a regular model independently of language-model prompting.
+
+.. figure:: _static/feature-run-protobuf.png
+   :alt: ONNX Runtime logging settings and a TensorProto input file in the Run window.
+   :width: 100%
+
+   Choose engine-specific logging and a saved input tensor.
 
 Running language-model prompts
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

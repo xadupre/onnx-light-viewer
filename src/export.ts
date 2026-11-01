@@ -914,6 +914,7 @@ export async function runProcess(
   environment: NodeJS.ProcessEnv,
   label: string,
   stdout?: (chunk: string) => void,
+  stderrEncoding: BufferEncoding = "utf8",
 ): Promise<void> {
   signal.throwIfAborted();
   await new Promise<void>((resolve, reject) => {
@@ -952,7 +953,7 @@ export async function runProcess(
       void termination.catch(finish);
     };
     for (const stream of [child.stdout, child.stderr]) {
-      stream.setEncoding("utf8");
+      stream.setEncoding(stream === child.stderr ? stderrEncoding : "utf8");
       stream.on("data", (chunk: string) => {
         if (finished) return;
         if (stream === child.stdout && stdout) {

@@ -66,8 +66,71 @@ test("regular input forms omit initializer defaults and preserve scalar types", 
     "functions.onnx",
   );
   assert.deepEqual(model.runInputs(), [
-    { name: "cond", text: "bool cond = {}" },
+    { name: "cond", text: "bool cond = {}", shape: [] },
   ]);
+});
+
+test("random inputs use SDK generation and prepared TensorProto inputs preserve exact values", async () => {
+  const model = loadModel(
+    readFileSync(require.resolve("./models/relu.onnx")),
+    "relu.onnx",
+  );
+  assert.deepEqual(model.runInputs()[0].shape, ["1", "3"]);
+  const result = await model.run([{ name: "input", source: "random" }], [], {
+    verbose: 0,
+  });
+  assert.match(result.outputs[0].text, /Values: \[/);
+  const prepared = await model.prepareRun(["float[1,3] input = {-1, 0, 2}"]);
+  const copy = loadModel(prepared.model, "snapshot.onnx");
+  const fromFile = await copy.run([
+    { name: "input", source: "protobuf", data: prepared.inputs[0] },
+  ]);
+  assert.match(fromFile.outputs[0].text, /Values: \[0, 0, 2\]/);
+  const raw = await model.prepareRun([{ name: "input", source: "random" }]);
+  const source = {
+    name: "input",
+    source: "protobuf",
+    data: new Uint8Array(raw.inputs[0]),
+  };
+  const expected = await model.run([source]);
+  for (let index = 0; index < 10; ++index)
+    assert.deepEqual((await model.run([source])).outputs, expected.outputs);
+  await assert.rejects(
+    model.run([
+      { name: "input", source: "protobuf", data: Buffer.from("invalid") },
+    ]),
+    /parse/,
+  );
+  assert.throws(() => model.run([], [], { verbose: 11 }), /Verbosity/);
+  assert.throws(
+    () => model.run([], [], { dimensions: { batch: -1 } }),
+    /dimension/,
+  );
+});
+
+test("dynamic random inputs require concrete dimensions without changing model metadata", async () => {
+  const model = loadModel(
+    readFileSync(require.resolve("./models/inference.onnx")),
+    "inference.onnx",
+  );
+  const before = model.graph();
+  assert.deepEqual(model.runInputs()[0].shape, ["N", "3"]);
+  assert.deepEqual(model.runInputs()[0].dynamicAxes, [0]);
+  await assert.rejects(
+    model.run([{ name: "x", source: "random" }]),
+    /Specify dynamic dimension: symbol:N/,
+  );
+  const result = await model.run([{ name: "x", source: "random" }], [], {
+    dimensions: { "symbol:N": 2 },
+  });
+  assert.match(result.outputs[0].text, /Values: \[/);
+  await assert.rejects(
+    model.run(["float[1,3] x = {1, 2, 3}"], [], {
+      dimensions: { "symbol:N": 2 },
+    }),
+    /does not match/,
+  );
+  assert.deepEqual(model.graph(), before);
 });
 
 test("regular execution preserves int64 input and output values beyond JavaScript precision", async () => {

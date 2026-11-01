@@ -58,12 +58,12 @@ test("regular run sends exact text inputs, handles errors and ignores stale resu
     inputs: [{ name: "<input>", text: 'int64[1] "<input>" = {}' }],
   });
   byId("run-input-0").value = 'int64[1] "<input>" = {9007199254740993}';
-  byId("run-form").querySelector("button").click();
+  byId("run-form").querySelector('button[type="submit"]').click();
   const run = messages.at(-1);
   assert.equal(run.type, "run-model");
   assert.equal(run.inputs[0], byId("run-input-0").value);
   assert.equal(byId("run-fields").disabled, true);
-  byId("run-form").querySelector("button").click();
+  byId("run-form").querySelector('button[type="submit"]').click();
   assert.equal(messages.at(-1), run);
   api.handleMessage({
     type: "run-error",
@@ -72,7 +72,7 @@ test("regular run sends exact text inputs, handles errors and ignores stale resu
   });
   assert.equal(byId("run-fields").disabled, false);
   assert.equal(byId("run-status").textContent, "SDK error");
-  byId("run-form").querySelector("button").click();
+  byId("run-form").querySelector('button[type="submit"]').click();
   const result = {
     timeMs: 1.25,
     outputs: [{ name: "<output>", text: "<script>alert(1)</script>" }],
@@ -91,6 +91,58 @@ test("regular run sends exact text inputs, handles errors and ignores stale resu
   assert.equal(byId("run-fields").disabled, true);
 });
 
+for (const type of ["metadata-error", "shape-error"])
+  test(`Run recovers from ${type} without stale messages or lost input drafts`, (t) => {
+    const { byId, api, messages } = panel(t);
+    const failure = { type, error: "Model analysis failed." };
+    api.activate();
+    const pendingInputs = messages.at(-1);
+    assert.equal(api.handleMessage(failure), false);
+    api.activate();
+    const freshInputs = messages.at(-1);
+    assert.ok(freshInputs.requestId > pendingInputs.requestId);
+    api.handleMessage({
+      ...pendingInputs,
+      stages: [],
+      path: [],
+      inputs: [],
+    });
+    assert.equal(byId("run-fields").disabled, true);
+    api.handleMessage({
+      ...freshInputs,
+      stages: [],
+      path: [],
+      inputs: [{ name: "X", text: "float[1] X = {}" }],
+    });
+    const draft = "float[1] X = {-1}";
+    byId("run-input-0").value = draft;
+    const submit = byId("run-form").querySelector('button[type="submit"]');
+    submit.click();
+    const run = messages.at(-1);
+    assert.equal(run.type, "run-model");
+    assert.equal(byId("run-fields").disabled, true);
+    assert.equal(api.handleMessage(failure), false);
+    assert.equal(byId("run-fields").disabled, false);
+    assert.equal(byId("run-input-0").value, draft);
+    const status = byId("run-status").textContent;
+    assert.match(status, /cancelled.*Model analysis failed/);
+    for (const type of ["run-result", "run-error", "run-log"])
+      api.handleMessage({
+        type,
+        requestId: run.requestId,
+        result: { timeMs: 1, outputs: [{ name: "old", text: "old" }] },
+        error: "old",
+        output: "old",
+      });
+    assert.equal(byId("run-status").textContent, status);
+    assert.equal(byId("run-results").textContent, "");
+    assert.equal(byId("run-log").textContent, "");
+    submit.click();
+    assert.equal(messages.at(-1).type, "run-model");
+    assert.ok(messages.at(-1).requestId > run.requestId);
+    assert.equal(messages.at(-1).inputs[0], draft);
+  });
+
 test("pipeline stage changes reload input forms without changing execution mode", (t) => {
   const { dom, byId, api, messages } = panel(t);
   byId("execution-run-tab").click();
@@ -105,6 +157,7 @@ test("pipeline stage changes reload input forms without changing execution mode"
     path: stages[0].path,
     inputs: [],
   });
+
   byId("run-stage").value = JSON.stringify(stages[1].path);
   byId("run-stage").dispatchEvent(new dom.window.Event("change"));
   assert.equal(
@@ -112,4 +165,112 @@ test("pipeline stage changes reload input forms without changing execution mode"
     JSON.stringify(stages[1].path),
   );
   assert.equal(byId("execution-run-view").hidden, false);
+});
+
+test("Run requires dimensions, supports mixed input sources and retains engine logging", (t) => {
+  const { dom, byId, api, messages } = panel(t);
+  api.activate();
+  api.handleMessage({
+    type: "run-inputs",
+    requestId: messages.at(-1).requestId,
+    stages: [],
+    path: [],
+    inputs: [
+      { name: "X", text: "float[batch,?] X = {}", shape: ["batch", null] },
+      { name: "Y", text: 'float["3"] Y = {}', shape: ["3"], dynamicAxes: [0] },
+      { name: "Z", text: "float[batch] Z = {}", shape: ["batch"] },
+    ],
+  });
+  assert.equal(byId("run-dimensions").querySelectorAll("input").length, 3);
+  assert.equal(byId("run-source-0").value, "random");
+  const submit = byId("run-form").querySelector('button[type="submit"]');
+  const before = messages.length;
+  submit.click();
+  assert.equal(messages.length, before);
+  byId("run-dimension-0").value = "2";
+  byId("run-dimension-1").value = "3";
+  byId("run-dimension-2").value = "2";
+  byId("run-verbose").value = "4";
+  byId("run-engine").value = "onnxruntime";
+  byId("run-engine").dispatchEvent(new dom.window.Event("change"));
+  assert.equal(byId("run-logging-light").hidden, true);
+  assert.equal(byId("run-verbose").disabled, true);
+  byId("run-log-severity").value = "0";
+  byId("run-log-verbosity").value = "2";
+  byId("run-source-1").value = "protobuf";
+  byId("run-source-1").dispatchEvent(new dom.window.Event("change"));
+  byId("run-file-1").parentElement.querySelector("button").click();
+  assert.equal(messages.at(-1).type, "run-file");
+  api.handleMessage({ ...messages.at(-1), path: "/tmp/input.pb" });
+  submit.click();
+  const run = messages.at(-1);
+  assert.equal(run.engine, "onnxruntime");
+  assert.equal(
+    JSON.stringify(run.dimensions),
+    JSON.stringify({
+      "symbol:batch": 2,
+      "axis:X:1": 3,
+      "symbol:3": 2,
+    }),
+  );
+  assert.equal(
+    JSON.stringify(run.settings),
+    JSON.stringify({ logSeverity: 0, logVerbosity: 2 }),
+  );
+  assert.equal(
+    JSON.stringify(run.inputs),
+    JSON.stringify([
+      { name: "X", source: "random" },
+      { name: "Y", source: "protobuf", path: "/tmp/input.pb" },
+      { name: "Z", source: "random" },
+    ]),
+  );
+  api.handleMessage({
+    type: "run-log",
+    requestId: run.requestId,
+    output: "<engine log>",
+  });
+  assert.equal(byId("run-fields").disabled, true);
+  assert.equal(byId("run-log").textContent, "<engine log>");
+  api.handleMessage({
+    type: "run-error",
+    requestId: run.requestId,
+    error: "error",
+  });
+  byId("run-engine").value = "onnx-light";
+  byId("run-engine").dispatchEvent(new dom.window.Event("change"));
+  assert.equal(byId("run-verbose").value, "4");
+  assert.equal(byId("run-log-verbosity").value, "2");
+});
+
+test("symbolic and unnamed dynamic dimensions with colliding labels remain independent", (t) => {
+  const { byId, api, messages } = panel(t);
+  api.activate();
+  api.handleMessage({
+    type: "run-inputs",
+    requestId: messages.at(-1).requestId,
+    stages: [],
+    path: [],
+    inputs: [
+      {
+        name: "X",
+        text: "float[X:1,?] X = {}",
+        shape: ["X:1", null],
+        dynamicAxes: [0, 1],
+      },
+    ],
+  });
+  const fields = [...byId("run-dimensions").querySelectorAll("input")];
+  assert.equal(fields.length, 2);
+  assert.deepEqual(
+    fields.map((field) => field.dataset.dimension),
+    ["symbol:X:1", "axis:X:1"],
+  );
+  fields[0].value = "2";
+  fields[1].value = "3";
+  byId("run-form").querySelector('button[type="submit"]').click();
+  assert.equal(
+    JSON.stringify(messages.at(-1).dimensions),
+    JSON.stringify({ "symbol:X:1": 2, "axis:X:1": 3 }),
+  );
 });
