@@ -2893,8 +2893,8 @@ svg.addEventListener(
   { passive: false },
 );
 window.addEventListener("message", (event) => {
-  if (event.data?.type === "pattern-library" && event.data.invalidateFusion)
-    fusionPanel.libraryChanged();
+  if (event.data?.type === "pattern-library")
+    fusionPanel.libraryChanged(event.data);
   settingsPanel.receive(event.data);
   if (event.data?.type === "model-progress") {
     if (

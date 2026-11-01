@@ -65,13 +65,17 @@ export class PatternLibrary {
     replacement: string,
     revision: number,
   ): void {
+    this.assertRevision(revision);
+    if (!this.definitions.has(name))
+      throw new Error(`Unknown function pattern: ${name}`);
+    this.merge([{ name, text, replacement }]);
+  }
+
+  assertRevision(revision: number): void {
     if (revision !== this.revision)
       throw new Error(
         "The pattern library changed. Revert edits before editing again.",
       );
-    if (!this.definitions.has(name))
-      throw new Error(`Unknown function pattern: ${name}`);
-    this.merge([{ name, text, replacement }]);
   }
 
   conflicts(patterns: FunctionPatternDefinition[]): string[] {

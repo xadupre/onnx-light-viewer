@@ -4027,6 +4027,7 @@ test("function pattern updates apply edited SDK bodies and invalidate stale prev
     text: definition.text,
     replacement:
       '<domain: "onnx_light.viewer", opset_import: ["" : 13]> HostEditedReplacement(x) => (a) { a = Identity(x) }',
+    libraryRevision: 1,
     requestId: 3,
   });
   expect("function-pattern-created");
@@ -4075,6 +4076,65 @@ test("function pattern updates apply edited SDK bodies and invalidate stale prev
   );
 });
 
+test("popup pattern updates reject stale library revisions before changing the native catalog", async (t) => {
+  const extension = await openExtension("fusion.onnx", undefined, true);
+  t.after(() => extension.dispose());
+  await extension.receive({
+    type: "create-function-pattern",
+    nodes: [0, 1],
+    name: "HostConcurrentPair",
+    requestId: 1,
+  });
+  const definition = extension.messages.at(-1).pattern;
+  await extension.receive({
+    type: "update-library-pattern",
+    name: definition.name,
+    text: definition.text.replaceAll("[1, 0]", "[0, 1]"),
+    replacement: definition.replacement,
+    libraryRevision: 1,
+    requestId: 2,
+  });
+  const latest = extension.messages.at(-1);
+  assert.equal(latest.type, "pattern-library-result");
+  assert.equal(latest.revision, 2);
+  const native = extension.nativeModels.at(-1);
+  const update = native.updateFunctionPattern;
+  let updates = 0;
+  native.updateFunctionPattern = (...args) => {
+    updates++;
+    return update(...args);
+  };
+  const request = {
+    type: "update-function-pattern",
+    name: definition.name,
+    text: definition.text,
+    replacement:
+      '<domain: "onnx_light.viewer", opset_import: ["" : 13]> HostDraftReplacement(x) => (a) { a = Identity(x) }',
+    libraryRevision: 1,
+    requestId: 3,
+  };
+  await extension.receive(request);
+  assert.equal(extension.messages.at(-1).type, "function-pattern-error");
+  assert.match(
+    extension.messages.at(-1).error,
+    /library changed.*Revert edits/,
+  );
+  assert.equal(updates, 0);
+  assert.deepEqual(
+    native.optimizationPatterns().find(({ name }) => name === definition.name)
+      .definition,
+    latest.patterns[0],
+  );
+  await extension.receive({
+    ...request,
+    text: latest.patterns[0].text,
+    libraryRevision: latest.revision,
+  });
+  assert.equal(extension.messages.at(-1).type, "function-pattern-created");
+  assert.equal(updates, 1);
+  assert.equal(extension.messages.at(-1).pattern.text, latest.patterns[0].text);
+});
+
 test("function pattern update transport rejects malformed fields and preserves definitions on SDK errors", async (t) => {
   const extension = await openExtension("fusion.onnx", undefined, true);
   t.after(() => extension.dispose());
@@ -4091,6 +4151,7 @@ test("function pattern update transport rejects malformed fields and preserves d
     name: definition.name,
     text: definition.text,
     replacement: definition.replacement,
+    libraryRevision: 0,
     requestId: 41,
   };
   for (const fields of [
@@ -4099,6 +4160,11 @@ test("function pattern update transport rejects malformed fields and preserves d
     { text: [] },
     { replacement: null },
     { replacement: {} },
+    { libraryRevision: undefined },
+    { libraryRevision: "0" },
+    { libraryRevision: -1 },
+    { libraryRevision: 0.5 },
+    { libraryRevision: Number.MAX_SAFE_INTEGER + 1 },
   ]) {
     await extension.receive({ ...request, ...fields });
     assert.equal(extension.messages.at(-1).type, "function-pattern-error");
@@ -4240,6 +4306,7 @@ test("function pattern creation and updates recover native handles and suppress 
           name: "HostDelayedPair",
           text: definition?.text,
           replacement: definition?.replacement,
+          libraryRevision: updating ? 1 : undefined,
           requestId: 91,
         });
         let navigation;
@@ -4328,6 +4395,7 @@ test("function patterns are shared across stage roots but reject pipeline overvi
     text: initialDefinition.text,
     replacement:
       '<domain: "onnx_light.viewer", opset_import: ["" : 13]> HostStageReplacement(x) => (a) { a = Identity(x) }',
+    libraryRevision: 1,
     requestId: 31,
   };
   await extension.receive(update);
@@ -4369,7 +4437,7 @@ test("function patterns are shared across stage roots but reject pipeline overvi
   assert.equal(definition.name, "HostStageQueuedPair");
   assert.ok(definition.text.length > 0);
   await extension.receive({ type: "navigate", path: [{ pipeline: "decode" }] });
-  await extension.receive(update);
+  await extension.receive({ ...update, libraryRevision: 3 });
   expect("function-pattern-created");
   await extension.receive({ type: "fusion-patterns", requestId: 29 });
   for (const name of ["HostStagePair", "HostStageQueuedPair"])

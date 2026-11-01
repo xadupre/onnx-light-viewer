@@ -1071,6 +1071,7 @@ export function webviewHtml(
           <textarea id="selection-pattern-replacement" rows="10" spellcheck="false"></textarea>
         </div>
         <button id="update-function-pattern" disabled>Apply edits</button>
+        <button id="revert-function-pattern" disabled>Revert edits</button>
       </details>
     </section>
   </dialog>

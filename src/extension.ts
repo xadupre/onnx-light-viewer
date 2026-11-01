@@ -2778,12 +2778,24 @@ async function configurePanel(
                       ? "Choose distinct operator nodes and a pattern name."
                       : "Expected a pattern name, match text and replacement text.",
                   );
+                const libraryRevision =
+                  message.type === "update-function-pattern"
+                    ? message.libraryRevision
+                    : 0;
+                if (
+                  typeof libraryRevision !== "number" ||
+                  !Number.isSafeInteger(libraryRevision) ||
+                  libraryRevision < 0
+                )
+                  throw new Error("Expected a valid pattern library revision.");
                 const native = await nativeModel(
                   current,
                   log,
                   () => void sendStatus(),
                 );
                 if (!isCurrent()) return;
+                if (message.type === "update-function-pattern")
+                  patternLibrary.assertRevision(libraryRevision);
                 fusionPreview = undefined;
                 const pattern =
                   message.type === "update-function-pattern"

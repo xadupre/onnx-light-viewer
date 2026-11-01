@@ -35,6 +35,7 @@ function createFusionPanel({
   let selectionCatalogLoaded = false;
   let functionBodyRequest = 0;
   let restoreFunctionEditor = false;
+  let libraryRevision = 0;
   const selectionPatterns = new Map();
   const selectionPatternDrafts = new Map();
   function canOpenSelectionPattern() {
@@ -104,6 +105,12 @@ function createFusionPanel({
       bodyUnloaded ||
       (byId("selection-pattern-text").value === pattern.text &&
         byId("selection-pattern-replacement").value === pattern.replacement);
+    byId("revert-function-pattern").disabled =
+      fusionBusy ||
+      !canFuse() ||
+      !pattern ||
+      bodyUnloaded ||
+      !selectionPatternDrafts.has(byId("selection-pattern-picker").value);
   }
   function showSelectionPattern() {
     const requestId = ++functionBodyRequest;
@@ -1011,13 +1018,22 @@ function createFusionPanel({
   );
   for (const field of ["text", "replacement"]) {
     byId(`selection-pattern-${field}`).addEventListener("input", () => {
-      selectionPatternDrafts.set(byId("selection-pattern-picker").value, {
+      const key = byId("selection-pattern-picker").value;
+      selectionPatternDrafts.set(key, {
         text: byId("selection-pattern-text").value,
         replacement: byId("selection-pattern-replacement").value,
+        libraryRevision:
+          selectionPatternDrafts.get(key)?.libraryRevision ?? libraryRevision,
       });
       selectionPatternControls();
     });
   }
+  byId("revert-function-pattern").addEventListener("click", () => {
+    if (byId("revert-function-pattern").disabled) return;
+    selectionPatternDrafts.delete(byId("selection-pattern-picker").value);
+    showSelectionPattern();
+    byId("selection-pattern-status").textContent = "Edits reverted.";
+  });
   for (const format of ["text", "replacement"]) {
     byId(`copy-selection-pattern-${format}`).addEventListener("click", () => {
       postMessage({
@@ -1051,6 +1067,9 @@ function createFusionPanel({
         name: byId("selection-pattern-picker").value,
         text: byId("selection-pattern-text").value,
         replacement: byId("selection-pattern-replacement").value,
+        libraryRevision:
+          selectionPatternDrafts.get(byId("selection-pattern-picker").value)
+            ?.libraryRevision ?? libraryRevision,
       });
   });
   byId("create-function-pattern").addEventListener("click", () => {
@@ -1508,7 +1527,9 @@ function createFusionPanel({
     },
     setEnabled,
     selectionChanged,
-    libraryChanged: () => {
+    libraryChanged: (data) => {
+      libraryRevision = data.revision;
+      if (!data.invalidateFusion) return;
       restoreFunctionEditor = false;
       creatingPattern = false;
       selectionCatalogLoaded = false;

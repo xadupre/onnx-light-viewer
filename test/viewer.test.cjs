@@ -5189,6 +5189,92 @@ test("Patterns page retains drafts on library updates and reverts against the la
   assert.equal(messages.at(-1).libraryRevision, 2);
 });
 
+test("popup template drafts retain their library revision until explicitly reverted after a Patterns page edit", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  load(demoGraph);
+  const byId = (id) => document.getElementById(id);
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  const definition = {
+    name: "SharedPattern",
+    text: "original match",
+    replacement: "original replacement",
+  };
+  const catalog = (pattern) => ({
+    patterns: [pattern.name],
+    optimizationPatterns: [{ name: pattern.name, definition: pattern }],
+  });
+  send({ type: "pattern-library", revision: 1, patterns: [definition] });
+  document
+    .querySelector('[data-id="node-0"]')
+    .dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  byId("open-selection-pattern").click();
+  send({
+    type: "fusion-patterns",
+    requestId: messages.at(-1).requestId,
+    ...catalog(definition),
+  });
+  const text = byId("selection-pattern-text");
+  const replacement = byId("selection-pattern-replacement");
+  replacement.value = "popup draft";
+  replacement.dispatchEvent(new window.Event("input"));
+  byId("close-selection-pattern").click();
+  byId("patterns-tab").click();
+  const latest = { ...definition, text: "new applied match" };
+  byId("pattern-library-text").value = latest.text;
+  byId("pattern-library-text").dispatchEvent(new window.Event("input"));
+  byId("update-library-pattern").click();
+  const libraryUpdate = messages.at(-1);
+  assert.equal(libraryUpdate.libraryRevision, 1);
+  send({
+    type: "pattern-library",
+    revision: 2,
+    patterns: [latest],
+    invalidateFusion: true,
+  });
+  send({
+    type: "pattern-library-result",
+    operation: libraryUpdate.type,
+    requestId: libraryUpdate.requestId,
+    revision: 2,
+    patterns: [latest],
+  });
+  byId("model-tab").click();
+  byId("open-selection-pattern").click();
+  send({
+    type: "fusion-patterns",
+    requestId: messages.at(-1).requestId,
+    ...catalog(latest),
+  });
+  assert.equal(text.value, definition.text);
+  assert.equal(replacement.value, "popup draft");
+  replacement.value = "continued popup draft";
+  replacement.dispatchEvent(new window.Event("input"));
+  byId("update-function-pattern").click();
+  const stale = messages.at(-1);
+  assert.equal(stale.type, "update-function-pattern");
+  assert.equal(stale.libraryRevision, 1);
+  assert.equal(stale.text, definition.text);
+  send({
+    type: "function-pattern-error",
+    requestId: stale.requestId,
+    error: "The pattern library changed. Revert edits before editing again.",
+  });
+  assert.equal(replacement.value, "continued popup draft");
+  assert.match(byId("selection-pattern-status").textContent, /Revert edits/);
+  byId("revert-function-pattern").click();
+  assert.equal(text.value, latest.text);
+  assert.equal(replacement.value, latest.replacement);
+  assert.equal(byId("update-function-pattern").disabled, true);
+  assert.equal(byId("revert-function-pattern").disabled, true);
+  replacement.value = "rebased popup draft";
+  replacement.dispatchEvent(new window.Event("input"));
+  byId("update-function-pattern").click();
+  assert.equal(messages.at(-1).libraryRevision, 2);
+  assert.equal(messages.at(-1).text, latest.text);
+  assert.equal(messages.at(-1).replacement, "rebased popup draft");
+});
+
 test("creates an editable selection FunctionPattern and offers an opt-in optimization bucket", (t) => {
   const { document, window, messages, load } = openViewer(t);
   const model = loadModel(
