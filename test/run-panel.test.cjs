@@ -58,12 +58,12 @@ test("regular run sends exact text inputs, handles errors and ignores stale resu
     inputs: [{ name: "<input>", text: 'int64[1] "<input>" = {}' }],
   });
   byId("run-input-0").value = 'int64[1] "<input>" = {9007199254740993}';
-  byId("run-form").querySelector("button").click();
+  byId("run-form").querySelector('button[type="submit"]').click();
   const run = messages.at(-1);
   assert.equal(run.type, "run-model");
   assert.equal(run.inputs[0], byId("run-input-0").value);
   assert.equal(byId("run-fields").disabled, true);
-  byId("run-form").querySelector("button").click();
+  byId("run-form").querySelector('button[type="submit"]').click();
   assert.equal(messages.at(-1), run);
   api.handleMessage({
     type: "run-error",
@@ -72,7 +72,7 @@ test("regular run sends exact text inputs, handles errors and ignores stale resu
   });
   assert.equal(byId("run-fields").disabled, false);
   assert.equal(byId("run-status").textContent, "SDK error");
-  byId("run-form").querySelector("button").click();
+  byId("run-form").querySelector('button[type="submit"]').click();
   const result = {
     timeMs: 1.25,
     outputs: [{ name: "<output>", text: "<script>alert(1)</script>" }],
@@ -105,6 +105,7 @@ test("pipeline stage changes reload input forms without changing execution mode"
     path: stages[0].path,
     inputs: [],
   });
+
   byId("run-stage").value = JSON.stringify(stages[1].path);
   byId("run-stage").dispatchEvent(new dom.window.Event("change"));
   assert.equal(
@@ -112,4 +113,73 @@ test("pipeline stage changes reload input forms without changing execution mode"
     JSON.stringify(stages[1].path),
   );
   assert.equal(byId("execution-run-view").hidden, false);
+});
+
+test("Run requires dimensions, supports mixed input sources and retains engine logging", (t) => {
+  const { dom, byId, api, messages } = panel(t);
+  api.activate();
+  api.handleMessage({
+    type: "run-inputs",
+    requestId: messages.at(-1).requestId,
+    stages: [],
+    path: [],
+    inputs: [
+      { name: "X", text: "float[batch,?] X = {}", shape: ["batch", null] },
+      { name: "Y", text: "float[batch] Y = {}", shape: ["batch"] },
+    ],
+  });
+  assert.equal(byId("run-dimensions").querySelectorAll("input").length, 2);
+  assert.equal(byId("run-source-0").value, "random");
+  const submit = byId("run-form").querySelector('button[type="submit"]');
+  const before = messages.length;
+  submit.click();
+  assert.equal(messages.length, before);
+  byId("run-dimension-0").value = "2";
+  byId("run-dimension-1").value = "3";
+  byId("run-verbose").value = "4";
+  byId("run-engine").value = "onnxruntime";
+  byId("run-engine").dispatchEvent(new dom.window.Event("change"));
+  assert.equal(byId("run-logging-light").hidden, true);
+  assert.equal(byId("run-verbose").disabled, true);
+  byId("run-log-severity").value = "0";
+  byId("run-log-verbosity").value = "2";
+  byId("run-source-1").value = "protobuf";
+  byId("run-source-1").dispatchEvent(new dom.window.Event("change"));
+  byId("run-file-1").parentElement.querySelector("button").click();
+  assert.equal(messages.at(-1).type, "run-file");
+  api.handleMessage({ ...messages.at(-1), path: "/tmp/input.pb" });
+  submit.click();
+  const run = messages.at(-1);
+  assert.equal(run.engine, "onnxruntime");
+  assert.equal(
+    JSON.stringify(run.dimensions),
+    JSON.stringify({ batch: 2, "X:1": 3 }),
+  );
+  assert.equal(
+    JSON.stringify(run.settings),
+    JSON.stringify({ logSeverity: 0, logVerbosity: 2 }),
+  );
+  assert.equal(
+    JSON.stringify(run.inputs),
+    JSON.stringify([
+      { name: "X", source: "random" },
+      { name: "Y", source: "protobuf", path: "/tmp/input.pb" },
+    ]),
+  );
+  api.handleMessage({
+    type: "run-log",
+    requestId: run.requestId,
+    output: "<engine log>",
+  });
+  assert.equal(byId("run-fields").disabled, true);
+  assert.equal(byId("run-log").textContent, "<engine log>");
+  api.handleMessage({
+    type: "run-error",
+    requestId: run.requestId,
+    error: "error",
+  });
+  byId("run-engine").value = "onnx-light";
+  byId("run-engine").dispatchEvent(new dom.window.Event("change"));
+  assert.equal(byId("run-verbose").value, "4");
+  assert.equal(byId("run-log-verbosity").value, "2");
 });

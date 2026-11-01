@@ -116,6 +116,31 @@ test("regular run host selects a pipeline stage root", async (t) => {
   assert.match(extension.messages.at(-1).error, /stage root/);
 });
 
+test("regular run host cancels ONNX Runtime preparation on panel disposal", async (t) => {
+  const extension = await openExtension("relu.onnx");
+  t.after(() => extension.dispose());
+  const native = extension.nativeModels.at(-1);
+  let finish;
+  native.prepareRun = () =>
+    new Promise((resolve) => {
+      finish = resolve;
+    });
+  const pending = extension.receive({
+    type: "run-model",
+    requestId: 1,
+    engine: "onnxruntime",
+    inputs: [],
+  });
+  while (!finish) await new Promise((resolve) => setImmediate(resolve));
+  extension.dispose();
+  finish({ model: new Uint8Array(), inputs: [] });
+  await pending;
+  assert.equal(
+    extension.messages.some((message) => message.type === "run-result"),
+    false,
+  );
+});
+
 test("regular run host discards results after replacing the model", async (t) => {
   const extension = await openExtension("relu.onnx");
   t.after(() => extension.dispose());

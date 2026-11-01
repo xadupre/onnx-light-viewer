@@ -22,6 +22,7 @@ import {
   FusionOperation,
 } from "./graph";
 import { webviewHtml } from "./webview";
+import { runModel } from "./run";
 import {
   applicationSettings,
   inspectPythonPackages,
@@ -523,6 +524,7 @@ async function configurePanel(
   let promptResult: { owner: LoadedModel; result: PromptResult } | undefined;
   let memoryRequest = 0;
   let runRequest = 0;
+  let runController: AbortController | undefined;
   let fusionRequest = 0;
   let diagnosticRequest = 0;
   let undoRequest = 0;
@@ -779,6 +781,7 @@ async function configurePanel(
       ...(file.size === undefined ? {} : { size: file.size }),
     }));
   const sendGraph = (selectedNodes?: number[], fusionRequestId?: unknown) => {
+    runController?.abort();
     fusionPreview = undefined;
     fusionRequest++;
     diagnosticRequest++;
@@ -845,6 +848,8 @@ async function configurePanel(
         path?: unknown;
         paths?: unknown;
         inputs?: unknown;
+        index?: unknown;
+        engine?: unknown;
         asPipeline?: unknown;
         nodeIndex?: unknown;
         nodes?: unknown;
@@ -1277,6 +1282,29 @@ async function configurePanel(
             `Could not estimate ONNX memory: ${detail}`,
           );
         }
+      } else if (message?.type === "run-file") {
+        const owner = model;
+        const generation = runRequest;
+        if (
+          !vscode.workspace.isTrusted ||
+          !Number.isSafeInteger(message.requestId) ||
+          typeof message.index !== "number" ||
+          !Number.isSafeInteger(message.index) ||
+          message.index < 0
+        )
+          return;
+        const uris = await vscode.window.showOpenDialog({
+          canSelectMany: false,
+          canSelectFolders: false,
+          filters: { "ONNX TensorProto": ["pb"] },
+        });
+        if (active && model === owner && generation === runRequest && uris?.[0])
+          await postMessage({
+            type: "run-file",
+            requestId: message.requestId,
+            index: message.index,
+            path: uris[0].fsPath,
+          });
       } else if (
         message?.type === "run-inputs" ||
         message?.type === "run-model"
@@ -1284,6 +1312,9 @@ async function configurePanel(
         const owner = model;
         const revision = graphRevision;
         const generation = ++runRequest;
+        runController?.abort();
+        const controller = new AbortController();
+        runController = controller;
         const isCurrent = () =>
           active &&
           model === owner &&
@@ -1324,14 +1355,23 @@ async function configurePanel(
           } else {
             if (!vscode.workspace.isTrusted)
               throw new Error("Trust this workspace before running a model.");
-            const inputs = message.inputs;
-            if (
-              !Array.isArray(inputs) ||
-              inputs.some((value: unknown) => typeof value !== "string")
-            )
-              throw new Error("Expected input tensor text.");
             const result = await log.run("Run model", () =>
-              native.run(inputs, path),
+              runModel(
+                native,
+                path,
+                message,
+                getApplicationSettings().pythonPath,
+                join(mediaRoot.fsPath, "run_model.py"),
+                (output) => {
+                  if (isCurrent())
+                    void postMessage({
+                      type: "run-log",
+                      requestId: message.requestId,
+                      output,
+                    });
+                },
+                controller.signal,
+              ),
             );
             if (isCurrent())
               await postMessage({
@@ -3820,6 +3860,7 @@ async function configurePanel(
                 current.graph.breadcrumbs.at(-1)?.path,
               );
               const retained = edited.model.clone();
+              runController?.abort();
               model = {
                 ...current,
                 native: edited.model,
@@ -3905,6 +3946,7 @@ async function configurePanel(
     active = false;
     releaseController?.abort();
     promptController?.abort();
+    runController?.abort();
     void promptSession
       .close()
       .catch((error: unknown) =>

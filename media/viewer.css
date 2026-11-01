@@ -2018,8 +2018,21 @@ button:disabled {
   grid-column: 1 / -1;
 }
 
-#run-inputs {
+#run-inputs,
+#run-dimensions,
+#run-logging-light,
+#run-logging-ort {
   grid-column: 1 / -1;
+}
+
+.run-file-controls {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.run-file-controls input {
+  flex: 1;
+  min-width: 0;
 }
 
 #run-results pre {

@@ -654,16 +654,30 @@ export function webviewHtml(
       </div>
       </section>
       <section id="execution-run-view" role="tabpanel" aria-labelledby="execution-run-tab" tabindex="0" hidden>
-        <p>Execute the current model once with onnx-light (CPU), including unsaved graph edits. For pipelines, select a stage. Enter ONNX tensor text, for example <code>float[3] X = {-1, 0, 2}</code>. Replace symbolic dimensions with concrete sizes and fill the braces with values. Integer values remain exact. Outputs show type, shape and values for tensors up to 32 elements.</p>
+        <p>Execute the current model once, including unsaved graph edits. Both engines use CPU; ONNX Runtime requires onnx, numpy and onnxruntime in the Settings Python environment. For pipelines, select a stage. Specify every dynamic dimension, then use random inputs, inline TensorProto files (.pb), or ONNX tensor text such as <code>float[3] X = {-1, 0, 2}</code>. Integer values remain exact. Outputs show type, shape and values for tensors up to 32 elements.</p>
         <form id="run-form">
           <fieldset id="run-fields" class="form-grid" disabled>
             <label for="run-stage">Model</label>
             <select id="run-stage"><option value="[]">Root graph</option></select>
+            <label for="run-engine">Engine</label>
+            <select id="run-engine"><option value="onnx-light">onnx-light</option><option value="onnxruntime">ONNX Runtime</option></select>
+            <div id="run-logging-light" class="form-grid">
+              <label for="run-verbose">Logging verbosity</label>
+              <input id="run-verbose" type="number" min="0" max="10" step="1" value="0" required>
+            </div>
+            <div id="run-logging-ort" class="form-grid" hidden>
+              <label for="run-log-severity">Log severity</label>
+              <select id="run-log-severity"><option value="0">Verbose</option><option value="1">Info</option><option value="2" selected>Warning</option><option value="3">Error</option><option value="4">Fatal</option></select>
+              <label for="run-log-verbosity">Log verbosity</label>
+              <input id="run-log-verbosity" type="number" min="0" max="2147483647" step="1" value="0" required>
+            </div>
+            <div id="run-dimensions" class="form-grid"></div>
             <div id="run-inputs" class="form-grid"></div>
             <button type="submit">Run model</button>
           </fieldset>
         </form>
         <p id="run-status" role="status">Open a model to run it.</p>
+        <pre id="run-log" aria-label="Engine logs"></pre>
         <div id="run-results" aria-live="polite"></div>
       </section>
     </section>

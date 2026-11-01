@@ -8,4 +8,6 @@ onnx-light-cpu==0.2.1.1
 huggingface-hub>=0.34,<2
 # Supply real native GenAI/ORT shared libraries for prompt integration tests.
 onnxruntime-genai==0.17.0
+onnx==1.23.2
+onnxruntime==1.31.1
 tokenizers>=0.22.2,<1
