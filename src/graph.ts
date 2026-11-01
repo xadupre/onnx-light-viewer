@@ -354,7 +354,8 @@ export type TensorInspection = TensorStatistics | TensorValues;
 export interface RunTensor {
   name: string;
   text: string;
-  canSave?: boolean;
+  /** Full inline TensorProto, absent for non-tensor outputs. */
+  data?: Uint8Array;
 }
 
 export interface RunInput extends RunTensor {
@@ -376,15 +377,12 @@ export interface RunOptions {
 export interface PreparedRun {
   model: Uint8Array;
   inputs: Uint8Array[];
-  inputPreviews: RunTensor[];
 }
 
 export interface RunResult {
   timeMs: number;
-  inputs: RunTensor[];
-  inputData: Uint8Array[];
+  inputs?: RunTensor[];
   outputs: RunTensor[];
-  outputData: (Uint8Array | null)[];
   lifecycle: {
     loadMs: number;
     reused: boolean;
@@ -617,6 +615,7 @@ export interface BackendTest {
 
 const native: {
   onnxLightVersion: string;
+  tensorStatisticsFromProto(data: Uint8Array): Promise<TensorStatistics>;
   validateFunctionPatterns(patterns: unknown): FunctionPatternDefinition[];
   updateModelFunctionHistory(
     models: NativeModel[],
@@ -653,6 +652,8 @@ const native: {
 
 /** C++ library release embedded in the addon, independent of the loaded model. */
 export const onnxLightVersion = native.onnxLightVersion;
+/** Computes full SDK statistics from an inline TensorProto without a retained model. */
+export const tensorStatisticsFromProto = native.tensorStatisticsFromProto;
 export const validateFunctionPatterns = native.validateFunctionPatterns;
 export const preparePromptPipeline = native.preparePromptPipeline;
 

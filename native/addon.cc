@@ -1,6 +1,7 @@
 /** @file Node-API entry points for the onnx-light viewer. */
 #include "addon.h"
 #include "graph.h"
+#include "tensor_statistics.h"
 #include <algorithm>
 #include <onnx_core/builder/pattern_registry.h>
 #include <onnx_extensions/kernels/kernel_dispatch_table.h>
@@ -32,6 +33,8 @@ Napi::Object Initialize(Napi::Env env, Napi::Object exports) {
   }();
   (void)registered;
   exports.Set("onnxLightVersion", ONNX_LIGHT_VERSION);
+  exports.Set("tensorStatisticsFromProto",
+              Napi::Function::New(env, onnx_light_viewer::TensorStatisticsFromProto));
   exports.Set("validateFunctionPatterns",
               Napi::Function::New(env, onnx_light_viewer::ValidateFunctionPatterns));
   exports.Set("updateModelFunctionHistory",

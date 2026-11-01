@@ -1,4 +1,5 @@
 /** @file On-demand numeric tensor inspection through the SDK. */
+#include "tensor_statistics.h"
 #include "graph.h"
 #include "model_io.h"
 #include "model_storage.h"
@@ -42,10 +43,24 @@ public:
         source_(std::move(source)), snapshot_(source_->model->SharedCopy()), name_(std::move(name)),
         path_(std::move(path)), values_if_small_(values_if_small) {}
 
+  StatisticsWorker(Napi::Env env, std::string protobuf)
+      : Napi::AsyncWorker(env), deferred_(Napi::Promise::Deferred::New(env)),
+        values_if_small_(false), protobuf_(std::move(protobuf)) {}
+
   Napi::Promise Promise() const { return deferred_.Promise(); }
 
   void Execute() override {
     try {
+      if (protobuf_) {
+        ol::TensorProto tensor;
+        if (!tensor.ParseFromString(*protobuf_))
+          throw std::runtime_error("Could not parse TensorProto.");
+        if (!tensor.external_data().empty() || tensor.data_location() == ol::TensorProto::EXTERNAL)
+          throw std::runtime_error("TensorProto statistics require inline values.");
+        name_ = tensor.name();
+        Compute(tensor);
+        return;
+      }
       auto selection = GraphScopes(snapshot_, path_);
       for (size_t index = selection.scopes.size(); index > selection.capture_start; --index) {
         const auto &graph = *selection.scopes[index - 1];
@@ -324,10 +339,30 @@ private:
   std::string name_;
   GraphPath path_;
   bool values_if_small_;
+  std::optional<std::string> protobuf_;
   std::optional<std::string> values_;
   rt::TensorStatistics statistics_;
 };
 } // namespace
+
+Napi::Value TensorStatisticsFromProto(const Napi::CallbackInfo &call) {
+  try {
+    if (call.Length() != 1 || !call[0].IsTypedArray() ||
+        call[0].As<Napi::TypedArray>().TypedArrayType() != napi_uint8_array)
+      throw std::runtime_error("Expected a TensorProto Uint8Array.");
+    const auto bytes = call[0].As<Napi::Uint8Array>();
+    if (!bytes.ByteLength())
+      throw std::runtime_error("Expected a nonempty TensorProto buffer.");
+    auto *worker = new StatisticsWorker(
+        call.Env(), std::string(reinterpret_cast<const char *>(bytes.Data()), bytes.ByteLength()));
+    const auto promise = worker->Promise();
+    worker->Queue();
+    return promise;
+  } catch (const std::exception &error) {
+    Napi::Error::New(call.Env(), error.what()).ThrowAsJavaScriptException();
+    return call.Env().Undefined();
+  }
+}
 
 void AddTensorStatisticsMethods(Napi::Env env, Napi::Object result,
                                 std::shared_ptr<StoredModel> model) {

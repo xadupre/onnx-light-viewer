@@ -42,6 +42,40 @@ struct RunState {
   double load_ms = 0;
 };
 
+struct RunTensor {
+  std::string name;
+  std::string text;
+  std::optional<std::string> data;
+};
+
+RunTensor DescribeTensor(const ol::TensorProto &proto, const rt::Tensor &tensor) {
+  std::string bytes;
+  if (!proto.SerializeToString(bytes))
+    throw std::runtime_error("Could not serialize run tensor.");
+  ol::ValueInfoProto metadata;
+  rt::FillValueInfo(tensor, metadata);
+  metadata.set_name(proto.name());
+  const auto values = TinyTensorValues(proto, 33);
+  return {std::string(proto.name()),
+          ol::ProtoToString(metadata) +
+              "\nValues: " + values.value_or("Omitted (preview limit: 32 elements)."),
+          std::move(bytes)};
+}
+
+Napi::Array RunTensors(Napi::Env env, const std::vector<RunTensor> &tensors) {
+  auto result = Napi::Array::New(env, tensors.size());
+  for (size_t index = 0; index < tensors.size(); ++index) {
+    const auto &tensor = tensors[index];
+    auto value = Napi::Object::New(env);
+    value.Set("name", Text(env, tensor.name));
+    value.Set("text", Text(env, tensor.text));
+    if (tensor.data)
+      value.Set("data", Napi::Buffer<char>::Copy(env, tensor.data->data(), tensor.data->size()));
+    result.Set(index, value);
+  }
+  return result;
+}
+
 int64_t Dimension(const Napi::Value &value) {
   if (!value.IsNumber())
     throw std::runtime_error("Expected a non-negative safe integer dimension.");
@@ -149,20 +183,16 @@ public:
             ++axis;
           }
         }
-        std::string bytes;
-        if (!tensor.SerializeToString(bytes))
-          throw std::runtime_error("Could not serialize input tensor.");
-        prepared_inputs_.push_back(std::move(bytes));
-        const auto values = TinyTensorValues(tensor, 33);
-        auto runtime_tensor = rt::TensorFromProto(tensor);
-        ol::ValueInfoProto metadata;
-        rt::FillValueInfo(runtime_tensor, metadata);
-        metadata.set_name(tensor.name());
-        input_previews_.emplace_back(std::string(tensor.name()),
-                                     ol::ProtoToString(metadata) + "\nValues: " +
-                                         values.value_or("Omitted (preview limit: 32 elements)."));
-        if (!prepare_)
-          context.Set(std::string(tensor.name()), std::move(runtime_tensor));
+        if (prepare_) {
+          std::string bytes;
+          if (!tensor.SerializeToString(bytes))
+            throw std::runtime_error("Could not serialize input tensor.");
+          prepared_inputs_.push_back(std::move(bytes));
+        } else {
+          auto value = rt::TensorFromProto(tensor);
+          actual_inputs_.push_back(DescribeTensor(tensor, value));
+          context.Set(std::string(tensor.name()), std::move(value));
+        }
       }
       if (!state_->session) {
         RestoreModelPayloads(snapshot_, *source_, source_->file_path);
@@ -210,8 +240,7 @@ public:
       for (const auto &output : snapshot_.graph().output()) {
         const std::string name = output.name();
         if (!context.Has(name)) {
-          outputs_.emplace_back(name, "Non-tensor output (no tensor preview).");
-          output_data_.emplace_back();
+          outputs_.push_back({name, "Non-tensor output (no tensor preview).", std::nullopt});
           continue;
         }
         const auto &tensor = context.Get(name);
@@ -226,16 +255,7 @@ public:
         } else {
           proto.ref_raw_data().assign_borrowed(tensor.bytes(), tensor.size_bytes());
         }
-        std::string bytes;
-        if (!proto.SerializeToString(bytes))
-          throw std::runtime_error("Could not serialize output tensor.");
-        output_data_.push_back(std::move(bytes));
-        const auto values = TinyTensorValues(proto, 33);
-        ol::ValueInfoProto metadata;
-        rt::FillValueInfo(tensor, metadata);
-        metadata.set_name(name);
-        outputs_.emplace_back(name, ol::ProtoToString(metadata) + "\nValues: " +
-                                        values.value_or("Omitted (preview limit: 32 elements)."));
+        outputs_.push_back(DescribeTensor(proto, tensor));
       }
     } catch (const std::exception &error) {
       SetError(error.what());
@@ -244,20 +264,12 @@ public:
 
   void OnOK() override {
     auto result = Napi::Object::New(Env());
-    auto previews = Napi::Array::New(Env(), input_previews_.size());
-    for (size_t index = 0; index < input_previews_.size(); ++index) {
-      auto preview = Napi::Object::New(Env());
-      preview.Set("name", Text(Env(), input_previews_[index].first));
-      preview.Set("text", Text(Env(), input_previews_[index].second));
-      previews.Set(index, preview);
-    }
-    result.Set(prepare_ ? "inputPreviews" : "inputs", previews);
-    auto inputs = Napi::Array::New(Env(), prepared_inputs_.size());
-    for (size_t index = 0; index < prepared_inputs_.size(); ++index)
-      inputs.Set(index, Napi::Buffer<char>::Copy(Env(), prepared_inputs_[index].data(),
-                                                 prepared_inputs_[index].size()));
-    result.Set(prepare_ ? "inputs" : "inputData", inputs);
     if (prepare_) {
+      auto inputs = Napi::Array::New(Env(), prepared_inputs_.size());
+      for (size_t index = 0; index < prepared_inputs_.size(); ++index)
+        inputs.Set(index, Napi::Buffer<char>::Copy(Env(), prepared_inputs_[index].data(),
+                                                   prepared_inputs_[index].size()));
+      result.Set("inputs", inputs);
       result.Set("model",
                  Napi::Buffer<char>::Copy(Env(), model_bytes_.data(), model_bytes_.size()));
       deferred_.Resolve(result);
@@ -269,21 +281,8 @@ public:
     lifecycle.Set("reused", reused_);
     lifecycle.Set("retained", state_->retained.load());
     result.Set("lifecycle", lifecycle);
-    auto outputs = Napi::Array::New(Env(), outputs_.size());
-    auto output_data = Napi::Array::New(Env(), output_data_.size());
-    for (size_t index = 0; index < outputs_.size(); ++index) {
-      auto output = Napi::Object::New(Env());
-      output.Set("name", Text(Env(), outputs_[index].first));
-      output.Set("text", Text(Env(), outputs_[index].second));
-      output.Set("canSave", !output_data_[index].empty());
-      outputs.Set(index, output);
-      output_data.Set(index, output_data_[index].empty()
-                                 ? Napi::Value(Env().Null())
-                                 : Napi::Buffer<char>::Copy(Env(), output_data_[index].data(),
-                                                            output_data_[index].size()));
-    }
-    result.Set("outputs", outputs);
-    result.Set("outputData", output_data);
+    result.Set("inputs", RunTensors(Env(), actual_inputs_));
+    result.Set("outputs", RunTensors(Env(), outputs_));
     if (!log_.empty())
       result.Set("log", Text(Env(), log_));
     deferred_.Resolve(result);
@@ -302,9 +301,8 @@ private:
   bool prepare_;
   std::string model_bytes_;
   std::vector<std::string> prepared_inputs_;
-  std::vector<std::pair<std::string, std::string>> input_previews_;
-  std::vector<std::pair<std::string, std::string>> outputs_;
-  std::vector<std::string> output_data_;
+  std::vector<RunTensor> actual_inputs_;
+  std::vector<RunTensor> outputs_;
   std::string log_;
   double time_ms_ = 0;
   double load_ms_ = 0;

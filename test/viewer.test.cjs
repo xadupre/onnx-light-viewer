@@ -752,6 +752,79 @@ test("Run subtab reloads after model replacement and conversion returns to Promp
   assert.equal(byId("execution-run-view").hidden, true);
 });
 
+test("Run tensor statistics browse actual tensors, save JSON and isolate cached runs", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const byId = (id) => document.getElementById(id);
+  const receive = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  load(demoGraph);
+  byId("prompt-tab").click();
+  byId("execution-run-tab").click();
+  receive({
+    type: "run-inputs",
+    requestId: messages.at(-1).requestId,
+    stages: [],
+    path: [],
+    inputs: [],
+  });
+  const submit = byId("run-form").querySelector('button[type="submit"]');
+  const complete = () => {
+    submit.click();
+    const requestId = messages.at(-1).requestId;
+    receive({
+      type: "run-result",
+      requestId,
+      result: {
+        timeMs: 1,
+        inputs: [],
+        outputs: [
+          { name: "sequence", text: "No tensor" },
+          ...["weight", "other-weight"].map((name) => ({
+            name,
+            text: name,
+            hasData: true,
+          })),
+        ],
+      },
+    });
+    return requestId;
+  };
+  const runId = complete();
+  byId("run-results").querySelector("button").click();
+  const first = messages.at(-1);
+  assert.equal(first.type, "tensor-statistics");
+  assert.equal(first.run.requestId, runId);
+  assert.equal(first.run.index, 1);
+  assert.equal(byId("tensor-statistics-save").hidden, false);
+  assert.equal(byId("tensor-statistics-save").disabled, true);
+  receive({
+    type: "tensor-statistics-info",
+    requestId: first.requestId,
+    statistics: tensorStatistics(),
+  });
+  assert.match(byId("tensor-statistics-scope").textContent, /completed run/);
+  assert.match(
+    byId("tensor-statistics-content").textContent,
+    /executed tensor/,
+  );
+  byId("tensor-statistics-save").click();
+  assert.equal(messages.at(-1).type, "run-save");
+  assert.equal(messages.at(-1).format, "statistics");
+  byId("tensor-statistics-next").click();
+  assert.equal(messages.at(-1).run.index, 2);
+  byId("close-tensor-statistics").click();
+  const nextRunId = complete();
+  byId("run-results").querySelector("button").click();
+  assert.equal(messages.at(-1).type, "tensor-statistics");
+  assert.equal(messages.at(-1).run.requestId, nextRunId);
+  assert.equal(byId("tensor-statistics-save").disabled, true);
+  receive({
+    type: "tensor-statistics-info",
+    requestId: first.requestId,
+    statistics: tensorStatistics(),
+  });
+  assert.equal(byId("tensor-statistics-content").textContent, "");
+});
 function tensorStatistics(name = "weight") {
   return {
     name,

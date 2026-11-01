@@ -2037,7 +2037,6 @@ button:disabled {
 }
 
 #run-results pre,
-#run-input-previews pre,
 #run-inputs pre {
   white-space: pre-wrap;
   overflow-wrap: anywhere;

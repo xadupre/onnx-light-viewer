@@ -737,7 +737,7 @@ export function webviewHtml(
       </div>
       </section>
       <section id="execution-run-view" role="tabpanel" aria-labelledby="execution-run-tab" tabindex="0" hidden>
-        <p>Execute the current model once, including unsaved graph edits. Both engines use CPU; ONNX Runtime requires onnx, numpy and onnxruntime in the Settings Python environment. For pipelines, select a stage. Specify every dynamic dimension, then use random inputs, inline TensorProto files (.pb), or ONNX tensor text such as <code>float[3] X = {-1, 0, 2}</code>. Integer values remain exact. Inputs and outputs show type, shape and values for tensors up to 32 elements.</p>
+        <p>Execute the current model once, including unsaved graph edits. Both engines use CPU; ONNX Runtime requires onnx, numpy and onnxruntime in the Settings Python environment. For pipelines, select a stage. Specify every dynamic dimension, then use random inputs, inline TensorProto files (.pb), or ONNX tensor text such as <code>float[3] X = {-1, 0, 2}</code>. Integer values remain exact. Inputs and outputs show type, shape and values for tensors up to 32 elements. Inspect statistics or save full tensors (.pb) and statistics (.json).</p>
         <p id="run-lifecycle" role="status"></p>
         <button id="run-settings-open" type="button">Settings</button>
         <form id="run-form">
@@ -766,11 +766,6 @@ export function webviewHtml(
         <button id="run-unload" type="button" disabled>Unload session</button>
         <p id="run-status" role="status">Open a model to run it.</p>
         <pre id="run-log" aria-label="Engine logs"></pre>
-        <section id="run-used-inputs" hidden>
-          <h2>Inputs used by the last run</h2>
-          <p>Previews show up to 32 elements. Save the complete input as an inline TensorProto (.pb), then use Load input (.pb) to reload it. Random values are regenerated on every run unless reloaded from a saved file.</p>
-          <div id="run-input-previews"></div>
-        </section>
         <div id="run-results" aria-live="polite"></div>
       </section>
     </section>
@@ -1212,7 +1207,7 @@ export function webviewHtml(
   </dialog>
   <dialog id="tensor-statistics-dialog" aria-labelledby="tensor-statistics-title">
     <header class="inspector-heading"><h2 id="tensor-statistics-title">Tensor statistics</h2><button id="close-tensor-statistics" autofocus>Close</button></header>
-    <p>Stored tensor data only. The model is not executed; intermediate values may be unavailable.</p>
+    <p id="tensor-statistics-scope">Stored tensor data only. The model is not executed; intermediate values may be unavailable.</p>
     <div id="tensor-statistics-picker">
       <label for="tensor-statistics-name">Tensor name</label>
       <input id="tensor-statistics-name" list="tensor-statistics-names" autocomplete="off"><datalist id="tensor-statistics-names"></datalist>
@@ -1221,6 +1216,7 @@ export function webviewHtml(
     <p id="tensor-statistics-status" role="status"></p>
     <progress id="tensor-statistics-progress" aria-label="Loading tensor data" aria-describedby="tensor-statistics-status" hidden></progress>
     <div id="tensor-statistics-content"></div>
+    <button id="tensor-statistics-save" hidden disabled>Save statistics…</button>
   </dialog>
   <dialog id="optimization-report" aria-labelledby="optimization-report-title">
     <header class="inspector-heading"><h2 id="optimization-report-title">Global optimization report</h2><button id="close-optimization-report" autofocus>Close</button></header>

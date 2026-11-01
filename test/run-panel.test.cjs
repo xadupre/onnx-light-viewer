@@ -14,6 +14,8 @@ function panel(t) {
   byId("prompt-view").hidden = false;
   const messages = [];
   let promptActivations = 0;
+  const inspections = [];
+  let statisticsResets = 0;
   dom.window.eval(
     readFileSync(require.resolve("../media/run-panel.js"), "utf8"),
   );
@@ -21,9 +23,84 @@ function panel(t) {
     byId,
     postMessage: (message) => messages.push(message),
     activatePrompt: () => ++promptActivations,
+    openStatistics: (...args) => inspections.push(args),
+    resetStatistics: () => ++statisticsResets,
   });
-  return { dom, byId, api, messages, activations: () => promptActivations };
+  return {
+    dom,
+    byId,
+    api,
+    messages,
+    inspections,
+    statisticsResets: () => statisticsResets,
+    activations: () => promptActivations,
+  };
 }
+
+test("Run displays executed inputs and outputs with per-tensor inspection and saving", (t) => {
+  const { byId, api, messages, inspections } = panel(t);
+  api.activate();
+  api.handleMessage({
+    type: "run-inputs",
+    requestId: messages.at(-1).requestId,
+    stages: [],
+    path: [],
+    inputs: [],
+  });
+  byId("run-form").querySelector('button[type="submit"]').click();
+  const requestId = messages.at(-1).requestId;
+  const input = {
+    name: "<input>",
+    text: "Actual random values",
+    hasData: true,
+  };
+  const output = { name: "<output>", text: "Execution result", hasData: true };
+  api.handleMessage({
+    type: "run-result",
+    requestId,
+    result: {
+      timeMs: 1,
+      inputs: [input],
+      outputs: [output, { name: "sequence", text: "Non-tensor" }],
+    },
+  });
+  assert.deepEqual(
+    [...byId("run-results").querySelectorAll("h2")].map(
+      (element) => element.textContent,
+    ),
+    ["Inputs", "Outputs"],
+  );
+  const buttons = byId("run-results").querySelectorAll("button");
+  assert.equal(buttons.length, 4);
+  buttons[0].click();
+  assert.equal(inspections[0][1], input.name);
+  assert.equal(
+    JSON.stringify(inspections[0][2]),
+    JSON.stringify({ requestId, kind: "inputs", index: 0 }),
+  );
+  buttons[3].click();
+  assert.equal(
+    JSON.stringify(messages.at(-1)),
+    JSON.stringify({
+      type: "run-save",
+      run: { requestId, kind: "outputs", index: 0 },
+      format: "protobuf",
+    }),
+  );
+  api.handleMessage({
+    type: "run-save-info",
+    requestId,
+    status: "Saved output.",
+  });
+  assert.equal(byId("run-status").textContent, "Saved output.");
+  api.reset();
+  api.handleMessage({
+    type: "run-save-error",
+    requestId,
+    error: "old failure",
+  });
+  assert.equal(byId("run-status").textContent, "Open a model to run it.");
+});
 
 test("Run window preserves Prompt and has accessible independent execution tabs", (t) => {
   const { dom, byId, messages, activations } = panel(t);
@@ -120,44 +197,38 @@ test("Run shows one-shot session lifecycle, actual inputs and save/reload contro
     result: {
       timeMs: 1,
       lifecycle: { loadMs: 2, reused: false, retained: false },
-      inputs: [{ name: "X", text }],
-      outputs: [{ name: "Y", text, canSave: true }],
+      inputs: [{ name: "X", text, hasData: true }],
+      outputs: [{ name: "Y", text, hasData: true }],
     },
   });
-  assert.equal(byId("run-used-inputs").hidden, false);
-  assert.equal(
-    byId("run-input-previews").querySelector("pre").textContent,
-    text,
-  );
+  assert.equal(byId("run-results").querySelector("pre").textContent, text);
   assert.match(
     byId("run-lifecycle").textContent,
     /created.*released.*2\.000.*No session is kept alive/,
   );
-  byId("run-input-previews").querySelector("button").click();
+  byId("run-results").querySelectorAll("button")[1].click();
   assert.deepEqual(JSON.parse(JSON.stringify(messages.at(-1))), {
-    type: "run-save-input",
-    requestId,
-    index: 0,
+    type: "run-save",
+    run: { requestId, kind: "inputs", index: 0 },
+    format: "protobuf",
   });
   api.handleMessage({
-    type: "run-input-saved",
+    type: "run-save-info",
     requestId,
-    name: "X",
-    path: "/tmp/exact.pb",
+    status: "Saved X to /tmp/exact.pb.",
   });
-  assert.equal(byId("run-file-0").value, "/tmp/exact.pb");
+  assert.match(byId("run-status").textContent, /Saved X/);
   assert.equal(byId("run-load-0").hidden, false);
-  byId("run-results").querySelector("button").click();
+  byId("run-results").querySelectorAll("button")[3].click();
   assert.deepEqual(JSON.parse(JSON.stringify(messages.at(-1))), {
-    type: "run-save-output",
-    requestId,
-    index: 0,
+    type: "run-save",
+    run: { requestId, kind: "outputs", index: 0 },
+    format: "protobuf",
   });
   api.handleMessage({
-    type: "run-output-saved",
+    type: "run-save-info",
     requestId,
-    name: "Y",
-    path: "/tmp/output.pb",
+    status: "Saved output Y to /tmp/output.pb.",
   });
   assert.match(byId("run-status").textContent, /Saved output Y/);
   byId("run-load-0").click();
@@ -169,16 +240,15 @@ test("Run shows one-shot session lifecycle, actual inputs and save/reload contro
   assert.deepEqual(JSON.parse(JSON.stringify(messages.at(-1).inputs)), [
     { name: "X", source: "protobuf", path: "/tmp/exact.pb" },
   ]);
-  assert.equal(byId("run-used-inputs").hidden, true);
+  assert.equal(byId("run-results").textContent, "");
   api.handleMessage({
-    type: "run-input-saved",
+    type: "run-save-info",
     requestId,
-    name: "X",
-    path: "/tmp/stale.pb",
+    status: "Stale save",
   });
   assert.equal(byId("run-file-0").value, "/tmp/exact.pb");
   api.reset();
-  assert.equal(byId("run-input-previews").textContent, "");
+  assert.equal(byId("run-results").textContent, "");
   assert.match(byId("run-lifecycle").textContent, /no retained session/);
 });
 
@@ -289,7 +359,7 @@ test("Run updates the retained session status after an idle worker stops", (t) =
 
 for (const type of ["metadata-error", "shape-error"])
   test(`Run recovers from ${type} without stale messages or lost input drafts`, (t) => {
-    const { byId, api, messages } = panel(t);
+    const { byId, api, messages, statisticsResets } = panel(t);
     const failure = { type, error: "Model analysis failed." };
     api.activate();
     const pendingInputs = messages.at(-1);
@@ -337,6 +407,21 @@ for (const type of ["metadata-error", "shape-error"])
     assert.equal(messages.at(-1).type, "run-model");
     assert.ok(messages.at(-1).requestId > run.requestId);
     assert.equal(messages.at(-1).inputs[0], draft);
+    const resetsBeforeCompletedResult = statisticsResets();
+    const completed = messages.at(-1);
+    api.handleMessage({
+      type: "run-result",
+      requestId: completed.requestId,
+      result: {
+        timeMs: 1,
+        outputs: [{ name: "Y", text: "result", hasData: true }],
+      },
+    });
+    assert.ok(byId("run-results").querySelector("button"));
+    api.handleMessage(failure);
+    assert.equal(byId("run-results").textContent, "");
+    assert.equal(byId("run-input-0").value, draft);
+    assert.equal(statisticsResets(), resetsBeforeCompletedResult + 1);
   });
 
 test("pipeline stage changes reload input forms without changing execution mode", (t) => {

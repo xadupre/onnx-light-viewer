@@ -2,6 +2,8 @@ function createRunPanel({
   byId,
   postMessage,
   activatePrompt,
+  openStatistics = () => {},
+  resetStatistics = () => {},
   canActivate = () => true,
 }) {
   let requestId = 0;
@@ -49,10 +51,6 @@ function createRunPanel({
   });
   for (const id of ["run-verbose", "run-log-severity", "run-log-verbosity"])
     byId(id).addEventListener("change", release);
-  const clearInputPreviews = () => {
-    byId("run-input-previews").replaceChildren();
-    byId("run-used-inputs").hidden = true;
-  };
   const selectEngine = () => {
     const light = engine.value === "onnx-light";
     byId("run-logging-light").hidden = !light;
@@ -106,7 +104,6 @@ function createRunPanel({
     available = false;
     fields.disabled = true;
     results.replaceChildren();
-    clearInputPreviews();
     byId("run-log").textContent = "";
     status.textContent = "Loading model inputs…";
     postMessage({
@@ -136,7 +133,6 @@ function createRunPanel({
     showLifecycle();
     fields.disabled = true;
     results.replaceChildren();
-    clearInputPreviews();
     byId("run-log").textContent = "";
     status.textContent = "Running model…";
     postMessage({
@@ -173,7 +169,6 @@ function createRunPanel({
       retained = false;
       inputs = [];
       showLifecycle();
-      clearInputPreviews();
       fields.disabled = true;
       stage.replaceChildren(new Option("Root graph", "[]"));
       byId("run-inputs").replaceChildren();
@@ -200,14 +195,15 @@ function createRunPanel({
         return true;
       }
       if (["metadata-error", "shape-error"].includes(message?.type)) {
-        if (busy || (requested && !available)) {
+        if (busy || requested) {
           ++requestId;
           requested = available;
           busy = false;
           retained = false;
           showLifecycle();
-          clearInputPreviews();
           fields.disabled = !available;
+          results.replaceChildren();
+          resetStatistics();
           status.textContent = `Run cancelled: ${message.error}`;
         }
         return false;
@@ -219,12 +215,10 @@ function createRunPanel({
           "run-error",
           "run-log",
           "run-file",
-          "run-input-saved",
-          "run-input-error",
-          "run-output-saved",
-          "run-output-error",
           "run-session-released",
           "run-session-error",
+          "run-save-info",
+          "run-save-error",
         ].includes(message?.type)
       )
         return false;
@@ -239,6 +233,10 @@ function createRunPanel({
           status.textContent = `Could not unload session: ${message.error}`;
         return true;
       }
+      if (message.type.startsWith("run-save-")) {
+        status.textContent = message.error || message.status;
+        return true;
+      }
       if (message.type === "run-log") {
         byId("run-log").textContent = message.output;
         return true;
@@ -251,21 +249,6 @@ function createRunPanel({
           source.value = "protobuf";
           source.dispatchEvent(new Event("change"));
         }
-        return true;
-      }
-      if (message.type === "run-input-saved") {
-        const index = inputs.findIndex((input) => input.name === message.name);
-        const field = byId(`run-file-${index}`);
-        if (field) field.value = message.path;
-        status.textContent = `Saved input ${message.name} to ${message.path}. Use Load input (.pb) to reload it.`;
-        return true;
-      }
-      if (message.type === "run-output-saved") {
-        status.textContent = `Saved output ${message.name} to ${message.path}.`;
-        return true;
-      }
-      if (["run-input-error", "run-output-error"].includes(message.type)) {
-        status.textContent = `Could not save ${message.type === "run-output-error" ? "output" : "input"}: ${message.error}`;
         return true;
       }
       busy = false;
@@ -397,36 +380,45 @@ function createRunPanel({
       } else {
         status.textContent = `Completed in ${message.result.timeMs.toFixed(3)} ms (execution only).`;
         showLifecycle(message.result.lifecycle);
-        const previews = byId("run-input-previews");
-        for (const [index, input] of (message.result.inputs ?? []).entries()) {
-          const heading = document.createElement("h3");
-          heading.textContent = input.name;
-          const values = document.createElement("pre");
-          values.textContent = input.text;
-          const save = document.createElement("button");
-          save.type = "button";
-          save.textContent = "Save input (.pb)…";
-          save.addEventListener("click", () =>
-            postMessage({ type: "run-save-input", requestId, index }),
-          );
-          previews.append(heading, values, save);
-        }
-        byId("run-used-inputs").hidden = !previews.childElementCount;
-        for (const [index, output] of message.result.outputs.entries()) {
-          const heading = document.createElement("h3");
-          heading.textContent = output.name;
-          const values = document.createElement("pre");
-          values.textContent = output.text;
-          results.append(heading, values);
-          if (output.canSave) {
+        for (const kind of ["inputs", "outputs"]) {
+          const tensors = message.result[kind] || [];
+          if (!tensors.length) continue;
+          const title = document.createElement("h2");
+          title.textContent = kind === "inputs" ? "Inputs" : "Outputs";
+          results.append(title);
+          tensors.forEach((output, index) => {
+            const heading = document.createElement("h3");
+            heading.textContent = output.name;
+            const values = document.createElement("pre");
+            values.textContent = output.text;
+            results.append(heading, values);
+            if (!output.hasData) return;
+            const reference = { requestId, kind, index };
+            const statistics = document.createElement("button");
+            statistics.type = "button";
+            statistics.textContent = "Statistics";
+            statistics.addEventListener("click", () =>
+              openStatistics(
+                tensors
+                  .filter((tensor) => tensor.hasData)
+                  .map((tensor) => tensor.name),
+                output.name,
+                reference,
+                tensors,
+              ),
+            );
             const save = document.createElement("button");
             save.type = "button";
-            save.textContent = "Save output (.pb)…";
+            save.textContent = "Save tensor…";
             save.addEventListener("click", () =>
-              postMessage({ type: "run-save-output", requestId, index }),
+              postMessage({
+                type: "run-save",
+                run: reference,
+                format: "protobuf",
+              }),
             );
-            results.append(save);
-          }
+            results.append(statistics, save);
+          });
         }
       }
       fields.disabled = !available;
