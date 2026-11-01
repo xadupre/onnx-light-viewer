@@ -247,11 +247,11 @@ public:
           const std::string device_key = provider == "cuda" ? "cudaDeviceId" : "dmlDeviceId";
           if ((provider == "cuda" || provider == "dml") &&
               (settings.Has(device_key) || settings.Has("deviceId"))) {
-            const auto device = settings.Has(device_key) ? settings.Get(device_key)
-                                                        : settings.Get("deviceId");
-            api.Check(api.OgaConfigSetProviderOption(
-                config.get(), provider.c_str(), "device_id",
-                std::to_string(Integer(device, 0, 65535)).c_str()));
+            const auto device =
+                settings.Has(device_key) ? settings.Get(device_key) : settings.Get("deviceId");
+            api.Check(
+                api.OgaConfigSetProviderOption(config.get(), provider.c_str(), "device_id",
+                                               std::to_string(Integer(device, 0, 65535)).c_str()));
           }
           if (provider == "cuda" && settings.Has("gpuMemoryMiB"))
             api.Check(api.OgaConfigSetProviderOption(

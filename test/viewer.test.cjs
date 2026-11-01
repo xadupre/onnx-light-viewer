@@ -9503,6 +9503,7 @@ for (const initialTab of ["model", "logs"]) {
     assert.deepEqual(
       messages.map(({ type }) => type),
       [
+        "get-settings",
         "ready",
         "get-settings",
         "get-settings",
@@ -9610,6 +9611,7 @@ for (const initialTab of ["model", "logs"]) {
     assert.deepEqual(
       messages.map(({ type }) => type),
       [
+        "get-settings",
         "ready",
         "get-settings",
         "get-settings",
@@ -10953,7 +10955,10 @@ test("opens local functions from the operator or inspector and returns using bre
 
 test("renders the demo, inspects its operator and requests a real file", (t) => {
   const { document, messages, load, window } = openViewer(t);
-  assert.equal(messages[0].type, "ready");
+  assert.deepEqual(
+    messages.map(({ type }) => type),
+    ["get-settings", "ready"],
+  );
   const errors = [];
   window.addEventListener("error", (event) => errors.push(event.error));
   document
