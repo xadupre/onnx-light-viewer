@@ -1483,12 +1483,15 @@ async function configurePanel(
               : [];
             await assertSaveDestination(sources, uri);
             if (!isCurrent()) return;
-            await vscode.workspace.fs.writeFile(
+            const published = await writeModelFile(
               uri,
               statistics
                 ? Buffer.from(JSON.stringify(statistics, null, 2) + "\n")
                 : tensor.data!,
+              true,
+              isCurrent,
             );
+            if (!published) return;
           }
           if (isCurrent())
             await postMessage({
