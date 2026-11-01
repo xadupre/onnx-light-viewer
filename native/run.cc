@@ -38,6 +38,7 @@ struct RunState {
   std::unique_ptr<rt::RuntimeSession> session;
   std::mutex mutex;
   std::atomic<bool> retained = false;
+  bool failed = false;
   int verbose;
   double load_ms = 0;
 };
@@ -109,8 +110,11 @@ public:
   Napi::Promise Promise() const { return deferred_.Promise(); }
 
   void Execute() override {
+    std::lock_guard lock(state_->mutex);
     try {
-      std::lock_guard lock(state_->mutex);
+      if (state_->failed)
+        throw std::runtime_error(
+            "The retained Run session failed; run again to create a new session.");
       std::vector<ol::TensorProto> input_storage;
       input_storage.reserve(inputs_.size());
       rt::RuntimeContext context(
@@ -267,6 +271,9 @@ public:
         outputs_.push_back(DescribeTensor(proto, tensor));
       }
     } catch (const std::exception &error) {
+      state_->failed = true;
+      state_->session.reset();
+      state_->retained = false;
       SetError(error.what());
     }
   }

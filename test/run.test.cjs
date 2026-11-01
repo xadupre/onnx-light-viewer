@@ -1,4 +1,5 @@
 const assert = require("node:assert/strict");
+const { execFileSync } = require("node:child_process");
 const { readFileSync } = require("node:fs");
 const { test } = require("node:test");
 const {
@@ -136,6 +137,37 @@ test("native Run failures release retained state before the next direct call", a
     await fail();
     assert.equal((await predict()).lifecycle.reused, false);
   }
+});
+
+test("queued native predictions cannot reuse a session after a worker failure", () => {
+  execFileSync(
+    process.execPath,
+    [
+      "-e",
+      `
+const assert = require("node:assert/strict");
+const { readFileSync } = require("node:fs");
+const { loadModel } = require(${JSON.stringify(require.resolve("../dist/graph"))});
+(async () => {
+  const model = loadModel(readFileSync(${JSON.stringify(require.resolve("./models/relu.onnx"))}), "relu.onnx");
+  const inputs = ["float[1,3] input = {-1, 0, 2}"];
+  await model.run(inputs, [], { keepLoaded: true });
+  const results = await Promise.allSettled([
+    model.run(["not a tensor"], [], { keepLoaded: true }),
+    model.run(inputs, [], { keepLoaded: true }),
+  ]);
+  assert.equal(results[0].status, "rejected");
+  assert.equal(results[1].status, "rejected");
+  assert.match(results[1].reason.message, /session failed/);
+  const next = await model.run(inputs, [], { keepLoaded: true });
+  assert.equal(next.lifecycle.reused, false);
+  assert.equal(next.lifecycle.retained, true);
+  model.releaseRunSession();
+})().catch((error) => { console.error(error); process.exitCode = 1; });
+`,
+    ],
+    { env: { ...process.env, UV_THREADPOOL_SIZE: "1" }, timeout: 10000 },
+  );
 });
 
 test("a failing native worker does not release its replacement retained state", async (t) => {

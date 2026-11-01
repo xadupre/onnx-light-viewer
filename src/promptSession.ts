@@ -7,6 +7,7 @@ export class PromptSession {
   private child?: ChildProcessWithoutNullStreams;
   private closed: Promise<void> = Promise.resolve();
   private closing?: Promise<void>;
+  private needsClose = false;
   private key?: string;
   private pending?: {
     event: (value: unknown) => void;
@@ -55,10 +56,12 @@ export class PromptSession {
       this.pending?.progress(output);
     };
     const log = (chunk: string) => {
+      if (this.child !== child || this.needsClose) return;
       output = (output + chunk).slice(-65536);
       if (!timer) timer = setTimeout(flush, 100);
     };
     const fail = (error: Error) => {
+      if (this.child !== child || this.needsClose) return;
       if (this.pending) this.pending.reject(error);
       else if (this.child === child) this.reportError(error);
     };
@@ -67,6 +70,7 @@ export class PromptSession {
     child.stderr.on("data", log);
     child.stdin.on("error", fail);
     child.stdout.on("data", (chunk: string) => {
+      if (this.child !== child || this.needsClose) return;
       try {
         pending += chunk;
         let newline: number;
@@ -110,14 +114,15 @@ export class PromptSession {
     this.closed = new Promise((resolve) => {
       child.once("close", (code, signal) => {
         if (timer) clearTimeout(timer);
-        if (this.child === child) {
+        // A closing process group can still have live descendants after stdio closes.
+        if (this.child === child && !this.needsClose) {
           fail(
             new Error(
               `${this.worker?.label ?? "Native prompt"} exited (${signal ?? code}).\n${output}`,
             ),
           );
           this.pending = undefined;
-          this.child = undefined;
+          if (!this.needsClose) this.child = undefined;
         }
         resolve();
       });
@@ -134,7 +139,7 @@ export class PromptSession {
   ): Promise<void> {
     if (this.closing) await this.closing;
     signal.throwIfAborted();
-    if (this.child && this.key !== key) await this.close();
+    if (this.needsClose || (this.child && this.key !== key)) await this.close();
     signal.throwIfAborted();
     if (this.pending)
       throw new Error(
@@ -160,7 +165,7 @@ export class PromptSession {
         else child.stdin.write(JSON.stringify({ input, output, key }) + "\n");
       });
     } catch (error) {
-      await this.close();
+      if (this.child === child) await this.close();
       throw error;
     } finally {
       signal.removeEventListener("abort", abort);
@@ -173,7 +178,8 @@ export class PromptSession {
     if (!child) return Promise.resolve();
     const closed = this.closed;
     const running = this.pending;
-    this.child = undefined;
+    const force = this.needsClose || running !== undefined;
+    this.needsClose = true;
     this.pending = undefined;
     running?.reject(
       new DOMException(
@@ -182,7 +188,7 @@ export class PromptSession {
       ),
     );
     this.closing = (async () => {
-      if (running) {
+      if (force) {
         await terminateExport(child);
       } else {
         child.stdin.end();
@@ -197,6 +203,10 @@ export class PromptSession {
         if (timedOut) await terminateExport(child);
       }
       await closed;
+      if (this.child === child) {
+        this.child = undefined;
+        this.needsClose = false;
+      }
     })().finally(() => {
       this.closing = undefined;
     });

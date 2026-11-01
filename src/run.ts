@@ -61,6 +61,7 @@ export class RunSession {
     signal: AbortSignal,
     progress: (output: string) => void,
   ): Promise<void> {
+    signal.throwIfAborted();
     if (!this.worker || !this.key)
       throw new Error("The ONNX Runtime session is not configured.");
     return this.worker.run(
@@ -77,13 +78,16 @@ export class RunSession {
     if (this.closing) return this.closing;
     this.generation++;
     const worker = this.worker;
-    this.worker = undefined;
     this.model?.releaseRunSession();
     this.model = undefined;
     this.key = undefined;
-    this.closing = (worker?.close() ?? Promise.resolve()).finally(() => {
-      this.closing = undefined;
-    });
+    this.closing = (worker?.close() ?? Promise.resolve())
+      .then(() => {
+        if (this.worker === worker) this.worker = undefined;
+      })
+      .finally(() => {
+        this.closing = undefined;
+      });
     return this.closing;
   }
 }
@@ -257,6 +261,7 @@ export async function runModel(
           keepLoaded,
         }),
       );
+      signal.throwIfAborted();
       if (retainedSession)
         await retainedSession.run(directory, signal, progress);
       else
@@ -282,6 +287,7 @@ export async function runModel(
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
+    signal.throwIfAborted();
     if (
       retainedSession &&
       (!retainedSession.alive || retainedSession.generation !== generation)

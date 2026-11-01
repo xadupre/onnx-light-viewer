@@ -1,5 +1,6 @@
 const assert = require("node:assert/strict");
 const { execFileSync } = require("node:child_process");
+const { once } = require("node:events");
 const { readFileSync } = require("node:fs");
 const { mkdtemp, writeFile, rm } = require("node:fs/promises");
 const { tmpdir } = require("node:os");
@@ -19,6 +20,26 @@ const python = process.platform === "win32" ? "python" : "python3";
 const runner = path.resolve(__dirname, "../media/run_model.py");
 const run = (model, request, progress = () => {}) =>
   runModel(model, [], request, python, runner, progress);
+
+function runModule(overrides) {
+  const loaded = {};
+  runInNewContext(readFileSync(require.resolve("../dist/run"), "utf8"), {
+    exports: loaded,
+    process,
+    AbortController,
+    require(name) {
+      return (
+        overrides[name] ??
+        require(
+          name.startsWith(".")
+            ? path.resolve(__dirname, "../dist", name)
+            : name,
+        )
+      );
+    },
+  });
+  return loaded;
+}
 
 for (const engine of ["onnx-light", "onnxruntime"])
   test(`${engine} Run retains real sessions with fresh inputs and invalidates ownership/settings`, async (t) => {
@@ -247,6 +268,206 @@ test("a failed pending input read does not unload a newer Run session", async (t
   assert.equal((await predict(replacement)).lifecycle.reused, false);
   assert.equal((await predict(replacement)).lifecycle.reused, true);
 });
+
+for (const phase of ["write", "read", "cleanup"])
+  for (const keepLoaded of [false, true])
+    test(
+      `ORT cancellation during ${phase} returns AbortError (retained: ${keepLoaded})`,
+      { timeout: 15000 },
+      async (t) => {
+        const session = new RunSession();
+        t.after(() => session.close());
+        const controller = new AbortController();
+        const fs = require("node:fs/promises");
+        let cancelled = false;
+        const delayed = runModule({
+          "node:fs/promises": {
+            ...fs,
+            async writeFile(file, ...args) {
+              await fs.writeFile(file, ...args);
+              if (
+                phase === "write" &&
+                path.basename(file) === "settings.json"
+              ) {
+                cancelled = true;
+                controller.abort();
+              }
+            },
+            async readFile(file, ...args) {
+              const value = await fs.readFile(file, ...args);
+              if (phase === "read" && path.basename(file) === "result.json") {
+                cancelled = true;
+                controller.abort();
+              }
+              return value;
+            },
+            async rm(...args) {
+              await fs.rm(...args);
+              if (phase === "cleanup") {
+                cancelled = true;
+                controller.abort();
+              }
+            },
+          },
+        });
+        const model = loadModel(
+          readFileSync(require.resolve("./models/relu.onnx")),
+          "relu.onnx",
+        );
+        await assert.rejects(
+          delayed.runModel(
+            model,
+            [],
+            {
+              engine: "onnxruntime",
+              keepLoaded,
+              inputs: ["float[1,3] input = {-1, 0, 2}"],
+            },
+            python,
+            runner,
+            () => {},
+            controller.signal,
+            session,
+          ),
+          { name: "AbortError" },
+        );
+        assert.equal(cancelled, true);
+        await session.close();
+        assert.equal(session.alive, false);
+      },
+    );
+
+for (const mode of ["idle", "active"])
+  test(
+    `failed ${mode} worker cleanup retains both owners and blocks replacement until retry succeeds`,
+    { timeout: 15000 },
+    async (t) => {
+      const directory = await mkdtemp(path.join(tmpdir(), "viewer-run-close-"));
+      const workerFile = path.join(directory, "worker.py");
+      const stop = path.join(directory, "stop");
+      await writeFile(
+        workerFile,
+        `
+import json
+import pathlib
+import sys
+import time
+
+while True:
+    line = sys.stdin.readline()
+    if line:
+        request = json.loads(line)
+        event = "ready" if pathlib.Path(request["input"]).name == "active" else "done"
+        print("\\x1e" + json.dumps({"type": event}), flush=True)
+    elif pathlib.Path(${JSON.stringify(stop)}).exists():
+        break
+    else:
+        time.sleep(0.01)
+`,
+      );
+      const { terminateExport } = require("../dist/export");
+      const permissionError = Object.assign(new Error("kill EPERM"), {
+        code: "EPERM",
+      });
+      let permitTermination = false;
+      const prompt = {};
+      runInNewContext(
+        readFileSync(require.resolve("../dist/promptSession"), "utf8"),
+        {
+          exports: prompt,
+          process,
+          Error,
+          DOMException,
+          setTimeout,
+          clearTimeout,
+          require(name) {
+            return name === "./export"
+              ? {
+                  async terminateExport(child) {
+                    if (!permitTermination) throw permissionError;
+                    await terminateExport(child);
+                  },
+                }
+              : require(name);
+          },
+        },
+      );
+      const loaded = runModule({ "./promptSession": prompt });
+      const errors = [];
+      const session = new loaded.RunSession((error) => errors.push(error));
+      let child;
+      t.after(async () => {
+        permitTermination = true;
+        await writeFile(stop, "");
+        try {
+          await session.close();
+          if (child?.exitCode === null && child.signalCode === null)
+            await terminateExport(child);
+        } finally {
+          await rm(directory, { recursive: true, force: true });
+        }
+      });
+      const model = loadModel(
+        readFileSync(require.resolve("./models/relu.onnx")),
+        "relu.onnx",
+      );
+      const signal = new AbortController().signal;
+      const ensure = () =>
+        session.ensure(
+          model,
+          [],
+          "onnxruntime",
+          {},
+          python,
+          workerFile,
+          signal,
+        );
+      await ensure();
+      const operation = session.run(
+        path.join(directory, mode),
+        signal,
+        () => {},
+      );
+      const outcome =
+        mode === "active"
+          ? assert.rejects(operation, (error) => error === permissionError)
+          : operation;
+      const worker = session.worker;
+      child = worker.child;
+      if (mode === "active") await once(child.stdout, "data");
+      else await outcome;
+      await assert.rejects(
+        session.close(),
+        (error) => error === permissionError,
+      );
+      if (mode === "active") await outcome;
+      assert.equal(session.worker, worker);
+      assert.equal(worker.child, child);
+      assert.equal(session.alive, true);
+      await assert.rejects(ensure(), (error) => error === permissionError);
+      await assert.rejects(
+        worker.run(
+          directory,
+          "unused",
+          "new-key",
+          signal,
+          () => {},
+          () => {},
+        ),
+        (error) => error === permissionError,
+      );
+      assert.equal(worker.child, child);
+      permitTermination = true;
+      await session.close();
+      assert.equal(session.worker, undefined);
+      assert.equal(worker.child, undefined);
+      assert.equal(child.exitCode !== null || child.signalCode !== null, true);
+      await ensure();
+      await session.run(directory, signal, () => {});
+      assert.notEqual(session.worker.child.pid, child.pid);
+      assert.deepEqual(errors, []);
+    },
+  );
 
 for (const engine of ["onnx-light", "onnxruntime"])
   test(`${engine} retained pipeline sessions invalidate when switching stages`, async (t) => {
