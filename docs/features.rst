@@ -157,11 +157,31 @@ selected input name. For text, a three-element float input named ``X`` is
 ``float[3] X = {-1, 0, 2}``; its concrete shape must match the dimension fields.
 Integer values are parsed natively without JavaScript rounding.
 A trusted workspace is required.
-**Run model** displays execution time and output type, shape and values for
+**Run model** displays execution time and actual input/output type, shape and values for
 tensors up to 32 elements. Larger tensors show metadata only. Native errors
 appear in the status; ONNX Runtime logs appear below it. Neither engine modifies
-the graph or saves user files. ONNX Runtime executes a temporary snapshot that is
+the graph. ONNX Runtime executes a temporary snapshot that is
 removed after execution.
+
+For each executed tensor, **Statistics** opens SDK summaries, quartiles,
+histograms and a heatmap without running the model again. **Save statistics…**
+exports the summary as JSON; **Save tensor…** exports the full inline TensorProto
+(``.pb``), including values omitted from the preview. Saved tensors can be reused
+as file inputs. Each save asks for a destination and can be cancelled. A new run
+or model change invalidates the previous run's tensors. Non-tensor outputs have
+no tensor inspection or save controls; unsupported statistics show the SDK error.
+
+.. figure:: _static/feature-run-tensors.png
+   :alt: Run results showing actual inputs and outputs with Statistics and Save tensor controls.
+   :width: 100%
+
+   Inspect or save each executed input and output.
+
+.. figure:: _static/feature-run-statistics.png
+   :alt: Statistics for an executed output tensor with a Save statistics button.
+   :width: 100%
+
+   Save the SDK statistics as JSON.
 
 .. figure:: _static/feature-run-model.png
    :alt: Run window with onnx-light logging, an explicit dynamic dimension and SDK-generated random input.

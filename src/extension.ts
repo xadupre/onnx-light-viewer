@@ -20,6 +20,8 @@ import {
   GraphPath,
   FusionMatch,
   FusionOperation,
+  RunResult,
+  tensorStatisticsFromProto,
 } from "./graph";
 import { webviewHtml } from "./webview";
 import { runModel } from "./run";
@@ -525,6 +527,41 @@ async function configurePanel(
   let memoryRequest = 0;
   let runRequest = 0;
   let runController: AbortController | undefined;
+  let runResult:
+    | {
+        owner: LoadedModel;
+        revision: number;
+        generation: number;
+        requestId: number;
+        result: RunResult;
+      }
+    | undefined;
+
+  function executedTensor(
+    reference:
+      { requestId?: unknown; kind?: unknown; index?: unknown } | undefined,
+  ) {
+    if (
+      !runResult ||
+      runResult.owner !== model ||
+      runResult.revision !== graphRevision ||
+      runResult.generation !== runRequest ||
+      reference?.requestId !== runResult.requestId ||
+      (reference?.kind !== "inputs" && reference?.kind !== "outputs") ||
+      typeof reference.index !== "number" ||
+      !Number.isSafeInteger(reference?.index) ||
+      reference.index < 0
+    )
+      throw new Error(
+        "Run tensor is no longer available. Run the model again.",
+      );
+    const tensor =
+      runResult.result[reference.kind as "inputs" | "outputs"]?.[
+        reference.index
+      ];
+    if (!tensor?.data) throw new Error("No TensorProto data for this output.");
+    return tensor;
+  }
   let fusionRequest = 0;
   let diagnosticRequest = 0;
   let undoRequest = 0;
@@ -782,6 +819,7 @@ async function configurePanel(
     }));
   const sendGraph = (selectedNodes?: number[], fusionRequestId?: unknown) => {
     runController?.abort();
+    runResult = undefined;
     fusionPreview = undefined;
     fusionRequest++;
     diagnosticRequest++;
@@ -848,6 +886,7 @@ async function configurePanel(
         path?: unknown;
         paths?: unknown;
         inputs?: unknown;
+        run?: { requestId?: unknown; kind?: unknown; index?: unknown };
         index?: unknown;
         engine?: unknown;
         asPipeline?: unknown;
@@ -1312,6 +1351,7 @@ async function configurePanel(
         const owner = model;
         const revision = graphRevision;
         const generation = ++runRequest;
+        runResult = undefined;
         runController?.abort();
         const controller = new AbortController();
         runController = controller;
@@ -1373,12 +1413,31 @@ async function configurePanel(
                 controller.signal,
               ),
             );
-            if (isCurrent())
+            if (isCurrent()) {
+              runResult = {
+                owner: current,
+                revision,
+                generation,
+                requestId: message.requestId,
+                result,
+              };
+              const preview = ({
+                data,
+                ...tensor
+              }: RunResult["outputs"][number]) => ({
+                ...tensor,
+                hasData: !!data,
+              });
               await postMessage({
                 type: "run-result",
                 requestId: message.requestId,
-                result,
+                result: {
+                  timeMs: result.timeMs,
+                  inputs: result.inputs?.map(preview),
+                  outputs: result.outputs.map(preview),
+                },
               });
+            }
           }
         } catch (error) {
           if (isCurrent())
@@ -1387,6 +1446,54 @@ async function configurePanel(
               requestId: message.requestId,
               error: error instanceof Error ? error.message : String(error),
             });
+        }
+      } else if (message?.type === "run-save") {
+        const savedRun = runResult;
+        const isCurrent = () =>
+          active &&
+          runResult === savedRun &&
+          savedRun?.owner === model &&
+          savedRun?.revision === graphRevision &&
+          savedRun?.generation === runRequest;
+        try {
+          const tensor = executedTensor(message.run);
+          if (message.format !== "protobuf" && message.format !== "statistics")
+            throw new Error("Choose TensorProto or statistics JSON.");
+          const statistics =
+            message.format === "statistics"
+              ? await tensorStatisticsFromProto(tensor.data!)
+              : undefined;
+          if (!isCurrent()) return;
+          const uri = await vscode.window.showSaveDialog({
+            saveLabel: statistics ? "Save statistics" : "Save tensor",
+            filters: statistics
+              ? { "Tensor statistics": ["json"] }
+              : { TensorProto: ["pb"] },
+          });
+          if (!isCurrent()) return;
+          if (uri) {
+            await vscode.workspace.fs.writeFile(
+              uri,
+              statistics
+                ? Buffer.from(JSON.stringify(statistics, null, 2) + "\n")
+                : tensor.data!,
+            );
+          }
+          if (isCurrent())
+            await postMessage({
+              type: "run-save-info",
+              requestId: message.run?.requestId,
+              status: uri
+                ? `Saved ${tensor.name} to ${locationText(uri)}.`
+                : "Save cancelled.",
+            });
+        } catch (error) {
+          if (!isCurrent()) return;
+          await postMessage({
+            type: "run-save-error",
+            requestId: message.run?.requestId,
+            error: error instanceof Error ? error.message : String(error),
+          });
         }
       } else if (message?.type === "prompt-cancel") {
         promptController?.abort();
@@ -1507,12 +1614,15 @@ async function configurePanel(
       } else if (message?.type === "tensor-statistics") {
         const requestedModel = model;
         const revision = graphRevision;
+        const execution = message.run ? runResult : undefined;
         const generation = ++tensorStatisticsRequest;
         const isCurrent = () =>
           active &&
           model === requestedModel &&
           graphRevision === revision &&
-          tensorStatisticsRequest === generation;
+          tensorStatisticsRequest === generation &&
+          (!message.run ||
+            (runResult === execution && execution?.generation === runRequest));
         try {
           const statistics = await log.run("Inspect tensor data", async () => {
             if (
@@ -1529,6 +1639,12 @@ async function configurePanel(
               void sendStatus();
             });
             if (!isCurrent()) return;
+            if (message.run) {
+              const tensor = executedTensor(message.run);
+              if (tensor.name !== message.name)
+                throw new Error("Invalid run tensor name.");
+              return tensorStatisticsFromProto(tensor.data!);
+            }
             return native.tensorStatistics(message.name, message.path, true);
           });
           if (isCurrent() && statistics)
@@ -3771,6 +3887,7 @@ async function configurePanel(
             return;
           runController?.abort();
           runRequest++;
+          runResult = undefined;
           if (model) invalidateModel(model, log);
           const detail = error instanceof Error ? error.message : String(error);
           await postMessage({
@@ -3921,6 +4038,7 @@ async function configurePanel(
             return;
           runController?.abort();
           runRequest++;
+          runResult = undefined;
           if (model) invalidateModel(model, log);
           const detail = error instanceof Error ? error.message : String(error);
           await postMessage({
@@ -3951,6 +4069,7 @@ async function configurePanel(
     releaseController?.abort();
     promptController?.abort();
     runController?.abort();
+    runResult = undefined;
     void promptSession
       .close()
       .catch((error: unknown) =>

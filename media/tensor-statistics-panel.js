@@ -11,12 +11,16 @@ function createTensorStatisticsPanel({ byId, postMessage }) {
   let requestId = 0;
   let pending;
   let opener;
+  let execution;
+  let cacheScope;
+  const save = byId("tensor-statistics-save");
   const ns = "http://www.w3.org/2000/svg";
 
   function invalidate() {
     pending = undefined;
     progress.hidden = true;
     dialog.setAttribute("aria-busy", "false");
+    save.disabled = true;
   }
 
   function close() {
@@ -57,6 +61,7 @@ function createTensorStatisticsPanel({ byId, postMessage }) {
   }
 
   function render(statistics) {
+    save.disabled = false;
     byId("tensor-statistics-title").textContent =
       statistics.values === undefined ? "Tensor statistics" : "Tensor values";
     const summary = document.createElement("dl");
@@ -202,7 +207,7 @@ function createTensorStatisticsPanel({ byId, postMessage }) {
     const legend = document.createElement("p");
     legend.className = "tensor-statistics-legend";
     legend.textContent = finite.length
-      ? `Heatmap: blue (low) ${low} → red (high) ${high}. Gray: non-finite. SDK 32 × 32 summary, not model execution.`
+      ? `Heatmap: blue (low) ${low} → red (high) ${high}. Gray: non-finite. SDK 32 × 32 summary${execution ? " of the executed tensor" : ", not model execution"}.`
       : "Heatmap unavailable: no finite values. Gray: non-finite.";
     const heatmapFigure = figure("Heatmap — SDK 32 × 32 summary", heatmap);
     heatmapFigure.append(legend);
@@ -240,8 +245,31 @@ function createTensorStatisticsPanel({ byId, postMessage }) {
     progress.hidden = false;
     dialog.setAttribute("aria-busy", "true");
     pending = { requestId: ++requestId, name };
-    postMessage({ type: "tensor-statistics", ...pending, path });
+    postMessage({
+      type: "tensor-statistics",
+      ...pending,
+      path,
+      ...(execution ? { run: runReference() } : {}),
+    });
   }
+
+  function runReference() {
+    return {
+      ...execution.run,
+      index: execution.tensors.findIndex(
+        (tensor) => tensor.name === names[index],
+      ),
+    };
+  }
+
+  save.addEventListener("click", () => {
+    if (!execution || save.disabled) return;
+    postMessage({
+      type: "run-save",
+      run: runReference(),
+      format: "statistics",
+    });
+  });
 
   selector.addEventListener("input", () => {
     invalidate();
@@ -273,7 +301,15 @@ function createTensorStatisticsPanel({ byId, postMessage }) {
 
   return {
     reset,
-    open(batch, graphPath, selectedName = batch[0]) {
+    open(batch, graphPath, selectedName = batch[0], context) {
+      execution = context;
+      const scope = JSON.stringify(context?.run || graphPath);
+      if (cacheScope !== scope) cache.clear();
+      cacheScope = scope;
+      save.hidden = !execution;
+      byId("tensor-statistics-scope").textContent = execution
+        ? "Actual inputs or outputs from the completed run. Statistics do not execute the model again."
+        : "Stored tensor data only. The model is not executed; intermediate values may be unavailable.";
       names = [
         ...new Set(batch.filter((name) => typeof name === "string" && name)),
       ];
@@ -287,6 +323,13 @@ function createTensorStatisticsPanel({ byId, postMessage }) {
     },
     handleMessage(message) {
       if (
+        dialog.open &&
+        execution &&
+        ["run-save-info", "run-save-error"].includes(message?.type) &&
+        message.requestId === execution.run.requestId
+      )
+        status.textContent = message.error || message.status;
+      if (
         !["tensor-statistics-info", "tensor-statistics-error"].includes(
           message?.type,
         )
@@ -297,7 +340,9 @@ function createTensorStatisticsPanel({ byId, postMessage }) {
       const name = pending.name;
       invalidate();
       if (message.type === "tensor-statistics-error") {
-        status.textContent = `Tensor data unavailable: ${message.error}. The model is not executed; intermediate values may have no stored data. Choose another tensor to continue.`;
+        status.textContent = execution
+          ? `Tensor statistics unavailable: ${message.error}.`
+          : `Tensor data unavailable: ${message.error}. The model is not executed; intermediate values may have no stored data. Choose another tensor to continue.`;
       } else {
         cache.delete(name);
         cache.set(name, message.statistics);

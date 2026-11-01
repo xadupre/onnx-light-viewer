@@ -14,6 +14,7 @@ function panel(t) {
   byId("prompt-view").hidden = false;
   const messages = [];
   let promptActivations = 0;
+  const inspections = [];
   dom.window.eval(
     readFileSync(require.resolve("../media/run-panel.js"), "utf8"),
   );
@@ -21,9 +22,82 @@ function panel(t) {
     byId,
     postMessage: (message) => messages.push(message),
     activatePrompt: () => ++promptActivations,
+    openStatistics: (...args) => inspections.push(args),
   });
-  return { dom, byId, api, messages, activations: () => promptActivations };
+  return {
+    dom,
+    byId,
+    api,
+    messages,
+    inspections,
+    activations: () => promptActivations,
+  };
 }
+
+test("Run displays executed inputs and outputs with per-tensor inspection and saving", (t) => {
+  const { byId, api, messages, inspections } = panel(t);
+  api.activate();
+  api.handleMessage({
+    type: "run-inputs",
+    requestId: messages.at(-1).requestId,
+    stages: [],
+    path: [],
+    inputs: [],
+  });
+  byId("run-form").querySelector('button[type="submit"]').click();
+  const requestId = messages.at(-1).requestId;
+  const input = {
+    name: "<input>",
+    text: "Actual random values",
+    hasData: true,
+  };
+  const output = { name: "<output>", text: "Execution result", hasData: true };
+  api.handleMessage({
+    type: "run-result",
+    requestId,
+    result: {
+      timeMs: 1,
+      inputs: [input],
+      outputs: [output, { name: "sequence", text: "Non-tensor" }],
+    },
+  });
+  assert.deepEqual(
+    [...byId("run-results").querySelectorAll("h2")].map(
+      (element) => element.textContent,
+    ),
+    ["Inputs", "Outputs"],
+  );
+  const buttons = byId("run-results").querySelectorAll("button");
+  assert.equal(buttons.length, 4);
+  buttons[0].click();
+  assert.equal(inspections[0][1], input.name);
+  assert.equal(
+    JSON.stringify(inspections[0][2]),
+    JSON.stringify({ requestId, kind: "inputs", index: 0 }),
+  );
+  buttons[3].click();
+  assert.equal(
+    JSON.stringify(messages.at(-1)),
+    JSON.stringify({
+      type: "run-save",
+      run: { requestId, kind: "outputs", index: 0 },
+      format: "protobuf",
+    }),
+  );
+  api.handleMessage({
+    type: "run-save-info",
+    requestId,
+    status: "Saved output.",
+  });
+  assert.equal(byId("run-status").textContent, "Saved output.");
+  api.reset();
+  api.handleMessage({
+    type: "run-save-error",
+    requestId,
+    error: "old failure",
+  });
+  assert.equal(byId("run-status").textContent, "Open a model to run it.");
+});
 
 test("Run window preserves Prompt and has accessible independent execution tabs", (t) => {
   const { dom, byId, messages, activations } = panel(t);

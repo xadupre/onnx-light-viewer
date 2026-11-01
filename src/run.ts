@@ -135,9 +135,19 @@ export async function runModel(
       undefined,
       process.platform === "win32" ? "utf16le" : "utf8",
     );
-    return JSON.parse(
+    const result = JSON.parse(
       await readFile(join(directory, "result.json"), "utf8"),
-    ) as RunResult;
+    ) as Omit<RunResult, "outputs"> & {
+      outputs: (RunResult["outputs"][number] & { hasData?: boolean })[];
+    };
+    for (const [index, input] of (result.inputs ?? []).entries())
+      input.data = prepared.inputs[index];
+    for (const [index, output] of result.outputs.entries()) {
+      if (output.hasData)
+        output.data = await readFile(join(directory, `output-${index}.pb`));
+      delete output.hasData;
+    }
+    return result;
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

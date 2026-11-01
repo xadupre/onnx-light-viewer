@@ -116,6 +116,93 @@ test("regular run host selects a pipeline stage root", async (t) => {
   assert.match(extension.messages.at(-1).error, /stage root/);
 });
 
+test("Run inspection and saving use host-owned execution tensors for both engines", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "viewer-run-save-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  for (const engine of ["onnx-light", "onnxruntime"]) {
+    const extension = await openExtension("relu.onnx");
+    t.after(() => extension.dispose());
+    await extension.receive({
+      type: "run-model",
+      requestId: 1,
+      engine,
+      inputs: ["float[1,3] input = {-1, 0, 2}"],
+    });
+    const result = extension.messages.at(-1).result;
+    assert.equal(result.inputs[0].hasData, true);
+    assert.equal(result.outputs[0].hasData, true);
+    assert.equal(result.outputs[0].data, undefined);
+    for (const [kind, mean] of [
+      ["inputs", 1 / 3],
+      ["outputs", 2 / 3],
+    ]) {
+      const run = { requestId: 1, kind, index: 0 };
+      await extension.receive({
+        type: "tensor-statistics",
+        requestId: 2,
+        path: [],
+        run,
+        name: result[kind][0].name,
+      });
+      const statistics = extension.messages.at(-1).statistics;
+      assert.equal(statistics.mean, mean);
+      assert.equal(statistics.count, "3");
+      const file = path.join(directory, `${engine}-${kind}.pb`);
+      extension.setSaveDestination(file);
+      await extension.receive({ type: "run-save", run, format: "protobuf" });
+      assert.equal(extension.messages.at(-1).type, "run-save-info");
+      assert.ok((await readFile(file)).length > 0);
+      const json = path.join(directory, `${engine}-${kind}.json`);
+      extension.setSaveDestination(json);
+      await extension.receive({
+        type: "run-save",
+        run,
+        format: "statistics",
+      });
+      assert.deepEqual(JSON.parse(await readFile(json, "utf8")), statistics);
+    }
+    extension.setSaveDestination(undefined);
+    await extension.receive({
+      type: "run-save",
+      run: { requestId: 1, kind: "outputs", index: 0 },
+      format: "protobuf",
+    });
+    assert.equal(extension.messages.at(-1).status, "Save cancelled.");
+    await extension.receive({ type: "run-inputs", requestId: 3 });
+    const dialogs = extension.saveDialogs.length;
+    await extension.receive({
+      type: "run-save",
+      run: { requestId: 1, kind: "outputs", index: 0 },
+      format: "protobuf",
+    });
+    assert.equal(extension.saveDialogs.length, dialogs);
+  }
+});
+
+test("Run saving discards a stale destination after a new run request", async (t) => {
+  const extension = await openExtension("relu.onnx");
+  t.after(() => extension.dispose());
+  await extension.receive({
+    type: "run-model",
+    requestId: 1,
+    inputs: ["float[1,3] input = {-1, 0, 2}"],
+  });
+  const directory = await mkdtemp(path.join(tmpdir(), "viewer-run-save-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const file = path.join(directory, "stale.pb");
+  extension.setSaveDestination(file);
+  const gate = extension.pauseNextSaveDialog();
+  const save = extension.receive({
+    type: "run-save",
+    run: { requestId: 1, kind: "inputs", index: 0 },
+    format: "protobuf",
+  });
+  await gate.opened;
+  await extension.receive({ type: "run-inputs", requestId: 2 });
+  gate.release();
+  await save;
+  await assert.rejects(readFile(file), { code: "ENOENT" });
+});
 test("regular run host cancels ONNX Runtime preparation on panel disposal", async (t) => {
   const extension = await openExtension("relu.onnx");
   t.after(() => extension.dispose());
@@ -734,6 +821,9 @@ async function openExtension(
     },
     passwordPrompts,
     saveDialogs,
+    setSaveDestination: (filePath) => {
+      saveDestination = filePath ? vscode.Uri.file(filePath) : undefined;
+    },
     openDialogs,
     setOpenSelection: (filePath) => {
       selection = filePath ? [vscode.Uri.file(filePath)] : undefined;

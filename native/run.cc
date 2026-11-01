@@ -29,6 +29,40 @@ struct InputSource {
   bool random = false;
 };
 
+struct RunTensor {
+  std::string name;
+  std::string text;
+  std::optional<std::string> data;
+};
+
+RunTensor DescribeTensor(const ol::TensorProto &proto, const rt::Tensor &tensor) {
+  std::string bytes;
+  if (!proto.SerializeToString(bytes))
+    throw std::runtime_error("Could not serialize run tensor.");
+  ol::ValueInfoProto metadata;
+  rt::FillValueInfo(tensor, metadata);
+  metadata.set_name(proto.name());
+  const auto values = TinyTensorValues(proto, 33);
+  return {std::string(proto.name()),
+          ol::ProtoToString(metadata) +
+              "\nValues: " + values.value_or("Omitted (preview limit: 32 elements)."),
+          std::move(bytes)};
+}
+
+Napi::Array RunTensors(Napi::Env env, const std::vector<RunTensor> &tensors) {
+  auto result = Napi::Array::New(env, tensors.size());
+  for (size_t index = 0; index < tensors.size(); ++index) {
+    const auto &tensor = tensors[index];
+    auto value = Napi::Object::New(env);
+    value.Set("name", Text(env, tensor.name));
+    value.Set("text", Text(env, tensor.text));
+    if (tensor.data)
+      value.Set("data", Napi::Buffer<char>::Copy(env, tensor.data->data(), tensor.data->size()));
+    result.Set(index, value);
+  }
+  return result;
+}
+
 int64_t Dimension(const Napi::Value &value) {
   if (!value.IsNumber())
     throw std::runtime_error("Expected a non-negative safe integer dimension.");
@@ -138,8 +172,11 @@ public:
           if (!tensor.SerializeToString(bytes))
             throw std::runtime_error("Could not serialize input tensor.");
           prepared_inputs_.push_back(std::move(bytes));
-        } else
-          context.Set(std::string(tensor.name()), rt::TensorFromProto(tensor));
+        } else {
+          auto value = rt::TensorFromProto(tensor);
+          actual_inputs_.push_back(DescribeTensor(tensor, value));
+          context.Set(std::string(tensor.name()), std::move(value));
+        }
       }
       RestoreModelPayloads(snapshot_, *source_, source_->file_path);
       std::vector<ol::EncodedValueProto *> encoded;
@@ -177,7 +214,7 @@ public:
       for (const auto &output : snapshot_.graph().output()) {
         const std::string name = output.name();
         if (!context.Has(name)) {
-          outputs_.emplace_back(name, "Non-tensor output (no tensor preview).");
+          outputs_.push_back({name, "Non-tensor output (no tensor preview).", std::nullopt});
           continue;
         }
         const auto &tensor = context.Get(name);
@@ -187,18 +224,12 @@ public:
         for (const auto dimension : tensor.shape)
           proto.add_dims(dimension);
         if (tensor.data_type == ol::TensorProto::STRING) {
-          if (tensor.AsStrings().size() <= 32)
-            for (const auto &value : tensor.AsStrings())
-              proto.add_string_data(value);
+          for (const auto &value : tensor.AsStrings())
+            proto.add_string_data(value);
         } else {
           proto.ref_raw_data().assign_borrowed(tensor.bytes(), tensor.size_bytes());
         }
-        const auto values = TinyTensorValues(proto, 33);
-        ol::ValueInfoProto metadata;
-        rt::FillValueInfo(tensor, metadata);
-        metadata.set_name(name);
-        outputs_.emplace_back(name, ol::ProtoToString(metadata) + "\nValues: " +
-                                        values.value_or("Omitted (preview limit: 32 elements)."));
+        outputs_.push_back(DescribeTensor(proto, tensor));
       }
     } catch (const std::exception &error) {
       SetError(error.what());
@@ -219,14 +250,8 @@ public:
       return;
     }
     result.Set("timeMs", time_ms_);
-    auto outputs = Napi::Array::New(Env(), outputs_.size());
-    for (size_t index = 0; index < outputs_.size(); ++index) {
-      auto output = Napi::Object::New(Env());
-      output.Set("name", Text(Env(), outputs_[index].first));
-      output.Set("text", Text(Env(), outputs_[index].second));
-      outputs.Set(index, output);
-    }
-    result.Set("outputs", outputs);
+    result.Set("inputs", RunTensors(Env(), actual_inputs_));
+    result.Set("outputs", RunTensors(Env(), outputs_));
     if (!log_.empty())
       result.Set("log", Text(Env(), log_));
     deferred_.Resolve(result);
@@ -244,7 +269,8 @@ private:
   bool prepare_;
   std::string model_bytes_;
   std::vector<std::string> prepared_inputs_;
-  std::vector<std::pair<std::string, std::string>> outputs_;
+  std::vector<RunTensor> actual_inputs_;
+  std::vector<RunTensor> outputs_;
   std::string log_;
   double time_ms_ = 0;
 };
