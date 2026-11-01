@@ -262,14 +262,30 @@ function focusNodes(nodes) {
 
 function showTab(name, focus = false) {
   endGesture();
-  if (name === "settings" && byId("settings-view").hidden)
+  if (name === "settings" && byId("settings-view").hidden) {
+    const regularRun =
+      !byId("prompt-view").hidden && !byId("execution-run-view").hidden;
+    byId("run-session-page").hidden = !regularRun;
+    byId("prompt-session-page").hidden = regularRun;
+    byId("run-session-fields").disabled = byId("run-fields").disabled;
+    if (regularRun) byId("run-session-fields").append(byId("run-logging"));
     for (const id of ["prompt-settings-back", "prompt-generation-back"])
       byId(id).hidden = byId("prompt-view").hidden;
+  } else if (name !== "settings")
+    byId("run-logging-home").append(byId("run-logging"));
   for (const tab of tabs) {
     const active = tab === name;
     byId(`${tab}-view`).hidden = !active;
     byId(`${tab}-tab`).setAttribute("aria-selected", String(active));
     byId(`${tab}-tab`).tabIndex = active ? 0 : -1;
+  }
+  if (name === "settings") {
+    const engineTab = byId("run-session-page").hidden
+      ? document.querySelector(
+          '#settings-engine-view [role="tab"][aria-selected="true"]',
+        )
+      : byId(`settings-${byId("run-engine").value}-tab`);
+    engineTab.click();
   }
   if (focus) byId(`${name}-tab`).focus();
   if (name === "model") fit();

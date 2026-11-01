@@ -2020,6 +2020,8 @@ button:disabled {
 
 #run-inputs,
 #run-dimensions,
+#run-logging-home,
+#run-logging,
 #run-logging-light,
 #run-logging-ort {
   grid-column: 1 / -1;

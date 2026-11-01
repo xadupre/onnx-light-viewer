@@ -28,6 +28,7 @@ function createRunPanel({
   });
   const showLifecycle = (value) => {
     if (value) retained = value.retained;
+    byId("run-settings-open").disabled = busy;
     byId("run-unload").disabled = busy || !retained;
     const name = engine.value === "onnxruntime" ? "ONNX Runtime" : "onnx-light";
     byId("run-lifecycle").textContent = value

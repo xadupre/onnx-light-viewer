@@ -146,7 +146,9 @@ Choose an **Engine** and its logging settings: onnx-light verbosity, or ONNX Run
 severity and verbosity. Each engine retains its own values while switching.
 ONNX Runtime requires ``onnx``, ``numpy`` and ``onnxruntime`` in the Python
 environment selected in **Settings → App**; onnx-light uses the bundled native SDK.
-**Settings** opens the selected engine's settings; **Back** returns to the Run subtab.
+**Settings** opens the selected engine's regular Run logging controls, not
+Prompt-only options. Changes apply to the next execution and unload any retained
+Run session; **Back** returns to the Run subtab with the same controls and values.
 Check **Keep session loaded between runs** to reuse the actual model session
 with either engine. Inputs are read or regenerated on each execution, including
 changed dynamic dimensions. The status distinguishes a newly created session
@@ -206,6 +208,12 @@ no tensor inspection or save controls; unsupported statistics show the SDK error
    :width: 100%
 
    Load saved inputs directly and save complete inputs and outputs.
+
+.. figure:: _static/feature-run-settings.png
+   :alt: Regular Run settings with ONNX Runtime log severity and verbosity, separate from Prompt generation settings.
+   :width: 100%
+
+   Edit the regular execution settings without changing Prompt options.
 
 Running language-model prompts
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -23,6 +23,10 @@ for (const engine of ["onnx-light", "onnxruntime"])
   test(`${engine} Run retains real sessions with fresh inputs and invalidates ownership/settings`, async (t) => {
     const session = new RunSession();
     t.after(() => session.close());
+    const directory = await mkdtemp(
+      path.join(tmpdir(), "viewer-run-preflight-"),
+    );
+    t.after(() => rm(directory, { recursive: true, force: true }));
     const model = loadModel(
       readFileSync(require.resolve("./models/inference.onnx")),
       "inference.onnx",
@@ -73,12 +77,86 @@ for (const engine of ["onnx-light", "onnxruntime"])
       /./,
     );
     assert.equal((await predict(changed, configured)).lifecycle.reused, false);
+    for (const invalid of [
+      { ...configured, settings: { verbose: -1, logSeverity: -1 } },
+      {
+        ...configured,
+        inputs: [
+          {
+            name: "x",
+            source: "protobuf",
+            path: path.join(directory, "missing.pb"),
+          },
+        ],
+      },
+    ]) {
+      await assert.rejects(predict(changed, invalid));
+      assert.equal(
+        (await predict(changed, configured)).lifecycle.reused,
+        false,
+      );
+      assert.equal((await predict(changed, configured)).lifecycle.reused, true);
+    }
     const controller = new AbortController();
     const pending = predict(changed, configured, controller.signal);
     queueMicrotask(() => controller.abort());
     await assert.rejects(pending, { name: "AbortError" });
     assert.equal((await predict(changed, configured)).lifecycle.reused, false);
   });
+
+test("a failed pending input read does not unload a newer Run session", async (t) => {
+  const session = new RunSession();
+  t.after(() => session.close());
+  const directory = await mkdtemp(path.join(tmpdir(), "viewer-run-preflight-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const model = loadModel(
+    readFileSync(require.resolve("./models/relu.onnx")),
+    "relu.onnx",
+  );
+  const request = {
+    keepLoaded: true,
+    inputs: ["float[1,3] input = {-1, 0, 2}"],
+  };
+  const predict = (owner, options = request) =>
+    runModel(
+      owner,
+      [],
+      options,
+      python,
+      runner,
+      () => {},
+      new AbortController().signal,
+      session,
+    );
+  await predict(model);
+  const failure = assert.rejects(
+    predict(model, {
+      ...request,
+      inputs: [
+        {
+          name: "input",
+          source: "protobuf",
+          path: path.join(directory, "missing.pb"),
+        },
+      ],
+    }),
+    { code: "ENOENT" },
+  );
+  const replacement = model.clone();
+  const generation = await session.ensure(
+    replacement,
+    [],
+    "onnx-light",
+    {},
+    python,
+    runner,
+    new AbortController().signal,
+  );
+  await failure;
+  assert.equal(session.generation, generation);
+  assert.equal((await predict(replacement)).lifecycle.reused, false);
+  assert.equal((await predict(replacement)).lifecycle.reused, true);
+});
 
 for (const engine of ["onnx-light", "onnxruntime"])
   test(`${engine} retained pipeline sessions invalidate when switching stages`, async (t) => {

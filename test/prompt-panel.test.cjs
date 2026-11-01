@@ -111,6 +111,35 @@ test("session options are already listed, explained and omitted while blank", (t
   );
 });
 
+test("incomplete numeric settings are validated rather than omitted as blank defaults", (t) => {
+  const { byId, api, messages } = panel(t);
+  api.handleMessage({
+    type: "prompt-info",
+    requestId: messages.at(-1).requestId,
+    info: { available: true, engines: ["onnxruntime-genai"] },
+  });
+  const field = byId("prompt-settings-genai").querySelector(
+    '[data-setting="logVerbosity"]',
+  );
+  // jsdom sanitizes incomplete numbers without exposing the browser's badInput state.
+  Object.defineProperty(field.validity, "badInput", {
+    configurable: true,
+    value: true,
+  });
+  field.setCustomValidity("Enter a number.");
+  byId("prompt-form").querySelector('button[type="submit"]').click();
+  assert.equal(
+    messages.some(({ type }) => type === "run-prompt"),
+    false,
+  );
+  assert.equal(byId("prompt-fields").disabled, false);
+  Object.defineProperty(field.validity, "badInput", { value: false });
+  field.setCustomValidity("");
+  byId("prompt-form").querySelector('button[type="submit"]').click();
+  assert.equal(messages.at(-1).type, "run-prompt");
+  assert.equal(messages.at(-1).options.sessionSettings.logVerbosity, undefined);
+});
+
 test("predefined configuration values validate UTF-8 size, nulls and numeric ranges", (t) => {
   const { dom, byId, api, messages } = panel(t);
   api.handleMessage({

@@ -8543,6 +8543,79 @@ test("Settings Back is shown only when entering from Prompt or Run and preserves
     }
 });
 
+test("Run Settings edits only regular execution controls and releases its retained session", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const byId = (id) => document.getElementById(id);
+  const receive = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  load(demoGraph);
+  byId("prompt-tab").click();
+  byId("execution-run-tab").click();
+  receive({
+    type: "run-inputs",
+    requestId: messages.findLast(({ type }) => type === "run-inputs").requestId,
+    inputs: [],
+    stages: [],
+    path: [],
+  });
+  byId("run-engine").value = "onnxruntime";
+  byId("run-engine").dispatchEvent(new window.Event("change"));
+  byId("run-keep-loaded").checked = true;
+  byId("run-form").dispatchEvent(new window.Event("submit"));
+  receive({
+    type: "run-result",
+    requestId: messages.at(-1).requestId,
+    result: {
+      timeMs: 1,
+      outputs: [],
+      lifecycle: { loadMs: 2, reused: false, retained: true },
+    },
+  });
+  const promptVerbosity = byId("prompt-settings-genai").querySelector(
+    '[data-setting="logVerbosity"]',
+  );
+  promptVerbosity.value = "7";
+  byId("run-settings-open").click();
+  assert.equal(byId("run-session-page").hidden, false);
+  assert.equal(byId("prompt-session-page").hidden, true);
+  assert.ok(byId("run-session-fields").contains(byId("run-log-severity")));
+  assert.ok(byId("settings-engine-view").contains(byId("run-session-page")));
+  byId("run-log-severity").value = "3";
+  byId("run-log-severity").dispatchEvent(
+    new window.Event("change", { bubbles: true }),
+  );
+  assert.equal(messages.at(-1).type, "run-release");
+  byId("run-log-verbosity").value = "2";
+  byId("prompt-settings-back").click();
+  assert.ok(byId("run-form").contains(byId("run-log-severity")));
+  byId("run-form").dispatchEvent(new window.Event("submit"));
+  assert.deepEqual(JSON.parse(JSON.stringify(messages.at(-1).settings)), {
+    logSeverity: 3,
+    logVerbosity: 2,
+  });
+  assert.equal(promptVerbosity.value, "7");
+  receive({
+    type: "run-result",
+    requestId: messages.at(-1).requestId,
+    result: {
+      timeMs: 1,
+      outputs: [],
+      lifecycle: { loadMs: 2, reused: false, retained: true },
+    },
+  });
+  byId("run-settings-open").click();
+  byId("settings-onnx-light-tab").click();
+  assert.equal(byId("run-engine").value, "onnx-light");
+  assert.equal(byId("run-logging-light").hidden, false);
+  assert.equal(messages.at(-1).type, "run-release");
+  byId("run-verbose").value = "1";
+  byId("prompt-settings-back").click();
+  byId("run-form").dispatchEvent(new window.Event("submit"));
+  assert.deepEqual(JSON.parse(JSON.stringify(messages.at(-1).settings)), {
+    verbose: 1,
+  });
+});
+
 test("Engine settings subtabs reuse prompt controls without changing the execution engine", (t) => {
   const { document, window, messages } = openViewer(t);
   const byId = (id) => document.getElementById(id);

@@ -702,7 +702,6 @@ export function webviewHtml(
       </div>
       <div id="prompt-session-page" hidden>
         <h2 id="prompt-settings-title">Engine session settings</h2>
-        <button id="prompt-settings-back" type="button" hidden>Back</button>
         <p>Applied on the next prompt run, without modifying the model or its exported configuration. A change unloads the retained session. Blank values preserve SDK/model defaults. Profiling adds overhead and writes to .prompt-profiles beside the model; GenAI finalizes its profile when unloaded.</p>
         <fieldset id="prompt-session-fields">
           <div id="prompt-settings-light" class="prompt-settings-grid">
@@ -748,6 +747,8 @@ export function webviewHtml(
             <select id="run-engine"><option value="onnx-light">onnx-light</option><option value="onnxruntime">ONNX Runtime</option></select>
             <label for="run-keep-loaded">Session lifetime</label>
             <label><input id="run-keep-loaded" type="checkbox"> Keep session loaded between runs (reuse the model and session, with fresh inputs)</label>
+            <div id="run-logging-home" class="form-grid">
+            <div id="run-logging" class="form-grid">
             <div id="run-logging-light" class="form-grid">
               <label for="run-verbose">Logging verbosity</label>
               <input id="run-verbose" type="number" min="0" max="10" step="1" value="0" required>
@@ -757,6 +758,8 @@ export function webviewHtml(
               <select id="run-log-severity"><option value="0">Verbose</option><option value="1">Info</option><option value="2" selected>Warning</option><option value="3">Error</option><option value="4">Fatal</option></select>
               <label for="run-log-verbosity">Log verbosity</label>
               <input id="run-log-verbosity" type="number" min="0" max="2147483647" step="1" value="0" required>
+            </div>
+            </div>
             </div>
             <div id="run-dimensions" class="form-grid"></div>
             <div id="run-inputs" class="form-grid"></div>
@@ -898,6 +901,12 @@ export function webviewHtml(
             <button id="settings-onnxruntime-tab" type="button" role="tab" aria-controls="prompt-settings-genai" aria-selected="true">onnxruntime</button>
             <button id="settings-onnx-light-tab" type="button" role="tab" aria-controls="prompt-settings-light" aria-selected="false" tabindex="-1">onnx-light</button>
           </nav>
+          <button id="prompt-settings-back" type="button" hidden>Back</button>
+          <section id="run-session-page" hidden>
+            <h2>Regular Run settings</h2>
+            <p>Applied to the next Run model execution, not Prompt generation. Changing a value unloads the retained Run session.</p>
+            <fieldset id="run-session-fields" class="form-grid"></fieldset>
+          </section>
       </section>
       <section id="settings-device-view" role="tabpanel" aria-labelledby="settings-device-tab" tabindex="0" hidden>
         <h3>Execution devices</h3>

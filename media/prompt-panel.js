@@ -114,7 +114,12 @@ function createPromptPanel({ byId, postMessage }) {
             "Configuration values cannot exceed 8192 UTF-8 bytes.",
           );
       }
-      if (field.disabled || (!field.value.trim() && field.type !== "checkbox"))
+      if (
+        field.disabled ||
+        (!field.value.trim() &&
+          field.type !== "checkbox" &&
+          !field.validity.badInput)
+      )
         continue;
       if (!field.checkValidity()) {
         if (deviceFields.contains(field)) {
