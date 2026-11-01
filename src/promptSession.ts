@@ -2,11 +2,12 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { resolve } from "node:path";
 import { terminateExport } from "./export";
 
-/** One native worker per panel; never retains two engines or models together. */
+/** One JSON-line worker per session owner, with serialized requests. */
 export class PromptSession {
   private child?: ChildProcessWithoutNullStreams;
   private closed: Promise<void> = Promise.resolve();
   private closing?: Promise<void>;
+  private needsClose = false;
   private key?: string;
   private pending?: {
     event: (value: unknown) => void;
@@ -17,12 +18,29 @@ export class PromptSession {
 
   constructor(
     private readonly reportError: (error: Error) => void = console.error,
+    private readonly worker?: {
+      executable: string;
+      args: string[];
+      stderrEncoding?: BufferEncoding;
+      label: string;
+    },
   ) {}
+
+  get alive(): boolean {
+    return (
+      this.child !== undefined &&
+      this.child.exitCode === null &&
+      this.child.signalCode === null
+    );
+  }
 
   private start(): void {
     const child = spawn(
-      process.execPath,
-      [resolve(__dirname, "..", "media", "run_prompt.cjs"), "--worker"],
+      this.worker?.executable ?? process.execPath,
+      this.worker?.args ?? [
+        resolve(__dirname, "..", "media", "run_prompt.cjs"),
+        "--worker",
+      ],
       {
         env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
         stdio: ["pipe", "pipe", "pipe"],
@@ -38,18 +56,21 @@ export class PromptSession {
       this.pending?.progress(output);
     };
     const log = (chunk: string) => {
+      if (this.child !== child || this.needsClose) return;
       output = (output + chunk).slice(-65536);
       if (!timer) timer = setTimeout(flush, 100);
     };
     const fail = (error: Error) => {
+      if (this.child !== child || this.needsClose) return;
       if (this.pending) this.pending.reject(error);
       else if (this.child === child) this.reportError(error);
     };
     child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
+    child.stderr.setEncoding(this.worker?.stderrEncoding ?? "utf8");
     child.stderr.on("data", log);
     child.stdin.on("error", fail);
     child.stdout.on("data", (chunk: string) => {
+      if (this.child !== child || this.needsClose) return;
       try {
         pending += chunk;
         let newline: number;
@@ -64,7 +85,9 @@ export class PromptSession {
           if (marker) log(line.slice(0, marker));
           const event: unknown = JSON.parse(line.slice(marker + 1));
           if (!event || typeof event !== "object" || !("type" in event))
-            throw new Error("Invalid native prompt event.");
+            throw new Error(
+              `Invalid ${this.worker?.label ?? "native prompt"} event.`,
+            );
           if (event.type === "done") {
             if (timer) clearTimeout(timer);
             flush();
@@ -75,14 +98,14 @@ export class PromptSession {
             throw new Error(
               "error" in event && typeof event.error === "string"
                 ? event.error
-                : "Native prompt failed.",
+                : `${this.worker?.label ?? "Native prompt"} failed.`,
             );
           } else {
             this.pending?.event(event);
           }
         }
         if (pending.length > 1_000_000)
-          throw new Error("The native runner returned an oversized event.");
+          throw new Error("The worker returned an oversized event.");
       } catch (error) {
         fail(error instanceof Error ? error : new Error(String(error)));
       }
@@ -91,12 +114,15 @@ export class PromptSession {
     this.closed = new Promise((resolve) => {
       child.once("close", (code, signal) => {
         if (timer) clearTimeout(timer);
-        if (this.child === child) {
+        // A closing process group can still have live descendants after stdio closes.
+        if (this.child === child && !this.needsClose) {
           fail(
-            new Error(`Native prompt exited (${signal ?? code}).\n${output}`),
+            new Error(
+              `${this.worker?.label ?? "Native prompt"} exited (${signal ?? code}).\n${output}`,
+            ),
           );
           this.pending = undefined;
-          this.child = undefined;
+          if (!this.needsClose) this.child = undefined;
         }
         resolve();
       });
@@ -113,9 +139,12 @@ export class PromptSession {
   ): Promise<void> {
     if (this.closing) await this.closing;
     signal.throwIfAborted();
-    if (this.child && this.key !== key) await this.close();
+    if (this.needsClose || (this.child && this.key !== key)) await this.close();
     signal.throwIfAborted();
-    if (this.pending) throw new Error("A native prompt is already running.");
+    if (this.pending)
+      throw new Error(
+        `A ${this.worker?.label ?? "native prompt"} is already running.`,
+      );
     if (!this.child) this.start();
     this.key = key;
     const child = this.child!;
@@ -125,13 +154,18 @@ export class PromptSession {
         const request = { resolve, reject, progress, event };
         this.pending = request;
         abort = () =>
-          reject(new DOMException("Prompt cancelled.", "AbortError"));
+          reject(
+            new DOMException(
+              `${this.worker?.label ?? "Prompt"} cancelled.`,
+              "AbortError",
+            ),
+          );
         signal.addEventListener("abort", abort, { once: true });
         if (signal.aborted) abort();
         else child.stdin.write(JSON.stringify({ input, output, key }) + "\n");
       });
     } catch (error) {
-      await this.close();
+      if (this.child === child) await this.close();
       throw error;
     } finally {
       signal.removeEventListener("abort", abort);
@@ -144,11 +178,17 @@ export class PromptSession {
     if (!child) return Promise.resolve();
     const closed = this.closed;
     const running = this.pending;
-    this.child = undefined;
+    const force = this.needsClose || running !== undefined;
+    this.needsClose = true;
     this.pending = undefined;
-    running?.reject(new DOMException("Prompt session released.", "AbortError"));
+    running?.reject(
+      new DOMException(
+        `${this.worker?.label ?? "Prompt"} session released.`,
+        "AbortError",
+      ),
+    );
     this.closing = (async () => {
-      if (running) {
+      if (force) {
         await terminateExport(child);
       } else {
         child.stdin.end();
@@ -163,6 +203,10 @@ export class PromptSession {
         if (timedOut) await terminateExport(child);
       }
       await closed;
+      if (this.child === child) {
+        this.child = undefined;
+        this.needsClose = false;
+      }
     })().finally(() => {
       this.closing = undefined;
     });

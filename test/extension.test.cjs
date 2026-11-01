@@ -116,6 +116,42 @@ test("regular run host selects a pipeline stage root", async (t) => {
   assert.match(extension.messages.at(-1).error, /stage root/);
 });
 
+test("regular run host reuses sessions, explicitly unloads and invalidates stages/models", async (t) => {
+  const extension = await openExtension("relu.onnx");
+  t.after(() => extension.dispose());
+  const request = {
+    type: "run-model",
+    keepLoaded: true,
+    inputs: ["float[1,3] input = {-1, 0, 2}"],
+  };
+  await extension.receive({ ...request, requestId: 1 });
+  assert.equal(extension.messages.at(-1).result.lifecycle.retained, true);
+  await extension.receive({ ...request, requestId: 2 });
+  assert.equal(extension.messages.at(-1).result.lifecycle.reused, true);
+  await extension.receive({ type: "run-release", requestId: 1, releaseId: 0 });
+  await extension.receive({ ...request, requestId: 2 });
+  assert.equal(extension.messages.at(-1).result.lifecycle.reused, true);
+  await extension.receive({
+    type: "run-release",
+    requestId: 2,
+    releaseId: 1,
+  });
+  assert.equal(extension.messages.at(-1).type, "run-session-released");
+  await extension.receive({ ...request, requestId: 3 });
+  assert.equal(extension.messages.at(-1).result.lifecycle.reused, false);
+  await extension.receive({ type: "run-inputs", requestId: 4 });
+  await extension.receive({ ...request, requestId: 5 });
+  assert.equal(extension.messages.at(-1).result.lifecycle.reused, false);
+  await extension.receive({
+    type: "open",
+    source: "local",
+    location: require.resolve("./models/relu.onnx"),
+    password: "",
+  });
+  await extension.receive({ ...request, requestId: 6 });
+  assert.equal(extension.messages.at(-1).result.lifecycle.reused, false);
+});
+
 test("Run inspection and saving use host-owned execution tensors for both engines", async (t) => {
   const directory = await mkdtemp(path.join(tmpdir(), "viewer-run-save-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
