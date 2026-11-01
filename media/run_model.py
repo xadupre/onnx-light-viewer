@@ -5,6 +5,10 @@ from pathlib import Path
 import sys
 from time import perf_counter
 
+if sys.platform == "win32":
+    # Match ONNX Runtime's wide-character stderr, including Python tracebacks.
+    sys.stderr.reconfigure(encoding="utf-16-le", errors="backslashreplace")
+
 import onnx
 from onnx import numpy_helper
 import onnxruntime as ort

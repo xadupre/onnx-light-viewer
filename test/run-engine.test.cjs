@@ -12,6 +12,7 @@ const {
   loadBackendTest,
 } = require("../dist/graph");
 const { runModel } = require("../dist/run");
+const { runProcess } = require("../dist/export");
 
 const python = process.platform === "win32" ? "python" : "python3";
 const runner = path.resolve(__dirname, "../media/run_model.py");
@@ -57,11 +58,12 @@ test("symbolic and unnamed dimensions remain independent for every input source"
     `
 import onnx
 import sys
-from onnx import TensorProto, helper
-input = helper.make_tensor_value_info("X", TensorProto.FLOAT, ["X:1", None])
-output = helper.make_tensor_value_info("Y", TensorProto.FLOAT, ["X:1", None])
-graph = helper.make_graph([helper.make_node("Identity", ["X"], ["Y"])], "graph", [input], [output])
-model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 13)])
+from onnx import TensorProto
+import onnx.helper as oh
+input = oh.make_tensor_value_info("X", TensorProto.FLOAT, ["X:1", None])
+output = oh.make_tensor_value_info("Y", TensorProto.FLOAT, ["X:1", None])
+graph = oh.make_graph([oh.make_node("Identity", ["X"], ["Y"])], "graph", [input], [output])
+model = oh.make_model(graph, opset_imports=[oh.make_opsetid("", 13)])
 model.ir_version = 10
 sys.stdout.buffer.write(model.SerializeToString())
 `,
@@ -214,6 +216,85 @@ test("both engines execute unsaved function edits without mutating the retained 
     assert.deepEqual(Buffer.from(await edited.serialize()), bytes);
     assert.deepEqual(readFileSync(file), originalBytes);
   }
+});
+
+test("onnx-light forwards SDK event diagnostics only when verbosity is enabled", async () => {
+  const model = loadModel(
+    readFileSync(require.resolve("./models/relu.onnx")),
+    "relu.onnx",
+  );
+  const request = {
+    engine: "onnx-light",
+    inputs: ["float[1,3] input = {-1, 0, 2}"],
+  };
+  let quietLogs = "";
+  const quiet = await run(model, request, (output) => {
+    quietLogs = output;
+  });
+  assert.equal(quietLogs, "");
+  let logs = "";
+  const verbose = await run(
+    model,
+    { ...request, settings: { verbose: 1 } },
+    (output) => {
+      logs = output;
+    },
+  );
+  assert.match(logs, /Relu/);
+  assert.match(logs, /run.?node/i);
+  assert.deepEqual(verbose.outputs, quiet.outputs);
+});
+
+test("ONNX Runtime transport decodes UTF-16 stderr while preserving UTF-8 stdout and failure details", async () => {
+  let logs = "";
+  const stdout = "stdout caf\u00e9";
+  const stderr = "stderr caf\u00e9 \u6f22 \ud83d\ude00";
+  await assert.rejects(
+    runProcess(
+      {
+        executable: python,
+        args: [
+          "-u",
+          "-c",
+          `
+import sys
+import time
+sys.stdout.buffer.write("stdout caf\\u00e9\\n".encode("utf-8"))
+sys.stdout.flush()
+sys.stderr.reconfigure(encoding="utf-16-le", errors="backslashreplace")
+message = "stderr caf\\u00e9 \\u6f22 \\U0001f600\\n".encode(sys.stderr.encoding)
+sys.stderr.buffer.write(message[:1])
+sys.stderr.flush()
+time.sleep(0.02)
+sys.stderr.buffer.write(message[1:])
+sys.stderr.flush()
+raise RuntimeError("Python failure: caf\\u00e9 \\U0001f600")
+`,
+        ],
+      },
+      new AbortController().signal,
+      (output) => {
+        logs = output;
+      },
+      {},
+      "ONNX Runtime",
+      undefined,
+      "utf16le",
+    ),
+    (error) => {
+      assert.match(error.message, /ONNX Runtime exited with code 1/);
+      assert.ok(error.message.includes(stdout));
+      assert.ok(error.message.includes(stderr));
+      assert.match(error.message, /Traceback/);
+      assert.ok(
+        error.message.includes("Python failure: caf\u00e9 \ud83d\ude00"),
+      );
+      return true;
+    },
+  );
+  assert.ok(logs.includes(stdout));
+  assert.ok(logs.includes(stderr));
+  assert.equal(logs.includes("\0"), false);
 });
 
 test("ONNX Runtime preserves int64 precision and exposes severity/verbosity logs", async () => {

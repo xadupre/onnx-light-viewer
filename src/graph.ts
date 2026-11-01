@@ -379,6 +379,7 @@ export interface PreparedRun {
 export interface RunResult {
   timeMs: number;
   outputs: RunTensor[];
+  log?: string;
 }
 
 /** SDK statistics; integer metadata and nonfinite numbers survive webview transport exactly. */

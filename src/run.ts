@@ -106,7 +106,11 @@ export async function runModel(
         : 0,
   };
   signal.throwIfAborted();
-  if (engine === "onnx-light") return model.run(inputs, path, options);
+  if (engine === "onnx-light") {
+    const { log, ...result } = await model.run(inputs, path, options);
+    if (log) progress(log);
+    return result;
+  }
   const prepared = await model.prepareRun(inputs, path, options);
   signal.throwIfAborted();
   const directory = await mkdtemp(join(tmpdir(), "onnx-light-run-"));
@@ -128,6 +132,8 @@ export async function runModel(
       progress,
       {},
       "ONNX Runtime",
+      undefined,
+      process.platform === "win32" ? "utf16le" : "utf8",
     );
     return JSON.parse(
       await readFile(join(directory, "result.json"), "utf8"),

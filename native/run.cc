@@ -54,7 +54,8 @@ public:
     try {
       std::vector<ol::TensorProto> input_storage;
       input_storage.reserve(inputs_.size());
-      rt::RuntimeContext context;
+      rt::RuntimeContext context(
+          rt::RuntimeContextOptions{.events_enabled = !prepare_ && verbose_ > 0});
       std::set<std::string> names;
       std::set<std::string> input_names;
       for (const auto &input : snapshot_.graph().input())
@@ -160,6 +161,19 @@ public:
       session.Run(context);
       time_ms_ = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
                      .count();
+      if (verbose_ > 0) {
+        constexpr size_t max_log_size = 65536;
+        const std::string truncated = "[Native diagnostics truncated]\n";
+        for (const auto &event : context.events()) {
+          const auto line = event.summary();
+          if (line.size() + 1 > max_log_size - truncated.size() - log_.size()) {
+            log_ += truncated;
+            break;
+          }
+          log_ += line;
+          log_ += '\n';
+        }
+      }
       for (const auto &output : snapshot_.graph().output()) {
         const std::string name = output.name();
         if (!context.Has(name)) {
@@ -213,6 +227,8 @@ public:
       outputs.Set(index, output);
     }
     result.Set("outputs", outputs);
+    if (!log_.empty())
+      result.Set("log", Text(Env(), log_));
     deferred_.Resolve(result);
   }
 
@@ -229,6 +245,7 @@ private:
   std::string model_bytes_;
   std::vector<std::string> prepared_inputs_;
   std::vector<std::pair<std::string, std::string>> outputs_;
+  std::string log_;
   double time_ms_ = 0;
 };
 } // namespace
