@@ -121,6 +121,57 @@ test("configuration entry editor validates duplicate and empty keys and retains 
   );
 });
 
+for (const advanced of [false, true])
+  test(`configuration entries validate the final serialized size${advanced ? " including advanced JSON" : ""} and allow the exact limit`, (t) => {
+    const { dom, byId, api, messages } = panel(t);
+    api.handleMessage({
+      type: "prompt-info",
+      requestId: messages.at(-1).requestId,
+      info: { available: true, engines: ["onnxruntime-genai"] },
+    });
+    const field = byId("prompt-settings-genai").querySelector(
+      '[data-setting="sessionOptions"]',
+    );
+    const entries = advanced ? { base: "x".repeat(8192) } : {};
+    if (advanced) field.value = JSON.stringify(entries);
+    let last;
+    for (let index = 0; index < (advanced ? 7 : 8); index++) {
+      byId("prompt-config-add").click();
+      const row = byId("prompt-config-entries").lastElementChild;
+      const name = `custom.option.${index}`;
+      row.querySelector('[data-config="key"]').value = name;
+      last = row.querySelector('[data-config="value"]');
+      last.value = entries[name] = "x".repeat(8192);
+      assert.equal(last.checkValidity(), true);
+    }
+    const submit = byId("prompt-form").querySelector('button[type="submit"]');
+    submit.click();
+    assert.equal(
+      messages.some(({ type }) => type === "run-prompt"),
+      false,
+    );
+    assert.equal(byId("prompt-fields").disabled, false);
+    assert.equal(byId("prompt-settings-genai").hidden, false);
+    assert.equal(field.checkValidity(), false);
+    assert.match(field.validationMessage, /65536.*Remove.*shorten/);
+    last.value = "x".repeat(8192 - (JSON.stringify(entries).length - 65536));
+    last.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+    submit.click();
+    assert.equal(field.checkValidity(), true);
+    const run = messages.at(-1);
+    assert.equal(run.type, "run-prompt");
+    assert.equal(run.options.sessionSettings.sessionOptions.length, 65536);
+    assert.equal(
+      JSON.parse(run.options.sessionSettings.sessionOptions)["custom.option.0"],
+      entries["custom.option.0"],
+    );
+    if (advanced)
+      assert.equal(
+        JSON.parse(run.options.sessionSettings.sessionOptions).base,
+        entries.base,
+      );
+  });
+
 test("invalid session JSON stops generation and corrected or blank JSON clears validity", (t) => {
   const { byId, api, messages } = panel(t);
   api.handleMessage({

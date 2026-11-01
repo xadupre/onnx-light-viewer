@@ -202,6 +202,15 @@ function createPromptPanel({ byId, postMessage }) {
           ...JSON.parse(settings.sessionOptions || "{}"),
           ...entries,
         });
+      const field = pane.querySelector('[data-setting="sessionOptions"]');
+      if (settings.sessionOptions?.length > field.maxLength) {
+        field.setCustomValidity(
+          `Combined session options exceed ${field.maxLength} characters. Remove configuration entries or shorten values / advanced JSON.`,
+        );
+        byId("prompt-settings-open").click();
+        field.reportValidity();
+        return;
+      }
     }
     return settings;
   };
