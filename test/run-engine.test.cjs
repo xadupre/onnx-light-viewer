@@ -13,6 +13,7 @@ const {
 } = require("../dist/graph");
 const { runModel, RunSession } = require("../dist/run");
 const { runProcess } = require("../dist/export");
+const { runInNewContext } = require("node:vm");
 
 const python = process.platform === "win32" ? "python" : "python3";
 const runner = path.resolve(__dirname, "../media/run_model.py");
@@ -103,6 +104,95 @@ for (const engine of ["onnx-light", "onnxruntime"])
     await assert.rejects(pending, { name: "AbortError" });
     assert.equal((await predict(changed, configured)).lifecycle.reused, false);
   });
+
+test(
+  "a Python worker exiting during result cleanup cannot restore a retained session",
+  { timeout: 10000 },
+  async (t) => {
+    const directory = await mkdtemp(path.join(tmpdir(), "viewer-run-exit-"));
+    const stop = path.join(directory, "stop");
+    const worker = path.join(directory, "worker.py");
+    await writeFile(
+      worker,
+      `
+import json
+import pathlib
+import sys
+import time
+
+request = json.loads(sys.stdin.readline())
+directory = pathlib.Path(request["input"])
+(directory / "output-0.pb").write_bytes((directory / "input-0.pb").read_bytes())
+(directory / "result.json").write_text(json.dumps({
+    "timeMs": 1,
+    "inputs": [{"name": "input", "text": "Input"}],
+    "outputs": [{"name": "output", "text": "Output", "hasData": True}],
+    "lifecycle": {"loadMs": 1, "reused": False, "retained": True}
+}))
+print("\\x1e" + json.dumps({"type": "done"}), flush=True)
+while not pathlib.Path(${JSON.stringify(stop)}).exists():
+    time.sleep(0.01)
+`,
+    );
+    let exited;
+    const lost = new Promise((resolve) => (exited = resolve));
+    const errors = [];
+    const session = new RunSession((error) => {
+      errors.push(error);
+      exited();
+    });
+    t.after(async () => {
+      await writeFile(stop, "");
+      await session.close();
+      await rm(directory, { recursive: true, force: true });
+    });
+    // The real worker exits after output reads, while temporary-file cleanup awaits it.
+    const delayed = {};
+    runInNewContext(readFileSync(require.resolve("../dist/run"), "utf8"), {
+      exports: delayed,
+      require(name) {
+        if (name === "node:fs/promises")
+          return {
+            ...require(name),
+            async rm(directory, options) {
+              assert.equal(session.alive, true);
+              await writeFile(stop, "");
+              await lost;
+              await rm(directory, options);
+            },
+          };
+        return require(
+          name.startsWith(".")
+            ? path.resolve(__dirname, "../dist", name)
+            : name,
+        );
+      },
+    });
+    const model = loadModel(
+      readFileSync(require.resolve("./models/relu.onnx")),
+      "relu.onnx",
+    );
+    const result = await delayed.runModel(
+      model,
+      [],
+      {
+        engine: "onnxruntime",
+        keepLoaded: true,
+        inputs: ["float[1,3] input = {-1, 0, 2}"],
+      },
+      python,
+      worker,
+      () => {},
+      new AbortController().signal,
+      session,
+    );
+    assert.equal(errors.length, 1);
+    assert.match(errors[0].message, /ONNX Runtime exited/);
+    assert.equal(result.lifecycle.retained, false);
+    assert.equal(session.alive, false);
+    assert.deepEqual(result.outputs[0].data, result.inputs[0].data);
+  },
+);
 
 test("a failed pending input read does not unload a newer Run session", async (t) => {
   const session = new RunSession();

@@ -42,6 +42,15 @@ struct RunState {
   double load_ms = 0;
 };
 
+using RunCache = std::shared_ptr<std::shared_ptr<RunState>>;
+
+void ReleaseRunState(const RunCache &cache, const std::shared_ptr<RunState> &state) {
+  if (state && *cache == state) {
+    state->retained = false;
+    cache->reset();
+  }
+}
+
 struct RunTensor {
   std::string name;
   std::string text;
@@ -90,12 +99,12 @@ class RunWorker : public Napi::AsyncWorker {
 public:
   RunWorker(Napi::Env env, std::shared_ptr<StoredModel> source, std::vector<InputSource> inputs,
             std::map<std::string, int64_t> dimensions, int verbose, bool prepare,
-            std::shared_ptr<RunState> state)
+            std::shared_ptr<RunState> state, RunCache cache)
       : Napi::AsyncWorker(env), deferred_(Napi::Promise::Deferred::New(env)),
         source_(std::move(source)),
         state_(state ? std::move(state) : std::make_shared<RunState>(*source_, verbose)),
         snapshot_(state_->model), inputs_(std::move(inputs)), dimensions_(std::move(dimensions)),
-        verbose_(verbose), prepare_(prepare) {}
+        verbose_(verbose), prepare_(prepare), cache_(std::move(cache)) {}
 
   Napi::Promise Promise() const { return deferred_.Promise(); }
 
@@ -288,7 +297,11 @@ public:
     deferred_.Resolve(result);
   }
 
-  void OnError(const Napi::Error &error) override { deferred_.Reject(error.Value()); }
+  void OnError(const Napi::Error &error) override {
+    if (!prepare_)
+      ReleaseRunState(cache_, state_);
+    deferred_.Reject(error.Value());
+  }
 
 private:
   Napi::Promise::Deferred deferred_;
@@ -299,6 +312,7 @@ private:
   std::map<std::string, int64_t> dimensions_;
   int verbose_;
   bool prepare_;
+  RunCache cache_;
   std::string model_bytes_;
   std::vector<std::string> prepared_inputs_;
   std::vector<RunTensor> actual_inputs_;
@@ -314,9 +328,7 @@ void AddRunMethods(Napi::Env env, Napi::Object result, std::shared_ptr<StoredMod
   auto retained = std::make_shared<std::shared_ptr<RunState>>();
   result.Set("releaseRunSession",
              Napi::Function::New(env, [retained](const Napi::CallbackInfo &call) {
-               if (*retained)
-                 (*retained)->retained = false;
-               retained->reset();
+               ReleaseRunState(retained, *retained);
                return call.Env().Undefined();
              }));
   result.Set("runInputs",
@@ -365,95 +377,97 @@ void AddRunMethods(Napi::Env env, Napi::Object result, std::shared_ptr<StoredMod
                }
              }));
   for (const bool prepare : {false, true})
-    result.Set(prepare ? "prepareRun" : "run",
-               Napi::Function::New(
-                   env, [model, prepare, retained](const Napi::CallbackInfo &call) -> Napi::Value {
-                     try {
-                       RootPath(call, 1);
-                       if (call.Length() < 1 || !call[0].IsArray())
-                         throw std::runtime_error("Expected input tensor text.");
-                       const auto values = call[0].As<Napi::Array>();
-                       std::vector<InputSource> inputs;
-                       for (uint32_t index = 0; index < values.Length(); ++index) {
-                         const auto value = values.Get(index);
-                         if (value.IsString()) {
-                           inputs.push_back({{}, value.As<Napi::String>().Utf8Value(), {}, false});
-                           continue;
-                         }
-                         if (!value.IsObject() || value.IsArray())
-                           throw std::runtime_error("Expected input tensor text.");
-                         const auto input = value.As<Napi::Object>();
-                         if (!input.Get("name").IsString() || !input.Get("source").IsString())
-                           throw std::runtime_error("Expected a named input source.");
-                         InputSource source;
-                         source.name = input.Get("name").As<Napi::String>().Utf8Value();
-                         const auto kind = input.Get("source").As<Napi::String>().Utf8Value();
-                         source.random = kind == "random";
-                         if (!source.random) {
-                           if (kind != "protobuf" || !input.Get("data").IsTypedArray() ||
-                               input.Get("data").As<Napi::TypedArray>().TypedArrayType() !=
-                                   napi_uint8_array)
-                             throw std::runtime_error(
-                                 "Expected a TensorProto buffer or random input.");
-                           const auto bytes = input.Get("data").As<Napi::Uint8Array>();
-                           source.protobuf.assign(reinterpret_cast<const char *>(bytes.Data()),
-                                                  bytes.ByteLength());
-                         }
-                         inputs.push_back(std::move(source));
-                       }
-                       int verbose = 0;
-                       bool keep_loaded = false;
-                       std::map<std::string, int64_t> dimensions;
-                       if (call.Length() > 2 && !call[2].IsUndefined()) {
-                         if (!call[2].IsObject() || call[2].IsArray())
-                           throw std::runtime_error("Expected run options.");
-                         const auto options = call[2].As<Napi::Object>();
-                         if (options.Has("keepLoaded")) {
-                           if (!options.Get("keepLoaded").IsBoolean())
-                             throw std::runtime_error("Expected a boolean keepLoaded option.");
-                           keep_loaded = options.Get("keepLoaded").As<Napi::Boolean>();
-                         }
-                         if (options.Has("verbose") && !options.Get("verbose").IsUndefined()) {
-                           const auto number = Dimension(options.Get("verbose"));
-                           if (number > 10)
-                             throw std::runtime_error("Verbosity must be between 0 and 10.");
-                           verbose = static_cast<int>(number);
-                         }
-                         if (options.Has("dimensions")) {
-                           const auto value = options.Get("dimensions");
-                           if (!value.IsObject() || value.IsArray())
-                             throw std::runtime_error("Expected dynamic dimensions.");
-                           const auto values = value.As<Napi::Object>();
-                           const auto keys = values.GetPropertyNames();
-                           for (uint32_t index = 0; index < keys.Length(); ++index) {
-                             const auto key = keys.Get(index).As<Napi::String>();
-                             dimensions.emplace(key.Utf8Value(), Dimension(values.Get(key)));
-                           }
-                         }
-                       }
-                       std::shared_ptr<RunState> state;
-                       if (!prepare) {
-                         if (*retained && (!keep_loaded || (*retained)->verbose != verbose)) {
-                           (*retained)->retained = false;
-                           retained->reset();
-                         }
-                         if (keep_loaded) {
-                           if (!*retained)
-                             *retained = std::make_shared<RunState>(*model, verbose);
-                           (*retained)->retained = true;
-                           state = *retained;
-                         }
-                       }
-                       auto *worker =
-                           new RunWorker(call.Env(), model, std::move(inputs),
-                                         std::move(dimensions), verbose, prepare, std::move(state));
-                       const auto promise = worker->Promise();
-                       worker->Queue();
-                       return promise;
-                     } catch (const std::exception &error) {
-                       Napi::Error::New(call.Env(), error.what()).ThrowAsJavaScriptException();
-                       return call.Env().Undefined();
-                     }
-                   }));
+    result.Set(
+        prepare ? "prepareRun" : "run",
+        Napi::Function::New(
+            env, [model, prepare, retained](const Napi::CallbackInfo &call) -> Napi::Value {
+              auto failed_state = prepare ? nullptr : *retained;
+              try {
+                RootPath(call, 1);
+                if (call.Length() < 1 || !call[0].IsArray())
+                  throw std::runtime_error("Expected input tensor text.");
+                const auto values = call[0].As<Napi::Array>();
+                std::vector<InputSource> inputs;
+                for (uint32_t index = 0; index < values.Length(); ++index) {
+                  const auto value = values.Get(index);
+                  if (value.IsString()) {
+                    inputs.push_back({{}, value.As<Napi::String>().Utf8Value(), {}, false});
+                    continue;
+                  }
+                  if (!value.IsObject() || value.IsArray())
+                    throw std::runtime_error("Expected input tensor text.");
+                  const auto input = value.As<Napi::Object>();
+                  if (!input.Get("name").IsString() || !input.Get("source").IsString())
+                    throw std::runtime_error("Expected a named input source.");
+                  InputSource source;
+                  source.name = input.Get("name").As<Napi::String>().Utf8Value();
+                  const auto kind = input.Get("source").As<Napi::String>().Utf8Value();
+                  source.random = kind == "random";
+                  if (!source.random) {
+                    if (kind != "protobuf" || !input.Get("data").IsTypedArray() ||
+                        input.Get("data").As<Napi::TypedArray>().TypedArrayType() !=
+                            napi_uint8_array)
+                      throw std::runtime_error("Expected a TensorProto buffer or random input.");
+                    const auto bytes = input.Get("data").As<Napi::Uint8Array>();
+                    source.protobuf.assign(reinterpret_cast<const char *>(bytes.Data()),
+                                           bytes.ByteLength());
+                  }
+                  inputs.push_back(std::move(source));
+                }
+                int verbose = 0;
+                bool keep_loaded = false;
+                std::map<std::string, int64_t> dimensions;
+                if (call.Length() > 2 && !call[2].IsUndefined()) {
+                  if (!call[2].IsObject() || call[2].IsArray())
+                    throw std::runtime_error("Expected run options.");
+                  const auto options = call[2].As<Napi::Object>();
+                  if (options.Has("keepLoaded")) {
+                    if (!options.Get("keepLoaded").IsBoolean())
+                      throw std::runtime_error("Expected a boolean keepLoaded option.");
+                    keep_loaded = options.Get("keepLoaded").As<Napi::Boolean>();
+                  }
+                  if (options.Has("verbose") && !options.Get("verbose").IsUndefined()) {
+                    const auto number = Dimension(options.Get("verbose"));
+                    if (number > 10)
+                      throw std::runtime_error("Verbosity must be between 0 and 10.");
+                    verbose = static_cast<int>(number);
+                  }
+                  if (options.Has("dimensions")) {
+                    const auto value = options.Get("dimensions");
+                    if (!value.IsObject() || value.IsArray())
+                      throw std::runtime_error("Expected dynamic dimensions.");
+                    const auto values = value.As<Napi::Object>();
+                    const auto keys = values.GetPropertyNames();
+                    for (uint32_t index = 0; index < keys.Length(); ++index) {
+                      const auto key = keys.Get(index).As<Napi::String>();
+                      dimensions.emplace(key.Utf8Value(), Dimension(values.Get(key)));
+                    }
+                  }
+                }
+                std::shared_ptr<RunState> state;
+                if (!prepare) {
+                  if (*retained && (!keep_loaded || (*retained)->verbose != verbose)) {
+                    ReleaseRunState(retained, *retained);
+                  }
+                  if (keep_loaded) {
+                    if (!*retained)
+                      *retained = std::make_shared<RunState>(*model, verbose);
+                    (*retained)->retained = true;
+                    state = *retained;
+                  }
+                  failed_state = state;
+                }
+                auto *worker =
+                    new RunWorker(call.Env(), model, std::move(inputs), std::move(dimensions),
+                                  verbose, prepare, std::move(state), retained);
+                const auto promise = worker->Promise();
+                worker->Queue();
+                return promise;
+              } catch (const std::exception &error) {
+                ReleaseRunState(retained, failed_state);
+                Napi::Error::New(call.Env(), error.what()).ThrowAsJavaScriptException();
+                return call.Env().Undefined();
+              }
+            }));
 }
 } // namespace onnx_light_viewer

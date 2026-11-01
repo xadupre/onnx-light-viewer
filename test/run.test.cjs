@@ -110,6 +110,53 @@ test("native retained sessions serialize predictions, use fresh inputs and relea
   assert.equal(oneShot.lifecycle.retained, false);
 });
 
+test("native Run failures release retained state before the next direct call", async (t) => {
+  const model = loadModel(
+    readFileSync(require.resolve("./models/relu.onnx")),
+    "relu.onnx",
+  );
+  t.after(() => model.releaseRunSession());
+  const inputs = ["float[1,3] input = {-1, 0, 2}"];
+  const predict = () => model.run(inputs, [], { keepLoaded: true });
+  for (const fail of [
+    () => assert.rejects(model.run(["not a tensor"], [], { keepLoaded: true })),
+    () =>
+      assert.throws(
+        () => model.run(inputs, [], { keepLoaded: "yes" }),
+        /boolean/,
+      ),
+    () =>
+      assert.throws(
+        () => model.run(inputs, [], { keepLoaded: true, verbose: 11 }),
+        /Verbosity/,
+      ),
+  ]) {
+    assert.equal((await predict()).lifecycle.retained, true);
+    assert.equal((await predict()).lifecycle.reused, true);
+    await fail();
+    assert.equal((await predict()).lifecycle.reused, false);
+  }
+});
+
+test("a failing native worker does not release its replacement retained state", async (t) => {
+  const model = loadModel(
+    readFileSync(require.resolve("./models/relu.onnx")),
+    "relu.onnx",
+  );
+  t.after(() => model.releaseRunSession());
+  const inputs = ["float[1,3] input = {-1, 0, 2}"];
+  const failure = assert.rejects(
+    model.run(["not a tensor"], [], { keepLoaded: true }),
+  );
+  model.releaseRunSession();
+  const replacement = model.run(inputs, [], { keepLoaded: true });
+  await failure;
+  assert.equal((await replacement).lifecycle.retained, true);
+  const reused = await model.run(inputs, [], { keepLoaded: true });
+  assert.equal(reused.lifecycle.reused, true);
+  assert.equal(reused.lifecycle.retained, true);
+});
+
 test("regular execution supports no-input models and scalar integer/string outputs", async () => {
   const cases = listBackendTests();
   for (const [name, expected] of [

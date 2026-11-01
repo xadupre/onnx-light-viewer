@@ -25,6 +25,14 @@ export class PromptSession {
     },
   ) {}
 
+  get alive(): boolean {
+    return (
+      this.child !== undefined &&
+      this.child.exitCode === null &&
+      this.child.signalCode === null
+    );
+  }
+
   private start(): void {
     const child = spawn(
       this.worker?.executable ?? process.execPath,

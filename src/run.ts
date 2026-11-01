@@ -17,6 +17,10 @@ export class RunSession {
     private readonly reportError: (error: Error) => void = console.error,
   ) {}
 
+  get alive(): boolean {
+    return this.worker?.alive === true;
+  }
+
   async ensure(
     model: NativeModel,
     path: GraphPath,
@@ -33,13 +37,22 @@ export class RunSession {
     signal.throwIfAborted();
     this.model = model;
     this.key = key;
-    if (engine === "onnxruntime")
-      this.worker = new PromptSession(this.reportError, {
-        executable: python,
-        args: ["-u", runner, "--worker"],
-        stderrEncoding: process.platform === "win32" ? "utf16le" : "utf8",
-        label: "ONNX Runtime",
-      });
+    if (engine === "onnxruntime") {
+      const worker = new PromptSession(
+        (error) => {
+          if (this.worker !== worker) return;
+          void this.close().catch(this.reportError);
+          this.reportError(error);
+        },
+        {
+          executable: python,
+          args: ["-u", runner, "--worker"],
+          stderrEncoding: process.platform === "win32" ? "utf16le" : "utf8",
+          label: "ONNX Runtime",
+        },
+      );
+      this.worker = worker;
+    }
     return this.generation;
   }
 
@@ -228,6 +241,9 @@ export async function runModel(
     const prepared = await model.prepareRun(inputs, path, options);
     signal.throwIfAborted();
     const directory = await mkdtemp(join(tmpdir(), "onnx-light-run-"));
+    let result: Omit<RunResult, "outputs"> & {
+      outputs: (RunResult["outputs"][number] & { hasData?: boolean })[];
+    };
     try {
       await writeFile(join(directory, "model.onnx"), prepared.model);
       for (const [index, bytes] of prepared.inputs.entries())
@@ -253,11 +269,9 @@ export async function runModel(
           undefined,
           process.platform === "win32" ? "utf16le" : "utf8",
         );
-      const result = JSON.parse(
+      result = JSON.parse(
         await readFile(join(directory, "result.json"), "utf8"),
-      ) as Omit<RunResult, "outputs"> & {
-        outputs: (RunResult["outputs"][number] & { hasData?: boolean })[];
-      };
+      );
       for (const [index, input] of (result.inputs ?? []).entries())
         input.data = prepared.inputs[index];
       for (const [index, output] of result.outputs.entries()) {
@@ -265,10 +279,15 @@ export async function runModel(
           output.data = await readFile(join(directory, `output-${index}.pb`));
         delete output.hasData;
       }
-      return result;
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
+    if (
+      retainedSession &&
+      (!retainedSession.alive || retainedSession.generation !== generation)
+    )
+      result.lifecycle.retained = false;
+    return result;
   } catch (error) {
     await release();
     throw error;
