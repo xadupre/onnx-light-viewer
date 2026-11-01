@@ -115,6 +115,7 @@ test("dynamic random inputs require concrete dimensions without changing model m
   );
   const before = model.graph();
   assert.deepEqual(model.runInputs()[0].shape, ["N", "3"]);
+  assert.deepEqual(model.runInputs()[0].dynamicAxes, [0]);
   await assert.rejects(
     model.run([{ name: "x", source: "random" }]),
     /Specify dynamic dimension: N/,

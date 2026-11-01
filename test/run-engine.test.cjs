@@ -1,4 +1,5 @@
 const assert = require("node:assert/strict");
+const { execFileSync } = require("node:child_process");
 const { readFileSync } = require("node:fs");
 const { mkdtemp, writeFile, rm } = require("node:fs/promises");
 const { tmpdir } = require("node:os");
@@ -15,6 +16,31 @@ const python = process.platform === "win32" ? "python" : "python3";
 const runner = path.resolve(__dirname, "../media/run_model.py");
 const run = (model, request, progress = () => {}) =>
   runModel(model, [], request, python, runner, progress);
+
+test("numeric-looking symbolic dimensions remain required for both engines", async () => {
+  const bytes = execFileSync(python, [
+    "-c",
+    `
+import onnx
+import sys
+model = onnx.load(sys.argv[1])
+model.graph.input[0].type.tensor_type.shape.dim[0].dim_param = "3"
+sys.stdout.buffer.write(model.SerializeToString())
+`,
+    require.resolve("./models/inference.onnx"),
+  ]);
+  const model = loadModel(bytes, "numeric-dimension.onnx");
+  assert.deepEqual(model.runInputs()[0].shape, ["3", "3"]);
+  assert.deepEqual(model.runInputs()[0].dynamicAxes, [0]);
+  for (const engine of ["onnx-light", "onnxruntime"]) {
+    const request = { engine, inputs: [{ name: "x", source: "random" }] };
+    await assert.rejects(run(model, request), /Specify dynamic dimension: 3/);
+    assert.equal(
+      (await run(model, { ...request, dimensions: { 3: 2 } })).outputs.length,
+      1,
+    );
+  }
+});
 
 test("Run honors panel-owned cancellation before starting execution", async () => {
   const controller = new AbortController();
@@ -50,6 +76,13 @@ test("Run validates engine logging, dimensions and input-source transport", asyn
   await assert.rejects(
     run(model, { inputs: [] }),
     /Specify dynamic dimension: N/,
+  );
+  await assert.rejects(
+    run(
+      { runInputs: () => [{ name: "x", shape: ["3"], dynamicAxes: [0] }] },
+      { inputs: [] },
+    ),
+    /Specify dynamic dimension: 3/,
   );
   await assert.rejects(
     run(model, {

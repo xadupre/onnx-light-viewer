@@ -51,7 +51,12 @@ export async function runModel(
   const metadata = model.runInputs(path);
   for (const input of metadata)
     input.shape?.forEach((dimension, axis) => {
-      if (dimension !== null && /^\d+$/.test(dimension)) return;
+      if (
+        input.dynamicAxes
+          ? !input.dynamicAxes.includes(axis)
+          : dimension !== null && /^\d+$/.test(dimension)
+      )
+        return;
       const key = dimension ?? `${input.name}:${axis}`;
       if (!Object.hasOwn(dimensions, key))
         throw new Error(`Specify dynamic dimension: ${key}`);

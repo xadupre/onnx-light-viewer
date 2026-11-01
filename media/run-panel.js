@@ -182,7 +182,12 @@ function createRunPanel({
         const dimensions = new Set();
         inputs.forEach((input) =>
           input.shape?.forEach((dimension, axis) => {
-            if (dimension !== null && /^\d+$/.test(dimension)) return;
+            if (
+              input.dynamicAxes
+                ? !input.dynamicAxes.includes(axis)
+                : dimension !== null && /^\d+$/.test(dimension)
+            )
+              return;
             dimensions.add(dimension ?? `${input.name}:${axis}`);
           }),
         );

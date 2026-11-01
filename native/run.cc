@@ -256,14 +256,20 @@ void AddRunMethods(Napi::Env env, Napi::Object result, std::shared_ptr<StoredMod
                    input.Set("text", Text(call.Env(), ol::ProtoToString(value) + " = {}"));
                    if (value.type().has_tensor_type() && value.type().tensor_type().has_shape()) {
                      auto shape = Napi::Array::New(call.Env());
+                     auto dynamic_axes = Napi::Array::New(call.Env());
                      uint32_t axis = 0;
-                     for (const auto &dim : value.type().tensor_type().shape().dim())
+                     for (const auto &dim : value.type().tensor_type().shape().dim()) {
+                       if (!dim.has_dim_value())
+                         dynamic_axes.Set(dynamic_axes.Length(), axis);
                        shape.Set(axis++, dim.has_dim_value()
                                              ? Text(call.Env(), std::to_string(dim.dim_value()))
                                          : dim.has_dim_param() && !dim.dim_param().empty()
                                              ? Text(call.Env(), dim.dim_param())
                                              : Napi::Value(call.Env().Null()));
+                     }
                      input.Set("shape", shape);
+                     if (dynamic_axes.Length())
+                       input.Set("dynamicAxes", dynamic_axes);
                    }
                    inputs.Set(index++, input);
                  }

@@ -125,10 +125,11 @@ test("Run requires dimensions, supports mixed input sources and retains engine l
     path: [],
     inputs: [
       { name: "X", text: "float[batch,?] X = {}", shape: ["batch", null] },
-      { name: "Y", text: "float[batch] Y = {}", shape: ["batch"] },
+      { name: "Y", text: 'float["3"] Y = {}', shape: ["3"], dynamicAxes: [0] },
+      { name: "Z", text: "float[batch] Z = {}", shape: ["batch"] },
     ],
   });
-  assert.equal(byId("run-dimensions").querySelectorAll("input").length, 2);
+  assert.equal(byId("run-dimensions").querySelectorAll("input").length, 3);
   assert.equal(byId("run-source-0").value, "random");
   const submit = byId("run-form").querySelector('button[type="submit"]');
   const before = messages.length;
@@ -136,6 +137,7 @@ test("Run requires dimensions, supports mixed input sources and retains engine l
   assert.equal(messages.length, before);
   byId("run-dimension-0").value = "2";
   byId("run-dimension-1").value = "3";
+  byId("run-dimension-2").value = "2";
   byId("run-verbose").value = "4";
   byId("run-engine").value = "onnxruntime";
   byId("run-engine").dispatchEvent(new dom.window.Event("change"));
@@ -153,7 +155,7 @@ test("Run requires dimensions, supports mixed input sources and retains engine l
   assert.equal(run.engine, "onnxruntime");
   assert.equal(
     JSON.stringify(run.dimensions),
-    JSON.stringify({ batch: 2, "X:1": 3 }),
+    JSON.stringify({ batch: 2, "X:1": 3, 3: 2 }),
   );
   assert.equal(
     JSON.stringify(run.settings),
@@ -164,6 +166,7 @@ test("Run requires dimensions, supports mixed input sources and retains engine l
     JSON.stringify([
       { name: "X", source: "random" },
       { name: "Y", source: "protobuf", path: "/tmp/input.pb" },
+      { name: "Z", source: "random" },
     ]),
   );
   api.handleMessage({

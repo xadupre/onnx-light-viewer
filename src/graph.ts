@@ -358,6 +358,7 @@ export interface RunTensor {
 
 export interface RunInput extends RunTensor {
   shape?: (string | null)[];
+  dynamicAxes?: number[];
 }
 
 export type RunInputSource =
