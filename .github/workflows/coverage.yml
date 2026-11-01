@@ -50,8 +50,6 @@ jobs:
             --CDCMAKE_SHARED_LINKER_FLAGS=--coverage
           npm exec -- tsc -p .
       - name: Run tests with TypeScript coverage
-        env:
-          ONNX_PATTERN_PYTHON: python
         run: |
           npm exec --yes --package=c8@12.0.0 -- c8 --all --src dist \
             --exclude 'test/**' --exclude 'media/**' --exclude 'scripts/**' \

@@ -76,6 +76,7 @@ const tabs = [
   "status",
   "controls",
   "repositories",
+  "patterns",
   "settings",
 ];
 
@@ -195,6 +196,11 @@ const fusionPanel = createFusionPanel({
       .filter((id) => nodeViews.get(id)?.node)
       .map((id) => Number(id.slice(5))),
   focusNodes,
+});
+const patternPanel = createPatternPanel({
+  byId,
+  requestAction,
+  postMessage: (message) => vscode.postMessage(message),
 });
 
 function closeGraphContextMenu(restoreFocus = false) {
@@ -2887,6 +2893,8 @@ svg.addEventListener(
   { passive: false },
 );
 window.addEventListener("message", (event) => {
+  if (event.data?.type === "pattern-library")
+    fusionPanel.libraryChanged(event.data);
   settingsPanel.receive(event.data);
   if (event.data?.type === "model-progress") {
     if (
@@ -2904,6 +2912,7 @@ window.addEventListener("message", (event) => {
     memoryPanel.handleMessage(event.data) ||
     exportPanel.handleMessage(event.data) ||
     filePanels.handleMessage(event.data) ||
+    patternPanel.handleMessage(event.data) ||
     fusionPanel.handleMessage(event.data)
   )
     return;

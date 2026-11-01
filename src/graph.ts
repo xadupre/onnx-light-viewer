@@ -161,7 +161,7 @@ export interface Graph {
   breadcrumbs: GraphBreadcrumb[];
   nodes: GraphNode[];
   /** Definitions listed at the model root, including functions with no call sites. */
-  localFunctions: SubgraphLink[];
+  localFunctions: (SubgraphLink & { functionName: string })[];
   inputs: string[];
   outputs: string[];
   initializerCount: number;
@@ -220,7 +220,13 @@ export interface FunctionPatternDefinition {
   name: string;
   text: string;
   replacement: string;
-  python: string;
+  /** Present for an existing ONNX function rather than a session-local pattern. */
+  functionIndex?: number;
+}
+
+export interface ModelFunctionDescriptor {
+  name: string;
+  functionIndex: number;
 }
 
 export interface FusionDiagnostic {
@@ -416,6 +422,8 @@ export interface NativeModel {
   summary(inferShapes?: boolean): GraphSummary;
   /** Pipeline fusions require the path of a stage root; ordinary models use []. */
   fusionPatterns(path?: GraphPath): string[];
+  /** Installs a validated library in this model's clone/undo lineage. */
+  setFunctionPatterns(patterns: FunctionPatternDefinition[]): void;
   /** Registers a model-local pattern without rewriting the selected graph. */
   createFunctionPattern(
     nodes: number[],
@@ -429,6 +437,17 @@ export interface NativeModel {
     replacement: string,
     path?: GraphPath,
   ): FunctionPatternDefinition;
+  modelFunctions(path?: GraphPath): FunctionPatternDefinition[];
+  modelFunctionDescriptors(path?: GraphPath): ModelFunctionDescriptor[];
+  modelFunction(
+    functionIndex: number,
+    path?: GraphPath,
+  ): FunctionPatternDefinition;
+  updateModelFunction(
+    functionIndex: number,
+    text: string,
+    path?: GraphPath,
+  ): NativeModel;
   optimizationPatterns(path?: GraphPath): OptimizationPattern[];
   /** Native report for the last optimization of this snapshot, including no-op runs. */
   optimizationReport(path?: GraphPath): OptimizationReport | null;
@@ -556,6 +575,12 @@ export interface BackendTest {
 
 const native: {
   onnxLightVersion: string;
+  validateFunctionPatterns(patterns: unknown): FunctionPatternDefinition[];
+  updateModelFunctionHistory(
+    models: NativeModel[],
+    functionIndex: number,
+    text: string,
+  ): NativeModel[];
   decodeGraph(bytes: Uint8Array, fileName: string, inferShapes: boolean): Graph;
   getSchema(
     opType: string,
@@ -586,6 +611,7 @@ const native: {
 
 /** C++ library release embedded in the addon, independent of the loaded model. */
 export const onnxLightVersion = native.onnxLightVersion;
+export const validateFunctionPatterns = native.validateFunctionPatterns;
 export const preparePromptPipeline = native.preparePromptPipeline;
 
 /** Minimal Relu snapshot with native schema documentation, requiring no model file. */
@@ -620,6 +646,14 @@ export const demoGraph: Graph = {
     { name: "output", type: "FLOAT", shape: ["1", "3"] },
   ],
 };
+
+export function updateModelFunctionHistory(
+  models: NativeModel[],
+  functionIndex: number,
+  text: string,
+): NativeModel[] {
+  return native.updateModelFunctionHistory(models, functionIndex, text);
+}
 
 /**
  * One-shot projection, skipping raw tensor bytes unless inference is requested.

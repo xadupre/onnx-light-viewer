@@ -1,4 +1,5 @@
 /** @file Pattern enumeration, preview and application on independent snapshots. */
+#include "graph.h"
 #include "model_io.h"
 #include "model_storage.h"
 #include "rewriting_trace.h"
@@ -39,59 +40,12 @@ ResolvePattern(const FunctionPatterns &patterns, const std::string &name) {
   return ol::core::builder::CreateRegisteredPattern(name);
 }
 
-std::string PythonText(const std::string &text) {
-  std::string literal = "'''\\\n";
-  for (const char ch : text) {
-    if (ch == '\r')
-      literal += "\\r";
-    else if (ch == '\0')
-      literal += "\\x00";
-    else {
-      if (ch == '\\' || ch == '\'')
-        literal += '\\';
-      literal += ch;
-    }
-  }
-  return literal + "'''";
-}
-
-std::string FunctionPatternPython(const std::string &name,
-                                  const StoredModel::FunctionPatternFunctions &functions) {
-  return "from onnx_light.onnx import load, save\n"
-         "from onnx_light.onnx.parser import parse_function\n"
-         "from onnx_light.onnx_core.graph_builder import GraphBuilder\n"
-         "from onnx_light.onnx_core.optimization import FunctionPattern, GraphGraph\n\n"
-         "match_text = " +
-         PythonText(functions.pattern_text) +
-         "\n\nreplacement_text = " + PythonText(functions.replacement_text) +
-         "\n\nmatch_function = parse_function(match_text)\n"
-         "replacement_function = parse_function(replacement_text)\n"
-         "pattern = FunctionPattern(match_function, replacement_function, name=\"" +
-         name +
-         "\", as_function=True)\n\n"
-         "def apply_pattern(model):\n"
-         "    builder = GraphBuilder(model)\n"
-         "    builder.register_pattern(pattern)\n"
-         "    GraphGraph(builder, patterns=[pattern]).optimize()\n"
-         "    return builder.to_onnx()\n\n"
-         "if __name__ == \"__main__\":\n"
-         "    import argparse\n"
-         "    parser = argparse.ArgumentParser(description=\"Apply " +
-         name +
-         "\")\n"
-         "    parser.add_argument(\"input\")\n"
-         "    parser.add_argument(\"output\")\n"
-         "    args = parser.parse_args()\n"
-         "    save(apply_pattern(load(args.input)), args.output)\n";
-}
-
 Napi::Object FunctionPatternDefinition(Napi::Env env, const std::string &name,
                                        const StoredModel::FunctionPatternFunctions &functions) {
   auto value = Napi::Object::New(env);
   value.Set("name", name);
   value.Set("text", functions.pattern_text);
   value.Set("replacement", functions.replacement_text);
-  value.Set("python", FunctionPatternPython(name, functions));
   return value;
 }
 
@@ -127,6 +81,106 @@ void RestoreFunctionExternalData(ol::FunctionProto &function, const std::string 
         tensor->data_location() == ol::TensorProto::EXTERNAL)
       restore(*tensor);
   function = container.functions(0).SharedCopy();
+}
+
+bool SameFunction(const ol::FunctionProto &left, const ol::FunctionProto &right) {
+  return left.name() == right.name() && left.domain() == right.domain() &&
+         left.overload() == right.overload();
+}
+
+struct FunctionEdit {
+  ol::FunctionProto original;
+  ol::FunctionProto replacement;
+  std::unordered_map<const StoredModel *, std::shared_ptr<StoredModel>> copies;
+
+  void Functions(ol::utils::RepeatedProtoField<ol::FunctionProto> &functions) {
+    for (auto &function : functions)
+      if (SameFunction(function, original))
+        function = replacement.SharedCopy();
+  }
+
+  void Plan(ol::RewritingProto &plan) { Functions(plan.ref_added_functions()); }
+
+  std::shared_ptr<StoredModel> Copy(const std::shared_ptr<StoredModel> &source) {
+    if (!source)
+      return nullptr;
+    if (const auto found = copies.find(source.get()); found != copies.end())
+      return found->second;
+    auto copy = CloneStoredModel(source);
+    copies.emplace(source.get(), copy);
+    std::set<size_t> changed;
+    for (size_t i = 0; i < copy->model->functions().size(); ++i)
+      if (SameFunction(copy->model->functions(i), original))
+        changed.insert(i);
+    Functions(copy->model->ref_functions());
+    std::erase_if(copy->skipped, [&](const auto &payload) {
+      return !payload.path.empty() && payload.path[0].field == 25 &&
+             changed.contains(payload.path[0].index);
+    });
+    for (auto &[name, plan] : copy->model->ref_rewritings())
+      Plan(plan);
+    for (auto &plan : copy->fusion_plans)
+      Plan(plan);
+    copy->fusion_base = Copy(source->fusion_base);
+    copy->fusion_previous = Copy(source->fusion_previous);
+    copy->rewriting_base = Copy(source->rewriting_base);
+    ol::VerifyModel(*copy->model);
+    return copy;
+  }
+};
+
+size_t ModelFunctionIndex(const StoredModel &model, const Napi::Value &value) {
+  if (!value.IsNumber())
+    throw std::runtime_error("Invalid model function index.");
+  const auto index = value.As<Napi::Number>().DoubleValue();
+  if (!std::isfinite(index) || index < 0 || std::floor(index) != index ||
+      index >= model.model->functions().size())
+    throw std::runtime_error("Invalid model function index.");
+  return static_cast<size_t>(index);
+}
+
+FunctionEdit ReadFunctionEdit(const StoredModel &model, const Napi::Value &index,
+                              const Napi::Value &text) {
+  if (!text.IsString())
+    throw std::runtime_error("Expected a model function index and function text.");
+  const auto &original = model.model->functions(ModelFunctionIndex(model, index));
+  auto replacement = ParseFunctionText(text.As<Napi::String>().Utf8Value());
+  if (!SameFunction(original, replacement) ||
+      !std::equal(original.input().begin(), original.input().end(), replacement.input().begin(),
+                  replacement.input().end()) ||
+      !std::equal(original.output().begin(), original.output().end(), replacement.output().begin(),
+                  replacement.output().end()) ||
+      !std::equal(original.attribute().begin(), original.attribute().end(),
+                  replacement.attribute().begin(), replacement.attribute().end()))
+    throw std::runtime_error(
+        "Edit the function body without changing its name, domain, overload or "
+        "input/output/attribute interface.");
+  return {original.SharedCopy(), std::move(replacement), {}};
+}
+
+Napi::Object ModelFunctionValue(Napi::Env env, const StoredModel &model, size_t index) {
+  auto function = model.model->functions(index).SharedCopy();
+  std::vector<SkippedTensorPayload> payloads;
+  for (const auto &payload : model.skipped)
+    if (!payload.path.empty() && payload.path[0] == ProtoPathStep{25, index})
+      payloads.push_back(payload);
+  if (!payloads.empty()) {
+    ol::ModelProto snapshot;
+    // Retain the original field index for source-file payload restoration.
+    for (size_t i = 0; i <= index; ++i)
+      snapshot.add_functions();
+    snapshot.ref_functions()[index] = std::move(function);
+    RestoreStatisticsPayloads(snapshot, model, model.file_path, payloads);
+    function = snapshot.functions(index).SharedCopy();
+  }
+  RestoreFunctionExternalData(function, model.file_path);
+  auto value = Napi::Object::New(env);
+  value.Set("name", FunctionName(function));
+  value.Set("functionIndex", Napi::Number::New(env, index));
+  const auto text = ol::ProtoToString(function);
+  value.Set("text", text);
+  value.Set("replacement", text);
+  return value;
 }
 
 ol::FunctionProto SelectionFunction(ol::ModelProto &model, const StoredModel &source,
@@ -868,12 +922,6 @@ private:
       graph.RemoveUnusedNodes();
       capture("RemoveUnusedNodes");
     } else {
-      {
-        builder::GraphGraph canonicalizer(
-            graph, std::vector<std::unique_ptr<builder::PatternOptimization>>{});
-        canonicalizer.Canonicalize();
-      }
-      capture("Canonicalize");
       std::vector<std::unique_ptr<builder::PatternOptimization>> chosen;
       for (const auto &name : patterns_)
         chosen.push_back(ResolvePattern(function_patterns_, name));
@@ -889,12 +937,6 @@ private:
       snapshot_ = graph.ToModel(snapshot_.ir_version());
       *snapshot_.mutable_graph() = std::move(optimized_graph);
       PreserveFunctionBodies(snapshot_, original);
-      {
-        builder::GraphGraph canonicalizer(
-            graph, std::vector<std::unique_ptr<builder::PatternOptimization>>{});
-        canonicalizer.Canonicalize();
-      }
-      capture("Canonicalize");
     }
     if (plan_.rewrites().empty())
       return;
@@ -1064,9 +1106,115 @@ private:
   FunctionPatterns function_patterns_;
 };
 
+FunctionPatterns ReadFunctionPatterns(const Napi::CallbackInfo &call,
+                                      const FunctionPatterns *existing = nullptr) {
+  if (call.Length() != 1 || !call[0].IsArray())
+    throw std::runtime_error("Expected an array of function pattern definitions.");
+  FunctionPatterns patterns;
+  const auto definitions = call[0].As<Napi::Array>();
+  ol::onnx_patterns::RegisterPatterns();
+  const auto registered = ol::core::builder::RegisteredPatternNames();
+  static const std::regex identifier("[A-Za-z_][A-Za-z0-9_]*");
+  for (uint32_t i = 0; i < definitions.Length(); ++i) {
+    const auto entry = definitions.Get(i);
+    if (!entry.IsObject() || entry.IsNull() || entry.IsArray())
+      throw std::runtime_error("Expected a function pattern definition.");
+    const auto definition = entry.As<Napi::Object>();
+    if (!definition.Get("name").IsString() || !definition.Get("text").IsString() ||
+        !definition.Get("replacement").IsString() || definition.Has("functionIndex"))
+      throw std::runtime_error("Expected a pattern name, match text and replacement text.");
+    const auto name = definition.Get("name").As<Napi::String>().Utf8Value();
+    if (!std::regex_match(name, identifier))
+      throw std::runtime_error("Invalid function pattern name: use an identifier.");
+    if (IsGlobalPass(name) ||
+        std::find(registered.begin(), registered.end(), name) != registered.end())
+      throw std::runtime_error("Function pattern name already exists: " + name +
+                               " (registered native pattern).");
+    if (patterns.contains(name))
+      throw std::runtime_error("Duplicate function pattern name: " + name);
+    auto text = definition.Get("text").As<Napi::String>().Utf8Value();
+    auto replacement = definition.Get("replacement").As<Napi::String>().Utf8Value();
+    if (existing) {
+      const auto found = existing->find(name);
+      if (found != existing->end() && found->second.pattern_text == text &&
+          found->second.replacement_text == replacement) {
+        patterns.emplace(
+            name, StoredModel::FunctionPatternFunctions{found->second.pattern.SharedCopy(),
+                                                        found->second.replacement.SharedCopy(),
+                                                        std::move(text), std::move(replacement)});
+        continue;
+      }
+    }
+    StoredModel::FunctionPatternFunctions functions{ParseFunctionText(text),
+                                                    ParseFunctionText(replacement), std::move(text),
+                                                    std::move(replacement)};
+    ol::onnx_patterns::FunctionPattern pattern(functions.pattern, functions.replacement, 1, name,
+                                               ol::core::symbolic::Device::kUndefined, -1, true);
+    patterns.emplace(name, std::move(functions));
+  }
+  return patterns;
+}
+
 } // namespace
 
+Napi::Value ValidateFunctionPatterns(const Napi::CallbackInfo &call) {
+  try {
+    const auto patterns = ReadFunctionPatterns(call);
+    auto result = Napi::Array::New(call.Env(), patterns.size());
+    uint32_t index = 0;
+    for (const auto &[name, functions] : patterns)
+      result.Set(index++, FunctionPatternDefinition(call.Env(), name, functions));
+    return result;
+  } catch (const std::exception &error) {
+    Napi::Error::New(call.Env(), error.what()).ThrowAsJavaScriptException();
+    return call.Env().Undefined();
+  }
+}
+
+Napi::Value UpdateModelFunctionHistory(const Napi::CallbackInfo &call) {
+  try {
+    if (call.Length() != 3 || !call[0].IsArray() || !call[0].As<Napi::Array>().Length())
+      throw std::runtime_error("Expected native history snapshots, a function index and text.");
+    const auto handles = call[0].As<Napi::Array>();
+    std::vector<std::shared_ptr<StoredModel>> models;
+    models.reserve(handles.Length());
+    for (uint32_t i = 0; i < handles.Length(); ++i)
+      models.push_back(UnwrapStoredModel(handles.Get(i)));
+    auto edit = ReadFunctionEdit(*models.front(), call[1], call[2]);
+    std::vector<std::shared_ptr<StoredModel>> edited;
+    edited.reserve(models.size());
+    for (const auto &model : models)
+      edited.push_back(edit.Copy(model));
+    auto result = Napi::Array::New(call.Env(), edited.size());
+    for (size_t i = 0; i < edited.size(); ++i)
+      result.Set(i, ModelHandle(call.Env(), std::move(edited[i])));
+    return result;
+  } catch (const std::exception &error) {
+    Napi::Error::New(call.Env(), error.what()).ThrowAsJavaScriptException();
+    return call.Env().Undefined();
+  }
+}
+
 void AddFusionMethods(Napi::Env env, Napi::Object result, std::shared_ptr<StoredModel> model) {
+  result.Set("setFunctionPatterns",
+             Napi::Function::New(env, [model](const Napi::CallbackInfo &call) -> Napi::Value {
+               try {
+                 auto patterns = ReadFunctionPatterns(call, model->function_patterns.get());
+                 for (const auto &[name, functions] : *model->function_patterns) {
+                   if (patterns.contains(name))
+                     continue;
+                   patterns.insert_or_assign(
+                       name, StoredModel::FunctionPatternFunctions{
+                                 functions.pattern.SharedCopy(), functions.replacement.SharedCopy(),
+                                 functions.pattern_text, functions.replacement_text});
+                 }
+                 model->function_patterns->swap(patterns);
+                 return call.Env().Undefined();
+               } catch (const std::exception &error) {
+                 Napi::Error::New(call.Env(), error.what()).ThrowAsJavaScriptException();
+                 return call.Env().Undefined();
+               }
+             }));
   result.Set("createFunctionPattern",
              Napi::Function::New(env, [model](const Napi::CallbackInfo &call) -> Napi::Value {
                try {
@@ -1078,11 +1226,17 @@ void AddFusionMethods(Napi::Env env, Napi::Object result, std::shared_ptr<Stored
                    throw std::runtime_error("Invalid function pattern name: use an identifier.");
                  ol::onnx_patterns::RegisterPatterns();
                  const auto registered = ol::core::builder::RegisteredPatternNames();
-                 if (IsGlobalPass(name) || model->function_patterns->contains(name) ||
-                     std::find(registered.begin(), registered.end(), name) != registered.end() ||
-                     std::any_of(model->model->functions().begin(), model->model->functions().end(),
+                 if (model->function_patterns->contains(name))
+                   throw std::runtime_error("Function pattern name already exists: " + name +
+                                            " (created in this viewer session).");
+                 if (IsGlobalPass(name) ||
+                     std::find(registered.begin(), registered.end(), name) != registered.end())
+                   throw std::runtime_error("Function pattern name already exists: " + name +
+                                            " (registered native pattern).");
+                 if (std::any_of(model->model->functions().begin(), model->model->functions().end(),
                                  [&](const auto &function) { return function.name() == name; }))
-                   throw std::runtime_error("Function pattern name already exists: " + name);
+                   throw std::runtime_error("Function pattern name already exists: " + name +
+                                            " (function present in the loaded ONNX model).");
                  auto snapshot = model->model->SharedCopy();
                  std::string aliases;
                  auto function =
@@ -1123,6 +1277,67 @@ void AddFusionMethods(Napi::Env env, Napi::Object result, std::shared_ptr<Stored
                  auto value = FunctionPatternDefinition(call.Env(), name, functions);
                  found->second = std::move(functions);
                  return value;
+               } catch (const std::exception &error) {
+                 Napi::Error::New(call.Env(), error.what()).ThrowAsJavaScriptException();
+                 return call.Env().Undefined();
+               }
+             }));
+  result.Set("modelFunctionDescriptors",
+             Napi::Function::New(env, [model](const Napi::CallbackInfo &call) {
+               auto values = Napi::Array::New(call.Env(), model->model->functions().size());
+               for (size_t i = 0; i < model->model->functions().size(); ++i) {
+                 auto value = Napi::Object::New(call.Env());
+                 value.Set("name", FunctionName(model->model->functions(i)));
+                 value.Set("functionIndex", Napi::Number::New(call.Env(), i));
+                 values.Set(i, value);
+               }
+               return values;
+             }));
+  result.Set("modelFunction",
+             Napi::Function::New(env, [model](const Napi::CallbackInfo &call) -> Napi::Value {
+               try {
+                 if (call.Length() != 1)
+                   throw std::runtime_error("Expected a model function index.");
+                 return ModelFunctionValue(call.Env(), *model, ModelFunctionIndex(*model, call[0]));
+               } catch (const std::exception &error) {
+                 Napi::Error::New(call.Env(), error.what()).ThrowAsJavaScriptException();
+                 return call.Env().Undefined();
+               }
+             }));
+  result.Set("modelFunctions",
+             Napi::Function::New(env, [model](const Napi::CallbackInfo &call) -> Napi::Value {
+               try {
+                 auto snapshot = model->model->SharedCopy();
+                 std::vector<SkippedTensorPayload> payloads;
+                 for (const auto &payload : model->skipped)
+                   if (!payload.path.empty() && payload.path[0].field == 25)
+                     payloads.push_back(payload);
+                 RestoreStatisticsPayloads(snapshot, *model, model->file_path, payloads);
+                 auto values = Napi::Array::New(call.Env());
+                 for (size_t i = 0; i < snapshot.functions().size(); ++i) {
+                   auto function = snapshot.functions(i).SharedCopy();
+                   RestoreFunctionExternalData(function, model->file_path);
+                   auto value = Napi::Object::New(call.Env());
+                   value.Set("name", FunctionName(function));
+                   value.Set("functionIndex", Napi::Number::New(call.Env(), i));
+                   const auto text = ol::ProtoToString(function);
+                   value.Set("text", text);
+                   value.Set("replacement", text);
+                   values.Set(i, value);
+                 }
+                 return values;
+               } catch (const std::exception &error) {
+                 Napi::Error::New(call.Env(), error.what()).ThrowAsJavaScriptException();
+                 return call.Env().Undefined();
+               }
+             }));
+  result.Set("updateModelFunction",
+             Napi::Function::New(env, [model](const Napi::CallbackInfo &call) -> Napi::Value {
+               try {
+                 if (call.Length() != 2)
+                   throw std::runtime_error("Expected a model function index and function text.");
+                 auto edit = ReadFunctionEdit(*model, call[0], call[1]);
+                 return ModelHandle(call.Env(), edit.Copy(model));
                } catch (const std::exception &error) {
                  Napi::Error::New(call.Env(), error.what()).ThrowAsJavaScriptException();
                  return call.Env().Undefined();

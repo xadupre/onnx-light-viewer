@@ -513,18 +513,34 @@ Patterns from node selections
 
 Select connected operators, right-click the selection and choose
 **Create / edit FunctionPattern...** to create a ``FunctionPattern`` in a popup.
-Inspect its text and copy reusable Python code for a local
-``GraphBuilder``. Match and fuse occurrences across the model, undo with
+Inspect and copy its function text. Match and fuse occurrences across the model, undo with
 **Unfuse**, or opt into the new **Selection patterns** optimization bucket.
 Edit the match and replacement functions in SDK textparser syntax, then
-**Apply edits**. Copy buttons export either function or the Python code.
-Pattern definitions are session-local. See :doc:`features/fusion_patterns`.
+**Apply edits**. The **Patterns** page lists created templates across models:
+edit them there, **Save patterns...** to a portable library file, and
+**Restore patterns...** in another viewer session. Restoration merges definitions
+and asks before replacing existing ones; invalid files leave the library unchanged.
+The popup also lists existing ONNX functions under **Patterns / model functions**:
+edit **Function body**, then **Apply edits** to update every call and **Save**
+to persist the change. See :doc:`features/fusion_patterns`.
 
 .. figure:: _static/feature-selection-pattern.png
    :alt: Create FunctionPattern with editable textparser match and replacement functions and copy controls.
    :width: 100%
 
    Turn selected operators into a reusable local-function fusion.
+
+.. figure:: _static/feature-model-function-edit.png
+   :alt: Existing ONNX function selected in the popup with editable Function body and Apply edits.
+   :width: 100%
+
+   Edit a function already present in a saved ONNX model.
+
+.. figure:: _static/feature-pattern-library.png
+   :alt: Patterns page with a reusable pattern selected, editable match and replacement functions, and Save patterns and Restore patterns buttons.
+   :width: 100%
+
+   Edit reusable templates and save or restore a shared pattern library.
 
 Unfuse (undo native edits)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^

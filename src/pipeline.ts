@@ -11,6 +11,7 @@ import type {
   MetadataEntry,
   MemoryDimension,
   MemoryProfile,
+  ModelFunctionDescriptor,
   NativeModel,
   OptimizationOperation,
   OptimizationPattern,
@@ -21,6 +22,7 @@ import type {
   RunResult,
   TensorInspection,
 } from "./graph";
+import { updateModelFunctionHistory } from "./graph";
 
 export interface PipelineData {
   name: string;
@@ -376,6 +378,10 @@ export class PipelineModel implements NativeModel {
     return stage.model.createFunctionPattern(nodes, name);
   };
 
+  setFunctionPatterns = (patterns: FunctionPatternDefinition[]): void => {
+    for (const [, model] of this.stages()) model.setFunctionPatterns(patterns);
+  };
+
   updateFunctionPattern = (
     name: string,
     text: string,
@@ -391,6 +397,68 @@ export class PipelineModel implements NativeModel {
     const stage = this.select(path);
     this.fusionPatterns(path);
     return stage.model.optimizationPatterns();
+  };
+
+  modelFunctions = (path: GraphPath = []): FunctionPatternDefinition[] => {
+    const stage = this.select(path);
+    this.fusionPatterns(path);
+    return stage.model.modelFunctions();
+  };
+
+  modelFunctionDescriptors = (
+    path: GraphPath = [],
+  ): ModelFunctionDescriptor[] => {
+    const stage = this.select(path);
+    this.fusionPatterns(path);
+    return stage.model.modelFunctionDescriptors();
+  };
+
+  modelFunction = (
+    functionIndex: number,
+    path: GraphPath = [],
+  ): FunctionPatternDefinition => {
+    const stage = this.select(path);
+    this.fusionPatterns(path);
+    return stage.model.modelFunction(functionIndex);
+  };
+
+  updateModelFunction = (
+    functionIndex: number,
+    text: string,
+    path: GraphPath = [],
+  ): NativeModel => {
+    const stage = this.select(path);
+    this.fusionPatterns(path);
+    const snapshots: PipelineModel[] = [];
+    for (
+      let snapshot: PipelineModel | undefined = this;
+      snapshot;
+      snapshot = snapshot.previous
+    )
+      snapshots.push(snapshot);
+    const models = snapshots.map((snapshot) => {
+      const current = snapshot.models[stage.role];
+      if (!current) throw new Error("Invalid pipeline stage.");
+      return current;
+    });
+    const edited = updateModelFunctionHistory(models, functionIndex, text);
+    const replace = (
+      snapshot: PipelineModel,
+      index: number,
+      previous?: PipelineModel,
+    ) =>
+      new PipelineModel(
+        snapshot.data,
+        snapshot.fileName,
+        snapshot.replace(stage.role, edited[index]).models,
+        previous,
+        snapshot.fusionOrder,
+        snapshot.undoDimensionPrefixes,
+      );
+    let previous: PipelineModel | undefined;
+    for (let i = snapshots.length - 1; i > 0; --i)
+      previous = replace(snapshots[i], i, previous);
+    return replace(this, 0, previous);
   };
 
   optimizationReport = (path: GraphPath = []): OptimizationReport | null => {

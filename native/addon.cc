@@ -32,6 +32,10 @@ Napi::Object Initialize(Napi::Env env, Napi::Object exports) {
   }();
   (void)registered;
   exports.Set("onnxLightVersion", ONNX_LIGHT_VERSION);
+  exports.Set("validateFunctionPatterns",
+              Napi::Function::New(env, onnx_light_viewer::ValidateFunctionPatterns));
+  exports.Set("updateModelFunctionHistory",
+              Napi::Function::New(env, onnx_light_viewer::UpdateModelFunctionHistory));
   exports.Set("decodeGraph", Napi::Function::New(env, onnx_light_viewer::DecodeGraph));
   exports.Set("getSchema", Napi::Function::New(env, onnx_light_viewer::GetSchema));
   exports.Set("loadModel", Napi::Function::New(env, onnx_light_viewer::LoadModel));

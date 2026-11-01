@@ -37,6 +37,7 @@ import {
   runExport,
 } from "./export";
 import { ActionLog, LogEntry } from "./log";
+import { PatternLibrary } from "./patternLibrary";
 import {
   PathHistory,
   historyEntries,
@@ -128,6 +129,7 @@ interface LoadedModel {
   /** Materialized Python edits remain modified after undoing later native edits. */
   pythonOptimized?: boolean;
   dimensionsRenamed?: boolean;
+  functionsEdited?: boolean;
   source?: { uri: vscode.Uri };
   /** Original source ownership survives materializing or removing external data. */
   sourceWeightLocations?: readonly string[];
@@ -184,7 +186,7 @@ function copyFileName(model: LoadedModel, encrypted = false): string {
  * Returns the retained handle, logging a reload if a previous refresh invalidated
  * it. The changed callback publishes status only after successful recreation.
  */
-async function nativeModel(
+async function recoverNativeModel(
   model: LoadedModel,
   log: ActionLog,
   changed: () => void,
@@ -231,6 +233,7 @@ export function activate(context: vscode.ExtensionContext): void {
     void vscode.window.showErrorMessage(message);
   });
   const exportHistory = new ExportHistory(context.globalState);
+  const patternLibrary = new PatternLibrary();
   let current: { panel: vscode.WebviewPanel; showLogs: () => void } | undefined;
   const openViewer = async (
     uri?: vscode.Uri,
@@ -249,6 +252,7 @@ export function activate(context: vscode.ExtensionContext): void {
       initialTab,
       pathHistory,
       exportHistory,
+      patternLibrary,
       (showLogs) => {
         if (showLogs) current = { panel, showLogs };
         else if (current?.panel === panel) current = undefined;
@@ -295,6 +299,7 @@ export function activate(context: vscode.ExtensionContext): void {
             "model",
             pathHistory,
             exportHistory,
+            patternLibrary,
             (showLogs) => {
               if (showLogs) current = { panel, showLogs };
               else if (current?.panel === panel) current = undefined;
@@ -493,6 +498,7 @@ async function configurePanel(
   initialTab: "model" | "logs",
   pathHistory: PathHistory,
   exportHistory: ExportHistory,
+  patternLibrary: PatternLibrary,
   activatePanel: (showLogs: (() => void) | undefined) => void,
 ): Promise<void> {
   panelSessions.get(panel)?.();
@@ -565,6 +571,28 @@ async function configurePanel(
   const stopExportHistory = exportHistory.subscribe((history) => {
     void postMessage({ type: "export-history", history });
   });
+  const fusionLibrarySource = {};
+  const stopPatternLibrary = patternLibrary.subscribe((snapshot, source) => {
+    const invalidateFusion = source !== fusionLibrarySource;
+    if (invalidateFusion) {
+      fusionRequest++;
+      diagnosticRequest++;
+      fusionPreview = undefined;
+    }
+    if (model?.native) patternLibrary.install(model.native);
+    if (model?.rewritingQueue)
+      patternLibrary.install(model.rewritingQueue.model);
+    void postMessage({
+      type: "pattern-library",
+      ...snapshot,
+      invalidateFusion,
+    });
+  });
+  const nativeModel: typeof recoverNativeModel = async (...args) => {
+    const native = await recoverNativeModel(...args);
+    patternLibrary.install(native);
+    return native;
+  };
   const updateHistory = async (
     target: HistoryTarget,
     change: Parameters<PathHistory["update"]>[1],
@@ -830,6 +858,9 @@ async function configurePanel(
         name?: unknown;
         text?: unknown;
         replacement?: unknown;
+        libraryRevision?: unknown;
+        dirty?: unknown;
+        functionIndex?: unknown;
         format?: unknown;
         dimensions?: unknown;
         previewId?: unknown;
@@ -867,7 +898,7 @@ async function configurePanel(
             typeof message.name !== "string" ||
             typeof message.text !== "string" ||
             typeof message.format !== "string" ||
-            !["text", "replacement", "python"].includes(message.format)
+            !["text", "replacement"].includes(message.format)
           )
             throw new Error(
               "Expected a pattern name, text and a supported copy format.",
@@ -885,6 +916,142 @@ async function configurePanel(
             format: message.format,
             error: error instanceof Error ? error.message : String(error),
           });
+        }
+      } else if (
+        message?.type === "save-pattern-library" ||
+        message?.type === "restore-pattern-library" ||
+        message?.type === "update-library-pattern"
+      ) {
+        const operation = message.type;
+        const action =
+          operation === "save-pattern-library"
+            ? "Save pattern library"
+            : operation === "restore-pattern-library"
+              ? "Restore pattern library"
+              : "Edit library pattern";
+        const isActive = () => active;
+        try {
+          await log.run(
+            action,
+            async (id) => {
+              if (operation === "update-library-pattern") {
+                if (
+                  typeof message.name !== "string" ||
+                  typeof message.text !== "string" ||
+                  typeof message.replacement !== "string" ||
+                  typeof message.libraryRevision !== "number" ||
+                  !Number.isSafeInteger(message.libraryRevision)
+                )
+                  throw new Error(
+                    "Expected a pattern definition and library revision.",
+                  );
+                patternLibrary.update(
+                  message.name,
+                  message.text,
+                  message.replacement,
+                  message.libraryRevision,
+                );
+              } else if (operation === "save-pattern-library") {
+                if (!patternLibrary.snapshot().patterns.length)
+                  throw new Error("No created patterns to save.");
+                const uri = await vscode.window.showSaveDialog({
+                  title: "Save pattern library",
+                  defaultUri: vscode.Uri.file(
+                    join(homedir(), "function-patterns.patterns.json"),
+                  ),
+                  filters: { "Function patterns": ["patterns.json"] },
+                });
+                if (!isActive()) return;
+                const revision = patternLibrary.snapshot().revision;
+                if (
+                  !uri ||
+                  !(await writeModelFile(
+                    uri,
+                    patternLibrary.serialize(),
+                    true,
+                    () =>
+                      isActive() &&
+                      patternLibrary.snapshot().revision === revision,
+                  ))
+                ) {
+                  log.record("CANCELLED", action, id);
+                  await postMessage({
+                    type: "pattern-library-result",
+                    requestId: message.requestId,
+                    operation,
+                    cancelled: true,
+                  });
+                  return;
+                }
+              } else {
+                const uris = await vscode.window.showOpenDialog({
+                  title: "Restore pattern library",
+                  canSelectMany: false,
+                  filters: { "Function patterns": ["patterns.json", "json"] },
+                });
+                if (!isActive()) return;
+                if (!uris?.length) {
+                  log.record("CANCELLED", action, id);
+                  await postMessage({
+                    type: "pattern-library-result",
+                    requestId: message.requestId,
+                    operation,
+                    cancelled: true,
+                  });
+                  return;
+                }
+                const patterns = patternLibrary.parse(
+                  await vscode.workspace.fs.readFile(uris[0]),
+                );
+                if (!isActive()) return;
+                const conflicts = patternLibrary.conflicts(patterns);
+                const revision = patternLibrary.snapshot().revision;
+                if (conflicts.length || message.dirty === true) {
+                  const detail = conflicts.length
+                    ? `Replace existing definitions: ${conflicts.join(", ")}?`
+                    : "Discard unapplied edits and restore patterns?";
+                  const choice = await vscode.window.showWarningMessage(
+                    detail,
+                    { modal: true },
+                    "Restore",
+                  );
+                  if (!isActive()) return;
+                  if (choice !== "Restore") {
+                    log.record("CANCELLED", action, id);
+                    await postMessage({
+                      type: "pattern-library-result",
+                      requestId: message.requestId,
+                      operation,
+                      cancelled: true,
+                    });
+                    return;
+                  }
+                  if (patternLibrary.snapshot().revision !== revision)
+                    throw new Error(
+                      "The pattern library changed while confirming restoration. Restore again.",
+                    );
+                }
+                patternLibrary.merge(patterns);
+              }
+              await postMessage({
+                type: "pattern-library-result",
+                requestId: message.requestId,
+                operation,
+                ...patternLibrary.snapshot(),
+              });
+            },
+            message.actionId,
+          );
+        } catch (error) {
+          if (!isActive()) return;
+          const detail = error instanceof Error ? error.message : String(error);
+          await postMessage({
+            type: "pattern-library-result",
+            requestId: message.requestId,
+            operation,
+            error: detail,
+          });
+          await vscode.window.showErrorMessage(`${action} failed: ${detail}`);
         }
       } else if (message?.type === "check-latest-versions") {
         const controller = new AbortController();
@@ -1771,6 +1938,10 @@ async function configurePanel(
         }
       } else if (message?.type === "ready") {
         ready = true;
+        await postMessage({
+          type: "pattern-library",
+          ...patternLibrary.snapshot(),
+        });
         const history = pathHistory.snapshot();
         if (history.open.length || history.save.length)
           await postMessage({ type: "path-history", history });
@@ -2354,6 +2525,8 @@ async function configurePanel(
         message?.type === "apply-rewriting" ||
         message?.type === "create-function-pattern" ||
         message?.type === "update-function-pattern" ||
+        message?.type === "update-model-function" ||
+        message?.type === "load-model-function" ||
         message?.type === "fusion-patterns" ||
         message?.type === "preview-fusion" ||
         message?.type === "apply-optimization" ||
@@ -2365,14 +2538,18 @@ async function configurePanel(
         const navigation = navigationRequest;
         const editsFunctionPattern =
           message.type === "create-function-pattern" ||
-          message.type === "update-function-pattern";
+          message.type === "update-function-pattern" ||
+          message.type === "update-model-function";
+        const updatesModelFunction = message.type === "update-model-function";
+        const loadsModelFunction = message.type === "load-model-function";
         const undoGeneration =
           message.type === "undo-fusion" ? ++undoRequest : undoRequest;
         const isCurrent = () =>
           active &&
           model === owner &&
           graphRevision === revision &&
-          (!editsFunctionPattern || navigationRequest === navigation) &&
+          (!(editsFunctionPattern || loadsModelFunction) ||
+            navigationRequest === navigation) &&
           (message.type === "undo-fusion"
             ? undoRequest === undoGeneration
             : fusionRequest === generation);
@@ -2394,9 +2571,38 @@ async function configurePanel(
                           ? "Create function pattern"
                           : message.type === "update-function-pattern"
                             ? "Update function pattern"
-                            : "List fusion patterns",
+                            : updatesModelFunction
+                              ? "Update ONNX function"
+                              : loadsModelFunction
+                                ? "Load ONNX function"
+                                : "List fusion patterns",
             async (id) => {
               const current = requireModel();
+              if (loadsModelFunction) {
+                if (
+                  typeof message.functionIndex !== "number" ||
+                  !Number.isSafeInteger(message.functionIndex) ||
+                  message.functionIndex < 0
+                )
+                  throw new Error("Expected a model function index.");
+                const native = await nativeModel(
+                  current,
+                  log,
+                  () => void sendStatus(),
+                );
+                if (!isCurrent()) return;
+                const path = current.graph.breadcrumbs.at(-1)?.path ?? [];
+                const definition = path.length
+                  ? native.modelFunction(message.functionIndex, path)
+                  : native.modelFunction(message.functionIndex);
+                await postMessage({
+                  type: "model-function-loaded",
+                  requestId: message.requestId,
+                  functionIndex: message.functionIndex,
+                  definition,
+                });
+                return;
+              }
               if (message.type === "undo-fusion") {
                 if (
                   message.all !== undefined &&
@@ -2446,7 +2652,7 @@ async function configurePanel(
                 };
                 graphRevision++;
                 navigationRequest++;
-                panel.title = `ONNX: ${current.fileName ?? graph.name}${model.pythonOptimized || model.dimensionsRenamed || model.fusionCount ? " (modified)" : ""}`;
+                panel.title = `ONNX: ${current.fileName ?? graph.name}${model.pythonOptimized || model.dimensionsRenamed || model.functionsEdited || model.fusionCount ? " (modified)" : ""}`;
                 await sendGraph(undefined, message.requestId);
                 return;
               }
@@ -2458,6 +2664,99 @@ async function configurePanel(
                 );
               const path = current.graph.breadcrumbs.at(-1)?.path ?? [];
               if (editsFunctionPattern) {
+                if (updatesModelFunction) {
+                  if (
+                    typeof message.functionIndex !== "number" ||
+                    !Number.isSafeInteger(message.functionIndex) ||
+                    message.functionIndex < 0 ||
+                    typeof message.text !== "string"
+                  )
+                    throw new Error(
+                      "Expected a model function index and function text.",
+                    );
+                  const native = await nativeModel(
+                    current,
+                    log,
+                    () => void sendStatus(),
+                  );
+                  if (!isCurrent()) return;
+                  const definitions = native.modelFunctionDescriptors(path);
+                  const definition = definitions.find(
+                    (entry) => entry.functionIndex === message.functionIndex,
+                  );
+                  if (!definition) throw new Error("Unknown model function.");
+                  const edited = path.length
+                    ? native.updateModelFunction(
+                        message.functionIndex,
+                        message.text,
+                        path,
+                      )
+                    : native.updateModelFunction(
+                        message.functionIndex,
+                        message.text,
+                      );
+                  let rewritingQueue = current.rewritingQueue;
+                  if (rewritingQueue) {
+                    const queued = rewritingQueue.model
+                      .modelFunctionDescriptors(path)
+                      .find((entry) => entry.name === definition.name);
+                    if (queued?.functionIndex === undefined)
+                      throw new Error(
+                        "The pending rewriting model no longer contains this function.",
+                      );
+                    rewritingQueue = {
+                      ...rewritingQueue,
+                      model: path.length
+                        ? rewritingQueue.model.updateModelFunction(
+                            queued.functionIndex,
+                            message.text,
+                            path,
+                          )
+                        : rewritingQueue.model.updateModelFunction(
+                            queued.functionIndex,
+                            message.text,
+                          ),
+                    };
+                  }
+                  const retained = edited.clone();
+                  const catalog = {
+                    patterns: edited.fusionPatterns(path),
+                    optimizationPatterns: edited.optimizationPatterns(path),
+                    functions: edited.modelFunctionDescriptors(path),
+                    definition: path.length
+                      ? edited.modelFunction(message.functionIndex, path)
+                      : edited.modelFunction(message.functionIndex),
+                    scenarios: edited.rewritingScenarios(path),
+                  };
+                  const replacement: LoadedModel = {
+                    ...current,
+                    native: edited,
+                    nativeReload: undefined,
+                    graph: edited.graph(false, path),
+                    metadata: undefined,
+                    rewritingQueue,
+                    functionsEdited: true,
+                    reload: () => retained.clone(),
+                  };
+                  model = replacement;
+                  graphRevision++;
+                  navigationRequest++;
+                  panel.title = `ONNX: ${current.fileName ?? replacement.graph.name} (modified)`;
+                  await sendGraph(undefined, message.requestId);
+                  if (
+                    !active ||
+                    model !== replacement ||
+                    fusionRequest !== generation + 1
+                  )
+                    return;
+                  await postMessage({
+                    type: "model-function-updated",
+                    requestId: message.requestId,
+                    functionIndex: message.functionIndex,
+                    ...catalog,
+                  });
+                  return;
+                }
                 if (
                   typeof message.name !== "string" ||
                   (message.type === "create-function-pattern"
@@ -2479,12 +2778,24 @@ async function configurePanel(
                       ? "Choose distinct operator nodes and a pattern name."
                       : "Expected a pattern name, match text and replacement text.",
                   );
+                const libraryRevision =
+                  message.type === "update-function-pattern"
+                    ? message.libraryRevision
+                    : 0;
+                if (
+                  typeof libraryRevision !== "number" ||
+                  !Number.isSafeInteger(libraryRevision) ||
+                  libraryRevision < 0
+                )
+                  throw new Error("Expected a valid pattern library revision.");
                 const native = await nativeModel(
                   current,
                   log,
                   () => void sendStatus(),
                 );
                 if (!isCurrent()) return;
+                if (message.type === "update-function-pattern")
+                  patternLibrary.assertRevision(libraryRevision);
                 fusionPreview = undefined;
                 const pattern =
                   message.type === "update-function-pattern"
@@ -2513,12 +2824,14 @@ async function configurePanel(
                 if (!isCurrent()) return;
                 const retained = native.clone();
                 current.reload = () => retained.clone();
+                patternLibrary.merge([pattern], fusionLibrarySource);
                 await postMessage({
                   type: "function-pattern-created",
                   requestId: message.requestId,
                   pattern,
                   patterns: native.fusionPatterns(path),
                   optimizationPatterns: native.optimizationPatterns(path),
+                  functions: native.modelFunctionDescriptors(path),
                   scenarios: native.rewritingScenarios(path),
                 });
                 return;
@@ -2561,6 +2874,7 @@ async function configurePanel(
                   optimizationReport: null,
                   patterns: edited.fusionPatterns(path),
                   optimizationPatterns: edited.optimizationPatterns(path),
+                  functions: edited.modelFunctionDescriptors(path),
                   scenarios: edited.rewritingScenarios(path),
                 });
                 return;
@@ -2632,7 +2946,7 @@ async function configurePanel(
                   model = replacement;
                   graphRevision++;
                   navigationRequest++;
-                  panel.title = `ONNX: ${current.fileName ?? replacement.graph.name}${replacement.pythonOptimized || replacement.dimensionsRenamed || replacement.fusionCount ? " (modified)" : ""}`;
+                  panel.title = `ONNX: ${current.fileName ?? replacement.graph.name}${replacement.pythonOptimized || replacement.dimensionsRenamed || replacement.functionsEdited || replacement.fusionCount ? " (modified)" : ""}`;
                   await sendGraph(undefined, message.requestId);
                   if (
                     !active ||
@@ -2664,6 +2978,7 @@ async function configurePanel(
                         : "No changes. Existing native undo history is retained.",
                     patterns: edited.fusionPatterns(),
                     optimizationPatterns: edited.optimizationPatterns(),
+                    functions: edited.modelFunctionDescriptors(),
                     scenarios: edited.rewritingScenarios(),
                   });
                   return;
@@ -2720,7 +3035,7 @@ async function configurePanel(
                 model = replacement;
                 graphRevision++;
                 navigationRequest++;
-                panel.title = `ONNX: ${current.fileName ?? graph.name}${replacement.pythonOptimized || replacement.dimensionsRenamed || replacement.fusionCount ? " (modified)" : ""}`;
+                panel.title = `ONNX: ${current.fileName ?? graph.name}${replacement.pythonOptimized || replacement.dimensionsRenamed || replacement.functionsEdited || replacement.fusionCount ? " (modified)" : ""}`;
                 await sendGraph(undefined, message.requestId);
                 if (
                   !active ||
@@ -2737,6 +3052,7 @@ async function configurePanel(
                   matches,
                   patterns: edited.fusionPatterns(path),
                   optimizationPatterns: edited.optimizationPatterns(path),
+                  functions: edited.modelFunctionDescriptors(path),
                   scenarios: edited.rewritingScenarios(path),
                 });
                 return;
@@ -2794,6 +3110,7 @@ async function configurePanel(
                   name: message.scenario,
                   patterns: edited.fusionPatterns(path),
                   optimizationPatterns: edited.optimizationPatterns(path),
+                  functions: edited.modelFunctionDescriptors(path),
                   scenarios: edited.rewritingScenarios(path),
                 });
                 return;
@@ -2880,6 +3197,7 @@ async function configurePanel(
                   count: anchors.length,
                   patterns: edited.fusionPatterns(path),
                   optimizationPatterns: edited.optimizationPatterns(path),
+                  functions: edited.modelFunctionDescriptors(path),
                   scenarios: edited.rewritingScenarios(path),
                 });
                 return;
@@ -2904,6 +3222,7 @@ async function configurePanel(
                   requestId: message.requestId,
                   patterns,
                   optimizationPatterns: native.optimizationPatterns(path),
+                  functions: native.modelFunctionDescriptors(path),
                   optimizationReport: native.optimizationReport(path),
                   scenarios: native.rewritingScenarios(path),
                 });
@@ -2947,6 +3266,7 @@ async function configurePanel(
                     replayed: true,
                     patterns,
                     optimizationPatterns: native.optimizationPatterns(path),
+                    functions: native.modelFunctionDescriptors(path),
                     scenarios: native.rewritingScenarios(path),
                   }
                 : {};
@@ -3003,14 +3323,19 @@ async function configurePanel(
             type:
               message.type === "undo-fusion"
                 ? "undo-fusion-error"
-                : editsFunctionPattern
-                  ? "function-pattern-error"
-                  : "fusion-error",
+                : loadsModelFunction
+                  ? "model-function-error"
+                  : editsFunctionPattern
+                    ? "function-pattern-error"
+                    : "fusion-error",
             requestId: message.requestId,
+            ...(loadsModelFunction
+              ? { functionIndex: message.functionIndex }
+              : {}),
             error: detail,
           });
           await vscode.window.showErrorMessage(
-            `${message.type === "undo-fusion" ? "Could not undo fusion" : editsFunctionPattern ? "Could not save function pattern" : "Could not fuse ONNX model"}: ${detail}`,
+            `${message.type === "undo-fusion" ? "Could not undo fusion" : loadsModelFunction ? "Could not load ONNX function" : updatesModelFunction ? "Could not update ONNX function" : editsFunctionPattern ? "Could not save function pattern" : "Could not fuse ONNX model"}: ${detail}`,
           );
         }
       } else if (message?.type === "save") {
@@ -3571,6 +3896,7 @@ async function configurePanel(
     model = undefined;
     stopHistory();
     stopExportHistory();
+    stopPatternLibrary();
     messages.dispose();
     viewState.dispose();
     disposal.dispose();

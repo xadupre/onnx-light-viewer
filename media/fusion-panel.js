@@ -33,7 +33,11 @@ function createFusionPanel({
   let nativePatterns = new Set();
   let creatingPattern = false;
   let selectionCatalogLoaded = false;
+  let functionBodyRequest = 0;
+  let restoreFunctionEditor = false;
+  let libraryRevision = 0;
   const selectionPatterns = new Map();
+  const selectionPatternDrafts = new Map();
   function canOpenSelectionPattern() {
     return canFuse() && !fusionBusy && selectedNodes().length > 0;
   }
@@ -48,47 +52,107 @@ function createFusionPanel({
       requestAction("fusion-patterns", "List selection patterns", {
         requestId: ++fusionRequest,
       });
+    } else {
+      const pattern = selectionPatterns.get(
+        byId("selection-pattern-picker").value,
+      );
+      if (pattern?.functionIndex !== undefined && pattern.text === undefined)
+        showSelectionPattern();
     }
     return true;
   }
   function selectionPatternControls() {
     const count = selectedNodes().length;
+    const name = byId("selection-pattern-name").value.trim();
+    const modelFunction = fusionGraph?.localFunctions?.some(
+      (fn) => fn.functionName === name,
+    );
+    const nameExists =
+      selectionPatterns.has(name) || nativePatterns.has(name) || modelFunction;
+    byId("selection-pattern-name").setCustomValidity(
+      nameExists ? `Pattern name already exists: ${name}.` : "",
+    );
+    byId("selection-pattern-name").setAttribute(
+      "aria-invalid",
+      String(nameExists),
+    );
+    const feedback = byId("selection-pattern-name-feedback");
+    feedback.hidden = !nameExists;
+    feedback.textContent = nameExists
+      ? `Pattern name already exists: ${name}.${modelFunction ? " The loaded ONNX model already contains this function." : ""} Choose another name to create a new pattern.${selectionPatterns.has(name) || modelFunction ? " To edit it, select it under Patterns / model functions." : ""}`
+      : "";
     byId("open-selection-pattern").disabled = !canOpenSelectionPattern();
     byId("create-function-pattern").disabled =
-      fusionBusy ||
-      !canFuse() ||
-      !count ||
-      !byId("selection-pattern-name").value.trim();
+      fusionBusy || !canFuse() || !count || !name || nameExists;
     byId("selection-pattern-name").disabled = fusionBusy || !canFuse();
     const pattern = selectionPatterns.get(
       byId("selection-pattern-picker").value,
     );
+    const bodyUnloaded =
+      pattern?.functionIndex !== undefined && pattern.text === undefined;
     for (const id of [
       "selection-pattern-text",
       "selection-pattern-replacement",
     ])
-      byId(id).disabled = fusionBusy || !canFuse();
+      byId(id).disabled = fusionBusy || !canFuse() || bodyUnloaded;
+    for (const format of ["text", "replacement"])
+      byId(`copy-selection-pattern-${format}`).disabled = bodyUnloaded;
     byId("selection-pattern-picker").disabled = fusionBusy;
     byId("update-function-pattern").disabled =
       fusionBusy ||
       !canFuse() ||
       !pattern ||
+      bodyUnloaded ||
       (byId("selection-pattern-text").value === pattern.text &&
         byId("selection-pattern-replacement").value === pattern.replacement);
+    byId("revert-function-pattern").disabled =
+      fusionBusy ||
+      !canFuse() ||
+      !pattern ||
+      bodyUnloaded ||
+      !selectionPatternDrafts.has(byId("selection-pattern-picker").value);
   }
   function showSelectionPattern() {
+    const requestId = ++functionBodyRequest;
     const pattern = selectionPatterns.get(
       byId("selection-pattern-picker").value,
     );
+    const draft = selectionPatternDrafts.get(
+      byId("selection-pattern-picker").value,
+    );
     byId("selection-pattern-result").hidden = !pattern;
-    byId("selection-pattern-text").value = pattern?.text ?? "";
-    byId("selection-pattern-replacement").value = pattern?.replacement ?? "";
-    byId("selection-pattern-python").value = pattern?.python ?? "";
+    byId("selection-pattern-text").value = draft?.text ?? pattern?.text ?? "";
+    byId("selection-pattern-replacement").value =
+      draft?.replacement ?? pattern?.replacement ?? "";
+    const modelFunction = pattern?.functionIndex !== undefined;
+    byId("selection-pattern-match").hidden = modelFunction;
+    byId("selection-pattern-replacement-label").textContent = modelFunction
+      ? "Function body"
+      : "Replacement";
+    byId("selection-pattern-edit-help").textContent = modelFunction
+      ? "Edit this ONNX function's body without changing its name, domain, overload or input/output/attribute interface. Apply edits updates all its calls in memory; Save keeps the change."
+      : "Edit the match and replacement functions using onnx-light textparser syntax, then apply the definition before matching or optimizing.";
     selectionPatternControls();
+    if (
+      modelFunction &&
+      pattern.text === undefined &&
+      byId("selection-pattern-dialog").open
+    ) {
+      byId("selection-pattern-status").textContent = "Loading function body…";
+      requestAction("load-model-function", "Load ONNX function", {
+        requestId,
+        functionIndex: pattern.functionIndex,
+      });
+    }
   }
   function diagnosticControls() {
     const picker = byId("diagnostic-pattern");
     picker.disabled = fusionBusy || !canFuse() || !picker.options.length;
+    const diagnostics = byId("fusion-diagnostics");
+    diagnostics.setAttribute("aria-disabled", String(picker.disabled));
+    const summary = diagnostics.querySelector("summary");
+    summary.tabIndex = picker.disabled ? -1 : 0;
+    if (picker.disabled) diagnostics.open = false;
     byId("explain-fusion").disabled =
       picker.disabled || diagnosticBusy || !diagnosticNode;
     byId("fusion-diagnostics").setAttribute(
@@ -903,6 +967,12 @@ function createFusionPanel({
     });
   });
   byId("diagnostic-pattern").addEventListener("change", clearDiagnostic);
+  byId("fusion-diagnostics")
+    .querySelector("summary")
+    .addEventListener("click", (event) => {
+      if (byId("fusion-diagnostics").getAttribute("aria-disabled") === "true")
+        event.preventDefault();
+    });
   byId("show-optimization-report").addEventListener(
     "click",
     openOptimizationReport,
@@ -934,19 +1004,37 @@ function createFusionPanel({
     selectionPatternControls,
   );
   byId("close-selection-pattern").addEventListener("click", () => {
+    restoreFunctionEditor = false;
+    functionBodyRequest++;
     byId("selection-pattern-dialog").close();
+  });
+  byId("selection-pattern-dialog").addEventListener("cancel", () => {
+    restoreFunctionEditor = false;
+    functionBodyRequest++;
   });
   byId("selection-pattern-picker").addEventListener(
     "change",
     showSelectionPattern,
   );
   for (const field of ["text", "replacement"]) {
-    byId(`selection-pattern-${field}`).addEventListener(
-      "input",
-      selectionPatternControls,
-    );
+    byId(`selection-pattern-${field}`).addEventListener("input", () => {
+      const key = byId("selection-pattern-picker").value;
+      selectionPatternDrafts.set(key, {
+        text: byId("selection-pattern-text").value,
+        replacement: byId("selection-pattern-replacement").value,
+        libraryRevision:
+          selectionPatternDrafts.get(key)?.libraryRevision ?? libraryRevision,
+      });
+      selectionPatternControls();
+    });
   }
-  for (const format of ["text", "replacement", "python"]) {
+  byId("revert-function-pattern").addEventListener("click", () => {
+    if (byId("revert-function-pattern").disabled) return;
+    selectionPatternDrafts.delete(byId("selection-pattern-picker").value);
+    showSelectionPattern();
+    byId("selection-pattern-status").textContent = "Edits reverted.";
+  });
+  for (const format of ["text", "replacement"]) {
     byId(`copy-selection-pattern-${format}`).addEventListener("click", () => {
       postMessage({
         type: "copy-function-pattern",
@@ -962,14 +1050,27 @@ function createFusionPanel({
     fusionPreview = undefined;
     byId("fusion-matches").replaceChildren();
     fusionControls(true);
-    byId("selection-pattern-status").textContent =
-      "Applying FunctionPattern edits…";
-    requestAction("update-function-pattern", "Update FunctionPattern", {
-      requestId: ++fusionRequest,
-      name: byId("selection-pattern-picker").value,
-      text: byId("selection-pattern-text").value,
-      replacement: byId("selection-pattern-replacement").value,
-    });
+    byId("selection-pattern-status").textContent = "Applying function edits…";
+    const pattern = selectionPatterns.get(
+      byId("selection-pattern-picker").value,
+    );
+    if (pattern.functionIndex !== undefined) {
+      restoreFunctionEditor = byId("selection-pattern-dialog").open;
+      requestAction("update-model-function", "Update ONNX function", {
+        requestId: ++fusionRequest,
+        functionIndex: pattern.functionIndex,
+        text: byId("selection-pattern-replacement").value,
+      });
+    } else
+      requestAction("update-function-pattern", "Update FunctionPattern", {
+        requestId: ++fusionRequest,
+        name: byId("selection-pattern-picker").value,
+        text: byId("selection-pattern-text").value,
+        replacement: byId("selection-pattern-replacement").value,
+        libraryRevision:
+          selectionPatternDrafts.get(byId("selection-pattern-picker").value)
+            ?.libraryRevision ?? libraryRevision,
+      });
   });
   byId("create-function-pattern").addEventListener("click", () => {
     if (byId("create-function-pattern").disabled) return;
@@ -1051,18 +1152,42 @@ function createFusionPanel({
     const available = new Set(
       (data.optimizationPatterns ?? []).map((pattern) => pattern.name),
     );
+    for (const fn of data.functions ?? []) {
+      const key = `model-function:${fn.functionIndex}`;
+      selectionPatterns.set(key, { ...selectionPatterns.get(key), ...fn });
+      available.add(key);
+    }
+    if (data.definition?.functionIndex !== undefined) {
+      selectionPatternDrafts.delete(
+        `model-function:${data.definition.functionIndex}`,
+      );
+      selectionPatterns.set(
+        `model-function:${data.definition.functionIndex}`,
+        data.definition,
+      );
+    }
     for (const name of selectionPatterns.keys())
-      if (!available.has(name)) selectionPatterns.delete(name);
+      if (!available.has(name)) {
+        selectionPatterns.delete(name);
+        selectionPatternDrafts.delete(name);
+      }
     const previous = byId("selection-pattern-picker").value;
     byId("selection-pattern-picker").replaceChildren(
-      ...[...selectionPatterns.keys()].map((name) => {
+      ...[...selectionPatterns.entries()].map(([key, definition]) => {
         const option = document.createElement("option");
-        option.value = option.textContent = name;
+        option.value = key;
+        option.textContent = definition.name;
         return option;
       }),
     );
     if (selectionPatterns.has(previous))
       byId("selection-pattern-picker").value = previous;
+    else {
+      const functionIndex = selectedNode()?.function?.path.at(-1)?.function;
+      const key = `model-function:${functionIndex}`;
+      if (selectionPatterns.has(key))
+        byId("selection-pattern-picker").value = key;
+    }
     showSelectionPattern();
     showScenarios(data.scenarios, data.name);
     showOptimizationPatterns(data.optimizationPatterns);
@@ -1092,6 +1217,47 @@ function createFusionPanel({
 
   function handleMessage(data) {
     if (
+      data?.type === "model-function-loaded" ||
+      data?.type === "model-function-error"
+    ) {
+      const key = `model-function:${data.functionIndex}`;
+      if (
+        data.requestId !== functionBodyRequest ||
+        !byId("selection-pattern-dialog").open ||
+        byId("selection-pattern-picker").value !== key
+      )
+        return true;
+      if (data.type === "model-function-error") {
+        byId("selection-pattern-status").textContent =
+          `Could not load function: ${data.error}`;
+        return true;
+      }
+      selectionPatterns.set(key, data.definition);
+      showSelectionPattern();
+      byId("selection-pattern-status").textContent =
+        "Function body loaded. Apply edits updates all its calls; Save keeps the change.";
+      return true;
+    }
+    if (data?.type === "model-function-updated") {
+      if (
+        fusionCompletion !== data.requestId ||
+        fusionRequest !== data.requestId + 1
+      )
+        return true;
+      fusionCompletion = undefined;
+      creatingPattern = false;
+      showFusionCatalog(data);
+      byId("selection-pattern-picker").value =
+        `model-function:${data.functionIndex}`;
+      showSelectionPattern();
+      fusionControls(false);
+      if (restoreFunctionEditor) byId("selection-pattern-dialog").showModal();
+      restoreFunctionEditor = false;
+      byId("selection-pattern-status").textContent =
+        "Function updated for all its calls. Save the model to keep the change.";
+      return true;
+    }
+    if (
       data?.type === "function-pattern-copied" ||
       data?.type === "function-pattern-copy-error"
     ) {
@@ -1113,6 +1279,7 @@ function createFusionPanel({
         byId("selection-pattern-status").textContent = data.error;
         return true;
       }
+      selectionPatternDrafts.delete(data.pattern.name);
       selectionPatterns.set(data.pattern.name, data.pattern);
       showFusionCatalog(data);
       byId("selection-pattern-picker").value = data.pattern.name;
@@ -1280,11 +1447,14 @@ function createFusionPanel({
     return true;
   }
   function reset(graph, operationRequestId, file) {
+    if (operationRequestId !== fusionRequest) restoreFunctionEditor = false;
+    functionBodyRequest++;
     if (byId("selection-pattern-dialog").open)
       byId("selection-pattern-dialog").close();
     creatingPattern = false;
     selectionCatalogLoaded = false;
     selectionPatterns.clear();
+    selectionPatternDrafts.clear();
     byId("selection-pattern-picker").replaceChildren();
     showSelectionPattern();
     byId("selection-pattern-status").textContent =
@@ -1357,10 +1527,36 @@ function createFusionPanel({
     },
     setEnabled,
     selectionChanged,
+    libraryChanged: (data) => {
+      libraryRevision = data.revision;
+      if (!data.invalidateFusion) return;
+      restoreFunctionEditor = false;
+      creatingPattern = false;
+      selectionCatalogLoaded = false;
+      fusionRequest++;
+      clearFusionPreview();
+      clearDiagnostic();
+      fusionControls(false);
+      if (byId("selection-pattern-dialog").open) {
+        byId("selection-pattern-dialog").close();
+        byId("selection-pattern-status").textContent =
+          "The pattern library changed. Reopen the editor to load its definitions.";
+      }
+      if (
+        canFuse() &&
+        (!byId("fusion-panel").hidden || !byId("optimization-panel").hidden)
+      ) {
+        fusionControls(true);
+        requestAction("fusion-patterns", "Refresh pattern library", {
+          requestId: ++fusionRequest,
+        });
+      }
+    },
     canOpenSelectionPattern,
     openSelectionPattern,
     refresh: () => fusionControls(fusionBusy),
     invalidate: () => {
+      restoreFunctionEditor = false;
       if (byId("selection-pattern-dialog").open)
         byId("selection-pattern-dialog").close();
       creatingPattern = false;
