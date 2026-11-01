@@ -5588,6 +5588,178 @@ test("model function bodies load only in the editor and ignore obsolete selectio
   assert.equal(byId("selection-pattern-dialog").open, false);
 });
 
+test("model function drafts survive same-model Fuse and Optimize catalog refreshes", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  load(demoGraph);
+  const byId = (id) => document.getElementById(id);
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  const catalog = {
+    patterns: [],
+    optimizationPatterns: [],
+    functions: [
+      { name: "FirstFunction", functionIndex: 0 },
+      { name: "SecondFunction", functionIndex: 1 },
+    ],
+  };
+  const definition = {
+    ...catalog.functions[0],
+    text: "saved body",
+    replacement: "saved body",
+  };
+  const editor = byId("selection-pattern-replacement");
+  const picker = byId("selection-pattern-picker");
+  document
+    .querySelector('[data-id="node-0"]')
+    .dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  byId("open-selection-pattern").click();
+  send({
+    type: "fusion-patterns",
+    requestId: messages.at(-1).requestId,
+    ...catalog,
+  });
+  send({
+    type: "model-function-loaded",
+    requestId: messages.at(-1).requestId,
+    functionIndex: 0,
+    definition,
+  });
+  editor.value = "unapplied draft";
+  editor.dispatchEvent(new window.Event("input"));
+  picker.value = "model-function:1";
+  picker.dispatchEvent(new window.Event("change"));
+  picker.value = "model-function:0";
+  picker.dispatchEvent(new window.Event("change"));
+  assert.equal(editor.value, "unapplied draft");
+  byId("close-selection-pattern").click();
+  for (const panel of ["fuse-pattern", "optimize-model"]) {
+    byId(panel).click();
+    send({
+      type: "fusion-patterns",
+      requestId: messages.at(-1).requestId,
+      ...catalog,
+    });
+    const beforeOpen = messages.length;
+    byId("open-selection-pattern").click();
+    assert.equal(messages.length, beforeOpen);
+    assert.equal(editor.value, "unapplied draft");
+    assert.equal(byId("selection-pattern-text").value, definition.text);
+    assert.equal(editor.disabled, false);
+    assert.equal(byId("update-function-pattern").disabled, false);
+    byId("close-selection-pattern").click();
+  }
+  byId("open-selection-pattern").click();
+  byId("update-function-pattern").click();
+  const update = messages.at(-1);
+  assert.equal(update.type, "update-model-function");
+  assert.equal(update.text, "unapplied draft");
+  send({
+    type: "function-pattern-error",
+    requestId: update.requestId,
+    error: "Invalid function body",
+  });
+  assert.equal(editor.value, "unapplied draft");
+  assert.equal(byId("update-function-pattern").disabled, false);
+  load(demoGraph);
+  document
+    .querySelector('[data-id="node-0"]')
+    .dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  byId("open-selection-pattern").click();
+  send({
+    type: "fusion-patterns",
+    requestId: messages.at(-1).requestId,
+    ...catalog,
+  });
+  assert.equal(messages.at(-1).type, "load-model-function");
+  assert.equal(editor.value, "");
+  send({
+    type: "model-function-loaded",
+    requestId: messages.at(-1).requestId,
+    functionIndex: 0,
+    definition,
+  });
+  assert.equal(editor.value, "saved body");
+  assert.equal(byId("update-function-pattern").disabled, true);
+});
+
+for (const dismissal of ["none", "before graph", "after graph", "cancel"])
+  test(`model function edit completion respects editor dismissal: ${dismissal}`, (t) => {
+    const { document, window, messages, load } = openViewer(t);
+    load(demoGraph);
+    const byId = (id) => document.getElementById(id);
+    const send = (data) =>
+      window.dispatchEvent(new window.MessageEvent("message", { data }));
+    const catalog = {
+      patterns: [],
+      optimizationPatterns: [],
+      functions: [{ name: "ModelFunction", functionIndex: 0 }],
+    };
+    const definition = {
+      ...catalog.functions[0],
+      text: "saved body",
+      replacement: "saved body",
+    };
+    const dialog = byId("selection-pattern-dialog");
+    const editor = byId("selection-pattern-replacement");
+    document
+      .querySelector('[data-id="node-0"]')
+      .dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+    byId("open-selection-pattern").click();
+    send({
+      type: "fusion-patterns",
+      requestId: messages.at(-1).requestId,
+      ...catalog,
+    });
+    send({
+      type: "model-function-loaded",
+      requestId: messages.at(-1).requestId,
+      functionIndex: 0,
+      definition,
+    });
+    editor.value = "updated body";
+    editor.dispatchEvent(new window.Event("input"));
+    byId("update-function-pattern").click();
+    const update = messages.at(-1);
+    assert.equal(update.type, "update-model-function");
+    if (dismissal === "before graph") byId("close-selection-pattern").click();
+    if (dismissal === "cancel") {
+      dialog.dispatchEvent(new window.Event("cancel"));
+      dialog.close();
+    }
+    load(demoGraph, update.requestId);
+    assert.equal(dialog.open, false);
+    if (dismissal === "after graph") byId("close-selection-pattern").click();
+    send({
+      type: "model-function-updated",
+      requestId: update.requestId,
+      functionIndex: 0,
+      ...catalog,
+      definition: {
+        ...definition,
+        text: "updated body",
+        replacement: "updated body",
+      },
+    });
+    assert.equal(dialog.open, dismissal === "none");
+    assert.equal(editor.value, "updated body");
+    assert.equal(byId("update-function-pattern").disabled, true);
+    assert.match(
+      byId("selection-pattern-status").textContent,
+      /Function updated for all its calls/,
+    );
+    if (dismissal !== "none") {
+      document
+        .querySelector('[data-id="node-0"]')
+        .dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+      const beforeOpen = messages.length;
+      byId("open-selection-pattern").click();
+      assert.equal(dialog.open, true);
+      assert.equal(messages.length, beforeOpen);
+      assert.equal(editor.value, "updated body");
+      assert.equal(byId("update-function-pattern").disabled, true);
+    }
+  });
+
 test("selection FunctionPattern errors recover controls and obsolete replies are ignored", (t) => {
   const { document, window, messages, load } = openViewer(t);
   load(demoGraph);

@@ -34,7 +34,9 @@ function createFusionPanel({
   let creatingPattern = false;
   let selectionCatalogLoaded = false;
   let functionBodyRequest = 0;
+  let restoreFunctionEditor = false;
   const selectionPatterns = new Map();
+  const selectionPatternDrafts = new Map();
   function canOpenSelectionPattern() {
     return canFuse() && !fusionBusy && selectedNodes().length > 0;
   }
@@ -108,9 +110,13 @@ function createFusionPanel({
     const pattern = selectionPatterns.get(
       byId("selection-pattern-picker").value,
     );
+    const draft = selectionPatternDrafts.get(
+      byId("selection-pattern-picker").value,
+    );
     byId("selection-pattern-result").hidden = !pattern;
-    byId("selection-pattern-text").value = pattern?.text ?? "";
-    byId("selection-pattern-replacement").value = pattern?.replacement ?? "";
+    byId("selection-pattern-text").value = draft?.text ?? pattern?.text ?? "";
+    byId("selection-pattern-replacement").value =
+      draft?.replacement ?? pattern?.replacement ?? "";
     const modelFunction = pattern?.functionIndex !== undefined;
     byId("selection-pattern-match").hidden = modelFunction;
     byId("selection-pattern-replacement-label").textContent = modelFunction
@@ -991,18 +997,26 @@ function createFusionPanel({
     selectionPatternControls,
   );
   byId("close-selection-pattern").addEventListener("click", () => {
+    restoreFunctionEditor = false;
     functionBodyRequest++;
     byId("selection-pattern-dialog").close();
+  });
+  byId("selection-pattern-dialog").addEventListener("cancel", () => {
+    restoreFunctionEditor = false;
+    functionBodyRequest++;
   });
   byId("selection-pattern-picker").addEventListener(
     "change",
     showSelectionPattern,
   );
   for (const field of ["text", "replacement"]) {
-    byId(`selection-pattern-${field}`).addEventListener(
-      "input",
-      selectionPatternControls,
-    );
+    byId(`selection-pattern-${field}`).addEventListener("input", () => {
+      selectionPatternDrafts.set(byId("selection-pattern-picker").value, {
+        text: byId("selection-pattern-text").value,
+        replacement: byId("selection-pattern-replacement").value,
+      });
+      selectionPatternControls();
+    });
   }
   for (const format of ["text", "replacement"]) {
     byId(`copy-selection-pattern-${format}`).addEventListener("click", () => {
@@ -1024,13 +1038,14 @@ function createFusionPanel({
     const pattern = selectionPatterns.get(
       byId("selection-pattern-picker").value,
     );
-    if (pattern.functionIndex !== undefined)
+    if (pattern.functionIndex !== undefined) {
+      restoreFunctionEditor = byId("selection-pattern-dialog").open;
       requestAction("update-model-function", "Update ONNX function", {
         requestId: ++fusionRequest,
         functionIndex: pattern.functionIndex,
         text: byId("selection-pattern-replacement").value,
       });
-    else
+    } else
       requestAction("update-function-pattern", "Update FunctionPattern", {
         requestId: ++fusionRequest,
         name: byId("selection-pattern-picker").value,
@@ -1120,16 +1135,23 @@ function createFusionPanel({
     );
     for (const fn of data.functions ?? []) {
       const key = `model-function:${fn.functionIndex}`;
-      selectionPatterns.set(key, fn);
+      selectionPatterns.set(key, { ...selectionPatterns.get(key), ...fn });
       available.add(key);
     }
-    if (data.definition?.functionIndex !== undefined)
+    if (data.definition?.functionIndex !== undefined) {
+      selectionPatternDrafts.delete(
+        `model-function:${data.definition.functionIndex}`,
+      );
       selectionPatterns.set(
         `model-function:${data.definition.functionIndex}`,
         data.definition,
       );
+    }
     for (const name of selectionPatterns.keys())
-      if (!available.has(name)) selectionPatterns.delete(name);
+      if (!available.has(name)) {
+        selectionPatterns.delete(name);
+        selectionPatternDrafts.delete(name);
+      }
     const previous = byId("selection-pattern-picker").value;
     byId("selection-pattern-picker").replaceChildren(
       ...[...selectionPatterns.entries()].map(([key, definition]) => {
@@ -1210,7 +1232,8 @@ function createFusionPanel({
         `model-function:${data.functionIndex}`;
       showSelectionPattern();
       fusionControls(false);
-      byId("selection-pattern-dialog").showModal();
+      if (restoreFunctionEditor) byId("selection-pattern-dialog").showModal();
+      restoreFunctionEditor = false;
       byId("selection-pattern-status").textContent =
         "Function updated for all its calls. Save the model to keep the change.";
       return true;
@@ -1237,6 +1260,7 @@ function createFusionPanel({
         byId("selection-pattern-status").textContent = data.error;
         return true;
       }
+      selectionPatternDrafts.delete(data.pattern.name);
       selectionPatterns.set(data.pattern.name, data.pattern);
       showFusionCatalog(data);
       byId("selection-pattern-picker").value = data.pattern.name;
@@ -1404,12 +1428,14 @@ function createFusionPanel({
     return true;
   }
   function reset(graph, operationRequestId, file) {
+    if (operationRequestId !== fusionRequest) restoreFunctionEditor = false;
     functionBodyRequest++;
     if (byId("selection-pattern-dialog").open)
       byId("selection-pattern-dialog").close();
     creatingPattern = false;
     selectionCatalogLoaded = false;
     selectionPatterns.clear();
+    selectionPatternDrafts.clear();
     byId("selection-pattern-picker").replaceChildren();
     showSelectionPattern();
     byId("selection-pattern-status").textContent =
@@ -1483,6 +1509,7 @@ function createFusionPanel({
     setEnabled,
     selectionChanged,
     libraryChanged: () => {
+      restoreFunctionEditor = false;
       creatingPattern = false;
       selectionCatalogLoaded = false;
       fusionRequest++;
@@ -1508,6 +1535,7 @@ function createFusionPanel({
     openSelectionPattern,
     refresh: () => fusionControls(fusionBusy),
     invalidate: () => {
+      restoreFunctionEditor = false;
       if (byId("selection-pattern-dialog").open)
         byId("selection-pattern-dialog").close();
       creatingPattern = false;
