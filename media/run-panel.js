@@ -2,6 +2,8 @@ function createRunPanel({
   byId,
   postMessage,
   activatePrompt,
+  openStatistics = () => {},
+  resetStatistics = () => {},
   canActivate = () => true,
 }) {
   let requestId = 0;
@@ -143,11 +145,13 @@ function createRunPanel({
     },
     handleMessage(message) {
       if (["metadata-error", "shape-error"].includes(message?.type)) {
-        if (busy || (requested && !available)) {
+        if (busy || requested) {
           ++requestId;
           requested = available;
           busy = false;
           fields.disabled = !available;
+          results.replaceChildren();
+          resetStatistics();
           status.textContent = `Run cancelled: ${message.error}`;
         }
         return false;
@@ -159,10 +163,16 @@ function createRunPanel({
           "run-error",
           "run-log",
           "run-file",
+          "run-save-info",
+          "run-save-error",
         ].includes(message?.type)
       )
         return false;
       if (message.requestId !== requestId) return true;
+      if (message.type.startsWith("run-save-")) {
+        status.textContent = message.error || message.status;
+        return true;
+      }
       if (message.type === "run-log") {
         byId("run-log").textContent = message.output;
         return true;
@@ -280,12 +290,45 @@ function createRunPanel({
         status.textContent = message.error;
       } else {
         status.textContent = `Completed in ${message.result.timeMs.toFixed(3)} ms (execution only).`;
-        for (const output of message.result.outputs) {
-          const heading = document.createElement("h3");
-          heading.textContent = output.name;
-          const values = document.createElement("pre");
-          values.textContent = output.text;
-          results.append(heading, values);
+        for (const kind of ["inputs", "outputs"]) {
+          const tensors = message.result[kind] || [];
+          if (!tensors.length) continue;
+          const title = document.createElement("h2");
+          title.textContent = kind === "inputs" ? "Inputs" : "Outputs";
+          results.append(title);
+          tensors.forEach((output, index) => {
+            const heading = document.createElement("h3");
+            heading.textContent = output.name;
+            const values = document.createElement("pre");
+            values.textContent = output.text;
+            results.append(heading, values);
+            if (!output.hasData) return;
+            const reference = { requestId, kind, index };
+            const statistics = document.createElement("button");
+            statistics.type = "button";
+            statistics.textContent = "Statistics";
+            statistics.addEventListener("click", () =>
+              openStatistics(
+                tensors
+                  .filter((tensor) => tensor.hasData)
+                  .map((tensor) => tensor.name),
+                output.name,
+                reference,
+                tensors,
+              ),
+            );
+            const save = document.createElement("button");
+            save.type = "button";
+            save.textContent = "Save tensor…";
+            save.addEventListener("click", () =>
+              postMessage({
+                type: "run-save",
+                run: reference,
+                format: "protobuf",
+              }),
+            );
+            results.append(statistics, save);
+          });
         }
       }
       fields.disabled = !available;

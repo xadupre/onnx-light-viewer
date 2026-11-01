@@ -121,6 +121,9 @@ const runPanel = createRunPanel({
   byId,
   postMessage: (message) => vscode.postMessage(message),
   activatePrompt: () => promptPanel.activate(),
+  openStatistics: (names, selectedName, run, tensors) =>
+    tensorStatisticsPanel.open(names, [], selectedName, { run, tensors }),
+  resetStatistics: () => tensorStatisticsPanel.reset(),
   canActivate: () =>
     hasModel &&
     !replacementPending &&

@@ -14,6 +14,17 @@ from onnx import numpy_helper
 import onnxruntime as ort
 
 
+def preview_values(value):
+    preview = []
+    for item in value.reshape(-1).tolist():
+        if isinstance(item, str) and len(item) > 128:
+            item = item[:128] + "…"
+        elif isinstance(item, bytes) and len(item) > 128:
+            item = item[:128] + b"..."
+        preview.append(item)
+    return str(preview)
+
+
 def main(directory):
     directory = Path(directory)
     settings = json.loads((directory / "settings.json").read_text(encoding="utf-8"))
@@ -34,19 +45,33 @@ def main(directory):
     values = session.run(None, inputs)
     time_ms = (perf_counter() - start) * 1000
     outputs = []
-    for metadata, value in zip(session.get_outputs(), values):
+    previews = []
+    for name, value in inputs.items():
+        preview = (
+            preview_values(value)
+            if value.size <= 32
+            else "Omitted (preview limit: 32 elements)."
+        )
+        previews.append({
+            "name": name,
+            "text": f"{value.dtype}{list(value.shape)} {name}\nValues: {preview}",
+        })
+    for index, (metadata, value) in enumerate(zip(session.get_outputs(), values)):
         if hasattr(value, "dtype"):
             preview = (
-                str(value.reshape(-1).tolist())
+                preview_values(value)
                 if value.size <= 32
                 else "Omitted (preview limit: 32 elements)."
             )
             text = f"{value.dtype}{list(value.shape)} {metadata.name}\nValues: {preview}"
+            (directory / f"output-{index}.pb").write_bytes(
+                numpy_helper.from_array(value, metadata.name).SerializeToString()
+            )
         else:
             text = "Non-tensor output (no tensor preview)."
-        outputs.append({"name": metadata.name, "text": text})
+        outputs.append({"name": metadata.name, "text": text, "hasData": hasattr(value, "dtype")})
     (directory / "result.json").write_text(
-        json.dumps({"timeMs": time_ms, "outputs": outputs}), encoding="utf-8"
+        json.dumps({"timeMs": time_ms, "inputs": previews, "outputs": outputs}), encoding="utf-8"
     )
 
 

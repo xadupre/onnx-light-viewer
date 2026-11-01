@@ -116,6 +116,54 @@ test("Run honors panel-owned cancellation before starting execution", async () =
   );
 });
 
+test("ONNX Runtime bounds long string previews but preserves full tensors", async (t) => {
+  const directory = await mkdtemp(
+    path.join(tmpdir(), "viewer-run-string-preview-"),
+  );
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const long = "x".repeat(100_000);
+  execFileSync(python, [
+    "-c",
+    `
+import json
+import onnx
+import onnx.helper as oh
+from onnx import TensorProto
+import pathlib
+import sys
+
+directory = pathlib.Path(sys.argv[1])
+input_info = oh.make_tensor_value_info("X", TensorProto.STRING, [1])
+output_info = oh.make_tensor_value_info("Y", TensorProto.STRING, [1])
+graph = oh.make_graph([oh.make_node("Identity", ["X"], ["Y"])], "strings", [input_info], [output_info])
+model = oh.make_model(graph, opset_imports=[oh.make_opsetid("", 13)])
+model.ir_version = 10
+onnx.save(model, directory / "model.onnx")
+tensor = oh.make_tensor("X", TensorProto.STRING, [1], ["x" * ${long.length}])
+(directory / "input-0.pb").write_bytes(tensor.SerializeToString())
+(directory / "settings.json").write_text(json.dumps({"logSeverity": 3, "logVerbosity": 0, "inputs": 1}))
+`,
+    directory,
+  ]);
+  execFileSync(python, [runner, directory]);
+  const result = JSON.parse(
+    readFileSync(path.join(directory, "result.json"), "utf8"),
+  );
+  for (const tensor of [result.inputs[0], result.outputs[0]]) {
+    assert.ok(tensor.text.length < 500);
+    assert.match(tensor.text, /…|b'\.\.\.'/);
+    assert.doesNotMatch(tensor.text, /x{1000}/);
+  }
+  const size = execFileSync(python, [
+    "-c",
+    "import onnx, sys; print(len(onnx.TensorProto.FromString(open(sys.argv[1], 'rb').read()).string_data[0]))",
+    path.join(directory, "output-0.pb"),
+  ])
+    .toString()
+    .trim();
+  assert.equal(size, "100000");
+});
+
 test("Run validates engine logging, dimensions and input-source transport", async () => {
   const model = loadModel(
     readFileSync(require.resolve("./models/inference.onnx")),
