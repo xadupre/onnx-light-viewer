@@ -370,6 +370,7 @@ export type RunInputSource =
 
 export interface RunOptions {
   verbose?: number;
+  keepLoaded?: boolean;
   dimensions?: Record<string, number>;
 }
 
@@ -382,6 +383,11 @@ export interface RunResult {
   timeMs: number;
   inputs?: RunTensor[];
   outputs: RunTensor[];
+  lifecycle: {
+    loadMs: number;
+    reused: boolean;
+    retained: boolean;
+  };
   log?: string;
 }
 
@@ -410,6 +416,7 @@ export interface TensorStatistics {
  * Analysis methods do not execute the model; run explicitly executes a snapshot.
  */
 export interface NativeModel {
+  releaseRunSession(): void;
   runInputs(path?: GraphPath): RunInput[];
   run(
     inputs: RunInputSource[],
