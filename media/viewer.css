@@ -2023,7 +2023,8 @@ button:disabled {
 #run-logging-home,
 #run-logging,
 #run-logging-light,
-#run-logging-ort {
+#run-logging-ort,
+#run-profiling-options {
   grid-column: 1 / -1;
 }
 
@@ -2111,7 +2112,8 @@ button:disabled {
   justify-self: start;
 }
 
-#prompt-results {
+#prompt-results,
+#run-results {
   overflow-x: auto;
   margin-block: 1rem;
 }
@@ -2124,7 +2126,9 @@ button:disabled {
 }
 
 .prompt-token-table th,
-.prompt-token-table td {
+.prompt-token-table td,
+#run-results th,
+#run-results td {
   padding: 0.4rem 0.75rem;
   border: 1px solid var(--vscode-panel-border, #888);
   white-space: pre;

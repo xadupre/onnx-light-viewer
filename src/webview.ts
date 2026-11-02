@@ -747,6 +747,10 @@ export function webviewHtml(
             <select id="run-engine"><option value="onnx-light">onnx-light</option><option value="onnxruntime">ONNX Runtime</option></select>
             <label for="run-keep-loaded">Session lifetime</label>
             <label><input id="run-keep-loaded" type="checkbox"> Keep session loaded between runs (reuse the model and session, with fresh inputs)</label>
+            <div id="run-profiling-options" class="form-grid" hidden>
+              <label for="run-profile">Profiling</label>
+              <label><input id="run-profile" type="checkbox"> Enable profiling (adds overhead; creates and releases a new session for each run)</label>
+            </div>
             <div id="run-logging-home" class="form-grid">
             <div id="run-logging" class="form-grid">
             <div id="run-logging-light" class="form-grid">

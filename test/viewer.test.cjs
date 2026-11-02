@@ -8592,6 +8592,7 @@ test("Run Settings edits only regular execution controls and releases its retain
   assert.deepEqual(JSON.parse(JSON.stringify(messages.at(-1).settings)), {
     logSeverity: 3,
     logVerbosity: 2,
+    enableProfiling: false,
   });
   assert.equal(promptVerbosity.value, "7");
   receive({

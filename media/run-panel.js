@@ -26,6 +26,10 @@ function createRunPanel({
   const stage = byId("run-stage");
   const engine = byId("run-engine");
   const keepLoaded = byId("run-keep-loaded");
+  const profile = byId("run-profile");
+  const profilingEnabled = () =>
+    engine.value === "onnxruntime" && profile.checked;
+  const retainSession = () => keepLoaded.checked && !profilingEnabled();
   byId("run-settings-open").addEventListener("click", () => {
     byId("settings-tab").click();
     byId("settings-engine-tab").click();
@@ -46,10 +50,10 @@ function createRunPanel({
       : value
         ? `${name} session: ${value.reused ? "reused from the previous run" : "created for this run"}, ${value.retained ? "still loaded and available for the next run" : "released after execution"}. Initialization: ${value.loadMs.toFixed(3)} ms.${value.retained ? "" : " No session is kept alive between runs."}`
         : busy
-          ? `${name}: run in progress. ${keepLoaded.checked ? "The session will stay loaded for the next run." : "A new session is created for this run and released when it finishes."}`
+          ? `${name}: run in progress. ${retainSession() ? "The session will stay loaded for the next run." : "A new session is created for this run and released when it finishes."}`
           : retained
             ? `${name}: session still loaded and available for the next run.`
-            : `${name}: no retained session. ${keepLoaded.checked ? "The next Run model creates a session and keeps it loaded." : "A new session is created on every Run model; it is never reused between runs."}`;
+            : `${name}: no retained session. ${retainSession() ? "The next Run model creates a session and keeps it loaded." : "A new session is created on every Run model; it is never reused between runs."}`;
   };
   const release = () => {
     if (retained) {
@@ -72,8 +76,15 @@ function createRunPanel({
     byId("run-logging-ort").hidden = light;
     byId("run-log-severity").disabled = light;
     byId("run-log-verbosity").disabled = light;
+    byId("run-profiling-options").hidden = light;
+    profile.disabled = light;
+    keepLoaded.disabled = profilingEnabled();
     showLifecycle();
   };
+  profile.addEventListener("change", () => {
+    release();
+    selectEngine();
+  });
   engine.addEventListener("change", () => {
     release();
     selectEngine();
@@ -154,13 +165,14 @@ function createRunPanel({
       requestId: ++requestId,
       path: JSON.parse(stage.value),
       engine: engine.value,
-      keepLoaded: keepLoaded.checked,
+      keepLoaded: retainSession(),
       settings:
         engine.value === "onnx-light"
           ? { verbose: Number(byId("run-verbose").value) }
           : {
               logSeverity: Number(byId("run-log-severity").value),
               logVerbosity: Number(byId("run-log-verbosity").value),
+              enableProfiling: profile.checked,
             },
       dimensions,
       inputs: inputs.map((input, index) => {
@@ -402,6 +414,53 @@ function createRunPanel({
       } else {
         status.textContent = `Completed in ${message.result.timeMs.toFixed(3)} ms (execution only).`;
         showLifecycle(message.result.lifecycle);
+        if (message.result.profiling) {
+          const title = document.createElement("h2");
+          title.textContent = "ONNX Runtime profiling";
+          const help = document.createElement("p");
+          help.textContent =
+            "Kernel timings, slowest first, for this run's optimized graph (nodes may be fused). Profiling adds overhead. Save the full Chrome trace JSON to inspect the timeline in a compatible trace viewer.";
+          const save = document.createElement("button");
+          save.type = "button";
+          save.textContent = "Save profiling trace…";
+          save.addEventListener("click", () =>
+            postMessage({
+              type: "run-save",
+              run: { requestId },
+              format: "profiling",
+            }),
+          );
+          const table = document.createElement("table");
+          table.setAttribute("aria-label", "ONNX Runtime kernel timings");
+          const header = table.createTHead().insertRow();
+          for (const label of [
+            "Node",
+            "Operator",
+            "Provider",
+            "Calls",
+            "Total (ms)",
+          ]) {
+            const cell = document.createElement("th");
+            cell.scope = "col";
+            cell.textContent = label;
+            header.append(cell);
+          }
+          const body = table.createTBody();
+          for (const node of message.result.profiling.nodes) {
+            const row = body.insertRow();
+            for (const value of [
+              node.name,
+              node.op,
+              node.provider,
+              node.calls,
+              (node.durationUs / 1000).toFixed(3),
+            ])
+              row.insertCell().textContent = String(value);
+          }
+          if (!body.rows.length)
+            help.textContent += " No kernel timing events were recorded.";
+          results.append(title, help, save, table);
+        }
         for (const kind of ["inputs", "outputs"]) {
           const tensors = message.result[kind] || [];
           if (!tensors.length) continue;

@@ -129,10 +129,6 @@ export async function runModel(
       typeof request.keepLoaded !== "boolean"
     )
       throw new Error("Expected a boolean Keep session loaded setting.");
-    const keepLoaded = request.keepLoaded === true;
-    const retainedSession = keepLoaded ? session : undefined;
-    if (keepLoaded && !retainedSession)
-      throw new Error("Retained execution requires a panel-owned Run session.");
     const dimensions = request.dimensions ?? {};
     if (
       !dimensions ||
@@ -149,6 +145,17 @@ export async function runModel(
     if (!settings || typeof settings !== "object" || Array.isArray(settings))
       throw new Error("Invalid engine logging settings.");
     const logging = settings as Record<string, unknown>;
+    if (
+      logging.enableProfiling !== undefined &&
+      typeof logging.enableProfiling !== "boolean"
+    )
+      throw new Error("Expected a boolean Enable profiling setting.");
+    const enableProfiling =
+      engine === "onnxruntime" && logging.enableProfiling === true;
+    const keepLoaded = request.keepLoaded === true && !enableProfiling;
+    const retainedSession = keepLoaded ? session : undefined;
+    if (keepLoaded && !retainedSession)
+      throw new Error("Retained execution requires a panel-owned Run session.");
     for (const [key, maximum] of engine === "onnx-light"
       ? ([["verbose", 10]] as const)
       : ([
@@ -261,6 +268,7 @@ export async function runModel(
         JSON.stringify({
           logSeverity: logging.logSeverity ?? 2,
           logVerbosity: logging.logVerbosity ?? 0,
+          enableProfiling,
           inputs: prepared.inputs.length,
           keepLoaded,
         }),

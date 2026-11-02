@@ -29,16 +29,45 @@ def preview_values(value):
     return str(preview)
 
 
+def read_profile(session):
+    trace = json.loads(Path(session.end_profiling()).read_text(encoding="utf-8"))
+    nodes = {}
+    for event in trace:
+        if event.get("cat") != "Node" or not event.get("name", "").endswith(
+            "_kernel_time"
+        ):
+            continue
+        args = event.get("args", {})
+        key = (
+            event["name"].removesuffix("_kernel_time"),
+            args.get("op_name", ""),
+            args.get("provider", ""),
+        )
+        node = nodes.setdefault(
+            key,
+            dict(name=key[0], op=key[1], provider=key[2], calls=0, durationUs=0),
+        )
+        node["calls"] += 1
+        node["durationUs"] += event["dur"]
+    return {
+        "trace": trace,
+        "nodes": sorted(nodes.values(), key=lambda node: node["durationUs"], reverse=True),
+    }
+
+
 def main(directory, cache=None, key=None):
     directory = Path(directory)
     settings = json.loads((directory / "settings.json").read_text(encoding="utf-8"))
-    reused = cache is not None and cache.get("key") == key
+    enable_profiling = settings.get("enableProfiling", False)
+    reused = not enable_profiling and cache is not None and cache.get("key") == key
     if reused:
         session, load_ms = cache["session"], cache["load_ms"]
     else:
         options = ort.SessionOptions()
         options.log_severity_level = settings["logSeverity"]
         options.log_verbosity_level = settings["logVerbosity"]
+        options.enable_profiling = enable_profiling
+        options.profile_file_prefix = str(directory / "profile")
         load_start = perf_counter()
         session = ort.InferenceSession(
             str(directory / "model.onnx"),
@@ -46,7 +75,7 @@ def main(directory, cache=None, key=None):
             providers=["CPUExecutionProvider"],
         )
         load_ms = (perf_counter() - load_start) * 1000
-    retained = settings.get("keepLoaded", False)
+    retained = settings.get("keepLoaded", False) and not enable_profiling
     if cache is not None:
         cache.clear()
         if retained:
@@ -59,6 +88,7 @@ def main(directory, cache=None, key=None):
     start = perf_counter()
     values = session.run(None, inputs)
     time_ms = (perf_counter() - start) * 1000
+    profiling = read_profile(session) if enable_profiling else None
     outputs = []
     previews = []
     for name, value in inputs.items():
@@ -97,6 +127,7 @@ def main(directory, cache=None, key=None):
                 "timeMs": time_ms,
                 "inputs": previews,
                 "outputs": outputs,
+                **({"profiling": profiling} if profiling is not None else {}),
                 "lifecycle": {
                     "loadMs": load_ms,
                     "reused": reused,

@@ -41,6 +41,65 @@ function runModule(overrides) {
   return loaded;
 }
 
+test("ONNX Runtime profiling returns real kernel timings and traces without retaining sessions", async (t) => {
+  const model = loadModel(
+    readFileSync(require.resolve("./models/relu.onnx")),
+    "relu.onnx",
+  );
+  const session = new RunSession();
+  t.after(() => session.close());
+  const request = {
+    engine: "onnxruntime",
+    keepLoaded: true,
+    inputs: ["float[1,3] input = {-1, 0, 2}"],
+  };
+  const predict = (settings) =>
+    runModel(
+      model,
+      [],
+      { ...request, settings },
+      python,
+      runner,
+      () => {},
+      new AbortController().signal,
+      session,
+    );
+  const ordinary = await predict({ enableProfiling: false });
+  assert.equal(ordinary.lifecycle.retained, true);
+  assert.equal(ordinary.profiling, undefined);
+  for (let index = 0; index < 2; ++index) {
+    const result = await predict({ enableProfiling: true });
+    assert.equal(result.lifecycle.reused, false);
+    assert.equal(result.lifecycle.retained, false);
+    assert.equal(session.alive, false);
+    assert.deepEqual(result.outputs, ordinary.outputs);
+    const { trace, nodes } = result.profiling;
+    assert.ok(trace.some((event) => event.cat === "Session"));
+    assert.ok(nodes.some((node) => node.op === "Relu"));
+    assert.ok(nodes.every((node) => node.calls > 0 && node.durationUs >= 0));
+    assert.ok(nodes.every((node) => node.provider === "CPUExecutionProvider"));
+    const kernelEvents = trace.filter(
+      (event) => event.cat === "Node" && event.name.endsWith("_kernel_time"),
+    );
+    assert.equal(
+      nodes.reduce((total, node) => total + node.calls, 0),
+      kernelEvents.length,
+    );
+    assert.equal(
+      nodes.reduce((total, node) => total + node.durationUs, 0),
+      kernelEvents.reduce((total, event) => total + event.dur, 0),
+    );
+    for (let i = 1; i < nodes.length; ++i)
+      assert.ok(nodes[i - 1].durationUs >= nodes[i].durationUs);
+  }
+  assert.equal((await predict({})).lifecycle.reused, false);
+  assert.equal((await predict({})).lifecycle.reused, true);
+  await assert.rejects(
+    predict({ enableProfiling: "yes" }),
+    /boolean Enable profiling/,
+  );
+});
+
 for (const engine of ["onnx-light", "onnxruntime"])
   test(`${engine} Run retains real sessions with fresh inputs and invalidates ownership/settings`, async (t) => {
     const session = new RunSession();
