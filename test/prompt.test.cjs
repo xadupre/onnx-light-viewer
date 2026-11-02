@@ -953,6 +953,35 @@ test("SDK owning pipelines support sequential/overlapped preparation and retaine
     });
 });
 
+test("worker error events flush buffered diagnostics before rejecting", async (t) => {
+  const session = new PromptSession(undefined, {
+    executable: process.execPath,
+    args: [
+      "-e",
+      `process.stdin.once("data", () => {
+        require("node:fs").writeSync(1,
+          'retained diagnostic\\n\\x1e{"type":"error","error":"prediction failed"}\\n');
+      });`,
+    ],
+    label: "Diagnostic worker",
+  });
+  t.after(() => session.close());
+  const logs = [];
+  await assert.rejects(
+    session.run(
+      "unused",
+      "unused",
+      "diagnostic",
+      signal(),
+      (output) => logs.push(output),
+      () => {},
+    ),
+    /prediction failed/,
+  );
+  assert.deepEqual(logs, ["retained diagnostic\n"]);
+  assert.equal(session.alive, false);
+});
+
 test("cancelling during initialization releases its model without closing the replacement", async (t) => {
   const { model } = await fixture(t);
   const session = new PromptSession();

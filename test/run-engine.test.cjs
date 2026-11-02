@@ -957,6 +957,103 @@ test("onnx-light verbose runs retain the session and isolate logs between predic
   assert.equal(session.alive, false);
 });
 
+test("retained verbose failures preserve SDK diagnostics and release the worker", async (t) => {
+  const model = loadModel(
+    readFileSync(require.resolve("./models/inference.onnx")),
+    "inference.onnx",
+  );
+  const session = new RunSession();
+  t.after(() => session.close());
+  let logs = "";
+  await assert.rejects(
+    runModel(
+      model,
+      [],
+      {
+        engine: "onnx-light",
+        settings: { verbose: 1 },
+        keepLoaded: true,
+        dimensions: { "symbol:N": 1 },
+        inputs: ["float[1,2] x = {1, 2}"],
+      },
+      python,
+      runner,
+      (output) => {
+        logs = output;
+      },
+      new AbortController().signal,
+      session,
+    ),
+    /not multidirectional-broadcastable/,
+  );
+  assert.match(logs, /\[ReferenceEvaluator\].*Add\(x, bias\)/);
+  assert.equal(session.alive, false);
+});
+
+test("warm verbose predictions avoid model snapshots and writes but refresh inputs and options", async (t) => {
+  const model = loadModel(
+    readFileSync(require.resolve("./models/inference.onnx")),
+    "inference.onnx",
+  );
+  let snapshots = 0;
+  const tracked = {
+    runInputs: (...args) => model.runInputs(...args),
+    releaseRunSession: () => model.releaseRunSession(),
+    prepareRun: (...args) => {
+      snapshots++;
+      return model.prepareRun(...args);
+    },
+  };
+  const fs = require("node:fs/promises");
+  const modelWrites = [];
+  const loaded = runModule({
+    "node:fs/promises": {
+      ...fs,
+      async writeFile(file, data, ...args) {
+        if (path.basename(file) === "model.onnx")
+          modelWrites.push(data.byteLength);
+        await fs.writeFile(file, data, ...args);
+      },
+    },
+  });
+  const session = new loaded.RunSession();
+  t.after(() => session.close());
+  const predict = (rows, verbose = 1) =>
+    loaded.runModel(
+      tracked,
+      [],
+      {
+        engine: "onnx-light",
+        settings: { verbose },
+        keepLoaded: true,
+        dimensions: { "symbol:N": rows },
+        inputs: [
+          `float[${rows},3] x = {${Array.from({ length: rows * 3 }, (_, index) => index).join(", ")}}`,
+        ],
+      },
+      python,
+      runner,
+      () => {},
+      new AbortController().signal,
+      session,
+    );
+  const first = await predict(1);
+  const warm = await predict(2);
+  assert.equal(warm.lifecycle.reused, true);
+  assert.notDeepEqual(warm.inputs, first.inputs);
+  assert.notDeepEqual(warm.outputs, first.outputs);
+  assert.equal(snapshots, 1);
+  assert.equal(modelWrites.length, 1);
+  assert.ok(modelWrites[0] > 0);
+  assert.equal((await predict(1, 2)).lifecycle.reused, false);
+  assert.equal(snapshots, 2);
+  assert.equal(modelWrites.length, 2);
+  await session.close();
+  assert.equal((await predict(1, 2)).lifecycle.reused, false);
+  assert.equal(snapshots, 3);
+  assert.equal(modelWrites.length, 3);
+});
+
 test("onnx-light verbose execution preserves unsaved edits and dynamic dimensions", async () => {
   const model = loadModel(
     readFileSync(require.resolve("./models/relu.onnx")),

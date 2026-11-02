@@ -260,9 +260,11 @@ export async function runModel(
       const directory = await mkdtemp(join(tmpdir(), "onnx-light-run-"));
       let result: RunResult;
       try {
-        const snapshot = await model.prepareRun([], path, options);
-        signal.throwIfAborted();
-        await writeFile(join(directory, "model.onnx"), snapshot.model);
+        if (!retainedSession?.alive) {
+          const snapshot = await model.prepareRun([], path, options);
+          signal.throwIfAborted();
+          await writeFile(join(directory, "model.onnx"), snapshot.model);
+        }
         const sources = [];
         for (const [index, input] of inputs.entries()) {
           if (typeof input !== "string" && input.source === "protobuf") {
