@@ -125,6 +125,10 @@ test("documentation runs weekly or manually in a Linux-only workflow", () => {
   assert.doesNotMatch(documentation, /matrix:|macos-|windows-/);
 });
 
+test("documentation uses Python 3.13 for Sphinx 9.2 compatibility", () => {
+  assert.match(documentation, /python-version: "3\.13"/);
+});
+
 test("documentation landing page displays the package version", () => {
   const config = readFileSync(
     path.resolve(__dirname, "..", "docs", "conf.py"),
