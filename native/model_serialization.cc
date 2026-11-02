@@ -48,6 +48,7 @@ public:
       snapshot_.clear_rewritings();
     } else if (!source->fusion_plans.empty()) {
       ol::RewritingProto combined;
+      std::set<std::string> replacements;
       for (const auto &plan : source->fusion_plans) {
         for (const auto &edit : plan.rewrites())
           *combined.add_rewrites() = edit.SharedCopy();
@@ -55,7 +56,8 @@ public:
         combined.ref_required_opset_imports() = plan.required_opset_imports();
         combined.ref_added_functions() = plan.added_functions().SharedCopy();
         for (const auto &id : plan.replaced_function_ids())
-          combined.add_replaced_function_ids(id);
+          if (replacements.insert(id).second)
+            combined.add_replaced_function_ids(id);
       }
       std::string name = "onnx-light-viewer.fusions";
       for (size_t suffix = 2; snapshot_.rewritings().contains(name); ++suffix)

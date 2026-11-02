@@ -5283,6 +5283,99 @@ test("opens the saved rewriting example and replays both patterns with undo", as
   assert.deepEqual(second.undoFusion().undoFusion().graph(), loaded.graph());
 });
 
+test("replays opset-only scenarios as one undoable step and preserves them on save", async () => {
+  const original = memoryTestModel([1]);
+  const bytes = captureRewritingPlans(
+    Buffer.concat([
+      Buffer.from(await original.serialize()),
+      bytesField(
+        1001,
+        Buffer.concat([
+          bytesField(1, "opset-only"),
+          bytesField(
+            2,
+            bytesField(
+              2,
+              Buffer.concat([
+                bytesField(1, "scenario.custom"),
+                varintField(2, 1),
+              ]),
+            ),
+          ),
+        ]),
+      ),
+    ]),
+  );
+  const saved = loadModel(bytes, "opset-only");
+  const [scenario] = saved.rewritingScenarios();
+  assert.equal(scenario.available, true);
+  assert.equal(scenario.steps.length, 1);
+  for (const all of [false, true]) {
+    const applied = await saved.applyRewritingScenario(scenario.name, all);
+    assert.ok(
+      applied
+        .graph()
+        .opsets.some((opset) => opset.domain === "scenario.custom"),
+    );
+    assert.deepEqual(applied.graph().nodes, original.graph().nodes);
+    assert.equal(applied.fusionCount(), 1);
+    assert.equal(applied.rewritingScenarios()[0].available, false);
+    assert.deepEqual(applied.undoFusion().graph(), saved.graph());
+    const exported = Buffer.from(
+      await applied.serialize(undefined, undefined, true),
+    );
+    const plan = rewritingPlans(exported).find((plan) =>
+      plan.name.startsWith("onnx-light-viewer.fusions"),
+    );
+    assert.deepEqual(
+      loadModel(plan.bytes, "replayed").graph(),
+      applied.graph(),
+    );
+  }
+});
+
+test("validates saved scenario hashes before recapturing a strict prefix", async () => {
+  const original = memoryTestModel([1]);
+  const edit = bytesField(
+    1,
+    Buffer.concat([
+      bytesField(1, "Keep Relu"),
+      varintField(3, 0),
+      bytesField(
+        5,
+        Buffer.concat([
+          bytesField(1, "x"),
+          bytesField(2, "y"),
+          bytesField(4, "Relu"),
+        ]),
+      ),
+      varintField(6, 0),
+    ]),
+  );
+  const source = loadModel(
+    Buffer.concat([
+      Buffer.from(await original.serialize()),
+      bytesField(
+        1001,
+        Buffer.concat([
+          bytesField(1, "bad-hashes"),
+          bytesField(
+            2,
+            Buffer.concat([edit, edit, varintField(6, 1), varintField(7, 2)]),
+          ),
+        ]),
+      ),
+    ]),
+    "bad-hashes",
+  );
+  await assert.rejects(
+    source.applyRewritingScenario("bad-hashes", false),
+    /hash/i,
+  );
+  assert.deepEqual(source.graph(), original.graph());
+  assert.equal(source.fusionCount(), 0);
+});
+
 test("applies saved rewriting scenarios all at once or stepwise with independent undo and exports", async () => {
   const { stages, bytes } = await savedFusionScenario();
   const name = "onnx-light-viewer.fusions";
