@@ -103,8 +103,12 @@ export async function runModel(
   session?: RunSession,
 ): Promise<RunResult> {
   let generation = session?.generation;
-  const release = () =>
-    session?.generation === generation ? session?.close() : undefined;
+  let releasing: Promise<void> | undefined;
+  const release = () => {
+    if (!releasing && session?.generation === generation)
+      releasing = session?.close();
+    return releasing;
+  };
   const abort = () => {
     void release()?.catch((error: unknown) => {
       progress(

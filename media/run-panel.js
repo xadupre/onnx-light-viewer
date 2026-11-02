@@ -11,6 +11,7 @@ function createRunPanel({
   let available = false;
   let busy = false;
   let retained = false;
+  let cleanup = "";
   let releaseId = 0;
   let inputs = [];
   const fields = byId("run-fields");
@@ -33,22 +34,28 @@ function createRunPanel({
     ).click();
   });
   const showLifecycle = (value) => {
-    if (value) retained = value.retained;
+    if (value) {
+      retained = value.retained;
+      cleanup = "";
+    }
     byId("run-settings-open").disabled = busy;
     byId("run-unload").disabled = busy || !retained;
     const name = engine.value === "onnxruntime" ? "ONNX Runtime" : "onnx-light";
-    byId("run-lifecycle").textContent = value
-      ? `${name} session: ${value.reused ? "reused from the previous run" : "created for this run"}, ${value.retained ? "still loaded and available for the next run" : "released after execution"}. Initialization: ${value.loadMs.toFixed(3)} ms.${value.retained ? "" : " No session is kept alive between runs."}`
-      : busy
-        ? `${name}: run in progress. ${keepLoaded.checked ? "The session will stay loaded for the next run." : "A new session is created for this run and released when it finishes."}`
-        : retained
-          ? `${name}: session still loaded and available for the next run.`
-          : `${name}: no retained session. ${keepLoaded.checked ? "The next Run model creates a session and keeps it loaded." : "A new session is created on every Run model; it is never reused between runs."}`;
+    byId("run-lifecycle").textContent = cleanup
+      ? `${name}: session cleanup ${cleanup === "error" ? "failed. Use Unload to retry." : "pending; awaiting release confirmation."}`
+      : value
+        ? `${name} session: ${value.reused ? "reused from the previous run" : "created for this run"}, ${value.retained ? "still loaded and available for the next run" : "released after execution"}. Initialization: ${value.loadMs.toFixed(3)} ms.${value.retained ? "" : " No session is kept alive between runs."}`
+        : busy
+          ? `${name}: run in progress. ${keepLoaded.checked ? "The session will stay loaded for the next run." : "A new session is created for this run and released when it finishes."}`
+          : retained
+            ? `${name}: session still loaded and available for the next run.`
+            : `${name}: no retained session. ${keepLoaded.checked ? "The next Run model creates a session and keeps it loaded." : "A new session is created on every Run model; it is never reused between runs."}`;
   };
   const release = () => {
-    if (retained)
+    if (retained) {
+      cleanup = "pending";
       postMessage({ type: "run-release", requestId, releaseId: ++releaseId });
-    retained = false;
+    }
     showLifecycle();
   };
   byId("run-unload").addEventListener("click", release);
@@ -174,6 +181,7 @@ function createRunPanel({
       ++requestId;
       requested = available = busy = false;
       retained = false;
+      cleanup = "";
       inputs = [];
       showLifecycle();
       setDisabled(true);
@@ -197,6 +205,7 @@ function createRunPanel({
     handleMessage(message) {
       if (message?.type === "run-session-lost") {
         retained = false;
+        cleanup = "";
         showLifecycle();
         status.textContent = `Session stopped: ${message.error}`;
         return true;
@@ -207,6 +216,7 @@ function createRunPanel({
           requested = available;
           busy = false;
           retained = false;
+          cleanup = "";
           showLifecycle();
           setDisabled(!available);
           results.replaceChildren();
@@ -234,7 +244,8 @@ function createRunPanel({
         ["run-session-released", "run-session-error"].includes(message.type)
       ) {
         if (message.releaseId !== releaseId) return true;
-        retained = false;
+        retained = message.type === "run-session-error";
+        cleanup = retained ? "error" : "";
         showLifecycle();
         if (message.type === "run-session-error")
           status.textContent = `Could not unload session: ${message.error}`;
@@ -261,6 +272,9 @@ function createRunPanel({
       busy = false;
       if (message.type === "run-inputs") {
         available = true;
+        retained = false;
+        cleanup = "";
+        showLifecycle();
         stage.replaceChildren(
           ...(message.stages.length
             ? message.stages.map(
@@ -383,6 +397,7 @@ function createRunPanel({
       } else if (message.type === "run-error") {
         status.textContent = message.error;
         retained = false;
+        cleanup = "";
         showLifecycle();
       } else {
         status.textContent = `Completed in ${message.result.timeMs.toFixed(3)} ms (execution only).`;

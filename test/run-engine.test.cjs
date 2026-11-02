@@ -271,71 +271,133 @@ test("a failed pending input read does not unload a newer Run session", async (t
 
 for (const phase of ["write", "read", "cleanup"])
   for (const keepLoaded of [false, true])
-    test(
-      `ORT cancellation during ${phase} returns AbortError (retained: ${keepLoaded})`,
-      { timeout: 15000 },
-      async (t) => {
-        const session = new RunSession();
-        t.after(() => session.close());
-        const controller = new AbortController();
-        const fs = require("node:fs/promises");
-        let cancelled = false;
-        const delayed = runModule({
-          "node:fs/promises": {
-            ...fs,
-            async writeFile(file, ...args) {
-              await fs.writeFile(file, ...args);
-              if (
-                phase === "write" &&
-                path.basename(file) === "settings.json"
-              ) {
-                cancelled = true;
-                controller.abort();
+    for (const cleanupFails of keepLoaded ? [false, true] : [false])
+      test(
+        `ORT cancellation during ${phase} awaits cleanup (retained: ${keepLoaded}, cleanup fails: ${cleanupFails})`,
+        { timeout: 15000 },
+        async (t) => {
+          const { PromptSession } = require("../dist/promptSession");
+          const permissionError = Object.assign(new Error("kill EPERM"), {
+            code: "EPERM",
+          });
+          let holdCleanup = false;
+          let resumeCleanup;
+          const cleanupGate = new Promise(
+            (resolve) => (resumeCleanup = resolve),
+          );
+          class HeldPromptSession extends PromptSession {
+            async close() {
+              if (holdCleanup) {
+                await cleanupGate;
+                if (cleanupFails) throw permissionError;
               }
+              await super.close();
+            }
+          }
+          const controller = new AbortController();
+          const fs = require("node:fs/promises");
+          let cancelled = false;
+          let onCancelled;
+          const cancellation = new Promise(
+            (resolve) => (onCancelled = resolve),
+          );
+          const cancel = () => {
+            cancelled = true;
+            controller.abort();
+            onCancelled();
+          };
+          const delayed = runModule({
+            "./promptSession": { PromptSession: HeldPromptSession },
+            "node:fs/promises": {
+              ...fs,
+              async writeFile(file, ...args) {
+                await fs.writeFile(file, ...args);
+                if (
+                  phase === "write" &&
+                  path.basename(file) === "settings.json"
+                ) {
+                  cancel();
+                }
+              },
+              async readFile(file, ...args) {
+                const value = await fs.readFile(file, ...args);
+                if (phase === "read" && path.basename(file) === "result.json") {
+                  cancel();
+                }
+                return value;
+              },
+              async rm(...args) {
+                await fs.rm(...args);
+                if (phase === "cleanup") {
+                  cancel();
+                }
+              },
             },
-            async readFile(file, ...args) {
-              const value = await fs.readFile(file, ...args);
-              if (phase === "read" && path.basename(file) === "result.json") {
-                cancelled = true;
-                controller.abort();
-              }
-              return value;
-            },
-            async rm(...args) {
-              await fs.rm(...args);
-              if (phase === "cleanup") {
-                cancelled = true;
-                controller.abort();
-              }
-            },
-          },
-        });
-        const model = loadModel(
-          readFileSync(require.resolve("./models/relu.onnx")),
-          "relu.onnx",
-        );
-        await assert.rejects(
-          delayed.runModel(
-            model,
-            [],
-            {
-              engine: "onnxruntime",
-              keepLoaded,
-              inputs: ["float[1,3] input = {-1, 0, 2}"],
-            },
-            python,
-            runner,
-            () => {},
-            controller.signal,
-            session,
-          ),
-          { name: "AbortError" },
-        );
-        assert.equal(cancelled, true);
-        await session.close();
-        assert.equal(session.alive, false);
-      },
-    );
+          });
+          const session = new delayed.RunSession();
+          t.after(async () => {
+            holdCleanup = false;
+            resumeCleanup();
+            await session.close();
+          });
+          const model = loadModel(
+            readFileSync(require.resolve("./models/relu.onnx")),
+            "relu.onnx",
+          );
+          const request = {
+            engine: "onnxruntime",
+            keepLoaded,
+            inputs: ["float[1,3] input = {-1, 0, 2}"],
+          };
+          if (keepLoaded) {
+            await runModel(
+              model,
+              [],
+              request,
+              python,
+              runner,
+              () => {},
+              new AbortController().signal,
+              session,
+            );
+            assert.equal(session.alive, true);
+            holdCleanup = true;
+          }
+          let settled = false;
+          const outcome = assert
+            .rejects(
+              delayed.runModel(
+                model,
+                [],
+                request,
+                python,
+                runner,
+                () => {},
+                controller.signal,
+                session,
+              ),
+              cleanupFails
+                ? (error) => error === permissionError
+                : { name: "AbortError" },
+            )
+            .then(() => {
+              settled = true;
+            });
+          await cancellation;
+          if (keepLoaded) {
+            await new Promise((resolve) => setImmediate(resolve));
+            assert.equal(settled, false);
+            assert.equal(session.alive, true);
+            resumeCleanup();
+          }
+          await outcome;
+          assert.equal(cancelled, true);
+          assert.equal(session.alive, cleanupFails);
+          holdCleanup = false;
+          await session.close();
+          assert.equal(session.alive, false);
+        },
+      );
 
 for (const mode of ["idle", "active"])
   test(

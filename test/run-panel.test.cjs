@@ -289,7 +289,23 @@ test("Run offers opt-in reuse, truthful session status and correlated unloading"
   byId("run-unload").click();
   const release = messages.at(-1);
   assert.equal(release.type, "run-release");
+  assert.match(byId("run-lifecycle").textContent, /cleanup pending/);
+  assert.equal(byId("run-unload").disabled, false);
+  api.handleMessage({
+    ...release,
+    type: "run-session-error",
+    error: "kill EPERM",
+  });
+  assert.match(byId("run-status").textContent, /Could not unload.*kill EPERM/);
+  assert.match(byId("run-lifecycle").textContent, /cleanup failed.*retry/);
+  assert.equal(byId("run-unload").disabled, false);
+  byId("run-unload").click();
+  const retry = messages.at(-1);
+  assert.equal(retry.type, "run-release");
+  assert.ok(retry.releaseId > release.releaseId);
   api.handleMessage({ ...release, type: "run-session-released" });
+  assert.match(byId("run-lifecycle").textContent, /cleanup pending/);
+  api.handleMessage({ ...retry, type: "run-session-released" });
   assert.match(byId("run-lifecycle").textContent, /no retained session/);
   assert.equal(byId("run-unload").disabled, true);
   submit.click();
@@ -329,6 +345,9 @@ for (const control of [
     });
     byId(control).dispatchEvent(new dom.window.Event("change"));
     assert.equal(messages.at(-1).type, "run-release");
+    assert.match(byId("run-lifecycle").textContent, /cleanup pending/);
+    assert.equal(byId("run-unload").disabled, false);
+    api.handleMessage({ ...messages.at(-1), type: "run-session-released" });
     assert.equal(byId("run-unload").disabled, true);
   });
 
@@ -438,14 +457,30 @@ test("pipeline stage changes reload input forms without changing execution mode"
     path: stages[0].path,
     inputs: [],
   });
-
+  api.handleMessage({
+    type: "run-result",
+    requestId: messages.at(-1).requestId,
+    result: {
+      timeMs: 1,
+      outputs: [],
+      lifecycle: { loadMs: 1, reused: false, retained: true },
+    },
+  });
   byId("run-stage").value = JSON.stringify(stages[1].path);
   byId("run-stage").dispatchEvent(new dom.window.Event("change"));
+  assert.match(byId("run-lifecycle").textContent, /cleanup pending/);
   assert.equal(
     JSON.stringify(messages.at(-1).path),
     JSON.stringify(stages[1].path),
   );
   assert.equal(byId("execution-run-view").hidden, false);
+  api.handleMessage({
+    ...messages.at(-1),
+    stages,
+    inputs: [],
+  });
+  assert.match(byId("run-lifecycle").textContent, /no retained session/);
+  assert.equal(byId("run-unload").disabled, true);
 });
 
 test("Run requires dimensions, supports mixed input sources and retains engine logging", (t) => {
