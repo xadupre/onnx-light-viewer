@@ -2894,10 +2894,10 @@ test("memory delta columns compare every configuration in its curve color", (t) 
   assert.deepEqual(deltas(0, 4), ["+0.5", "+1", "+1.5"]);
   assert.deepEqual(deltas(1, 3), ["+1", "Unavailable", "+3"]);
   assert.deepEqual(deltas(1, 4), ["+0.5", "Unavailable", "+1.5"]);
-  assert.equal(document.querySelectorAll("#memory-events tr").length, 100);
+  assert.equal(document.querySelectorAll("#memory-events tr").length, 203);
   assert.equal(
     document.querySelectorAll("#memory-events .memory-delta").length,
-    600,
+    1218,
   );
   const swatches = document.querySelectorAll(".memory-configuration-swatch");
   for (const column of [3, 4])
@@ -2909,10 +2909,8 @@ test("memory delta columns compare every configuration in its curve color", (t) 
       assert.equal(value.title, curve.getAttribute("aria-label"));
       assert.equal(window.getComputedStyle(value).display, "block");
     }
-  document.getElementById("memory-next").click();
-  assert.equal(document.querySelector("#memory-events th").textContent, "101");
-  assert.deepEqual(deltas(0, 3), ["+1", "Unavailable", "+3"]);
-  assert.deepEqual(deltas(0, 4), ["+0.5", "Unavailable", "+1.5"]);
+  assert.deepEqual(deltas(202, 3), ["+1", "Unavailable", "+3"]);
+  assert.deepEqual(deltas(202, 4), ["+0.5", "Unavailable", "+1.5"]);
   document.querySelector("#memory-configurations input").click();
   assert.deepEqual(deltas(0, 3), ["+1", "+2", "+3"]);
   document.querySelectorAll("#memory-configurations input")[1].click();
@@ -3091,12 +3089,10 @@ test("memory local peaks handle empty, constant, endpoint and plateau traces", (
     );
     for (const row of document.querySelectorAll("#memory-events tr"))
       assert.match(row.cells[3].textContent, /\(local peak\)$/);
-    assert.equal(document.getElementById("memory-previous").disabled, true);
-    assert.equal(document.getElementById("memory-next").disabled, true);
   }
 });
 
-test("memory local peaks paginate without losing execution indices", (t) => {
+test("memory local peaks show every matching event without losing execution indices", (t) => {
   const viewer = openViewer(t);
   const { document, load } = viewer;
   load(demoGraph);
@@ -3105,18 +3101,23 @@ test("memory local peaks paginate without losing execution indices", (t) => {
     Array.from({ length: 203 }, (_, index) => index % 2),
   );
   document.getElementById("memory-peaks-only").click();
-  assert.equal(document.querySelectorAll("#memory-events tr").length, 100);
+  assert.equal(document.querySelectorAll("#memory-events tr").length, 101);
   assert.equal(
     document.querySelectorAll("#memory-events .memory-delta").length,
-    200,
+    202,
   );
   assert.equal(document.querySelector("#memory-events th").textContent, "2");
-  document.getElementById("memory-next").click();
-  assert.equal(document.querySelectorAll("#memory-events tr").length, 1);
-  assert.equal(document.querySelector("#memory-events th").textContent, "202");
-  assert.equal(document.getElementById("memory-next").disabled, true);
-  document.getElementById("memory-previous").click();
-  assert.equal(document.querySelector("#memory-events th").textContent, "2");
+  assert.equal(
+    document.querySelector("#memory-events tr:last-child th").textContent,
+    "202",
+  );
+  assert.equal(
+    document.getElementById("memory-range").textContent,
+    "101 events",
+  );
+  document.getElementById("memory-peaks-only").click();
+  assert.equal(document.querySelectorAll("#memory-events tr").length, 203);
+  assert.equal(document.querySelector("#memory-events th").textContent, "1");
 });
 
 test("memory peak links focus node indices in the estimated graph or pipeline stage", (t) => {
@@ -3180,7 +3181,7 @@ test("memory peak links focus node indices in the estimated graph or pipeline st
   }
 });
 
-test("memory chart batches 20,000 events and paginates rows under sticky table headers", (t) => {
+test("memory chart batches 20,000 events and shows every row under sticky table headers", (t) => {
   const { document, window, messages, load } = openViewer(t);
   load(demoGraph);
   document.getElementById("memory-tab").click();
@@ -3214,7 +3215,21 @@ test("memory chart batches 20,000 events and paginates rows under sticky table h
     requestId: messages.at(-1).requestId,
     profile: { name: "Large", device: "CPU", peakBytes: 32, events },
   });
-  assert.equal(document.querySelectorAll("#memory-events tr").length, 100);
+  assert.equal(document.querySelectorAll("#memory-events tr").length, 20_000);
+  assert.equal(
+    document.querySelector("#memory-events tr:last-child th").textContent,
+    "20000",
+  );
+  assert.equal(
+    document.querySelector("#memory-events tr:last-child").cells[4].textContent,
+    "Unavailable",
+  );
+  assert.equal(
+    document.getElementById("memory-range").textContent,
+    `${(20_000).toLocaleString()} events`,
+  );
+  assert.equal(document.getElementById("memory-previous"), null);
+  assert.equal(document.getElementById("memory-next"), null);
   const table = document.querySelector(".memory-table");
   assert.equal(window.getComputedStyle(table).overflow, "auto");
   const maxHeight = parseFloat(window.getComputedStyle(table).maxHeight);
@@ -3244,21 +3259,6 @@ test("memory chart batches 20,000 events and paginates rows under sticky table h
   assert.equal(path.match(/V/g).length, 39_999);
   assert.equal(path.includes("L"), false);
   assert.equal(/NaN|Infinity/.test(path), false);
-  document.getElementById("memory-next").click();
-  assert.match(document.getElementById("memory-range").textContent, /101–200/);
-  assert.equal(document.querySelector("#memory-events th").textContent, "101");
-  document.getElementById("memory-previous").click();
-  assert.equal(document.querySelector("#memory-events th").textContent, "1");
-  document.getElementById("memory-next").click();
-  document.getElementById("memory-peaks-only").click();
-  assert.equal(document.querySelectorAll("#memory-events tr").length, 1);
-  assert.equal(
-    document.querySelector("#memory-events th").textContent,
-    "12346",
-  );
-  assert.equal(document.getElementById("memory-previous").disabled, true);
-  assert.equal(document.getElementById("memory-next").disabled, true);
-  document.getElementById("memory-peaks-only").click();
   assert.equal(document.querySelector("#memory-events th").textContent, "1");
 });
 

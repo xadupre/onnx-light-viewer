@@ -16,10 +16,8 @@ function createMemoryPanel({
   let pendingConfiguration;
   let peaks = [];
   let peakIndices = new Set();
-  let page = 0;
   let zoom = 1;
   let inspectedIndex = 0;
-  const pageSize = 100;
   const view = byId("memory-view");
   const fields = byId("memory-dimensions");
   const status = byId("memory-status");
@@ -114,10 +112,10 @@ function createMemoryPanel({
   function table() {
     const peaksOnly = byId("memory-peaks-only").checked;
     const events = peaksOnly ? peaks : profile.events;
-    const start = page * pageSize;
     const body = byId("memory-events");
     body.replaceChildren();
-    for (const event of events.slice(start, start + pageSize)) {
+    const rows = document.createDocumentFragment();
+    for (const event of events) {
       const row = document.createElement("tr");
       for (const [index, value] of [
         event.index + 1,
@@ -166,15 +164,14 @@ function createMemoryPanel({
         else cell.textContent = value;
         row.append(cell);
       }
-      body.append(row);
+      rows.append(row);
     }
+    body.append(rows);
     byId("memory-range").textContent = events.length
-      ? `Events ${start + 1}–${Math.min(start + pageSize, events.length)} of ${events.length.toLocaleString()}`
+      ? `${events.length.toLocaleString()} events`
       : peaksOnly
         ? "No local peaks."
         : "No executable nodes; no per-node peak is available.";
-    byId("memory-previous").disabled = page === 0;
-    byId("memory-next").disabled = start + pageSize >= events.length;
   }
 
   function chartEventCount() {
@@ -568,7 +565,6 @@ function createMemoryPanel({
       "Dimensions changed. Estimate again to update the profile.";
   });
   byId("memory-peaks-only").addEventListener("change", () => {
-    page = 0;
     table();
   });
   byId("memory-stage").addEventListener("change", () => {
@@ -578,14 +574,6 @@ function createMemoryPanel({
     configured = false;
     open();
   });
-  for (const [id, delta] of [
-    ["memory-previous", -1],
-    ["memory-next", 1],
-  ])
-    byId(id).addEventListener("click", () => {
-      page += delta;
-      table();
-    });
 
   function handleMessage(message) {
     if (
@@ -727,7 +715,6 @@ function createMemoryPanel({
     peakIndices = new Set(peaks.map((event) => event.index));
     byId("memory-peaks-count").textContent =
       `${peaks.length.toLocaleString()} local peak${peaks.length === 1 ? "" : "s"}. Select a node to show it in Model.`;
-    page = 0;
     byId("memory-peak").textContent =
       profile.peakBytes === null
         ? "Unavailable (no nodes)"
