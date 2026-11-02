@@ -16,10 +16,8 @@ function createMemoryPanel({
   let pendingConfiguration;
   let peaks = [];
   let peakIndices = new Set();
-  let page = 0;
   let zoom = 1;
   let inspectedIndex = 0;
-  const pageSize = 100;
   const view = byId("memory-view");
   const fields = byId("memory-dimensions");
   const status = byId("memory-status");
@@ -27,6 +25,26 @@ function createMemoryPanel({
   const svg = byId("memory-chart");
   const scroll = byId("memory-chart-scroll");
   const inspection = byId("memory-inspection");
+  const deltaFormatter = new Intl.NumberFormat(undefined, {
+    signDisplay: "always",
+    maximumFractionDigits: 6,
+  });
+
+  function memoryDelta(before, after) {
+    if (before == null || after == null) return "Unavailable";
+    const bytes = BigInt(after) - BigInt(before);
+    const absolute = bytes < 0n ? -bytes : bytes;
+    const whole = deltaFormatter
+      .formatToParts(absolute / 1_000_000n)
+      .filter(({ type }) => type === "integer" || type === "group")
+      .map(({ value }) => value)
+      .join("");
+    const fraction = Number(absolute % 1_000_000n) / 1e6;
+    return deltaFormatter
+      .formatToParts(bytes < 0n ? -fraction : fraction)
+      .map(({ type, value }) => (type === "integer" ? whole : value))
+      .join("");
+  }
 
   function clearOverlay() {
     overlayProfile = undefined;
@@ -76,25 +94,45 @@ function createMemoryPanel({
       });
   }
 
+  function deltaValues(event, phase) {
+    const values = document.createDocumentFragment();
+    for (const configuration of configurations) {
+      const compared = configuration.profile.events[event.index];
+      const before = compared?.memory?.before_bytes ?? compared?.existingBytes;
+      const delta = memoryDelta(
+        before,
+        phase === "peak" ? compared?.deviceBytes : compared?.afterBytes,
+      );
+      const value = document.createElement("span");
+      value.className = "memory-delta";
+      value.style.color = configuration.color;
+      value.title = configuration.label;
+      value.textContent =
+        delta +
+        (phase === "peak" &&
+        configuration.profile === profile &&
+        peakIndices.has(event.index)
+          ? " (local peak)"
+          : "");
+      values.append(value);
+    }
+    return values;
+  }
+
   function table() {
     const peaksOnly = byId("memory-peaks-only").checked;
     const events = peaksOnly ? peaks : profile.events;
-    const start = page * pageSize;
     const body = byId("memory-events");
     body.replaceChildren();
-    for (const event of events.slice(start, start + pageSize)) {
+    const rows = document.createDocumentFragment();
+    for (const event of events) {
       const row = document.createElement("tr");
       for (const [index, value] of [
         event.index + 1,
         event.node || `node-${event.index}`,
         event.opType,
-        formatFileSize(event.existingBytes),
-        formatFileSize(event.outputBytes),
-        formatFileSize(event.scratchBytes),
-        `${formatFileSize(event.deviceBytes)}${peakIndices.has(event.index) ? " (local peak)" : ""}`,
-        event.afterBytes == null
-          ? "Unavailable"
-          : formatFileSize(event.afterBytes),
+        deltaValues(event, "peak"),
+        deltaValues(event, "net"),
         (event.decisions ?? [])
           .filter(({ action }) => action === "inplace")
           .map(({ input, output, kind }) => `${input} → ${output} (${kind})`)
@@ -118,8 +156,8 @@ function createMemoryPanel({
           })),
         ]
           .map(
-            ({ name, type, shape, tag, direction }) =>
-              `${direction}: ${name}: ${type ?? "Unknown"} ${shape ?? "Unknown shape"}${tag ? ` (${tag})` : ""}`,
+            ({ type, shape, tag, direction }) =>
+              `${direction}: ${type ?? "Unknown"} ${shape ?? "Unknown shape"}${tag ? ` (${tag})` : ""}`,
           )
           .join("\n") || "—",
       ].entries()) {
@@ -132,18 +170,18 @@ function createMemoryPanel({
           button.title = "Show this node in Model";
           button.addEventListener("click", () => selectNode(path, event.index));
           cell.append(button);
-        } else cell.textContent = value;
+        } else if (index === 3 || index === 4) cell.append(value);
+        else cell.textContent = value;
         row.append(cell);
       }
-      body.append(row);
+      rows.append(row);
     }
+    body.append(rows);
     byId("memory-range").textContent = events.length
-      ? `Events ${start + 1}–${Math.min(start + pageSize, events.length)} of ${events.length.toLocaleString()}`
+      ? `${events.length.toLocaleString()} events`
       : peaksOnly
         ? "No local peaks."
         : "No executable nodes; no per-node peak is available.";
-    byId("memory-previous").disabled = page === 0;
-    byId("memory-next").disabled = start + pageSize >= events.length;
   }
 
   function chartEventCount() {
@@ -174,7 +212,7 @@ function createMemoryPanel({
     const y = (bytes) => (240 - (210 * bytes) / Math.max(1, peak)).toFixed(5);
     const curves = byId("memory-comparison-curves");
     curves.replaceChildren();
-    for (const item of configurations) {
+    for (const [configurationIndex, item] of configurations.entries()) {
       const trace = item.profile.events;
       const points = trace.length
         ? [
@@ -193,6 +231,7 @@ function createMemoryPanel({
           ? byId("memory-curve")
           : document.createElementNS("http://www.w3.org/2000/svg", "path");
       curve.setAttribute("class", "memory-curve");
+      curve.dataset.configurationIndex = String(configurationIndex);
       curve.setAttribute("d", points.join(" "));
       curve.style.stroke = item.color;
       curve.setAttribute("stroke-dasharray", item.dash);
@@ -339,10 +378,14 @@ function createMemoryPanel({
       !events.length || events.at(-1).afterBytes != null;
   }
 
-  function inspect(index, phase = "during") {
-    const event = profile?.events[index];
+  function inspect(
+    index,
+    phase = "during",
+    configuration = configurations.find((item) => item.profile === profile),
+  ) {
+    const event = configuration?.profile.events[index];
     if (!event) return;
-    inspectedIndex = index;
+    if (configuration.profile === profile) inspectedIndex = index;
     const bytes =
       phase === "before"
         ? (event.memory?.before_bytes ?? event.existingBytes)
@@ -358,7 +401,7 @@ function createMemoryPanel({
         ? value
         : undefined;
     const lines = [
-      configurations.find((item) => item.profile === profile).label,
+      configuration.label,
       `#${event.index + 1} ${event.opType}${event.node ? `: ${event.node}` : ""} — ${phase} execution`,
       `Memory: ${amount(bytes)}`,
       `Already allocated: ${amount(event.existingBytes)}`,
@@ -434,7 +477,15 @@ function createMemoryPanel({
     { passive: false },
   );
   svg.addEventListener("pointermove", (event) => {
-    if (!profile?.events.length) return;
+    const curve = event.target.closest(".memory-curve");
+    const configuration = curve
+      ? configurations[Number(curve.dataset.configurationIndex)]
+      : configurations.find((item) => item.profile === profile);
+    const trace = configuration?.profile;
+    if (!trace?.events.length) {
+      inspection.hidden = true;
+      return;
+    }
     const rect = svg.getBoundingClientRect();
     if (!rect.width) return;
     const width = Number(svg.getAttribute("viewBox").split(" ")[2]);
@@ -447,17 +498,18 @@ function createMemoryPanel({
       return;
     }
     const step = ((position - 60) * (chartEventCount() * 3 + 1)) / (width - 80);
-    if (step > profile.events.length * 3 + 1) {
+    if (step > trace.events.length * 3 + 1) {
       inspection.hidden = true;
       return;
     }
     const index = Math.min(
-      profile.events.length - 1,
+      trace.events.length - 1,
       Math.max(0, Math.floor((step - 1) / 3)),
     );
     inspect(
       index,
       step < 1 ? "before" : step >= index * 3 + 3 ? "after" : "during",
+      configuration,
     );
   });
   svg.addEventListener("pointerleave", () => {
@@ -492,9 +544,9 @@ function createMemoryPanel({
     const dimensions = {};
     for (const input of fields.querySelectorAll("input")) {
       const value = Number(input.value);
-      if (!Number.isSafeInteger(value) || value <= 0) {
+      if (!input.value.trim() || !Number.isSafeInteger(value) || value < 0) {
         status.textContent =
-          "Enter positive safe integers for every dynamic dimension.";
+          "Enter non-negative safe integers for every dynamic dimension.";
         return;
       }
       dimensions[input.name] = value;
@@ -523,7 +575,6 @@ function createMemoryPanel({
       "Dimensions changed. Estimate again to update the profile.";
   });
   byId("memory-peaks-only").addEventListener("change", () => {
-    page = 0;
     table();
   });
   byId("memory-stage").addEventListener("change", () => {
@@ -533,14 +584,6 @@ function createMemoryPanel({
     configured = false;
     open();
   });
-  for (const [id, delta] of [
-    ["memory-previous", -1],
-    ["memory-next", 1],
-  ])
-    byId(id).addEventListener("click", () => {
-      page += delta;
-      table();
-    });
 
   function handleMessage(message) {
     if (
@@ -583,7 +626,7 @@ function createMemoryPanel({
         label.htmlFor = input.id;
         input.name = dimension.key;
         input.type = "number";
-        input.min = "1";
+        input.min = "0";
         input.max = String(Number.MAX_SAFE_INTEGER);
         input.step = "1";
         input.required = true;
@@ -682,7 +725,6 @@ function createMemoryPanel({
     peakIndices = new Set(peaks.map((event) => event.index));
     byId("memory-peaks-count").textContent =
       `${peaks.length.toLocaleString()} local peak${peaks.length === 1 ? "" : "s"}. Select a node to show it in Model.`;
-    page = 0;
     byId("memory-peak").textContent =
       profile.peakBytes === null
         ? "Unavailable (no nodes)"

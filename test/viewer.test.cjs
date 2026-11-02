@@ -2529,15 +2529,25 @@ test("memory estimates are lazy, accept dimensions, and discard stale results an
   });
   const dimension = document.querySelector("#memory-dimensions input");
   assert.equal(dimension.value, "1");
-  dimension.value = "3";
   const submit = () =>
     document
       .getElementById("memory-form")
       .dispatchEvent(new window.Event("submit", { cancelable: true }));
+  for (const value of ["", "-1", "1.5", "9007199254740992"]) {
+    dimension.value = value;
+    submit();
+    assert.equal(memoryRequests().length, 1);
+    assert.match(
+      document.getElementById("memory-status").textContent,
+      /non-negative safe integers/,
+    );
+  }
+  dimension.value = "0";
+  assert.equal(dimension.checkValidity(), true);
   submit();
   const request = memoryRequests().at(-1);
   assert.equal(request.type, "memory-profile");
-  assert.equal(request.dimensions["symbol:N"], 3);
+  assert.equal(request.dimensions["symbol:N"], 0);
   assert.equal(document.getElementById("memory-run").disabled, true);
   send({ type: "memory-profile", requestId: setup.requestId, profile: {} });
   assert.equal(document.getElementById("memory-results").hidden, true);
@@ -2759,6 +2769,39 @@ test("memory configurations share scales and retain selectable estimates across 
     document.getElementById("memory-chart-peak").textContent,
     "48 bytes",
   );
+  const chart = document.getElementById("memory-chart");
+  chart.getBoundingClientRect = () => new window.DOMRect(0, 0, 1000, 330);
+  const hoverCurve = (curve, step, y) =>
+    curve.dispatchEvent(
+      new window.MouseEvent("pointermove", {
+        bubbles: true,
+        clientX: 60 + (920 * step) / 4,
+        clientY: y,
+      }),
+    );
+  const inspection = document.getElementById("memory-inspection");
+  for (const [step, y, phase, bytes] of [
+    [0.5, 187.5, "before", 12],
+    [2, 135, "during", 24],
+    [3.5, 187.5, "after", 12],
+  ]) {
+    hoverCurve(previousCurve, step, y);
+    assert.match(inspection.textContent, /Configuration 1: N <img src=x>=1/);
+    assert.match(
+      inspection.textContent,
+      new RegExp(`${phase} execution\\nMemory: .*${bytes} bytes`),
+    );
+  }
+  assert.equal(radios()[1].checked, true);
+  assert.equal(dimension.value, "2");
+  assert.equal(document.getElementById("memory-peak").textContent, "48 bytes");
+  assert.match(
+    document.getElementById("memory-events").textContent,
+    /batch-48/,
+  );
+  hoverCurve(selectedCurve, 2, 30);
+  assert.match(inspection.textContent, /Configuration 2: N <img src=x>=2/);
+  assert.match(inspection.textContent, /during execution\nMemory: .*48 bytes/);
   radios()[0].click();
   assert.equal(dimension.value, "1");
   assert.equal(document.getElementById("memory-peak").textContent, "24 bytes");
@@ -2814,6 +2857,85 @@ test("memory configurations share scales and retain selectable estimates across 
   assert.equal(document.getElementById("memory-run").disabled, false);
 });
 
+test("memory delta columns compare every configuration in its curve color", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  load(demoGraph);
+  document.getElementById("memory-tab").click();
+  send({
+    type: "memory-inputs",
+    requestId: messages.at(-1).requestId,
+    dimensions: [{ key: "symbol:N", label: "N", defaultValue: 1 }],
+    stages: [],
+    path: [],
+  });
+  for (const number of [1, 2, 3]) {
+    document.querySelector("#memory-dimensions input").value = String(number);
+    document
+      .getElementById("memory-form")
+      .dispatchEvent(new window.Event("submit", { cancelable: true }));
+    send({
+      type: "memory-profile",
+      requestId: messages.at(-1).requestId,
+      profile: {
+        name: "Colored deltas",
+        device: "CPU",
+        peakBytes: number * 2e6,
+        events: Array.from({ length: number === 2 ? 1 : 203 }, (_, index) => ({
+          index,
+          node: `node-${index}`,
+          opType: "Relu",
+          existingBytes: number * 1e6,
+          outputBytes: number * 1e6,
+          scratchBytes: 0,
+          deviceBytes: number * 2e6,
+          afterBytes: number * 1.5e6,
+        })),
+      },
+    });
+  }
+  const entries = (row, column) => [
+    ...document.querySelectorAll("#memory-events tr")[row].cells[column]
+      .children,
+  ];
+  const deltas = (row, column) =>
+    entries(row, column).map((value) =>
+      value.textContent.replace(/ \(local peak\)$/, ""),
+    );
+  assert.deepEqual(deltas(0, 3), ["+1", "+2", "+3"]);
+  assert.deepEqual(deltas(0, 4), ["+0.5", "+1", "+1.5"]);
+  assert.deepEqual(deltas(1, 3), ["+1", "Unavailable", "+3"]);
+  assert.deepEqual(deltas(1, 4), ["+0.5", "Unavailable", "+1.5"]);
+  assert.equal(document.querySelectorAll("#memory-events tr").length, 203);
+  assert.equal(
+    document.querySelectorAll("#memory-events .memory-delta").length,
+    1218,
+  );
+  const swatches = document.querySelectorAll(".memory-configuration-swatch");
+  for (const column of [3, 4])
+    for (const [index, value] of entries(0, column).entries()) {
+      const curve = document.querySelector(
+        `.memory-curve[data-configuration-index="${index}"]`,
+      );
+      assert.equal(value.style.color, swatches[index].style.borderColor);
+      assert.equal(value.title, curve.getAttribute("aria-label"));
+      assert.equal(window.getComputedStyle(value).display, "block");
+    }
+  assert.deepEqual(deltas(202, 3), ["+1", "Unavailable", "+3"]);
+  assert.deepEqual(deltas(202, 4), ["+0.5", "Unavailable", "+1.5"]);
+  document.querySelector("#memory-configurations input").click();
+  assert.deepEqual(deltas(0, 3), ["+1", "+2", "+3"]);
+  document.querySelectorAll("#memory-configurations input")[1].click();
+  document.getElementById("memory-remove").click();
+  assert.deepEqual(deltas(0, 3), ["+1", "+3"]);
+  assert.deepEqual(deltas(0, 4), ["+0.5", "+1.5"]);
+  assert.match(entries(0, 3)[1].title, /^Configuration 3:/);
+  document.getElementById("memory-peaks-only").click();
+  assert.equal(document.querySelectorAll("#memory-events tr").length, 1);
+  assert.deepEqual(deltas(0, 3), ["+1", "+3"]);
+});
+
 test("memory comparison handles empty and different-length traces on the same event axis", (t) => {
   const viewer = openViewer(t);
   const { document, window, load } = viewer;
@@ -2829,6 +2951,22 @@ test("memory comparison handles empty and different-length traces on the same ev
     "an empty selected trace must not hide comparisons",
   );
   assert.equal(document.getElementById("memory-curve").getAttribute("d"), "");
+  chart.getBoundingClientRect = () => new window.DOMRect(0, 0, 1000, 330);
+  const longestCurve = document.querySelector(
+    '.memory-curve[aria-label^="Configuration 1:"]',
+  );
+  longestCurve.dispatchEvent(
+    new window.MouseEvent("pointermove", {
+      bubbles: true,
+      clientX: 60 + (920 * 8) / 10,
+      clientY: 135,
+    }),
+  );
+  assert.match(
+    document.getElementById("memory-inspection").textContent,
+    /Configuration 1:.*\n#3 Relu.*during execution\nMemory: .*8 bytes/,
+  );
+  assert.equal(document.getElementById("memory-curve").getAttribute("d"), "");
   const select = (index) =>
     document.querySelectorAll("#memory-configurations input")[index].click();
   select(1);
@@ -2836,7 +2974,6 @@ test("memory comparison handles empty and different-length traces on the same ev
     document.getElementById("memory-curve").getAttribute("d"),
     /H152\.00000/,
   );
-  chart.getBoundingClientRect = () => new window.DOMRect(0, 0, 1000, 330);
   const hover = (step) =>
     chart.dispatchEvent(
       new window.MouseEvent("pointermove", {
@@ -2856,6 +2993,19 @@ test("memory comparison handles empty and different-length traces on the same ev
   assert.equal(document.querySelectorAll(".memory-curve").length, 3);
   select(0);
   document.getElementById("memory-remove").click();
+  document
+    .querySelector('.memory-curve[aria-label^="Configuration 2:"]')
+    .dispatchEvent(
+      new window.MouseEvent("pointermove", {
+        bubbles: true,
+        clientX: 520,
+        clientY: 30,
+      }),
+    );
+  assert.match(
+    document.getElementById("memory-inspection").textContent,
+    /Configuration 2:.*\n#1 Relu.*during execution\nMemory: .*4 bytes/,
+  );
   select(0);
   assert.match(
     document.getElementById("memory-curve").getAttribute("d"),
@@ -2951,13 +3101,11 @@ test("memory local peaks handle empty, constant, endpoint and plateau traces", (
       JSON.stringify(bytes),
     );
     for (const row of document.querySelectorAll("#memory-events tr"))
-      assert.match(row.cells[6].textContent, /\(local peak\)$/);
-    assert.equal(document.getElementById("memory-previous").disabled, true);
-    assert.equal(document.getElementById("memory-next").disabled, true);
+      assert.match(row.cells[3].textContent, /\(local peak\)$/);
   }
 });
 
-test("memory local peaks paginate without losing execution indices", (t) => {
+test("memory local peaks show every matching event without losing execution indices", (t) => {
   const viewer = openViewer(t);
   const { document, load } = viewer;
   load(demoGraph);
@@ -2966,14 +3114,23 @@ test("memory local peaks paginate without losing execution indices", (t) => {
     Array.from({ length: 203 }, (_, index) => index % 2),
   );
   document.getElementById("memory-peaks-only").click();
-  assert.equal(document.querySelectorAll("#memory-events tr").length, 100);
+  assert.equal(document.querySelectorAll("#memory-events tr").length, 101);
+  assert.equal(
+    document.querySelectorAll("#memory-events .memory-delta").length,
+    202,
+  );
   assert.equal(document.querySelector("#memory-events th").textContent, "2");
-  document.getElementById("memory-next").click();
-  assert.equal(document.querySelectorAll("#memory-events tr").length, 1);
-  assert.equal(document.querySelector("#memory-events th").textContent, "202");
-  assert.equal(document.getElementById("memory-next").disabled, true);
-  document.getElementById("memory-previous").click();
-  assert.equal(document.querySelector("#memory-events th").textContent, "2");
+  assert.equal(
+    document.querySelector("#memory-events tr:last-child th").textContent,
+    "202",
+  );
+  assert.equal(
+    document.getElementById("memory-range").textContent,
+    "101 events",
+  );
+  document.getElementById("memory-peaks-only").click();
+  assert.equal(document.querySelectorAll("#memory-events tr").length, 203);
+  assert.equal(document.querySelector("#memory-events th").textContent, "1");
 });
 
 test("memory peak links focus node indices in the estimated graph or pipeline stage", (t) => {
@@ -3037,7 +3194,7 @@ test("memory peak links focus node indices in the estimated graph or pipeline st
   }
 });
 
-test("memory chart batches 20,000 events and paginates every row", (t) => {
+test("memory chart batches 20,000 events and shows every row under sticky table headers", (t) => {
   const { document, window, messages, load } = openViewer(t);
   load(demoGraph);
   document.getElementById("memory-tab").click();
@@ -3071,7 +3228,30 @@ test("memory chart batches 20,000 events and paginates every row", (t) => {
     requestId: messages.at(-1).requestId,
     profile: { name: "Large", device: "CPU", peakBytes: 32, events },
   });
-  assert.equal(document.querySelectorAll("#memory-events tr").length, 100);
+  assert.equal(document.querySelectorAll("#memory-events tr").length, 20_000);
+  assert.equal(
+    document.querySelector("#memory-events tr:last-child th").textContent,
+    "20000",
+  );
+  assert.equal(
+    document.querySelector("#memory-events tr:last-child").cells[4].textContent,
+    "Unavailable",
+  );
+  assert.equal(
+    document.getElementById("memory-range").textContent,
+    `${(20_000).toLocaleString()} events`,
+  );
+  assert.equal(document.getElementById("memory-previous"), null);
+  assert.equal(document.getElementById("memory-next"), null);
+  const table = document.querySelector(".memory-table");
+  assert.equal(window.getComputedStyle(table).overflow, "auto");
+  const maxHeight = parseFloat(window.getComputedStyle(table).maxHeight);
+  assert.ok(maxHeight > 0 && maxHeight < window.innerHeight);
+  for (const header of table.querySelectorAll("thead th")) {
+    const style = window.getComputedStyle(header);
+    assert.equal(style.position, "sticky");
+    assert.equal(style.top, "0px");
+  }
   assert.equal(document.querySelectorAll("#memory-chart path").length, 4);
   const ticks = document.querySelectorAll(".memory-node-number");
   assert.ok(ticks.length >= 2 && ticks.length <= 12);
@@ -3092,21 +3272,6 @@ test("memory chart batches 20,000 events and paginates every row", (t) => {
   assert.equal(path.match(/V/g).length, 39_999);
   assert.equal(path.includes("L"), false);
   assert.equal(/NaN|Infinity/.test(path), false);
-  document.getElementById("memory-next").click();
-  assert.match(document.getElementById("memory-range").textContent, /101–200/);
-  assert.equal(document.querySelector("#memory-events th").textContent, "101");
-  document.getElementById("memory-previous").click();
-  assert.equal(document.querySelector("#memory-events th").textContent, "1");
-  document.getElementById("memory-next").click();
-  document.getElementById("memory-peaks-only").click();
-  assert.equal(document.querySelectorAll("#memory-events tr").length, 1);
-  assert.equal(
-    document.querySelector("#memory-events th").textContent,
-    "12346",
-  );
-  assert.equal(document.getElementById("memory-previous").disabled, true);
-  assert.equal(document.getElementById("memory-next").disabled, true);
-  document.getElementById("memory-peaks-only").click();
   assert.equal(document.querySelector("#memory-events th").textContent, "1");
 });
 
@@ -3160,7 +3325,14 @@ test("memory hover inspects numerical and symbolic allocations at each phase, sa
             outputs: { "": "30*N" },
           },
           inputs: [{ name: "x", type: "FLOAT", shape: "[2,3]", tag: null }],
-          outputs: [],
+          outputs: [
+            {
+              name: "model.layers.0.attention.output",
+              type: "FLOAT",
+              shape: "[2,3]",
+              tag: "intermediate",
+            },
+          ],
           decisions: [],
         },
       ],
@@ -3169,6 +3341,10 @@ test("memory hover inspects numerical and symbolic allocations at each phase, sa
   const chart = document.getElementById("memory-chart");
   chart.getBoundingClientRect = () => new window.DOMRect(0, 0, 1000, 330);
   const inspection = document.getElementById("memory-inspection");
+  assert.equal(
+    document.querySelector("#memory-events tr").lastElementChild.textContent,
+    "in: FLOAT [2,3]\nout: FLOAT [2,3] (intermediate)",
+  );
   const hover = (step) =>
     chart.dispatchEvent(
       new window.MouseEvent("pointermove", {
@@ -3179,10 +3355,26 @@ test("memory hover inspects numerical and symbolic allocations at each phase, sa
   hover(0.5);
   assert.match(inspection.textContent, /before execution\nMemory: .*10 bytes/);
   assert.match(inspection.textContent, /Already allocated: .*20 bytes/);
-  assert.equal(
-    document.querySelectorAll("#memory-results thead th")[3].textContent,
-    "Already allocated",
+  assert.deepEqual(
+    [...document.querySelectorAll("#memory-results thead th")].map(
+      (cell) => cell.textContent,
+    ),
+    [
+      "Event",
+      "Node",
+      "Operator",
+      "Peak delta (MB)",
+      "Net delta (MB)",
+      "In-place",
+      "Release",
+      "Release shape",
+      "Tensor shapes",
+    ],
   );
+  const cells = document.querySelector("#memory-events tr").cells;
+  assert.equal(cells.length, 9);
+  assert.equal(cells[3].textContent, "+0.00009 (local peak)");
+  assert.equal(cells[4].textContent, "Unavailable");
   hover(2);
   assert.equal(inspection.hidden, false);
   assert.match(inspection.textContent, /during execution\nMemory: .*100 bytes/);
@@ -3201,6 +3393,10 @@ test("memory hover inspects numerical and symbolic allocations at each phase, sa
   );
   assert.match(inspection.textContent, /scratch excluded\): 8\+36\*N bytes/);
   assert.match(inspection.textContent, /in: x: FLOAT \[2,3\]/);
+  assert.match(
+    inspection.textContent,
+    /out: model\.layers\.0\.attention\.output: FLOAT \[2,3\] \(intermediate\)/,
+  );
   assert.equal(inspection.querySelector("img"), null);
   hover(3.5);
   assert.match(inspection.textContent, /after execution\nMemory: Unavailable/);
@@ -3563,18 +3759,25 @@ test("memory steps allocate before each two-interval node and release into one-i
   );
   assert.equal(document.getElementById("memory-final-status").hidden, false);
   const cells = document.querySelectorAll("#memory-events tr")[1].cells;
-  assert.match(cells[7].textContent, /Unavailable/);
-  assert.equal(cells[8].textContent, "a → b (equal)");
-  assert.equal(cells[9].textContent, "<img src=x>");
-  assert.equal(cells[10].textContent, "target");
-  assert.match(cells[11].textContent, /target: INT64 \[2\] \(shape\)/);
-  assert.match(cells[11].textContent, /b: FLOAT \[2,3\]/);
+  assert.match(cells[4].textContent, /Unavailable/);
+  assert.equal(cells[5].textContent, "a → b (equal)");
+  assert.equal(cells[6].textContent, "<img src=x>");
+  assert.equal(cells[7].textContent, "target");
+  assert.equal(cells[8].textContent, "in: INT64 [2] (shape)\nout: FLOAT [2,3]");
   assert.equal(document.querySelector("#memory-events img"), null);
 
   profile.events = [profile.events[0]];
   profile.events[0].afterBytes = 40;
   display();
   assert.equal(document.getElementById("memory-final-status").hidden, true);
+  assert.equal(
+    document.querySelector("#memory-events tr").cells[3].textContent,
+    "+0.00008 (local peak)",
+  );
+  assert.equal(
+    document.querySelector("#memory-events tr").cells[4].textContent,
+    "+0.00002",
+  );
   assert.equal(document.querySelectorAll(".memory-node-number").length, 1);
   assert.equal(
     document.querySelectorAll("#memory-operator-labels > g").length,
@@ -3591,6 +3794,10 @@ test("memory steps allocate before each two-interval node and release into one-i
     /V240\.00000 H980\.00000$/,
   );
   assert.equal(document.getElementById("memory-final-status").hidden, true);
+  assert.equal(
+    document.querySelector("#memory-events tr").cells[4].textContent,
+    "-0.00002",
+  );
   delete profile.events[0].afterBytes;
   display();
   assert.equal(
@@ -3599,9 +3806,28 @@ test("memory steps allocate before each two-interval node and release into one-i
   );
   assert.equal(document.getElementById("memory-final-status").hidden, false);
   assert.equal(
-    document.querySelector("#memory-events tr").cells[7].textContent,
+    document.querySelector("#memory-events tr").cells[4].textContent,
     "Unavailable",
   );
+  for (const [before, during, after, peakDelta, netDelta] of [
+    [1_000_000, 2_500_000, 750_000, "+1.5", "-0.25"],
+    [0, 1, 1, "+0.000001", "+0.000001"],
+    [2_000_000, 2_000_000, 2_000_000, "+0", "+0"],
+  ]) {
+    Object.assign(profile.events[0], {
+      memory: { before_bytes: before },
+      deviceBytes: during,
+      afterBytes: after,
+    });
+    profile.peakBytes = during;
+    display();
+    const cells = document.querySelector("#memory-events tr").cells;
+    assert.equal(
+      cells[3].textContent.replace(/ \(local peak\)$/, ""),
+      peakDelta,
+    );
+    assert.equal(cells[4].textContent, netDelta);
+  }
   profile.events = [];
   profile.peakBytes = null;
   display();

@@ -409,6 +409,7 @@ p {
 }
 .memory-table {
   overflow: auto;
+  max-height: 60vh;
 }
 .tensor-list-table {
   overflow: auto;
@@ -468,7 +469,7 @@ body.resizing-tensor-column * {
 .memory-table table {
   border-collapse: collapse;
   width: 100%;
-  min-width: 1400px;
+  min-width: 1100px;
 }
 .memory-table th,
 .memory-table td {
@@ -481,6 +482,16 @@ body.resizing-tensor-column * {
 }
 .memory-table td:last-child {
   min-width: 240px;
+}
+.memory-delta {
+  display: block;
+  white-space: nowrap;
+}
+.memory-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--panel);
 }
 #memory-range {
   margin: 0 12px;

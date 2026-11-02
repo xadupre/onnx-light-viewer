@@ -707,6 +707,24 @@ async function configurePanel(
         pythonPath: process.platform === "win32" ? "python" : "python3",
       },
     );
+  const getMemoryDimensions = (): Record<string, number> => {
+    const stored = context.globalState.get<unknown>("memoryDimensions");
+    if (stored === undefined) return {};
+    if (!stored || typeof stored !== "object" || Array.isArray(stored)) {
+      log.record("FAILED", "Ignoring invalid saved memory dimension values.");
+      return {};
+    }
+    const entries = Object.entries(stored);
+    const valid = entries.filter(
+      (entry): entry is [string, number] =>
+        typeof entry[1] === "number" &&
+        Number.isSafeInteger(entry[1]) &&
+        entry[1] >= 0,
+    );
+    if (valid.length !== entries.length)
+      log.record("FAILED", "Ignoring invalid saved memory dimension values.");
+    return Object.fromEntries(valid);
+  };
   const sendSettings = async (
     type: "settings-info" | "status-info" = "settings-info",
   ) => {
@@ -1302,12 +1320,21 @@ async function configurePanel(
             if (!isGraphPath(path))
               throw new Error("Invalid memory profiling path.");
             setup = { stages, path };
-            if (message.type === "memory-inputs")
+            if (message.type === "memory-inputs") {
+              const remembered = getMemoryDimensions();
               return {
-                dimensions: native.memoryProfileInputs(path),
+                dimensions: native
+                  .memoryProfileInputs(path)
+                  .map((dimension) => ({
+                    ...dimension,
+                    defaultValue: Object.hasOwn(remembered, dimension.label)
+                      ? remembered[dimension.label]
+                      : dimension.defaultValue,
+                  })),
                 stages,
                 path,
               };
+            }
             const values = message.dimensions;
             if (!values || typeof values !== "object" || Array.isArray(values))
               throw new Error("Expected dynamic dimension values.");
@@ -1316,15 +1343,32 @@ async function configurePanel(
                 if (
                   typeof value !== "number" ||
                   !Number.isSafeInteger(value) ||
-                  value <= 0
+                  value < 0
                 )
                   throw new Error(
-                    `Expected a positive safe integer for ${key}.`,
+                    `Expected a non-negative safe integer for ${key}.`,
                   );
                 return [key, value];
               }),
             );
-            return { profile: await native.memoryProfile(dimensions, path) };
+            const inputs = native.memoryProfileInputs(path);
+            const profile = await native.memoryProfile(dimensions, path);
+            if (!isCurrent()) return;
+            if (inputs.length) {
+              const remembered = getMemoryDimensions();
+              if (
+                inputs.some(
+                  ({ key, label }) => remembered[label] !== dimensions[key],
+                )
+              )
+                await context.globalState.update("memoryDimensions", {
+                  ...remembered,
+                  ...Object.fromEntries(
+                    inputs.map(({ key, label }) => [label, dimensions[key]]),
+                  ),
+                });
+            }
+            return { profile };
           });
           if (isCurrent() && result)
             await postMessage({

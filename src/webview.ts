@@ -627,7 +627,7 @@ export function webviewHtml(
       <p>One event per node in execution order, accounting for native lifetime and potential in-place reuse decisions. Function/control-flow internals and allocator overhead are not included. Scratch estimates depend on registered estimators; zero can mean unavailable.</p>
       <form id="memory-form">
         <div id="memory-stage-field" hidden><label for="memory-stage">Pipeline stage</label><select id="memory-stage"></select></div>
-        <fieldset><legend>Dynamic dimensions (default: 1)</legend><div id="memory-dimensions"></div><p id="memory-no-dimensions" hidden>No dynamic dimensions to fill.</p></fieldset>
+        <fieldset><legend>Dynamic dimensions</legend><p>Last successfully profiled values are restored by dimension name across models and VS Code sessions. New dimensions default to 1.</p><div id="memory-dimensions"></div><p id="memory-no-dimensions" hidden>No dynamic dimensions to fill.</p></fieldset>
         <button id="memory-run" type="submit" disabled>Estimate memory</button>
       </form>
       <p id="memory-status" role="status">Open a model to estimate its memory.</p>
@@ -653,10 +653,11 @@ export function webviewHtml(
         <pre id="memory-inspection" role="status" hidden></pre>
         <p id="memory-final-status" role="status" hidden>Final post-release memory is unavailable for this profile. The curve stops at the last available value.</p>
         <h3>Estimated execution events</h3>
+        <p>Each delta column lists all configurations in their curve colors; hover a value to identify its configuration. Net delta compares memory after releases with memory before output allocation. Other columns and the local-peak filter follow the selected configuration.</p>
         <p id="memory-peaks-count"></p>
         <label><input id="memory-peaks-only" type="checkbox"> Local peaks only</label>
-        <div class="memory-table"><table><thead><tr><th scope="col">Event</th><th scope="col">Node</th><th scope="col">Operator</th><th scope="col">Already allocated</th><th scope="col">New outputs</th><th scope="col">Scratch</th><th scope="col">During execution</th><th scope="col">After release</th><th scope="col">In-place</th><th scope="col">Release</th><th scope="col">Release shape</th><th scope="col">Tensor shapes</th></tr></thead><tbody id="memory-events"></tbody></table></div>
-        <nav aria-label="Memory events"><button id="memory-previous" type="button" disabled>Previous</button><span id="memory-range" role="status"></span><button id="memory-next" type="button" disabled>Next</button></nav>
+        <div class="memory-table"><table><thead><tr><th scope="col">Event</th><th scope="col">Node</th><th scope="col">Operator</th><th scope="col" title="Memory during execution minus memory before the node. 1 MB = 1,000,000 bytes.">Peak delta (MB)</th><th scope="col" title="Memory after releases minus memory before output allocation. 1 MB = 1,000,000 bytes.">Net delta (MB)</th><th scope="col">In-place</th><th scope="col">Release</th><th scope="col">Release shape</th><th scope="col">Tensor shapes</th></tr></thead><tbody id="memory-events"></tbody></table></div>
+        <p id="memory-range" role="status"></p>
       </div>
     </section>
     <section id="prompt-view" role="tabpanel" aria-labelledby="prompt-tab" tabindex="0" hidden>
