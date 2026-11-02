@@ -642,9 +642,13 @@ function createMemoryPanel({
       radio.type = "radio";
       radio.name = "memory-configuration";
       radio.checked = configuration === item;
-      radio.addEventListener("change", () => {
+      const restoreConfiguration = () => {
         showConfiguration(configuration);
         legend.querySelector("input:checked").focus();
+      };
+      radio.addEventListener("change", restoreConfiguration);
+      radio.addEventListener("click", () => {
+        if (configuration === item) restoreConfiguration();
       });
       const swatch = document.createElement("span");
       swatch.className = "memory-configuration-swatch";
