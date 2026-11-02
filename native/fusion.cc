@@ -312,7 +312,7 @@ std::vector<size_t> FinalizedNodeOrder(const ol::ModelProto &model,
   return permutation;
 }
 
-void FinalizeCapturedPlan(const ol::ModelProto &model, ol::RewritingProto &plan,
+bool FinalizeCapturedPlan(const ol::ModelProto &model, ol::RewritingProto &plan,
                           std::vector<std::vector<StoredModel::FusionMatch>> &history,
                           const std::vector<FusionNodeKey> &inserted_order,
                           const ol::core::builder::GraphBuilder &builder) {
@@ -321,7 +321,7 @@ void FinalizeCapturedPlan(const ol::ModelProto &model, ol::RewritingProto &plan,
   for (size_t i = 0; i < permutation.size(); ++i)
     reordered |= permutation[i] != i;
   if (!reordered)
-    return;
+    return false;
   for (auto &previous : history)
     for (auto &match : previous) {
       for (auto &node : match.nodes)
@@ -338,6 +338,7 @@ void FinalizeCapturedPlan(const ol::ModelProto &model, ol::RewritingProto &plan,
     reorder->ref_added_nodes()[i].ref_attribute() = builder.Nodes()[i].attribute().SharedCopy();
     reorder->add_added_nodes_positions(i);
   }
+  return true;
 }
 
 Napi::Object FusionNode(Napi::Env env, const ol::NodeProto &node) {
@@ -485,6 +486,8 @@ Napi::Object OptimizationReportValue(Napi::Env env,
   result.Set("matchingTimeNs", Napi::Number::New(env, report.matching_time_ns));
   result.Set("rewritingTimeNs", Napi::Number::New(env, report.rewriting_time_ns));
   result.Set("cleanupTimeNs", Napi::Number::New(env, report.cleanup_time_ns));
+  result.Set("moveShapeAndSizeTimeNs", Napi::Number::New(env, report.move_shape_and_size_time_ns));
+  result.Set("movedShapeAndSizeNodes", Napi::Number::New(env, report.moved_shape_and_size_nodes));
   result.Set("constantFoldingTimeNs", Napi::Number::New(env, report.constant_folding_time_ns));
   result.Set("subgraphOptimizationTimeNs",
              Napi::Number::New(env, report.subgraph_optimization_time_ns));
@@ -761,10 +764,15 @@ public:
       plan.ref_added_functions() = declarations.functions().SharedCopy();
       plan.ref_required_opset_imports() = declarations.opset_import();
       builder::GraphBuilder original(snapshot_);
+      plan = original.CaptureRewritings(plan);
       auto rewritten = original.ApplyRewritings(plan);
       snapshot_ = rewritten.ToModel(snapshot_.ir_version());
       ol::VerifyModel(snapshot_);
-      FinalizeCapturedPlan(snapshot_, plan, history_, inserted_order, rewritten);
+      if (FinalizeCapturedPlan(snapshot_, plan, history_, inserted_order, rewritten)) {
+        plan.clear_hash_before();
+        plan.clear_hash_after();
+        plan = original.CaptureRewritings(plan);
+      }
       plan_ = std::move(plan);
     } catch (const std::exception &error) {
       SetError(error.what());
@@ -930,6 +938,8 @@ private:
       auto rewrites = optimizer.Optimize(-1, optimization_report_.get());
       plan_.ref_added_functions() = rewrites.added_functions().SharedCopy();
       plan_.ref_required_opset_imports() = rewrites.required_opset_imports();
+      plan_.ref_replaced_function_ids() = rewrites.replaced_function_ids();
+      plan_.ref_moved_nodes() = rewrites.moved_nodes().SharedCopy();
       for (const auto &edit : rewrites.rewrites())
         *plan_.add_rewrites() = edit.SharedCopy();
       auto optimized_graph = graph.BuildGraph();
@@ -938,7 +948,7 @@ private:
       *snapshot_.mutable_graph() = std::move(optimized_graph);
       PreserveFunctionBodies(snapshot_, original);
     }
-    if (plan_.rewrites().empty())
+    if (plan_.rewrites().empty() && plan_.moved_nodes().empty())
       return;
     auto expected_functions = snapshot_.functions().SharedCopy();
     if (!plan_.added_functions().empty()) {
@@ -1014,6 +1024,22 @@ private:
       else if (opset.version() != found->version())
         throw std::runtime_error("Optimization produced conflicting opset declarations.");
     }
+    builder::GraphBuilder source(original);
+    plan_ = source.CaptureRewritings(plan_);
+    if (!plan_.moved_nodes().empty()) {
+      const auto relocated = CaptureScopes(source.ApplyRewritings(plan_));
+      plan_.clear_moved_nodes();
+      plan_.clear_hash_before();
+      plan_.clear_hash_after();
+      plan_ = source.CaptureRewritings(plan_);
+      const auto before = CaptureScopes(source.ApplyRewritings(plan_));
+      for (auto scope = relocated.rbegin(); scope != relocated.rend(); ++scope)
+        CaptureTransformation(before.at(scope->first), scope->second,
+                              "Finalize optimization node order", plan_, scope->first);
+      plan_.clear_hash_before();
+      plan_.clear_hash_after();
+      plan_ = source.CaptureRewritings(plan_);
+    }
     RewritingTrace trace(original.graph());
     history_.emplace_back();
     for (const auto &edit : plan_.rewrites()) {
@@ -1021,10 +1047,14 @@ private:
       history_.back().push_back({edit.pattern_name().value(), std::move(nodes)});
     }
     const auto order = trace.Finish(history_);
-    auto replayed = builder::GraphBuilder(original).ApplyRewritings(plan_);
+    auto replayed = source.ApplyRewritings(plan_);
     snapshot_ = replayed.ToModel(original.ir_version());
     ol::VerifyModel(snapshot_);
-    FinalizeCapturedPlan(snapshot_, plan_, history_, order, replayed);
+    if (FinalizeCapturedPlan(snapshot_, plan_, history_, order, replayed)) {
+      plan_.clear_hash_before();
+      plan_.clear_hash_after();
+      plan_ = source.CaptureRewritings(plan_);
+    }
   }
 
   void ApplyScenario() {
@@ -1042,10 +1072,17 @@ private:
     batches_ = source_->rewriting_batches;
     batches_.push_back(target);
     plan_ = scenario.SharedCopy();
+    ol::core::builder::GraphBuilder source(snapshot_);
+    auto rewritten = source.ApplyRewritings(plan_);
     plan_.clear_rewrites();
     for (size_t i = 0; i < target; ++i)
       *plan_.add_rewrites() = scenario.rewrites(i).SharedCopy();
-    auto rewritten = ol::core::builder::GraphBuilder(snapshot_).ApplyRewritings(plan_);
+    if (target != scenario.rewrites().size()) {
+      plan_.clear_hash_before();
+      plan_.clear_hash_after();
+      plan_ = source.CaptureRewritings(plan_);
+      rewritten = source.ApplyRewritings(plan_);
+    }
     std::vector<FusionNodeKey> order;
     for (const auto &node : snapshot_.graph().node())
       order.push_back(NodeOrderKey(node));
@@ -1063,7 +1100,11 @@ private:
     }
     snapshot_ = rewritten.ToModel(snapshot_.ir_version());
     ol::VerifyModel(snapshot_);
-    FinalizeCapturedPlan(snapshot_, plan_, history_, order, rewritten);
+    if (FinalizeCapturedPlan(snapshot_, plan_, history_, order, rewritten)) {
+      plan_.clear_hash_before();
+      plan_.clear_hash_after();
+      plan_ = source.CaptureRewritings(plan_);
+    }
   }
 
   void ResolveModel(const std::shared_ptr<StoredModel> &stored) {

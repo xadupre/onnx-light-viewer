@@ -246,6 +246,8 @@ export interface OptimizationReport {
   matchingTimeNs: number;
   rewritingTimeNs: number;
   cleanupTimeNs: number;
+  moveShapeAndSizeTimeNs: number;
+  movedShapeAndSizeNodes: number;
   constantFoldingTimeNs: number;
   subgraphOptimizationTimeNs: number;
   patterns: {

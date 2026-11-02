@@ -6823,7 +6823,11 @@ test("opens tabular optimization reports only on request, including no-op runs a
     assert.equal(elapsed.cells[1].textContent, elapsedMs);
     assert.equal(
       document.querySelectorAll("#optimization-report-phases tbody tr").length,
-      5,
+      6,
+    );
+    assert.match(
+      document.getElementById("optimization-report-phases").textContent,
+      /Shape\/Size relocation/,
     );
     const rejections = data.patterns.flatMap((pattern) => pattern.noMatches);
     if (rejections.length) {
