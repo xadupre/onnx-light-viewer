@@ -31,24 +31,56 @@ def preview_values(value):
 
 def read_profile(session):
     trace = json.loads(Path(session.end_profiling()).read_text(encoding="utf-8"))
+    events = [
+        event
+        for event in trace
+        if event.get("cat") == "Node"
+        and event.get("name", "").endswith("_kernel_time")
+    ]
+    events.sort(
+        key=lambda event: (
+            event.get("pid", 0),
+            event.get("tid", 0),
+            event.get("ts", 0),
+            -event["dur"],
+        )
+    )
     nodes = {}
-    for event in trace:
-        if event.get("cat") != "Node" or not event.get("name", "").endswith(
-            "_kernel_time"
-        ):
-            continue
+    scopes = []
+    thread = None
+    for event in events:
+        current_thread = (event.get("pid"), event.get("tid"))
+        if current_thread != thread:
+            scopes.clear()
+            thread = current_thread
+        start = event.get("ts", 0)
+        end = start + event["dur"]
+        while scopes and (start >= scopes[-1][0] or end > scopes[-1][0]):
+            scopes.pop()
         args = event.get("args", {})
+        name = event["name"].removesuffix("_kernel_time")
+        op = args.get("op_name", "")
+        provider = args.get("provider", "")
+        index = args.get("node_index")
         key = (
-            event["name"].removesuffix("_kernel_time"),
-            args.get("op_name", ""),
-            args.get("provider", ""),
+            scopes[-1][1] if scopes else (),
+            name,
+            op,
+            provider,
+            index,
         )
-        node = nodes.setdefault(
-            key,
-            dict(name=key[0], op=key[1], provider=key[2], calls=0, durationUs=0),
-        )
+        node = nodes.get(key)
+        if node is None:
+            label = f"{name} [node {index}]" if index is not None else name
+            if scopes:
+                label = f"{scopes[-1][2]} / {label}"
+            node = dict(name=label, op=op, provider=provider, calls=0, durationUs=0)
+            nodes[key] = node
         node["calls"] += 1
         node["durationUs"] += event["dur"]
+        # Node indices are graph-local; enclosing control-flow kernels scope subgraphs.
+        if op in {"If", "Loop", "Scan"} and "ts" in event and event["dur"] > 0:
+            scopes.append((end, key, node["name"]))
     return {
         "trace": trace,
         "nodes": sorted(nodes.values(), key=lambda node: node["durationUs"], reverse=True),
