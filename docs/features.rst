@@ -661,13 +661,14 @@ Save and conversion suggestions. Clearing history never deletes files.
 Open **Settings → Device** to select devices independently; CPU and GPU selections
 can coexist. Supported devices are selected by default after capability detection.
 CPU fallback is always enabled; GPU selections use CUDA then DirectML priority.
-CPU thread counts, the CPU memory arena and GPU limits are separate from engine
-options. Detection requires workspace trust and the configured Python runtime;
+Detection requires workspace trust and the configured Python runtime;
 it does not overwrite manual selections. onnx-light and Hugging Face validation
 remain CPU-only.
 Open **Settings → Engine** for **onnxruntime** and **onnx-light**
-subtabs. ONNX Runtime GenAI and onnx-light share the session controls used by
-Prompt; changes apply to the next run and remain in this viewer panel, without
+subtabs. CPU thread counts belong to their engine; the CPU memory arena, exported
+provider configuration, GPU device IDs and memory limits belong to onnxruntime.
+These pages share the session controls used by Prompt;
+changes apply to the next run and remain in this viewer panel, without
 changing the selected execution engine. Reference selection and validation remain
 on Prompt.
 Open **Settings → Generation** for temperature and maximum new tokens, shared
@@ -688,13 +689,13 @@ their tab buttons.
    Manage remembered suggestions separately in History.
 
 .. figure:: _static/feature-settings-engine.png
-   :alt: Settings Engine category with onnxruntime and onnx-light subtabs and editable GenAI session options.
+   :alt: Settings Engine category with onnxruntime CPU thread counts, memory arena and GPU provider options.
    :width: 100%
 
    Browse engine options independently of the engine selected for Prompt.
 
 .. figure:: _static/feature-settings-device.png
-   :alt: Settings Device category with independent CPU, CUDA and DirectML selections and GPU limits.
+   :alt: Settings Device category with independent CPU, CUDA and DirectML selections and device detection.
    :width: 100%
 
    Select devices separately from engine session options.

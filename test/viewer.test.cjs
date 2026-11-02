@@ -9214,7 +9214,7 @@ test("Engine settings subtabs reuse prompt controls without changing the executi
     assert.equal(byId("prompt-engine").value, executionEngine);
   };
   assertEngine("onnxruntime");
-  const threads = byId("prompt-device-fields").querySelector(
+  const threads = byId("prompt-settings-genai").querySelector(
     '[data-setting="intraOpThreads"]',
   );
   threads.value = "4";
@@ -9306,7 +9306,7 @@ test("async Prompt discovery preserves the user's selected Settings engine subta
   assert.equal(byId("prompt-settings-light").hidden, false);
 });
 
-test("Prompt applies CPU settings and opens Device for invalid values", (t) => {
+test("Prompt applies CPU settings and opens the owning Engine page for invalid values", (t) => {
   const { document, window, messages, load } = openViewer(t);
   const byId = (id) => document.getElementById(id);
   load(demoGraph);
@@ -9324,7 +9324,7 @@ test("Prompt applies CPU settings and opens Device for invalid values", (t) => {
   byId("prompt-engine").value = "onnx-light";
   byId("prompt-engine").dispatchEvent(new window.Event("change"));
   byId("prompt-settings-open").click();
-  const threads = byId("prompt-device-fields").querySelector(
+  const threads = byId("prompt-settings-light").querySelector(
     '[data-setting="threads"]',
   );
   threads.value = "-1";
@@ -9335,7 +9335,9 @@ test("Prompt applies CPU settings and opens Device for invalid values", (t) => {
     false,
   );
   assert.equal(byId("settings-view").hidden, false);
-  assert.equal(byId("settings-device-view").hidden, false);
+  assert.equal(byId("settings-engine-view").hidden, false);
+  assert.equal(byId("settings-device-view").hidden, true);
+  assert.equal(byId("prompt-settings-light").hidden, false);
   assert.equal(
     byId("settings-onnx-light-tab").getAttribute("aria-selected"),
     "true",
@@ -9629,11 +9631,24 @@ test("Device multi-selection and predefined configuration options travel with Ge
     "session.intra_op.allow_spinning": "0",
   });
   assert.equal(byId("prompt-device-fields").disabled, true);
+  for (const name of ["cudaDeviceId", "dmlDeviceId", "gpuMemoryMiB"])
+    assert.ok(
+      byId("prompt-settings-genai")
+        .querySelector(`[data-setting="${name}"]`)
+        .matches(":disabled"),
+    );
   byId("prompt-cancel").click();
   byId("settings-device-model").checked = true;
   byId("settings-device-model").dispatchEvent(
     new window.Event("change", { bubbles: true }),
   );
+  assert.equal(messages.at(-1).type, "prompt-release");
+  for (const name of ["cudaDeviceId", "dmlDeviceId", "gpuMemoryMiB"])
+    assert.equal(
+      byId("prompt-settings-genai").querySelector(`[data-setting="${name}"]`)
+        .disabled,
+      true,
+    );
   byId("prompt-form").dispatchEvent(new window.Event("submit"));
   run = messages.findLast(({ type }) => type === "run-prompt");
   assert.equal(run.options.sessionSettings.providers, undefined);
