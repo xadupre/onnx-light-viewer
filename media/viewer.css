@@ -483,6 +483,10 @@ body.resizing-tensor-column * {
 .memory-table td:last-child {
   min-width: 240px;
 }
+.memory-delta {
+  display: block;
+  white-space: nowrap;
+}
 .memory-table thead th {
   position: sticky;
   top: 0;

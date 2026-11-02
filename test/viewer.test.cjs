@@ -2844,6 +2844,87 @@ test("memory configurations share scales and retain selectable estimates across 
   assert.equal(document.getElementById("memory-run").disabled, false);
 });
 
+test("memory delta columns compare every configuration in its curve color", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  load(demoGraph);
+  document.getElementById("memory-tab").click();
+  send({
+    type: "memory-inputs",
+    requestId: messages.at(-1).requestId,
+    dimensions: [{ key: "symbol:N", label: "N", defaultValue: 1 }],
+    stages: [],
+    path: [],
+  });
+  for (const number of [1, 2, 3]) {
+    document.querySelector("#memory-dimensions input").value = String(number);
+    document
+      .getElementById("memory-form")
+      .dispatchEvent(new window.Event("submit", { cancelable: true }));
+    send({
+      type: "memory-profile",
+      requestId: messages.at(-1).requestId,
+      profile: {
+        name: "Colored deltas",
+        device: "CPU",
+        peakBytes: number * 2e6,
+        events: Array.from({ length: number === 2 ? 1 : 203 }, (_, index) => ({
+          index,
+          node: `node-${index}`,
+          opType: "Relu",
+          existingBytes: number * 1e6,
+          outputBytes: number * 1e6,
+          scratchBytes: 0,
+          deviceBytes: number * 2e6,
+          afterBytes: number * 1e6,
+        })),
+      },
+    });
+  }
+  const entries = (row, column) => [
+    ...document.querySelectorAll("#memory-events tr")[row].cells[column]
+      .children,
+  ];
+  const deltas = (row, column) =>
+    entries(row, column).map((value) =>
+      value.textContent.replace(/ \(local peak\)$/, ""),
+    );
+  assert.deepEqual(deltas(0, 3), ["+1", "+2", "+3"]);
+  assert.deepEqual(deltas(0, 4), ["-1", "-2", "-3"]);
+  assert.deepEqual(deltas(1, 3), ["+1", "Unavailable", "+3"]);
+  assert.deepEqual(deltas(1, 4), ["-1", "Unavailable", "-3"]);
+  assert.equal(document.querySelectorAll("#memory-events tr").length, 100);
+  assert.equal(
+    document.querySelectorAll("#memory-events .memory-delta").length,
+    600,
+  );
+  const swatches = document.querySelectorAll(".memory-configuration-swatch");
+  for (const column of [3, 4])
+    for (const [index, value] of entries(0, column).entries()) {
+      const curve = document.querySelector(
+        `.memory-curve[data-configuration-index="${index}"]`,
+      );
+      assert.equal(value.style.color, swatches[index].style.borderColor);
+      assert.equal(value.title, curve.getAttribute("aria-label"));
+      assert.equal(window.getComputedStyle(value).display, "block");
+    }
+  document.getElementById("memory-next").click();
+  assert.equal(document.querySelector("#memory-events th").textContent, "101");
+  assert.deepEqual(deltas(0, 3), ["+1", "Unavailable", "+3"]);
+  assert.deepEqual(deltas(0, 4), ["-1", "Unavailable", "-3"]);
+  document.querySelector("#memory-configurations input").click();
+  assert.deepEqual(deltas(0, 3), ["+1", "+2", "+3"]);
+  document.querySelectorAll("#memory-configurations input")[1].click();
+  document.getElementById("memory-remove").click();
+  assert.deepEqual(deltas(0, 3), ["+1", "+3"]);
+  assert.deepEqual(deltas(0, 4), ["-1", "-3"]);
+  assert.match(entries(0, 3)[1].title, /^Configuration 3:/);
+  document.getElementById("memory-peaks-only").click();
+  assert.equal(document.querySelectorAll("#memory-events tr").length, 1);
+  assert.deepEqual(deltas(0, 3), ["+1", "+3"]);
+});
+
 test("memory comparison handles empty and different-length traces on the same event axis", (t) => {
   const viewer = openViewer(t);
   const { document, window, load } = viewer;
@@ -3025,6 +3106,10 @@ test("memory local peaks paginate without losing execution indices", (t) => {
   );
   document.getElementById("memory-peaks-only").click();
   assert.equal(document.querySelectorAll("#memory-events tr").length, 100);
+  assert.equal(
+    document.querySelectorAll("#memory-events .memory-delta").length,
+    200,
+  );
   assert.equal(document.querySelector("#memory-events th").textContent, "2");
   document.getElementById("memory-next").click();
   assert.equal(document.querySelectorAll("#memory-events tr").length, 1);

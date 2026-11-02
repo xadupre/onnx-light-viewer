@@ -86,6 +86,33 @@ function createMemoryPanel({
       });
   }
 
+  function deltaValues(event, phase) {
+    const values = document.createDocumentFragment();
+    for (const configuration of configurations) {
+      const compared = configuration.profile.events[event.index];
+      const delta =
+        phase === "peak"
+          ? memoryDelta(
+              compared?.memory?.before_bytes ?? compared?.existingBytes,
+              compared?.deviceBytes,
+            )
+          : memoryDelta(compared?.deviceBytes, compared?.afterBytes);
+      const value = document.createElement("span");
+      value.className = "memory-delta";
+      value.style.color = configuration.color;
+      value.title = configuration.label;
+      value.textContent =
+        delta +
+        (phase === "peak" &&
+        configuration.profile === profile &&
+        peakIndices.has(event.index)
+          ? " (local peak)"
+          : "");
+      values.append(value);
+    }
+    return values;
+  }
+
   function table() {
     const peaksOnly = byId("memory-peaks-only").checked;
     const events = peaksOnly ? peaks : profile.events;
@@ -98,8 +125,8 @@ function createMemoryPanel({
         event.index + 1,
         event.node || `node-${event.index}`,
         event.opType,
-        `${memoryDelta(event.memory?.before_bytes ?? event.existingBytes, event.deviceBytes)}${peakIndices.has(event.index) ? " (local peak)" : ""}`,
-        memoryDelta(event.deviceBytes, event.afterBytes),
+        deltaValues(event, "peak"),
+        deltaValues(event, "release"),
         (event.decisions ?? [])
           .filter(({ action }) => action === "inplace")
           .map(({ input, output, kind }) => `${input} → ${output} (${kind})`)
@@ -137,7 +164,8 @@ function createMemoryPanel({
           button.title = "Show this node in Model";
           button.addEventListener("click", () => selectNode(path, event.index));
           cell.append(button);
-        } else cell.textContent = value;
+        } else if (index === 3 || index === 4) cell.append(value);
+        else cell.textContent = value;
         row.append(cell);
       }
       body.append(row);

@@ -653,6 +653,7 @@ export function webviewHtml(
         <pre id="memory-inspection" role="status" hidden></pre>
         <p id="memory-final-status" role="status" hidden>Final post-release memory is unavailable for this profile. The curve stops at the last available value.</p>
         <h3>Estimated execution events</h3>
+        <p>Each delta column lists all configurations in their curve colors; hover a value to identify its configuration. Other columns and the local-peak filter follow the selected configuration.</p>
         <p id="memory-peaks-count"></p>
         <label><input id="memory-peaks-only" type="checkbox"> Local peaks only</label>
         <div class="memory-table"><table><thead><tr><th scope="col">Event</th><th scope="col">Node</th><th scope="col">Operator</th><th scope="col" title="Memory during execution minus memory before the node. 1 MB = 1,000,000 bytes.">Peak delta (MB)</th><th scope="col" title="Memory after release minus memory during execution. 1 MB = 1,000,000 bytes.">After-release delta (MB)</th><th scope="col">In-place</th><th scope="col">Release</th><th scope="col">Release shape</th><th scope="col">Tensor shapes</th></tr></thead><tbody id="memory-events"></tbody></table></div>
