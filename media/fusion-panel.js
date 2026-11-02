@@ -295,6 +295,7 @@ function createFusionPanel({
         ["Matching (root)", milliseconds(report.matchingTimeNs)],
         ["Rewriting (root)", milliseconds(report.rewritingTimeNs)],
         ["Cleanup (root)", milliseconds(report.cleanupTimeNs)],
+        ["Shape/Size relocation", milliseconds(report.moveShapeAndSizeTimeNs)],
         ["Constant folding (root)", milliseconds(report.constantFoldingTimeNs)],
         [
           "Subgraph optimization",

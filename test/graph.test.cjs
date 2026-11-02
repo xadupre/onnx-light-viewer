@@ -21,6 +21,7 @@ const { withCommaLocale } = require("../build/native/Release/test_locale.node");
 const {
   layoutTensors,
   rewritingPlans,
+  captureRewritingPlans,
   traceRewritings,
 } = require("../build/native/Release/test_model_storage.node");
 const {
@@ -378,6 +379,7 @@ test("native CPU support supplies custom shapes and memory estimates before patt
       "MicrosoftGroupQueryAttention",
       "MicrosoftLinearAttention",
       "MicrosoftMatMulNBitsBias",
+      "MicrosoftMoE",
       "MicrosoftNormalizationCast",
     ],
   );
@@ -3765,15 +3767,15 @@ test("keeps fused match selections in finalized Shape/Size order across fusion a
     const first = await original.applyFusion("TransposeTranspose", [2]);
     assert.deepEqual(
       first.graph().nodes.map((node) => node.opType),
-      ["Transpose", "Transpose", opType, "Identity", "Transpose", "Transpose"],
+      ["Transpose", "Transpose", "Identity", "Transpose", "Transpose", opType],
     );
     assert.deepEqual(first.fusionHistory(), [
-      { matches: [{ pattern: "TransposeTranspose", nodes: [3] }] },
+      { matches: [{ pattern: "TransposeTranspose", nodes: [2] }] },
     ]);
-    const second = await first.applyFusion("TransposeTranspose", [4]);
+    const second = await first.applyFusion("TransposeTranspose", [3]);
     assert.deepEqual(second.fusionHistory(), [
+      { matches: [{ pattern: "TransposeTranspose", nodes: [2] }] },
       { matches: [{ pattern: "TransposeTranspose", nodes: [3] }] },
-      { matches: [{ pattern: "TransposeTranspose", nodes: [4] }] },
     ]);
     assert.deepEqual(
       second.undoFusion().fusionHistory(),
@@ -3786,11 +3788,318 @@ test("keeps fused match selections in finalized Shape/Size order across fusion a
   }
 });
 
+test("preserves SDK Shape/Size relocation through optimization, subsequent edits and saved replay", async () => {
+  for (const opType of ["Shape", "Size"]) {
+    const source = loadModel(fusionWithLateMetadata(opType), "metadata");
+    const optimized = await source.optimize([], "Optimize");
+    assert.ok(optimized.optimizationReport().movedShapeAndSizeNodes > 0);
+    assert.equal(optimized.graph().nodes[2].opType, opType);
+    const preview = await optimized.previewFusion("TransposeTranspose");
+    const fused = await preview.model.applyFusion("TransposeTranspose", [
+      preview.matches.at(-1).anchor,
+    ]);
+    assert.deepEqual(fused.undoFusion().graph(), optimized.graph());
+    const bytes = Buffer.from(
+      await fused.serialize(undefined, undefined, true),
+    );
+    const [plan] = rewritingPlans(bytes);
+    assert.deepEqual(loadModel(plan.bytes, "replayed").graph(), fused.graph());
+    const saved = loadModel(bytes, "saved");
+    const replayed = await saved.applyRewritingScenario(
+      saved.rewritingScenarios()[0].name,
+      true,
+    );
+    assert.deepEqual(replayed.graph(), fused.graph());
+  }
+});
+
+function functionOptimizationBytes({
+  rootRewrite = false,
+  metadataOp,
+  notPair = false,
+} = {}) {
+  const node = (name, op, input, output, domain = "") =>
+    Buffer.concat([
+      bytesField(1, input),
+      ...output.map((value) => bytesField(2, value)),
+      bytesField(3, name),
+      bytesField(4, op),
+      ...(domain ? [bytesField(7, domain)] : []),
+      ...(op === "Transpose"
+        ? [
+            bytesField(
+              5,
+              Buffer.concat([
+                bytesField(1, "perm"),
+                varintField(8, 1),
+                varintField(8, 0),
+                varintField(20, 7),
+              ]),
+            ),
+          ]
+        : []),
+    ]);
+  const value = (name, type, shape) =>
+    Buffer.concat([
+      bytesField(1, name),
+      bytesField(
+        2,
+        bytesField(
+          1,
+          Buffer.concat([
+            varintField(1, type),
+            bytesField(
+              2,
+              Buffer.concat(
+                shape.map((size) => bytesField(1, varintField(1, size))),
+              ),
+            ),
+          ]),
+        ),
+      ),
+    ]);
+  const body = metadataOp
+    ? [
+        node("produce", "Relu", "X", ["A"]),
+        node("consume", "Relu", "A", ["B"]),
+        node("metadata", metadataOp, "A", ["M"]),
+        node("finish", "Relu", "B", ["Y"]),
+      ]
+    : [
+        node("first", "Transpose", "X", ["T"]),
+        node("second", "Transpose", "T", ["A"]),
+        ...(notPair
+          ? [
+              node("not-first", "Not", "A", ["N"]),
+              node("not-second", "Not", "N", ["B"]),
+            ]
+          : []),
+        node("finish", notPair ? "Identity" : "Relu", notPair ? "B" : "A", [
+          "Y",
+        ]),
+      ];
+  return Buffer.concat([
+    varintField(1, 9),
+    bytesField(8, varintField(2, 18)),
+    bytesField(
+      8,
+      Buffer.concat([bytesField(1, "review.scope"), varintField(2, 1)]),
+    ),
+    bytesField(
+      7,
+      Buffer.concat([
+        ...(rootRewrite
+          ? [
+              bytesField(1, node("root-first", "Transpose", "x", ["t"])),
+              bytesField(1, node("root-second", "Transpose", "t", ["a"])),
+            ]
+          : []),
+        bytesField(
+          1,
+          node(
+            "call",
+            "Block",
+            rootRewrite ? "a" : "x",
+            metadataOp ? ["y", "metadata"] : ["y"],
+            "review.scope",
+          ),
+        ),
+        bytesField(2, "function-optimization"),
+        bytesField(11, value("x", notPair ? 9 : 1, [2, 2])),
+        bytesField(12, value("y", notPair ? 9 : 1, [2, 2])),
+        ...(metadataOp
+          ? [
+              bytesField(
+                12,
+                value("metadata", 7, metadataOp === "Shape" ? [2] : []),
+              ),
+            ]
+          : []),
+      ]),
+    ),
+    bytesField(
+      25,
+      Buffer.concat([
+        bytesField(1, "Block"),
+        bytesField(4, "X"),
+        bytesField(5, "Y"),
+        ...(metadataOp ? [bytesField(5, "M")] : []),
+        ...body.map((item) => bytesField(7, item)),
+        bytesField(9, varintField(2, 18)),
+        bytesField(10, "review.scope"),
+      ]),
+    ),
+  ]);
+}
+
+test("keeps local function replacements with and without root rewrites through undo and replay", async () => {
+  for (const rootRewrite of [false, true]) {
+    const source = loadModel(
+      functionOptimizationBytes({ rootRewrite }),
+      "functions",
+    );
+    const optimized = await source.optimize(["TransposeTranspose"], "Optimize");
+    const functionGraph = (model) =>
+      model.graph(
+        false,
+        model.graph().nodes.find((node) => node.opType === "Block").function
+          .path,
+      );
+    assert.ok(optimized.optimizationReport().rewrites > 0);
+    assert.equal(
+      functionGraph(optimized).nodes.some(
+        (node) => node.opType === "Transpose",
+      ),
+      false,
+    );
+    assert.equal(optimized.fusionCount(), 1);
+    assert.deepEqual(optimized.undoFusion().graph(), source.graph());
+    assert.deepEqual(
+      functionGraph(optimized.undoFusion()),
+      functionGraph(source),
+    );
+    const bytes = Buffer.from(
+      await optimized.serialize(undefined, undefined, true),
+    );
+    const [plan] = rewritingPlans(bytes);
+    const replayed = loadModel(plan.bytes, "replayed");
+    assert.deepEqual(functionGraph(replayed), functionGraph(optimized));
+    const saved = loadModel(bytes, "saved");
+    const scenario = saved.rewritingScenarios()[0];
+    assert.ok(scenario.available);
+    assert.ok(scenario.steps.length > 0);
+    const applied = await saved.applyRewritingScenario(scenario.name, true);
+    assert.deepEqual(applied.graph(), optimized.graph());
+    assert.deepEqual(functionGraph(applied), functionGraph(optimized));
+    assert.equal(
+      applied.rewritingScenarios()[0].applied,
+      scenario.steps.length,
+    );
+    assert.equal(applied.rewritingScenarios()[0].available, false);
+    assert.equal(applied.undoFusion().rewritingScenarios()[0].available, true);
+    if (!rootRewrite) {
+      const stepwise = await saved.applyRewritingScenario(scenario.name, false);
+      assert.deepEqual(functionGraph(stepwise), functionGraph(optimized));
+      await assert.rejects(
+        stepwise.applyRewritingScenario(scenario.name, false),
+        /No remaining/,
+      );
+    }
+  }
+});
+
+test("keeps function-scoped Shape/Size relocations through optimization, subsequent edits and saved replay", async () => {
+  for (const metadataOp of ["Shape", "Size"]) {
+    const source = loadModel(
+      functionOptimizationBytes({ rootRewrite: true, metadataOp }),
+      "functions",
+    );
+    const optimized = await source.optimize([], "Optimize");
+    const functionGraph = (model) => model.graph(false, [{ function: 0 }]);
+    assert.equal(functionGraph(source).nodes[2].opType, metadataOp);
+    assert.equal(functionGraph(optimized).nodes[1].opType, metadataOp);
+    assert.equal(optimized.fusionCount(), 1);
+    const fused = await optimized.applyFusion("TransposeTranspose", [0]);
+    assert.deepEqual(
+      functionGraph(fused.undoFusion()),
+      functionGraph(optimized),
+    );
+    const bytes = Buffer.from(
+      await fused.serialize(undefined, undefined, true),
+    );
+    const [plan] = rewritingPlans(bytes);
+    assert.deepEqual(
+      functionGraph(loadModel(plan.bytes, "replayed")),
+      functionGraph(optimized),
+    );
+    const saved = loadModel(bytes, "saved");
+    const applied = await saved.applyRewritingScenario(
+      saved.rewritingScenarios()[0].name,
+      true,
+    );
+    assert.deepEqual(applied.graph(), fused.graph());
+    assert.deepEqual(functionGraph(applied), functionGraph(fused));
+  }
+});
+
+test("saves successive replacements of the same canonical function with its final body", async () => {
+  const source = loadModel(
+    functionOptimizationBytes({ notPair: true }),
+    "successive-replacements",
+  );
+  const first = await source.optimize(["TransposeTranspose"], "Optimize");
+  const second = await first.optimize(["NotNot"], "Optimize");
+  const functionGraph = (model) => model.graph(false, [{ function: 0 }]);
+  assert.equal(first.fusionCount(), 1);
+  assert.equal(second.fusionCount(), 2);
+  assert.equal(
+    functionGraph(first).nodes.filter((node) => node.opType === "Not").length,
+    2,
+  );
+  assert.equal(
+    functionGraph(second).nodes.filter((node) => node.opType === "Not").length,
+    0,
+  );
+  const bytes = Buffer.from(await second.serialize(undefined, undefined, true));
+  const [plan] = rewritingPlans(bytes);
+  assert.deepEqual(
+    functionGraph(loadModel(plan.bytes, "replayed")),
+    functionGraph(second),
+  );
+  const saved = loadModel(bytes, "saved");
+  const applied = await saved.applyRewritingScenario(
+    saved.rewritingScenarios()[0].name,
+    true,
+  );
+  assert.deepEqual(functionGraph(applied), functionGraph(second));
+  assert.deepEqual(functionGraph(second.undoFusion()), functionGraph(first));
+});
+
+test("saves replacement of a helper introduced by an earlier fusion as a new canonical declaration", async () => {
+  const source = loadModel(modelBytes("fusion.onnx"), "introduced-helper");
+  const definition = source.createFunctionPattern([0, 1], "IntroducedPair");
+  const preview = await source.previewFusion(definition.name);
+  const fused = await preview.model.applyFusion(definition.name, [
+    preview.matches[0].anchor,
+  ]);
+  const optimized = await fused.optimize(["TransposeTranspose"], "Optimize");
+  const functionGraph = (model) =>
+    model.graph(
+      false,
+      model.graph().nodes.find((node) => node.function).function.path,
+    );
+  assert.equal(source.modelFunctions().length, 0);
+  assert.equal(fused.fusionCount(), 1);
+  assert.equal(optimized.fusionCount(), 2);
+  assert.deepEqual(
+    functionGraph(fused).nodes.map((node) => node.opType),
+    ["Transpose", "Transpose"],
+  );
+  assert.deepEqual(
+    functionGraph(optimized).nodes.map((node) => node.opType),
+    ["Identity"],
+  );
+  const bytes = Buffer.from(
+    await optimized.serialize(undefined, undefined, true),
+  );
+  const [plan] = rewritingPlans(bytes);
+  const replayed = loadModel(plan.bytes, "replayed");
+  assert.deepEqual(replayed.graph(), optimized.graph());
+  assert.deepEqual(functionGraph(replayed), functionGraph(optimized));
+  const saved = loadModel(bytes, "saved");
+  const applied = await saved.applyRewritingScenario(
+    saved.rewritingScenarios()[0].name,
+    true,
+  );
+  assert.deepEqual(functionGraph(applied), functionGraph(optimized));
+  assert.deepEqual(functionGraph(optimized.undoFusion()), functionGraph(fused));
+});
+
 test("replays successive fusion plans through intervening Shape/Size materialization", async () => {
   for (const opType of ["Shape", "Size"]) {
     const original = loadModel(fusionWithLateMetadata(opType), "late-metadata");
     const first = await original.applyFusion("TransposeTranspose", [2]);
-    const second = await first.applyFusion("TransposeTranspose", [4]);
+    const second = await first.applyFusion("TransposeTranspose", [3]);
     const saved = Buffer.from(
       await second.serialize(undefined, undefined, true),
     );
@@ -4108,6 +4417,7 @@ test("retains native optimizer reports for changed and no-op snapshots, clone an
     report.matchingTimeNs +
       report.rewritingTimeNs +
       report.cleanupTimeNs +
+      report.moveShapeAndSizeTimeNs +
       report.constantFoldingTimeNs +
       report.subgraphOptimizationTimeNs,
   );
@@ -4271,14 +4581,17 @@ test("preserves nested scope identities through canonicalization, fusion and rew
     const optimized = await source.optimize(["MatMulAdd"], "Optimize");
     const continued = await cleaned.optimize(["MatMulAdd"], "Optimize");
     const result = inspectScopedGraphs(optimized);
-    assert.deepEqual(inspectScopedGraphs(continued), result);
+    const cleanedResult = inspectScopedGraphs(
+      await optimized.optimize([], "IdentityRemoval"),
+    );
+    assert.deepEqual(inspectScopedGraphs(continued), cleanedResult);
     const leaves = (tree) =>
       tree.children.length
         ? tree.children.flatMap(leaves)
         : [tree.graph.nodes.map((node) => node.opType)];
     assert.deepEqual(
       leaves(result),
-      Array.from({ length: 2 ** depth }, () => ["Gemm"]),
+      Array.from({ length: 2 ** depth }, () => ["Identity", "Gemm"]),
     );
     assert.equal(
       optimized
@@ -4296,14 +4609,17 @@ test("preserves nested scope identities through canonicalization, fusion and rew
       const [plan] = rewritingPlans(bytes);
       assert.deepEqual(
         inspectScopedGraphs(loadModel(plan.bytes, "replayed")),
-        result,
+        inspectScopedGraphs(model),
       );
       const saved = loadModel(bytes, "saved");
       const replayed = await saved.applyRewritingScenario(
         saved.rewritingScenarios()[0].name,
         true,
       );
-      assert.deepEqual(inspectScopedGraphs(replayed), result);
+      assert.deepEqual(
+        inspectScopedGraphs(replayed),
+        inspectScopedGraphs(model),
+      );
     }
   }
 });
@@ -4317,7 +4633,7 @@ test("replays nested optimization after a fusion finalizes the parent node order
   const fused = await source.applyFusion("TransposeTranspose", [0]);
   assert.deepEqual(
     fused.graph().nodes.map((node) => node.opType),
-    ["Identity", "Shape", "If"],
+    ["Identity", "If", "Shape"],
   );
   const optimized = await fused.optimize(["MatMulAdd"], "Optimize");
   const report = optimized.optimizationReport();
@@ -4343,7 +4659,10 @@ test("replays nested optimization after a fusion finalizes the parent node order
     inspectScopedGraphs(optimized).children.map((child) =>
       child.graph.nodes.map((node) => node.opType),
     ),
-    [["Gemm"], ["Gemm"]],
+    [
+      ["Identity", "Gemm"],
+      ["Identity", "Gemm"],
+    ],
   );
   assert.deepEqual(
     inspectScopedGraphs(optimized.undoFusion()),
@@ -4359,7 +4678,7 @@ test("replays nested optimization after a fusion finalizes the parent node order
   );
   const saved = loadModel(bytes, "saved");
   const scenario = saved.rewritingScenarios()[0];
-  assert.ok(scenario.steps.some((step) => step.pattern.startsWith("Finalize")));
+  assert.ok(scenario.steps.some((step) => step.pattern === "MatMulAdd"));
   const replayed = await saved.applyRewritingScenario(scenario.name, true);
   assert.deepEqual(
     inspectScopedGraphs(replayed),
@@ -4796,19 +5115,21 @@ test("uses the full catalog and native priorities without absorbing Gemm output 
   assert.ok(patterns.includes("TransposeTranspose"));
   assert.equal(optimized.fusionCount(), 1);
   assert.equal(
-    optimized
-      .graph()
-      .nodes.some(
-        (node) => node.opType === "Identity" || node.name === "unused_relu",
-      ),
+    optimized.graph().nodes.some((node) => node.name === "unused_relu"),
     false,
   );
+  assert.ok(optimized.graph().nodes.some((node) => node.opType === "Identity"));
   assert.equal(
     optimized.graph().nodes.some((node) => node.opType === "MatMul"),
     false,
   );
   assert.ok(optimized.graph().nodes.some((node) => node.opType === "Gemm"));
-  assert.deepEqual(all.graph(), optimized.graph());
+  assert.ok(
+    all
+      .fusionHistory()[0]
+      .matches.some((match) => match.pattern === "PartitionGroup"),
+  );
+  assert.deepEqual(all.undoFusion().graph(), source.graph());
   assert.deepEqual(optimized.undoFusion().graph(), source.graph());
   const transposeOnly = await source.optimize(
     ["TransposeTranspose"],
@@ -5056,7 +5377,7 @@ test("replays stored prefixes from canonical order despite Shape/Size finalizati
   for (const opType of ["Shape", "Size"]) {
     const { stages, bytes } = await savedFusionScenario(
       fusionWithLateMetadata(opType),
-      [2, 4],
+      [2, 3],
     );
     const loaded = loadModel(bytes, "scenario");
     let applied = loaded;
@@ -5144,11 +5465,11 @@ test("maps the next saved pattern to current nodes after Shape/Size reordering",
         ]),
       ),
     ]);
-    const saved = loadModel(bytes, "late-metadata");
+    const saved = loadModel(captureRewritingPlans(bytes), "late-metadata");
     assert.deepEqual(saved.rewritingScenarios()[0].steps[0].nodes, [2, 3]);
     const first = await saved.applyRewritingScenario("two-pairs", false);
     const [scenario] = first.rewritingScenarios();
-    assert.deepEqual(scenario.steps[1].nodes, [4, 5]);
+    assert.deepEqual(scenario.steps[1].nodes, [3, 4]);
     assert.deepEqual(
       scenario.steps[1].nodes.map((index) => first.graph().nodes[index].name),
       ["fifth", "sixth"],
@@ -5156,7 +5477,81 @@ test("maps the next saved pattern to current nodes after Shape/Size reordering",
     const second = await first.applyRewritingScenario("two-pairs", false);
     assert.deepEqual(
       second.undoFusion().rewritingScenarios()[0].steps[1].nodes,
-      [4, 5],
+      [3, 4],
+    );
+  }
+});
+
+test("applies terminal scenario moves only after all edits and retains mapped history on save", async () => {
+  const edit = (matched, position, output) =>
+    bytesField(
+      1,
+      Buffer.concat([
+        bytesField(1, "TransposeTranspose"),
+        ...matched.map((index) => varintField(3, index)),
+        bytesField(
+          5,
+          Buffer.concat([
+            bytesField(1, "x"),
+            bytesField(2, output),
+            bytesField(4, "Identity"),
+          ]),
+        ),
+        varintField(6, position),
+      ]),
+    );
+  for (const opType of ["Shape", "Size"]) {
+    const bytes = captureRewritingPlans(
+      Buffer.concat([
+        fusionWithLateMetadata(opType),
+        bytesField(
+          1001,
+          Buffer.concat([
+            bytesField(1, "terminal-moves"),
+            bytesField(
+              2,
+              Buffer.concat([
+                edit([2, 3], 2, "b"),
+                edit([3, 4], 3, "c"),
+                bytesField(
+                  8,
+                  Buffer.concat([varintField(1, 4), varintField(2, 2)]),
+                ),
+              ]),
+            ),
+          ]),
+        ),
+      ]),
+    );
+    const source = loadModel(bytes, "terminal-moves");
+    const expected = loadModel(rewritingPlans(bytes)[0].bytes, "expected");
+    const full = await source.applyRewritingScenario("terminal-moves", true);
+    assert.deepEqual(full.graph(), expected.graph());
+    assert.deepEqual(
+      full.fusionHistory()[0].matches.map((match) => match.nodes),
+      [[3], [4]],
+    );
+    const partial = await source.applyRewritingScenario(
+      "terminal-moves",
+      false,
+    );
+    assert.equal(partial.graph().nodes[2].opType, "Identity");
+    assert.equal(partial.rewritingScenarios()[0].applied, 1);
+    const continued = await partial.applyRewritingScenario(
+      "terminal-moves",
+      false,
+    );
+    assert.deepEqual(continued.graph(), expected.graph());
+    assert.deepEqual(continued.undoFusion().graph(), partial.graph());
+    const plans = rewritingPlans(
+      Buffer.from(await continued.serialize(undefined, undefined, true)),
+    );
+    assert.deepEqual(
+      loadModel(
+        plans.find((plan) => plan.name === "onnx-light-viewer.fusions").bytes,
+        "replayed",
+      ).graph(),
+      expected.graph(),
     );
   }
 });
@@ -5221,23 +5616,25 @@ test("restores scenario-only initializers, imports and functions from embedded o
       ),
     ]);
   const bytes = (payload) =>
-    Buffer.concat([
-      varintField(1, 9),
-      bytesField(8, varintField(2, 18)),
-      bytesField(
-        7,
-        Buffer.concat([
-          bytesField(1, node("Identity", ["x"], "y")),
-          bytesField(2, "scenario"),
-          bytesField(11, value("x")),
-          bytesField(12, value("y")),
-        ]),
-      ),
-      bytesField(
-        1001,
-        Buffer.concat([bytesField(1, "shift"), bytesField(2, plan(payload))]),
-      ),
-    ]);
+    captureRewritingPlans(
+      Buffer.concat([
+        varintField(1, 9),
+        bytesField(8, varintField(2, 18)),
+        bytesField(
+          7,
+          Buffer.concat([
+            bytesField(1, node("Identity", ["x"], "y")),
+            bytesField(2, "scenario"),
+            bytesField(11, value("x")),
+            bytesField(12, value("y")),
+          ]),
+        ),
+        bytesField(
+          1001,
+          Buffer.concat([bytesField(1, "shift"), bytesField(2, plan(payload))]),
+        ),
+      ]),
+    );
   const embedded = loadModel(bytes([bytesField(9, bias)]), "scenario");
   const applied = await embedded.applyRewritingScenario("shift", true);
   assert.equal(applied.graph().nodes[0].opType, "Shift");

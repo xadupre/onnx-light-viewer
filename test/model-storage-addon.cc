@@ -146,6 +146,28 @@ Napi::Value RewritingPlans(const Napi::CallbackInfo &info) {
   }
 }
 
+Napi::Value CaptureRewritingPlans(const Napi::CallbackInfo &info) {
+  try {
+    const auto bytes = info[0].As<Napi::Buffer<uint8_t>>();
+    ol::ModelProto model;
+    if (!model.ParseFromString(
+            std::string(reinterpret_cast<const char *>(bytes.Data()), bytes.Length())))
+      throw std::runtime_error("Could not parse test model.");
+    ol::onnx_shapes::RegisterShapeFunctions();
+    ol::onnx_kernels::RegisterKernelFunctions();
+    ol::core::builder::GraphBuilder source(model);
+    for (auto &[name, plan] : model.ref_rewritings())
+      plan = source.CaptureRewritings(plan);
+    std::string serialized;
+    if (!model.SerializeToString(serialized))
+      throw std::runtime_error("Could not serialize captured rewritings.");
+    return Napi::Buffer<char>::Copy(info.Env(), serialized.data(), serialized.size());
+  } catch (const std::exception &error) {
+    Napi::Error::New(info.Env(), error.what()).ThrowAsJavaScriptException();
+    return info.Env().Undefined();
+  }
+}
+
 Napi::Value TraceRewritings(const Napi::CallbackInfo &info) {
   try {
     const auto bytes = info[0].As<Napi::Buffer<uint8_t>>();
@@ -201,6 +223,7 @@ Napi::Value TraceRewritings(const Napi::CallbackInfo &info) {
 Napi::Object Init(Napi::Env env, Napi::Object exports) {
   exports.Set("traceRewritings", Napi::Function::New(env, TraceRewritings));
   exports.Set("rewritingPlans", Napi::Function::New(env, RewritingPlans));
+  exports.Set("captureRewritingPlans", Napi::Function::New(env, CaptureRewritingPlans));
   exports.Set("tensorVisits", Napi::Function::New(env, TensorVisits));
   exports.Set("layoutTensors", Napi::Function::New(env, LayoutTensors));
   exports.Set("encodedVisits", Napi::Function::New(env, EncodedVisits));

@@ -6,8 +6,10 @@
 #include <cstring>
 #include <limits>
 #include <map>
+#include <onnx_core/builder/graph_builder.h>
 #include <onnx_core/runtime/memory/simple_tensor.h>
 #include <onnx_proto/onnx_crypt.h>
+#include <set>
 #include <stdexcept>
 #include <tuple>
 #include <unordered_map>
@@ -52,11 +54,14 @@ public:
         // Each captured plan contains the complete declarations at that step.
         combined.ref_required_opset_imports() = plan.required_opset_imports();
         combined.ref_added_functions() = plan.added_functions().SharedCopy();
+        for (const auto &id : plan.replaced_function_ids())
+          combined.add_replaced_function_ids(id);
       }
       std::string name = "onnx-light-viewer.fusions";
       for (size_t suffix = 2; snapshot_.rewritings().contains(name); ++suffix)
         name = "onnx-light-viewer.fusions." + std::to_string(suffix);
       snapshot_.ref_rewritings().emplace(name, std::move(combined));
+      captured_plan_name_ = std::move(name);
     }
   }
 
@@ -65,6 +70,23 @@ public:
   void Execute() override {
     try {
       RestoreModelPayloads(snapshot_, *source_, file_path_);
+      if (!captured_plan_name_.empty()) {
+        auto &plan = snapshot_.ref_rewritings().at(captured_plan_name_);
+        if (!plan.replaced_function_ids().empty()) {
+          std::set<std::string> replacements(plan.replaced_function_ids().begin(),
+                                             plan.replaced_function_ids().end());
+          const auto canonical =
+              ol::core::builder::GraphBuilder(snapshot_).ToModel(snapshot_.ir_version());
+          plan.clear_replaced_function_ids();
+          for (const auto &function : canonical.functions()) {
+            const auto key = ol::core::shapes::ShapesContext::LocalFunctionKey(
+                function.domain().value(), function.name().value(), function.overload().value());
+            if (replacements.erase(key))
+              plan.add_replaced_function_ids(key);
+          }
+        }
+        plan = ol::core::builder::GraphBuilder(snapshot_).CaptureRewritings(plan);
+      }
       std::vector<ol::EncodedValueProto *> encoded;
       std::set<const ol::TensorProto *> layout_tensors;
       const auto tensors = ModelSaveTensors(snapshot_, &encoded, &layout_tensors);
@@ -223,6 +245,7 @@ private:
   std::optional<std::string> password_;
   std::string file_path_;
   std::string bytes_;
+  std::string captured_plan_name_;
   size_t max_external_file_size_;
   std::string external_file_prefix_;
   std::unordered_map<std::string, std::string> external_files_;

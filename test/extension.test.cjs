@@ -6896,6 +6896,7 @@ test("selects optimization groups and previews global passes through the real we
   document.getElementById("select-optimization-patterns").click();
   assert.equal(groupInput("optimization-pattern-group", "all").checked, true);
   patterns.querySelector('input[value="RepeatedLayer"]').click();
+  patterns.querySelector('input[value="PartitionGroup"]').click();
   assert.equal(
     groupInput("optimization-pattern-group", "Default").checked,
     true,
@@ -7039,6 +7040,10 @@ test("selects optimization groups and previews global passes through the real we
   assert.equal(count(), original);
   document.getElementById("optimize-model").click();
   await flush();
+  const partitionGroup = document.querySelector(
+    '#optimization-patterns input[value="PartitionGroup"]',
+  );
+  if (partitionGroup.checked) partitionGroup.click();
   document.getElementById("run-optimization").click();
   assert.equal(document.getElementById("run-optimization").disabled, true);
   await flush();
@@ -7049,9 +7054,7 @@ test("selects optimization groups and previews global passes through the real we
     (message) => message.type === "graph",
   ).graph;
   assert.equal(
-    optimized.nodes.some(
-      (node) => node.opType === "Identity" || node.name === "unused_relu",
-    ),
+    optimized.nodes.some((node) => node.name === "unused_relu"),
     false,
   );
   const results = document.getElementById("optimization-results");
