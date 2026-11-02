@@ -88,9 +88,6 @@ function createMemoryPanel({
         event.index + 1,
         event.node || `node-${event.index}`,
         event.opType,
-        formatFileSize(event.existingBytes),
-        formatFileSize(event.outputBytes),
-        formatFileSize(event.scratchBytes),
         `${formatFileSize(event.deviceBytes)}${peakIndices.has(event.index) ? " (local peak)" : ""}`,
         event.afterBytes == null
           ? "Unavailable"

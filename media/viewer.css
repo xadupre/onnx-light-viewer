@@ -469,7 +469,7 @@ body.resizing-tensor-column * {
 .memory-table table {
   border-collapse: collapse;
   width: 100%;
-  min-width: 1400px;
+  min-width: 1100px;
 }
 .memory-table th,
 .memory-table td {

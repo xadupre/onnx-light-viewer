@@ -2948,7 +2948,7 @@ test("memory local peaks handle empty, constant, endpoint and plateau traces", (
       JSON.stringify(bytes),
     );
     for (const row of document.querySelectorAll("#memory-events tr"))
-      assert.match(row.cells[6].textContent, /\(local peak\)$/);
+      assert.match(row.cells[3].textContent, /\(local peak\)$/);
     assert.equal(document.getElementById("memory-previous").disabled, true);
     assert.equal(document.getElementById("memory-next").disabled, true);
   }
@@ -3196,10 +3196,26 @@ test("memory hover inspects numerical and symbolic allocations at each phase, sa
   hover(0.5);
   assert.match(inspection.textContent, /before execution\nMemory: .*10 bytes/);
   assert.match(inspection.textContent, /Already allocated: .*20 bytes/);
-  assert.equal(
-    document.querySelectorAll("#memory-results thead th")[3].textContent,
-    "Already allocated",
+  assert.deepEqual(
+    [...document.querySelectorAll("#memory-results thead th")].map(
+      (cell) => cell.textContent,
+    ),
+    [
+      "Event",
+      "Node",
+      "Operator",
+      "Peak during execution",
+      "After release",
+      "In-place",
+      "Release",
+      "Release shape",
+      "Tensor shapes",
+    ],
   );
+  const cells = document.querySelector("#memory-events tr").cells;
+  assert.equal(cells.length, 9);
+  assert.match(cells[3].textContent, /^100 bytes/);
+  assert.equal(cells[4].textContent, "Unavailable");
   hover(2);
   assert.equal(inspection.hidden, false);
   assert.match(inspection.textContent, /during execution\nMemory: .*100 bytes/);
@@ -3584,20 +3600,21 @@ test("memory steps allocate before each two-interval node and release into one-i
   );
   assert.equal(document.getElementById("memory-final-status").hidden, false);
   const cells = document.querySelectorAll("#memory-events tr")[1].cells;
-  assert.match(cells[7].textContent, /Unavailable/);
-  assert.equal(cells[8].textContent, "a → b (equal)");
-  assert.equal(cells[9].textContent, "<img src=x>");
-  assert.equal(cells[10].textContent, "target");
-  assert.equal(
-    cells[11].textContent,
-    "in: INT64 [2] (shape)\nout: FLOAT [2,3]",
-  );
+  assert.match(cells[4].textContent, /Unavailable/);
+  assert.equal(cells[5].textContent, "a → b (equal)");
+  assert.equal(cells[6].textContent, "<img src=x>");
+  assert.equal(cells[7].textContent, "target");
+  assert.equal(cells[8].textContent, "in: INT64 [2] (shape)\nout: FLOAT [2,3]");
   assert.equal(document.querySelector("#memory-events img"), null);
 
   profile.events = [profile.events[0]];
   profile.events[0].afterBytes = 40;
   display();
   assert.equal(document.getElementById("memory-final-status").hidden, true);
+  assert.equal(
+    document.querySelector("#memory-events tr").cells[4].textContent,
+    "40 bytes",
+  );
   assert.equal(document.querySelectorAll(".memory-node-number").length, 1);
   assert.equal(
     document.querySelectorAll("#memory-operator-labels > g").length,
@@ -3614,6 +3631,10 @@ test("memory steps allocate before each two-interval node and release into one-i
     /V240\.00000 H980\.00000$/,
   );
   assert.equal(document.getElementById("memory-final-status").hidden, true);
+  assert.equal(
+    document.querySelector("#memory-events tr").cells[4].textContent,
+    "0 bytes",
+  );
   delete profile.events[0].afterBytes;
   display();
   assert.equal(
@@ -3622,7 +3643,7 @@ test("memory steps allocate before each two-interval node and release into one-i
   );
   assert.equal(document.getElementById("memory-final-status").hidden, false);
   assert.equal(
-    document.querySelector("#memory-events tr").cells[7].textContent,
+    document.querySelector("#memory-events tr").cells[4].textContent,
     "Unavailable",
   );
   profile.events = [];
