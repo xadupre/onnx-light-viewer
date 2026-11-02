@@ -118,8 +118,8 @@ function createMemoryPanel({
           })),
         ]
           .map(
-            ({ name, type, shape, tag, direction }) =>
-              `${direction}: ${name}: ${type ?? "Unknown"} ${shape ?? "Unknown shape"}${tag ? ` (${tag})` : ""}`,
+            ({ type, shape, tag, direction }) =>
+              `${direction}: ${type ?? "Unknown"} ${shape ?? "Unknown shape"}${tag ? ` (${tag})` : ""}`,
           )
           .join("\n") || "—",
       ].entries()) {
@@ -492,9 +492,9 @@ function createMemoryPanel({
     const dimensions = {};
     for (const input of fields.querySelectorAll("input")) {
       const value = Number(input.value);
-      if (!Number.isSafeInteger(value) || value <= 0) {
+      if (!input.value.trim() || !Number.isSafeInteger(value) || value < 0) {
         status.textContent =
-          "Enter positive safe integers for every dynamic dimension.";
+          "Enter non-negative safe integers for every dynamic dimension.";
         return;
       }
       dimensions[input.name] = value;
@@ -583,7 +583,7 @@ function createMemoryPanel({
         label.htmlFor = input.id;
         input.name = dimension.key;
         input.type = "number";
-        input.min = "1";
+        input.min = "0";
         input.max = String(Number.MAX_SAFE_INTEGER);
         input.step = "1";
         input.required = true;

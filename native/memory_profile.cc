@@ -318,9 +318,10 @@ void AddMemoryProfileMethods(Napi::Env env, Napi::Object result,
           for (const auto &dimension : expected) {
             const auto value = values.Get(dimension.key);
             const double number = value.IsNumber() ? value.As<Napi::Number>().DoubleValue() : 0;
-            if (!std::isfinite(number) || number < 1 || number > maxSafeBytes ||
-                std::floor(number) != number)
-              throw std::runtime_error("Expected a positive safe integer for " + dimension.label);
+            if (!value.IsNumber() || !std::isfinite(number) || number < 0 ||
+                number > maxSafeBytes || std::floor(number) != number)
+              throw std::runtime_error("Expected a non-negative safe integer for " +
+                                       dimension.label);
             dimensions.emplace(dimension.key, static_cast<int64_t>(number));
           }
           ol::onnx_shapes::RegisterShapeFunctions();

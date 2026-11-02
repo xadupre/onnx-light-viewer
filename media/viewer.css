@@ -409,6 +409,7 @@ p {
 }
 .memory-table {
   overflow: auto;
+  max-height: 60vh;
 }
 .tensor-list-table {
   overflow: auto;
@@ -481,6 +482,12 @@ body.resizing-tensor-column * {
 }
 .memory-table td:last-child {
   min-width: 240px;
+}
+.memory-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--panel);
 }
 #memory-range {
   margin: 0 12px;

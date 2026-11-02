@@ -5928,6 +5928,36 @@ test("estimates root and pipeline memory on request and reports errors without i
   }
 });
 
+test("memory profiling accepts zero symbolic dimensions and rejects invalid values", async (t) => {
+  const extension = await openExtension("inference.onnx");
+  t.after(() => extension.dispose());
+  await extension.receive({
+    type: "memory-profile",
+    requestId: 1,
+    dimensions: { "symbol:N": 0 },
+  });
+  const response = extension.messages.at(-1);
+  assert.equal(response.type, "memory-profile");
+  assert.equal(response.profile.events[0].inputs[0].shape, "[0,3]");
+  for (const value of [
+    -1,
+    1.5,
+    null,
+    false,
+    "0",
+    Number.MAX_SAFE_INTEGER + 1,
+  ]) {
+    await extension.receive({
+      type: "memory-profile",
+      requestId: 2,
+      dimensions: { "symbol:N": value },
+    });
+    const error = extension.messages.at(-1);
+    assert.equal(error.type, "memory-error");
+    assert.match(error.error, /non-negative safe integer/);
+  }
+});
+
 test("tensor statistics requests validate transport and keep native handles usable", async (t) => {
   const extension = await openExtension("tiny-initializers.onnx");
   t.after(() => extension.dispose());

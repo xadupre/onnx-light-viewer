@@ -2516,15 +2516,25 @@ test("memory estimates are lazy, accept dimensions, and discard stale results an
   });
   const dimension = document.querySelector("#memory-dimensions input");
   assert.equal(dimension.value, "1");
-  dimension.value = "3";
   const submit = () =>
     document
       .getElementById("memory-form")
       .dispatchEvent(new window.Event("submit", { cancelable: true }));
+  for (const value of ["", "-1", "1.5", "9007199254740992"]) {
+    dimension.value = value;
+    submit();
+    assert.equal(memoryRequests().length, 1);
+    assert.match(
+      document.getElementById("memory-status").textContent,
+      /non-negative safe integers/,
+    );
+  }
+  dimension.value = "0";
+  assert.equal(dimension.checkValidity(), true);
   submit();
   const request = memoryRequests().at(-1);
   assert.equal(request.type, "memory-profile");
-  assert.equal(request.dimensions["symbol:N"], 3);
+  assert.equal(request.dimensions["symbol:N"], 0);
   assert.equal(document.getElementById("memory-run").disabled, true);
   send({ type: "memory-profile", requestId: setup.requestId, profile: {} });
   assert.equal(document.getElementById("memory-results").hidden, true);
@@ -3024,7 +3034,7 @@ test("memory peak links focus node indices in the estimated graph or pipeline st
   }
 });
 
-test("memory chart batches 20,000 events and paginates every row", (t) => {
+test("memory chart batches 20,000 events and paginates rows under sticky table headers", (t) => {
   const { document, window, messages, load } = openViewer(t);
   load(demoGraph);
   document.getElementById("memory-tab").click();
@@ -3059,6 +3069,15 @@ test("memory chart batches 20,000 events and paginates every row", (t) => {
     profile: { name: "Large", device: "CPU", peakBytes: 32, events },
   });
   assert.equal(document.querySelectorAll("#memory-events tr").length, 100);
+  const table = document.querySelector(".memory-table");
+  assert.equal(window.getComputedStyle(table).overflow, "auto");
+  const maxHeight = parseFloat(window.getComputedStyle(table).maxHeight);
+  assert.ok(maxHeight > 0 && maxHeight < window.innerHeight);
+  for (const header of table.querySelectorAll("thead th")) {
+    const style = window.getComputedStyle(header);
+    assert.equal(style.position, "sticky");
+    assert.equal(style.top, "0px");
+  }
   assert.equal(document.querySelectorAll("#memory-chart path").length, 4);
   const ticks = document.querySelectorAll(".memory-node-number");
   assert.ok(ticks.length >= 2 && ticks.length <= 12);
@@ -3147,7 +3166,14 @@ test("memory hover inspects numerical and symbolic allocations at each phase, sa
             outputs: { "": "30*N" },
           },
           inputs: [{ name: "x", type: "FLOAT", shape: "[2,3]", tag: null }],
-          outputs: [],
+          outputs: [
+            {
+              name: "model.layers.0.attention.output",
+              type: "FLOAT",
+              shape: "[2,3]",
+              tag: "intermediate",
+            },
+          ],
           decisions: [],
         },
       ],
@@ -3156,6 +3182,10 @@ test("memory hover inspects numerical and symbolic allocations at each phase, sa
   const chart = document.getElementById("memory-chart");
   chart.getBoundingClientRect = () => new window.DOMRect(0, 0, 1000, 330);
   const inspection = document.getElementById("memory-inspection");
+  assert.equal(
+    document.querySelector("#memory-events tr").lastElementChild.textContent,
+    "in: FLOAT [2,3]\nout: FLOAT [2,3] (intermediate)",
+  );
   const hover = (step) =>
     chart.dispatchEvent(
       new window.MouseEvent("pointermove", {
@@ -3188,6 +3218,10 @@ test("memory hover inspects numerical and symbolic allocations at each phase, sa
   );
   assert.match(inspection.textContent, /scratch excluded\): 8\+36\*N bytes/);
   assert.match(inspection.textContent, /in: x: FLOAT \[2,3\]/);
+  assert.match(
+    inspection.textContent,
+    /out: model\.layers\.0\.attention\.output: FLOAT \[2,3\] \(intermediate\)/,
+  );
   assert.equal(inspection.querySelector("img"), null);
   hover(3.5);
   assert.match(inspection.textContent, /after execution\nMemory: Unavailable/);
@@ -3554,8 +3588,10 @@ test("memory steps allocate before each two-interval node and release into one-i
   assert.equal(cells[8].textContent, "a → b (equal)");
   assert.equal(cells[9].textContent, "<img src=x>");
   assert.equal(cells[10].textContent, "target");
-  assert.match(cells[11].textContent, /target: INT64 \[2\] \(shape\)/);
-  assert.match(cells[11].textContent, /b: FLOAT \[2,3\]/);
+  assert.equal(
+    cells[11].textContent,
+    "in: INT64 [2] (shape)\nout: FLOAT [2,3]",
+  );
   assert.equal(document.querySelector("#memory-events img"), null);
 
   profile.events = [profile.events[0]];

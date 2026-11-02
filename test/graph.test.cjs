@@ -429,6 +429,21 @@ test("memory estimates bind anonymous and repeated dimensions and retain zero-si
     (await model.memoryProfile({ "input:0:0": 2, "symbol:N": 3 })).peakBytes,
     144,
   );
+  const original = model.graph();
+  for (const dimensions of [
+    { "input:0:0": 2, "symbol:N": 0 },
+    { "input:0:0": 0, "symbol:N": 3 },
+    { "input:0:0": 0, "symbol:N": 0 },
+  ]) {
+    const profile = await model.memoryProfile(dimensions);
+    assert.equal(profile.peakBytes, 0);
+    assert.equal(profile.events[0].deviceBytes, 0);
+    assert.equal(
+      profile.events[0].outputs[0].shape,
+      `[${dimensions["input:0:0"]},${dimensions["symbol:N"]},${dimensions["symbol:N"]}]`,
+    );
+  }
+  assert.deepEqual(model.graph(), original);
   const empty = memoryTestModel([Number.MAX_SAFE_INTEGER, 0]);
   assert.equal((await empty.memoryProfile({})).peakBytes, 0);
 });
@@ -543,11 +558,15 @@ test("native memory estimates reject missing, invalid and unresolved dimensions 
   const model = loadModel(modelBytes("inference.onnx"), "inference.onnx");
   for (const values of [
     {},
-    { "symbol:N": 0 },
     { "symbol:N": -1 },
     { "symbol:N": 1.5 },
     { "symbol:N": "2" },
+    { "symbol:N": null },
+    { "symbol:N": undefined },
+    { "symbol:N": false },
+    { "symbol:N": NaN },
     { "symbol:N": Infinity },
+    { "symbol:N": Number.MAX_SAFE_INTEGER + 1 },
     { "symbol:N": 2, extra: 1 },
   ])
     assert.throws(() => model.memoryProfile(values), /dimensions|integer/);

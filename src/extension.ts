@@ -1316,10 +1316,10 @@ async function configurePanel(
                 if (
                   typeof value !== "number" ||
                   !Number.isSafeInteger(value) ||
-                  value <= 0
+                  value < 0
                 )
                   throw new Error(
-                    `Expected a positive safe integer for ${key}.`,
+                    `Expected a non-negative safe integer for ${key}.`,
                   );
                 return [key, value];
               }),
