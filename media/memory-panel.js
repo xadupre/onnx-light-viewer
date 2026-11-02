@@ -27,6 +27,16 @@ function createMemoryPanel({
   const svg = byId("memory-chart");
   const scroll = byId("memory-chart-scroll");
   const inspection = byId("memory-inspection");
+  const deltaFormatter = new Intl.NumberFormat(undefined, {
+    signDisplay: "always",
+    maximumFractionDigits: 6,
+  });
+
+  function memoryDelta(before, after) {
+    return before == null || after == null
+      ? "Unavailable"
+      : deltaFormatter.format((after - before) / 1e6);
+  }
 
   function clearOverlay() {
     overlayProfile = undefined;
@@ -88,10 +98,8 @@ function createMemoryPanel({
         event.index + 1,
         event.node || `node-${event.index}`,
         event.opType,
-        `${formatFileSize(event.deviceBytes)}${peakIndices.has(event.index) ? " (local peak)" : ""}`,
-        event.afterBytes == null
-          ? "Unavailable"
-          : formatFileSize(event.afterBytes),
+        `${memoryDelta(event.memory?.before_bytes ?? event.existingBytes, event.deviceBytes)}${peakIndices.has(event.index) ? " (local peak)" : ""}`,
+        memoryDelta(event.deviceBytes, event.afterBytes),
         (event.decisions ?? [])
           .filter(({ action }) => action === "inplace")
           .map(({ input, output, kind }) => `${input} → ${output} (${kind})`)

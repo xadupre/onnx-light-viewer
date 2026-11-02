@@ -3204,8 +3204,8 @@ test("memory hover inspects numerical and symbolic allocations at each phase, sa
       "Event",
       "Node",
       "Operator",
-      "Peak during execution",
-      "After release",
+      "Peak delta (MB)",
+      "After-release delta (MB)",
       "In-place",
       "Release",
       "Release shape",
@@ -3214,7 +3214,7 @@ test("memory hover inspects numerical and symbolic allocations at each phase, sa
   );
   const cells = document.querySelector("#memory-events tr").cells;
   assert.equal(cells.length, 9);
-  assert.match(cells[3].textContent, /^100 bytes/);
+  assert.equal(cells[3].textContent, "+0.00009 (local peak)");
   assert.equal(cells[4].textContent, "Unavailable");
   hover(2);
   assert.equal(inspection.hidden, false);
@@ -3612,8 +3612,12 @@ test("memory steps allocate before each two-interval node and release into one-i
   display();
   assert.equal(document.getElementById("memory-final-status").hidden, true);
   assert.equal(
+    document.querySelector("#memory-events tr").cells[3].textContent,
+    "+0.00008 (local peak)",
+  );
+  assert.equal(
     document.querySelector("#memory-events tr").cells[4].textContent,
-    "40 bytes",
+    "-0.00006",
   );
   assert.equal(document.querySelectorAll(".memory-node-number").length, 1);
   assert.equal(
@@ -3633,7 +3637,7 @@ test("memory steps allocate before each two-interval node and release into one-i
   assert.equal(document.getElementById("memory-final-status").hidden, true);
   assert.equal(
     document.querySelector("#memory-events tr").cells[4].textContent,
-    "0 bytes",
+    "-0.0001",
   );
   delete profile.events[0].afterBytes;
   display();
@@ -3646,6 +3650,25 @@ test("memory steps allocate before each two-interval node and release into one-i
     document.querySelector("#memory-events tr").cells[4].textContent,
     "Unavailable",
   );
+  for (const [before, during, after, peakDelta, releaseDelta] of [
+    [1_000_000, 2_500_000, 750_000, "+1.5", "-1.75"],
+    [0, 1, 1, "+0.000001", "+0"],
+    [2_000_000, 2_000_000, 2_000_000, "+0", "+0"],
+  ]) {
+    Object.assign(profile.events[0], {
+      memory: { before_bytes: before },
+      deviceBytes: during,
+      afterBytes: after,
+    });
+    profile.peakBytes = during;
+    display();
+    const cells = document.querySelector("#memory-events tr").cells;
+    assert.equal(
+      cells[3].textContent.replace(/ \(local peak\)$/, ""),
+      peakDelta,
+    );
+    assert.equal(cells[4].textContent, releaseDelta);
+  }
   profile.events = [];
   profile.peakBytes = null;
   display();
