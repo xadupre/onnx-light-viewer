@@ -3813,6 +3813,203 @@ test("preserves SDK Shape/Size relocation through optimization, subsequent edits
   }
 });
 
+function functionOptimizationBytes({ rootRewrite = false, metadataOp } = {}) {
+  const node = (name, op, input, output, domain = "") =>
+    Buffer.concat([
+      bytesField(1, input),
+      ...output.map((value) => bytesField(2, value)),
+      bytesField(3, name),
+      bytesField(4, op),
+      ...(domain ? [bytesField(7, domain)] : []),
+      ...(op === "Transpose"
+        ? [
+            bytesField(
+              5,
+              Buffer.concat([
+                bytesField(1, "perm"),
+                varintField(8, 1),
+                varintField(8, 0),
+                varintField(20, 7),
+              ]),
+            ),
+          ]
+        : []),
+    ]);
+  const value = (name, type, shape) =>
+    Buffer.concat([
+      bytesField(1, name),
+      bytesField(
+        2,
+        bytesField(
+          1,
+          Buffer.concat([
+            varintField(1, type),
+            bytesField(
+              2,
+              Buffer.concat(
+                shape.map((size) => bytesField(1, varintField(1, size))),
+              ),
+            ),
+          ]),
+        ),
+      ),
+    ]);
+  const body = metadataOp
+    ? [
+        node("produce", "Relu", "X", ["A"]),
+        node("consume", "Relu", "A", ["B"]),
+        node("metadata", metadataOp, "A", ["M"]),
+        node("finish", "Relu", "B", ["Y"]),
+      ]
+    : [
+        node("first", "Transpose", "X", ["T"]),
+        node("second", "Transpose", "T", ["A"]),
+        node("finish", "Relu", "A", ["Y"]),
+      ];
+  return Buffer.concat([
+    varintField(1, 9),
+    bytesField(8, varintField(2, 18)),
+    bytesField(
+      8,
+      Buffer.concat([bytesField(1, "review.scope"), varintField(2, 1)]),
+    ),
+    bytesField(
+      7,
+      Buffer.concat([
+        ...(rootRewrite
+          ? [
+              bytesField(1, node("root-first", "Transpose", "x", ["t"])),
+              bytesField(1, node("root-second", "Transpose", "t", ["a"])),
+            ]
+          : []),
+        bytesField(
+          1,
+          node(
+            "call",
+            "Block",
+            rootRewrite ? "a" : "x",
+            metadataOp ? ["y", "metadata"] : ["y"],
+            "review.scope",
+          ),
+        ),
+        bytesField(2, "function-optimization"),
+        bytesField(11, value("x", 1, [2, 2])),
+        bytesField(12, value("y", 1, [2, 2])),
+        ...(metadataOp
+          ? [
+              bytesField(
+                12,
+                value("metadata", 7, metadataOp === "Shape" ? [2] : []),
+              ),
+            ]
+          : []),
+      ]),
+    ),
+    bytesField(
+      25,
+      Buffer.concat([
+        bytesField(1, "Block"),
+        bytesField(4, "X"),
+        bytesField(5, "Y"),
+        ...(metadataOp ? [bytesField(5, "M")] : []),
+        ...body.map((item) => bytesField(7, item)),
+        bytesField(9, varintField(2, 18)),
+        bytesField(10, "review.scope"),
+      ]),
+    ),
+  ]);
+}
+
+test("keeps local function replacements with and without root rewrites through undo and replay", async () => {
+  for (const rootRewrite of [false, true]) {
+    const source = loadModel(
+      functionOptimizationBytes({ rootRewrite }),
+      "functions",
+    );
+    const optimized = await source.optimize(["TransposeTranspose"], "Optimize");
+    const functionGraph = (model) =>
+      model.graph(
+        false,
+        model.graph().nodes.find((node) => node.opType === "Block").function
+          .path,
+      );
+    assert.ok(optimized.optimizationReport().rewrites > 0);
+    assert.equal(
+      functionGraph(optimized).nodes.some(
+        (node) => node.opType === "Transpose",
+      ),
+      false,
+    );
+    assert.equal(optimized.fusionCount(), 1);
+    assert.deepEqual(optimized.undoFusion().graph(), source.graph());
+    assert.deepEqual(
+      functionGraph(optimized.undoFusion()),
+      functionGraph(source),
+    );
+    const bytes = Buffer.from(
+      await optimized.serialize(undefined, undefined, true),
+    );
+    const [plan] = rewritingPlans(bytes);
+    const replayed = loadModel(plan.bytes, "replayed");
+    assert.deepEqual(functionGraph(replayed), functionGraph(optimized));
+    const saved = loadModel(bytes, "saved");
+    const scenario = saved.rewritingScenarios()[0];
+    assert.ok(scenario.available);
+    assert.ok(scenario.steps.length > 0);
+    const applied = await saved.applyRewritingScenario(scenario.name, true);
+    assert.deepEqual(applied.graph(), optimized.graph());
+    assert.deepEqual(functionGraph(applied), functionGraph(optimized));
+    assert.equal(
+      applied.rewritingScenarios()[0].applied,
+      scenario.steps.length,
+    );
+    assert.equal(applied.rewritingScenarios()[0].available, false);
+    assert.equal(applied.undoFusion().rewritingScenarios()[0].available, true);
+    if (!rootRewrite) {
+      const stepwise = await saved.applyRewritingScenario(scenario.name, false);
+      assert.deepEqual(functionGraph(stepwise), functionGraph(optimized));
+      await assert.rejects(
+        stepwise.applyRewritingScenario(scenario.name, false),
+        /No remaining/,
+      );
+    }
+  }
+});
+
+test("keeps function-scoped Shape/Size relocations through optimization, subsequent edits and saved replay", async () => {
+  for (const metadataOp of ["Shape", "Size"]) {
+    const source = loadModel(
+      functionOptimizationBytes({ rootRewrite: true, metadataOp }),
+      "functions",
+    );
+    const optimized = await source.optimize([], "Optimize");
+    const functionGraph = (model) => model.graph(false, [{ function: 0 }]);
+    assert.equal(functionGraph(source).nodes[2].opType, metadataOp);
+    assert.equal(functionGraph(optimized).nodes[1].opType, metadataOp);
+    assert.equal(optimized.fusionCount(), 1);
+    const fused = await optimized.applyFusion("TransposeTranspose", [0]);
+    assert.deepEqual(
+      functionGraph(fused.undoFusion()),
+      functionGraph(optimized),
+    );
+    const bytes = Buffer.from(
+      await fused.serialize(undefined, undefined, true),
+    );
+    const [plan] = rewritingPlans(bytes);
+    assert.deepEqual(
+      functionGraph(loadModel(plan.bytes, "replayed")),
+      functionGraph(optimized),
+    );
+    const saved = loadModel(bytes, "saved");
+    const applied = await saved.applyRewritingScenario(
+      saved.rewritingScenarios()[0].name,
+      true,
+    );
+    assert.deepEqual(applied.graph(), fused.graph());
+    assert.deepEqual(functionGraph(applied), functionGraph(fused));
+  }
+});
+
 test("replays successive fusion plans through intervening Shape/Size materialization", async () => {
   for (const opType of ["Shape", "Size"]) {
     const original = loadModel(fusionWithLateMetadata(opType), "late-metadata");
@@ -5196,6 +5393,80 @@ test("maps the next saved pattern to current nodes after Shape/Size reordering",
     assert.deepEqual(
       second.undoFusion().rewritingScenarios()[0].steps[1].nodes,
       [3, 4],
+    );
+  }
+});
+
+test("applies terminal scenario moves only after all edits and retains mapped history on save", async () => {
+  const edit = (matched, position, output) =>
+    bytesField(
+      1,
+      Buffer.concat([
+        bytesField(1, "TransposeTranspose"),
+        ...matched.map((index) => varintField(3, index)),
+        bytesField(
+          5,
+          Buffer.concat([
+            bytesField(1, "x"),
+            bytesField(2, output),
+            bytesField(4, "Identity"),
+          ]),
+        ),
+        varintField(6, position),
+      ]),
+    );
+  for (const opType of ["Shape", "Size"]) {
+    const bytes = captureRewritingPlans(
+      Buffer.concat([
+        fusionWithLateMetadata(opType),
+        bytesField(
+          1001,
+          Buffer.concat([
+            bytesField(1, "terminal-moves"),
+            bytesField(
+              2,
+              Buffer.concat([
+                edit([2, 3], 2, "b"),
+                edit([3, 4], 3, "c"),
+                bytesField(
+                  8,
+                  Buffer.concat([varintField(1, 4), varintField(2, 2)]),
+                ),
+              ]),
+            ),
+          ]),
+        ),
+      ]),
+    );
+    const source = loadModel(bytes, "terminal-moves");
+    const expected = loadModel(rewritingPlans(bytes)[0].bytes, "expected");
+    const full = await source.applyRewritingScenario("terminal-moves", true);
+    assert.deepEqual(full.graph(), expected.graph());
+    assert.deepEqual(
+      full.fusionHistory()[0].matches.map((match) => match.nodes),
+      [[3], [4]],
+    );
+    const partial = await source.applyRewritingScenario(
+      "terminal-moves",
+      false,
+    );
+    assert.equal(partial.graph().nodes[2].opType, "Identity");
+    assert.equal(partial.rewritingScenarios()[0].applied, 1);
+    const continued = await partial.applyRewritingScenario(
+      "terminal-moves",
+      false,
+    );
+    assert.deepEqual(continued.graph(), expected.graph());
+    assert.deepEqual(continued.undoFusion().graph(), partial.graph());
+    const plans = rewritingPlans(
+      Buffer.from(await continued.serialize(undefined, undefined, true)),
+    );
+    assert.deepEqual(
+      loadModel(
+        plans.find((plan) => plan.name === "onnx-light-viewer.fusions").bytes,
+        "replayed",
+      ).graph(),
+      expected.graph(),
     );
   }
 });
