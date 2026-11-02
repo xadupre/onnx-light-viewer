@@ -5958,6 +5958,136 @@ test("memory profiling accepts zero symbolic dimensions and rejects invalid valu
   }
 });
 
+test("memory dimensions persist their last successful values by name across reopened models", async (t) => {
+  const preferences = new Map([["memoryDimensions", { unrelated: 7 }]]);
+  const open = async () => {
+    const extension = await openExtension(
+      "inference.onnx",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      preferences,
+    );
+    t.after(() => extension.dispose());
+    return extension;
+  };
+  const first = await open();
+  await first.receive({ type: "memory-inputs", requestId: 1 });
+  assert.equal(first.messages.at(-1).dimensions[0].defaultValue, 1);
+  await first.receive({
+    type: "memory-profile",
+    requestId: 2,
+    dimensions: { "symbol:N": 0 },
+  });
+  assert.equal(first.messages.at(-1).type, "memory-profile");
+  assert.deepEqual(preferences.get("memoryDimensions"), { unrelated: 7, N: 0 });
+  const remembered = preferences.get("memoryDimensions");
+  await first.receive({
+    type: "memory-profile",
+    requestId: 3,
+    dimensions: { "symbol:N": 0 },
+  });
+  assert.equal(first.messages.at(-1).type, "memory-profile");
+  assert.equal(preferences.get("memoryDimensions"), remembered);
+  for (const value of [-1, Number.MAX_SAFE_INTEGER]) {
+    await first.receive({
+      type: "memory-profile",
+      requestId: 3,
+      dimensions: { "symbol:N": value },
+    });
+    assert.equal(first.messages.at(-1).type, "memory-error");
+    assert.deepEqual(preferences.get("memoryDimensions"), {
+      unrelated: 7,
+      N: 0,
+    });
+  }
+  first.dispose();
+  const second = await open();
+  await second.openBytes(
+    "another-model.onnx",
+    await readFile(require.resolve("./models/inference.onnx")),
+  );
+  await second.receive({ type: "memory-inputs", requestId: 1 });
+  assert.deepEqual(second.messages.at(-1).dimensions, [
+    { key: "symbol:N", label: "N", defaultValue: 0 },
+  ]);
+  await second.receive({
+    type: "memory-profile",
+    requestId: 2,
+    dimensions: { "symbol:N": 4 },
+  });
+  await second.receive({ type: "memory-inputs", requestId: 3 });
+  assert.equal(second.messages.at(-1).dimensions[0].defaultValue, 4);
+  assert.deepEqual(preferences.get("memoryDimensions"), { unrelated: 7, N: 4 });
+});
+
+test("memory dimension names share remembered values across pipeline stages", async (t) => {
+  const extension = await openExtension("tiny.pipe-onnx");
+  t.after(() => extension.dispose());
+  await extension.receive({
+    type: "memory-profile",
+    requestId: 1,
+    path: [{ pipeline: "embedding" }],
+    dimensions: { "symbol:batch": 2, "symbol:sequence": 3 },
+  });
+  assert.equal(extension.messages.at(-1).type, "memory-profile");
+  await extension.receive({
+    type: "memory-inputs",
+    requestId: 2,
+    path: [{ pipeline: "prefill" }],
+  });
+  assert.deepEqual(extension.messages.at(-1).dimensions, [
+    { key: "symbol:batch", label: "batch", defaultValue: 2 },
+    { key: "symbol:sequence", label: "sequence", defaultValue: 3 },
+  ]);
+});
+
+test("memory dimension caching discards stale profiles and reports invalid saved values", async (t) => {
+  const extension = await openExtension("inference.onnx");
+  t.after(() => extension.dispose());
+  extension.preferences.set("memoryDimensions", { N: -1, other: 0 });
+  await extension.receive({ type: "memory-inputs", requestId: 1 });
+  assert.equal(extension.messages.at(-1).dimensions[0].defaultValue, 1);
+  assert.ok(
+    extension.logs.some((entry) =>
+      entry.includes("Ignoring invalid saved memory dimension values."),
+    ),
+  );
+  let release, arrived;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  const started = new Promise((resolve) => {
+    arrived = resolve;
+  });
+  const native = extension.nativeModels.at(-1);
+  const memoryProfile = native.memoryProfile;
+  native.memoryProfile = async (...args) => {
+    const profile = await memoryProfile(...args);
+    arrived();
+    await gate;
+    return profile;
+  };
+  t.after(() => release());
+  const pending = extension.receive({
+    type: "memory-profile",
+    requestId: 2,
+    dimensions: { "symbol:N": 4 },
+  });
+  await started;
+  await extension.openBytes(
+    "replacement.onnx",
+    await readFile(require.resolve("./models/inference.onnx")),
+  );
+  release();
+  await pending;
+  assert.deepEqual(extension.preferences.get("memoryDimensions"), {
+    N: -1,
+    other: 0,
+  });
+});
+
 test("tensor statistics requests validate transport and keep native handles usable", async (t) => {
   const extension = await openExtension("tiny-initializers.onnx");
   t.after(() => extension.dispose());

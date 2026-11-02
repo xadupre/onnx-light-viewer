@@ -627,7 +627,7 @@ export function webviewHtml(
       <p>One event per node in execution order, accounting for native lifetime and potential in-place reuse decisions. Function/control-flow internals and allocator overhead are not included. Scratch estimates depend on registered estimators; zero can mean unavailable.</p>
       <form id="memory-form">
         <div id="memory-stage-field" hidden><label for="memory-stage">Pipeline stage</label><select id="memory-stage"></select></div>
-        <fieldset><legend>Dynamic dimensions (default: 1)</legend><div id="memory-dimensions"></div><p id="memory-no-dimensions" hidden>No dynamic dimensions to fill.</p></fieldset>
+        <fieldset><legend>Dynamic dimensions</legend><p>Last successfully profiled values are restored by dimension name across models and VS Code sessions. New dimensions default to 1.</p><div id="memory-dimensions"></div><p id="memory-no-dimensions" hidden>No dynamic dimensions to fill.</p></fieldset>
         <button id="memory-run" type="submit" disabled>Estimate memory</button>
       </form>
       <p id="memory-status" role="status">Open a model to estimate its memory.</p>
