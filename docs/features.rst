@@ -501,6 +501,16 @@ Set dynamic dimensions and view the estimated CPU memory curve with paginated
 per-node allocation/scratch events. Zoom for more operator labels and hover for
 numerical and symbolic allocation details. See :doc:`features/memory_profiling`.
 Native estimation, not model execution or measured RAM/GPU usage.
+
+Estimate again with different dimensions to overlay configurations on shared
+scales. Select a configuration for inspection, or remove it from the comparison.
+
+.. figure:: _static/feature-memory-comparison.png
+   :alt: Two dimension configurations overlaid on the Memory chart, with a selectable legend showing their peaks.
+   :width: 100%
+
+   Compare estimated memory for different input dimensions on the same plot.
+
 The matching Model graph shows reported in-place reuse as background port links.
 
 .. figure:: _static/feature-inplace-links.png

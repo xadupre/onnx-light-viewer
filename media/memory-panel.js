@@ -10,6 +10,10 @@ function createMemoryPanel({
   let path;
   let configured = false;
   let profile;
+  let overlayProfile;
+  let configurations = [];
+  let configurationNumber = 0;
+  let pendingConfiguration;
   let peaks = [];
   let peakIndices = new Set();
   let page = 0;
@@ -24,9 +28,21 @@ function createMemoryPanel({
   const scroll = byId("memory-chart-scroll");
   const inspection = byId("memory-inspection");
 
-  function clearProfile() {
-    profile = undefined;
+  function clearOverlay() {
+    overlayProfile = undefined;
     onProfile?.();
+  }
+
+  function clearConfigurations() {
+    configurations = [];
+    configurationNumber = 0;
+    pendingConfiguration = undefined;
+    byId("memory-configurations").replaceChildren();
+    byId("memory-comparison-curves").replaceChildren();
+    profile = undefined;
+    clearOverlay();
+    results.hidden = true;
+    inspection.hidden = true;
   }
 
   function busy(pending) {
@@ -35,11 +51,16 @@ function createMemoryPanel({
     byId("memory-stage").disabled = pending;
     for (const input of fields.querySelectorAll("input"))
       input.disabled = pending;
+    for (const input of byId("memory-configurations").querySelectorAll("input"))
+      input.disabled = pending;
+    byId("memory-remove").disabled = pending || !profile;
   }
 
   function open() {
-    clearProfile();
-    results.hidden = true;
+    if (configured && view.getAttribute("aria-busy") !== "true") return;
+    pendingConfiguration = undefined;
+    clearOverlay();
+    results.hidden = !profile;
     inspection.hidden = true;
     configured = false;
     status.textContent = hasModel
@@ -125,9 +146,20 @@ function createMemoryPanel({
     byId("memory-next").disabled = start + pageSize >= events.length;
   }
 
+  function chartEventCount() {
+    return configurations.reduce(
+      (maximum, item) => Math.max(maximum, item.profile.events.length),
+      0,
+    );
+  }
+
   function chart() {
     const events = profile.events;
-    const peak = profile.peakBytes ?? 0;
+    const peak = configurations.reduce(
+      (maximum, item) => Math.max(maximum, item.profile.peakBytes ?? 0),
+      0,
+    );
+    const eventCount = chartEventCount();
     const width = Math.max(1000, scroll.clientWidth) * zoom;
     const plotWidth = width - 80;
     svg.setAttribute("viewBox", `0 0 ${width} 330`);
@@ -138,27 +170,43 @@ function createMemoryPanel({
     byId("memory-zoom-level").textContent = `${Math.round(zoom * 100)}%`;
     byId("memory-zoom-out").disabled = zoom === 1;
     const x = (step) =>
-      (60 + (plotWidth * step) / (events.length * 3 + 1)).toFixed(5);
+      (60 + (plotWidth * step) / (eventCount * 3 + 1)).toFixed(5);
     const y = (bytes) => (240 - (210 * bytes) / Math.max(1, peak)).toFixed(5);
-    const points = events.length
-      ? [
-          `M${x(0)},${y(events[0].memory?.before_bytes ?? events[0].existingBytes)}`,
-        ]
-      : [];
+    const curves = byId("memory-comparison-curves");
+    curves.replaceChildren();
+    for (const item of configurations) {
+      const trace = item.profile.events;
+      const points = trace.length
+        ? [
+            `M${x(0)},${y(trace[0].memory?.before_bytes ?? trace[0].existingBytes)}`,
+          ]
+        : [];
+      for (const [index, event] of trace.entries()) {
+        const allocate = index * 3 + 1;
+        const release = allocate + 2;
+        points.push(`H${x(allocate)} V${y(event.deviceBytes)} H${x(release)}`);
+        if (event.afterBytes != null)
+          points.push(`V${y(event.afterBytes)} H${x(release + 1)}`);
+      }
+      const curve =
+        item.profile === profile
+          ? byId("memory-curve")
+          : document.createElementNS("http://www.w3.org/2000/svg", "path");
+      curve.setAttribute("class", "memory-curve");
+      curve.setAttribute("d", points.join(" "));
+      curve.style.stroke = item.color;
+      curve.setAttribute("stroke-dasharray", item.dash);
+      curve.setAttribute("aria-label", item.label);
+      if (item.profile !== profile) curves.append(curve);
+    }
     const interval = (index) =>
       `M${x(index * 3 + 1)},242 H${x(index * 3 + 3)} V252 H${x(index * 3 + 1)}Z`;
     const intervals = [];
-    for (const [index, event] of events.entries()) {
-      const allocate = index * 3 + 1;
-      const release = allocate + 2;
-      points.push(`H${x(allocate)} V${y(event.deviceBytes)} H${x(release)}`);
-      if (event.afterBytes != null)
-        points.push(`V${y(event.afterBytes)} H${x(release + 1)}`);
+    for (const [index] of events.entries()) {
       intervals.push(interval(index));
     }
-    byId("memory-curve").setAttribute("d", points.join(" "));
     byId("memory-node-intervals").setAttribute("d", intervals.join(" "));
-    byId("memory-chart").toggleAttribute("hidden", events.length === 0);
+    byId("memory-chart").toggleAttribute("hidden", eventCount === 0);
     byId("memory-chart-peak").textContent = formatFileSize(peak);
     const append = (parent, tag, attributes, text) => {
       const element = document.createElementNS(
@@ -310,6 +358,7 @@ function createMemoryPanel({
         ? value
         : undefined;
     const lines = [
+      configurations.find((item) => item.profile === profile).label,
       `#${event.index + 1} ${event.opType}${event.node ? `: ${event.node}` : ""} — ${phase} execution`,
       `Memory: ${amount(bytes)}`,
       `Already allocated: ${amount(event.existingBytes)}`,
@@ -356,9 +405,10 @@ function createMemoryPanel({
   }
 
   function changeZoom(next, anchor = 0.5) {
-    if (!profile?.events.length) return;
+    const eventCount = chartEventCount();
+    if (!eventCount) return;
     const previous = zoom;
-    zoom = Math.max(1, Math.min(Math.max(32, profile.events.length / 4), next));
+    zoom = Math.max(1, Math.min(Math.max(32, eventCount / 4), next));
     const position = scroll.scrollLeft + scroll.clientWidth * anchor;
     chart();
     scroll.scrollLeft =
@@ -373,7 +423,7 @@ function createMemoryPanel({
   svg.addEventListener(
     "wheel",
     (event) => {
-      if (!event.ctrlKey || !profile?.events.length) return;
+      if (!event.ctrlKey || !profile) return;
       event.preventDefault();
       const rect = scroll.getBoundingClientRect();
       changeZoom(
@@ -396,8 +446,11 @@ function createMemoryPanel({
       inspection.hidden = true;
       return;
     }
-    const step =
-      ((position - 60) * (profile.events.length * 3 + 1)) / (width - 80);
+    const step = ((position - 60) * (chartEventCount() * 3 + 1)) / (width - 80);
+    if (step > profile.events.length * 3 + 1) {
+      inspection.hidden = true;
+      return;
+    }
     const index = Math.min(
       profile.events.length - 1,
       Math.max(0, Math.floor((step - 1) / 3)),
@@ -446,10 +499,16 @@ function createMemoryPanel({
       }
       dimensions[input.name] = value;
     }
-    results.hidden = true;
     inspection.hidden = true;
     status.textContent = "Estimating memory without executing the model…";
-    clearProfile();
+    const labels = [...fields.querySelectorAll("input")].map(
+      (input) => `${input.labels[0]?.textContent ?? input.name}=${input.value}`,
+    );
+    pendingConfiguration = {
+      dimensions,
+      description: labels.join(", ") || "Default dimensions",
+    };
+    clearOverlay();
     busy(true);
     postMessage({
       type: "memory-profile",
@@ -459,8 +518,7 @@ function createMemoryPanel({
     });
   });
   fields.addEventListener("input", () => {
-    clearProfile();
-    results.hidden = true;
+    clearOverlay();
     status.textContent =
       "Dimensions changed. Estimate again to update the profile.";
   });
@@ -471,6 +529,8 @@ function createMemoryPanel({
   byId("memory-stage").addEventListener("change", () => {
     path = JSON.parse(byId("memory-stage").value);
     fields.replaceChildren();
+    clearConfigurations();
+    configured = false;
     open();
   });
   for (const [id, delta] of [
@@ -504,9 +564,9 @@ function createMemoryPanel({
       byId("memory-stage-field").hidden = message.stages.length === 0;
     }
     if (message.type === "memory-error") {
-      clearProfile();
+      pendingConfiguration = undefined;
       status.textContent = `Memory estimate unavailable: ${message.error}`;
-      results.hidden = true;
+      results.hidden = !profile;
     } else if (message.type === "memory-inputs") {
       const previous = new Map(
         [...fields.querySelectorAll("input")].map((input) => [
@@ -536,55 +596,127 @@ function createMemoryPanel({
       status.textContent =
         "Set dynamic dimensions, then choose Estimate memory.";
     } else {
-      profile = message.profile;
-      onProfile?.(profile, path);
-      zoom = 1;
-      inspectedIndex = 0;
-      results.hidden = false;
-      scroll.scrollLeft = 0;
-      inspection.hidden = true;
-      peaks = [];
-      for (let start = 0; start < profile.events.length;) {
-        let end = start;
-        const bytes = profile.events[start].deviceBytes;
-        while (
-          end + 1 < profile.events.length &&
-          profile.events[end + 1].deviceBytes === bytes
-        )
-          end++;
-        if (
-          (start === 0 || bytes > profile.events[start - 1].deviceBytes) &&
-          (end === profile.events.length - 1 ||
-            bytes > profile.events[end + 1].deviceBytes)
-        )
-          peaks.push(profile.events[start]);
-        start = end + 1;
-      }
-      peakIndices = new Set(peaks.map((event) => event.index));
-      byId("memory-peaks-count").textContent =
-        `${peaks.length.toLocaleString()} local peak${peaks.length === 1 ? "" : "s"}. Select a node to show it in Model.`;
-      page = 0;
-      byId("memory-peak").textContent =
-        profile.peakBytes === null
-          ? "Unavailable (no nodes)"
-          : formatFileSize(profile.peakBytes);
-      byId("memory-device").textContent = profile.device;
-      byId("memory-model-name").textContent = profile.name || "Unnamed model";
-      chart();
-      table();
-      status.textContent = `${profile.events.length.toLocaleString()} estimated node events. No model execution was performed.`;
+      if (!pendingConfiguration) return true;
+      const number = configurationNumber++;
+      const colors = [
+        "var(--mint)",
+        "#e5aa38",
+        "#b28df4",
+        "#e57c9d",
+        "#55a9e3",
+      ];
+      const item = {
+        ...pendingConfiguration,
+        profile: message.profile,
+        label: `Configuration ${number + 1}: ${pendingConfiguration.description}`,
+        color: colors[number % colors.length],
+        dash:
+          number < colors.length
+            ? "none"
+            : `${4 + Math.floor(number / colors.length) * 2} 4`,
+      };
+      configurations.push(item);
+      pendingConfiguration = undefined;
+      showConfiguration(item);
     }
     busy(false);
     return true;
   }
 
+  function showConfiguration(item) {
+    profile = item.profile;
+    for (const input of fields.querySelectorAll("input"))
+      input.value = String(item.dimensions[input.name]);
+    overlayProfile = profile;
+    onProfile?.(profile, path);
+    zoom = 1;
+    inspectedIndex = 0;
+    results.hidden = false;
+    scroll.scrollLeft = 0;
+    inspection.hidden = true;
+    const legend = byId("memory-configurations");
+    legend.replaceChildren();
+    for (const configuration of configurations) {
+      const label = document.createElement("label");
+      const radio = document.createElement("input");
+      radio.type = "radio";
+      radio.name = "memory-configuration";
+      radio.checked = configuration === item;
+      const restoreConfiguration = () => {
+        showConfiguration(configuration);
+        legend.querySelector("input:checked").focus();
+      };
+      radio.addEventListener("change", restoreConfiguration);
+      radio.addEventListener("click", () => {
+        if (configuration === item) restoreConfiguration();
+      });
+      const swatch = document.createElement("span");
+      swatch.className = "memory-configuration-swatch";
+      swatch.style.borderColor = configuration.color;
+      if (configuration.dash !== "none") swatch.style.borderTopStyle = "dashed";
+      swatch.setAttribute("aria-hidden", "true");
+      label.append(
+        radio,
+        swatch,
+        `${configuration.label} — peak: ${configuration.profile.peakBytes == null ? "Unavailable (no nodes)" : formatFileSize(configuration.profile.peakBytes)}`,
+      );
+      legend.append(label);
+    }
+    peaks = [];
+    for (let start = 0; start < profile.events.length;) {
+      let end = start;
+      const bytes = profile.events[start].deviceBytes;
+      while (
+        end + 1 < profile.events.length &&
+        profile.events[end + 1].deviceBytes === bytes
+      )
+        end++;
+      if (
+        (start === 0 || bytes > profile.events[start - 1].deviceBytes) &&
+        (end === profile.events.length - 1 ||
+          bytes > profile.events[end + 1].deviceBytes)
+      )
+        peaks.push(profile.events[start]);
+      start = end + 1;
+    }
+    peakIndices = new Set(peaks.map((event) => event.index));
+    byId("memory-peaks-count").textContent =
+      `${peaks.length.toLocaleString()} local peak${peaks.length === 1 ? "" : "s"}. Select a node to show it in Model.`;
+    page = 0;
+    byId("memory-peak").textContent =
+      profile.peakBytes === null
+        ? "Unavailable (no nodes)"
+        : formatFileSize(profile.peakBytes);
+    byId("memory-device").textContent = profile.device;
+    byId("memory-model-name").textContent = profile.name || "Unnamed model";
+    chart();
+    table();
+    status.textContent = `${profile.events.length.toLocaleString()} estimated node events. No model execution was performed.`;
+  }
+
+  byId("memory-remove").addEventListener("click", () => {
+    configurations = configurations.filter((item) => item.profile !== profile);
+    if (configurations.length) showConfiguration(configurations.at(-1));
+    else {
+      clearConfigurations();
+      status.textContent =
+        "Set dynamic dimensions, then choose Estimate memory.";
+    }
+    busy(false);
+  });
+
   return {
     open,
     handleMessage,
-    setGraph(graph) {
+    setGraph(graph, preserveConfigurations = false) {
+      if (hasModel && preserveConfigurations) {
+        onProfile?.(overlayProfile, path);
+        if (!view.hidden && view.getAttribute("aria-busy") === "true") open();
+        return;
+      }
       hasModel = true;
       configured = false;
-      clearProfile();
+      clearConfigurations();
       path = graph.pipeline
         ? graph.breadcrumbs?.[1]?.path?.slice(0, 1)
         : undefined;

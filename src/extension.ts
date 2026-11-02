@@ -834,7 +834,11 @@ async function configurePanel(
       directory: false,
       ...(file.size === undefined ? {} : { size: file.size }),
     }));
-  const sendGraph = (selectedNodes?: number[], fusionRequestId?: unknown) => {
+  const sendGraph = (
+    selectedNodes?: number[],
+    fusionRequestId?: unknown,
+    preserveMemory = false,
+  ) => {
     releaseRunSession();
     runResult = undefined;
     fusionPreview = undefined;
@@ -845,6 +849,7 @@ async function configurePanel(
     return postMessage({
       type: "graph",
       graph: current.graph,
+      ...(preserveMemory ? { preserveMemory: true } : {}),
       ...(fusionRequestId === undefined ? {} : { fusionRequestId }),
       ...(selectedNodes ? { selectedNodes } : {}),
       file: {
@@ -3945,7 +3950,7 @@ async function configurePanel(
         requireModel().graph = graph;
         requireModel().metadata = undefined;
         graphRevision++;
-        await sendGraph(selectedNodes);
+        await sendGraph(selectedNodes, undefined, true);
       } else if (message?.type === "metadata") {
         const requestedModel = model;
         const requestedGraphRevision = graphRevision;

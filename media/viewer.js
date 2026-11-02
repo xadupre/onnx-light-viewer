@@ -3042,7 +3042,7 @@ window.addEventListener("message", (event) => {
     runPanel.reset();
     if (!byId("prompt-view").hidden) runPanel.activateSelected();
     tensorStatisticsPanel.reset();
-    memoryPanel.setGraph(displayedGraph);
+    memoryPanel.setGraph(displayedGraph, event.data.preserveMemory === true);
     fusionPanel.reset(
       displayedGraph,
       event.data.fusionRequestId,

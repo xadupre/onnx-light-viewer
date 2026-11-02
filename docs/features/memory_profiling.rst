@@ -13,6 +13,27 @@ running the model or changing its retained shapes.
    output allocations, scratch estimates and their total. **Previous** / **Next**
    exposes every event, with 100 rows per page.
 
+Compare dimension configurations
+--------------------------------
+
+Change the dimensions and choose **Estimate memory** again to add another curve.
+All configurations share the same byte and execution-event scales. The legend
+identifies each curve by its dimensions and peak; select a configuration to
+restore its dimensions and inspect its table, local peaks and hover readout.
+**Remove selected configuration** removes that curve and rescales the plot.
+Failed estimates leave the previous curves available.
+
+Configurations remain available when switching tabs. Changing the model or
+pipeline stage clears them; they are not saved when the viewer closes.
+
+.. figure:: ../_static/feature-memory-comparison.png
+   :alt: Memory tab comparing two dimension configurations on one shared-scale plot, with a selectable legend and per-configuration peaks.
+
+   Compare dimension choices without losing the previous estimate.
+
+Inspect an estimate
+-------------------
+
 Hover over the curve to inspect memory **before**, **during** or **after** a node.
 The readout shows exact bytes, scratch, tensor shapes and SDK allocation buckets:
 weights (initializers), inputs, live intermediates and newly allocated outputs,
@@ -35,7 +56,7 @@ More node graduations and operator types appear as space becomes available.
 Crowded labels prioritize **Attention**, then **MatMul**, then
 **Normalization**, with other operators sampled every five or ten nodes.
 Focus the chart and use **Left** / **Right** to inspect nodes without a mouse.
-**Reset zoom**, a new estimate or a stage change returns to the full trace.
+**Reset zoom**, a new estimate or selecting a configuration returns to the full trace.
 
 .. figure:: ../_static/feature-memory.png
    :alt: Memory chart with zoom controls and numerical and symbolic allocation inspection.

@@ -6162,6 +6162,7 @@ test("navigation selects a requested node index and rejects invalid indices", as
   const graph = extension.messages.at(-1);
   assert.equal(graph.type, "graph");
   assert.deepEqual(graph.selectedNodes, [0]);
+  assert.equal(graph.preserveMemory, true);
   for (const nodeIndex of [-1, 0.5, 9999, "0", null]) {
     await extension.receive({ type: "navigate", path: [], nodeIndex });
     assert.equal(extension.messages.at(-1).type, "navigation-error");
