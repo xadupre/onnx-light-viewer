@@ -72,9 +72,20 @@ test("Run displays executed inputs and outputs with per-tensor inspection and sa
   );
   const buttons = byId("run-results").querySelectorAll("button");
   assert.equal(buttons.length, 4);
-  for (const [index, tensor] of [input, output].entries()) {
-    const icon = buttons[index * 2];
-    assert.ok(icon.classList.contains("tensor-statistics-button"));
+  const icons = [
+    ...byId("run-results").querySelectorAll(".tensor-statistics-button"),
+  ];
+  assert.equal(icons.length, 2);
+  for (const [kind, tensor] of [
+    ["inputs", input],
+    ["outputs", output],
+  ]) {
+    const icon = icons.find(
+      (button) =>
+        button.getAttribute("aria-label") ===
+        `Inspect values or statistics for ${tensor.name}`,
+    );
+    assert.ok(icon);
     assert.ok(icon.querySelector("svg"));
     assert.equal(icon.parentElement.tagName, "H3");
     assert.equal(
@@ -88,21 +99,12 @@ test("Run displays executed inputs and outputs with per-tensor inspection and sa
     );
     icon.click();
     assert.equal(inspections.at(-1)[1], tensor.name);
-    assert.equal(
-      JSON.stringify(inspections.at(-1)[2]),
-      JSON.stringify({
-        requestId,
-        kind: index === 0 ? "inputs" : "outputs",
-        index: 0,
-      }),
-    );
+    assert.deepEqual(structuredClone(inspections.at(-1)[2]), {
+      requestId,
+      kind,
+      index: 0,
+    });
   }
-  buttons[0].click();
-  assert.equal(inspections[0][1], input.name);
-  assert.equal(
-    JSON.stringify(inspections[0][2]),
-    JSON.stringify({ requestId, kind: "inputs", index: 0 }),
-  );
   buttons[3].click();
   assert.equal(
     JSON.stringify(messages.at(-1)),

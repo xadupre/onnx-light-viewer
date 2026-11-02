@@ -790,17 +790,18 @@ test("Run tensor statistics browse actual tensors, save JSON and isolate cached 
     return requestId;
   };
   const runId = complete();
-  const icons = byId("run-results").querySelectorAll(
-    ".tensor-statistics-button",
-  );
-  icons[0].click();
+  const statisticsIcon = (name) =>
+    byId("run-results").querySelector(
+      `.tensor-statistics-button[aria-label="Inspect values or statistics for ${name}"]`,
+    );
+  statisticsIcon("input").click();
   assert.equal(byId("tensor-statistics-dialog").open, true);
   assert.equal(messages.at(-1).type, "tensor-statistics");
   assert.equal(messages.at(-1).run.kind, "inputs");
   assert.equal(messages.at(-1).run.requestId, runId);
   assert.equal(messages.at(-1).run.index, 0);
   byId("close-tensor-statistics").click();
-  icons[1].click();
+  statisticsIcon("weight").click();
   assert.equal(byId("tensor-statistics-dialog").open, true);
   const first = messages.at(-1);
   assert.equal(first.type, "tensor-statistics");
@@ -826,7 +827,7 @@ test("Run tensor statistics browse actual tensors, save JSON and isolate cached 
   assert.equal(messages.at(-1).run.index, 2);
   byId("close-tensor-statistics").click();
   const nextRunId = complete();
-  byId("run-results").querySelectorAll(".tensor-statistics-button")[1].click();
+  statisticsIcon("weight").click();
   assert.equal(messages.at(-1).type, "tensor-statistics");
   assert.equal(messages.at(-1).run.requestId, nextRunId);
   assert.equal(byId("tensor-statistics-save").disabled, true);

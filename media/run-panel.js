@@ -449,7 +449,7 @@ function createRunPanel({
                 format: "protobuf",
               }),
             );
-            heading.className = "tensor-statistics-heading";
+            heading.classList.add("tensor-statistics-heading");
             heading.append(statistics);
             results.append(save);
           });
