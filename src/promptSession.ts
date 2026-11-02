@@ -95,6 +95,8 @@ export class PromptSession {
             this.pending = undefined;
             output = "";
           } else if (event.type === "error") {
+            if (timer) clearTimeout(timer);
+            flush();
             throw new Error(
               "error" in event && typeof event.error === "string"
                 ? event.error

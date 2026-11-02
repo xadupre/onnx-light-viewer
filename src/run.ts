@@ -1,6 +1,7 @@
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
+import { deserialize } from "node:v8";
 import { runProcess } from "./export";
 import { GraphPath, NativeModel, RunInputSource, RunResult } from "./graph";
 import { PromptSession } from "./promptSession";
@@ -37,7 +38,7 @@ export class RunSession {
     signal.throwIfAborted();
     this.model = model;
     this.key = key;
-    if (engine === "onnxruntime") {
+    if (engine === "onnxruntime" || Number(settings.verbose) > 0) {
       const worker = new PromptSession(
         (error) => {
           if (this.worker !== worker) return;
@@ -45,10 +46,19 @@ export class RunSession {
           this.reportError(error);
         },
         {
-          executable: python,
-          args: ["-u", runner, "--worker"],
-          stderrEncoding: process.platform === "win32" ? "utf16le" : "utf8",
-          label: "ONNX Runtime",
+          executable: engine === "onnxruntime" ? python : process.execPath,
+          args:
+            engine === "onnxruntime"
+              ? ["-u", runner, "--worker"]
+              : [
+                  resolve(__dirname, "..", "media", "run_model.cjs"),
+                  "--worker",
+                ],
+          stderrEncoding:
+            engine === "onnxruntime" && process.platform === "win32"
+              ? "utf16le"
+              : "utf8",
+          label: engine === "onnxruntime" ? "ONNX Runtime" : "onnx-light",
         },
       );
       this.worker = worker;
@@ -237,13 +247,67 @@ export async function runModel(
       await closing;
     }
     signal.throwIfAborted();
-    if (engine === "onnx-light") {
+    if (engine === "onnx-light" && options.verbose === 0) {
       const { log, ...result } = await model.run(inputs, path, {
         ...options,
         keepLoaded,
       });
       signal.throwIfAborted();
       if (log) progress(log);
+      return result;
+    }
+    if (engine === "onnx-light") {
+      const directory = await mkdtemp(join(tmpdir(), "onnx-light-run-"));
+      let result: RunResult;
+      try {
+        if (!retainedSession?.alive) {
+          const snapshot = await model.prepareRun([], path, options);
+          signal.throwIfAborted();
+          await writeFile(join(directory, "model.onnx"), snapshot.model);
+        }
+        const sources = [];
+        for (const [index, input] of inputs.entries()) {
+          if (typeof input !== "string" && input.source === "protobuf") {
+            await writeFile(join(directory, `input-${index}.pb`), input.data);
+            sources.push({ name: input.name, source: input.source });
+          } else sources.push(input);
+        }
+        await writeFile(
+          join(directory, "request.json"),
+          JSON.stringify({
+            inputs: sources,
+            options: { ...options, keepLoaded },
+          }),
+        );
+        signal.throwIfAborted();
+        if (retainedSession)
+          await retainedSession.run(directory, signal, progress);
+        else
+          await runProcess(
+            {
+              executable: process.execPath,
+              args: [
+                resolve(__dirname, "..", "media", "run_model.cjs"),
+                directory,
+              ],
+            },
+            signal,
+            progress,
+            { ELECTRON_RUN_AS_NODE: "1" },
+            "onnx-light",
+          );
+        result = deserialize(
+          await readFile(join(directory, "result.bin")),
+        ) as RunResult;
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
+      signal.throwIfAborted();
+      if (
+        retainedSession &&
+        (!retainedSession.alive || retainedSession.generation !== generation)
+      )
+        result.lifecycle.retained = false;
       return result;
     }
     const prepared = await model.prepareRun(inputs, path, options);
