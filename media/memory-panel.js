@@ -707,6 +707,7 @@ function createMemoryPanel({
     setGraph(graph, preserveConfigurations = false) {
       if (hasModel && preserveConfigurations) {
         onProfile?.(overlayProfile, path);
+        if (!view.hidden && view.getAttribute("aria-busy") === "true") open();
         return;
       }
       hasModel = true;
