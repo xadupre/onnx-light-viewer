@@ -383,6 +383,16 @@ export interface RunResult {
   timeMs: number;
   inputs?: RunTensor[];
   outputs: RunTensor[];
+  profiling?: {
+    trace: unknown[];
+    nodes: {
+      name: string;
+      op: string;
+      provider: string;
+      calls: number;
+      durationUs: number;
+    }[];
+  };
   lifecycle: {
     loadMs: number;
     reused: boolean;

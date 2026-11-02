@@ -42,6 +42,197 @@ function runModule(overrides) {
   return loaded;
 }
 
+test("profiling aggregates runtime node identities without merging colliding names or subgraph scopes", () => {
+  const event = (name, index, ts, dur, op = "Relu", tid = 1) => ({
+    cat: "Node",
+    name: `${name}_kernel_time`,
+    pid: 1,
+    tid,
+    ts,
+    dur,
+    args: { node_index: index, op_name: op, provider: "CPUExecutionProvider" },
+  });
+  const trace = [
+    event("repeat", 1, 10, 3),
+    event("first", 0, 0, 50, "If"),
+    event("repeat", 1, 70, 6),
+    event("second", 1, 60, 30, "If"),
+    event("repeat", 1, 100, 5),
+    event("repeat", 1, 120, 7),
+    event("repeat", 2, 140, 4),
+    event("repeat", 1, 15, 2, "Relu", 2),
+    event("legacy", undefined, 200, 1),
+    event("legacy", undefined, 220, 2),
+  ];
+  const result = JSON.parse(
+    execFileSync(
+      python,
+      [
+        "-c",
+        `
+import json
+import runpy
+import sys
+import tempfile
+from pathlib import Path
+
+read_profile = runpy.run_path(sys.argv[1])["read_profile"]
+with tempfile.TemporaryDirectory() as directory:
+    filename = Path(directory) / "trace.json"
+    filename.write_text(sys.stdin.read(), encoding="utf-8")
+    class TraceSession:
+        def end_profiling(self):
+            return str(filename)
+    print(json.dumps(read_profile(TraceSession())))
+`,
+        runner,
+      ],
+      { input: JSON.stringify(trace), encoding: "utf8" },
+    ),
+  );
+  assert.deepEqual(result.trace, JSON.parse(JSON.stringify(trace)));
+  const nodes = result.nodes.filter((node) => node.op === "Relu");
+  assert.deepEqual(
+    nodes.map(({ name, calls, durationUs }) => ({ name, calls, durationUs })),
+    [
+      { name: "repeat [node 1]", calls: 3, durationUs: 14 },
+      { name: "second [node 1] / repeat [node 1]", calls: 1, durationUs: 6 },
+      { name: "repeat [node 2]", calls: 1, durationUs: 4 },
+      { name: "first [node 0] / repeat [node 1]", calls: 1, durationUs: 3 },
+      { name: "legacy", calls: 2, durationUs: 3 },
+    ],
+  );
+});
+
+test("real ONNX Runtime subgraphs keep colliding graph-local node indices separate", () => {
+  const result = JSON.parse(
+    execFileSync(
+      python,
+      [
+        "-c",
+        `
+import json
+import runpy
+import sys
+import tempfile
+from pathlib import Path
+import numpy as np
+import onnx.helper as oh
+import onnxruntime as ort
+from onnx import TensorProto
+
+read_profile = runpy.run_path(sys.argv[1])["read_profile"]
+def branch(name):
+    return oh.make_graph(
+        [oh.make_node("Relu", ["x"], ["value"], name="shared")],
+        name, [], [oh.make_tensor_value_info("value", TensorProto.FLOAT, [3])]
+    )
+names = ["first", "second"]
+graph = oh.make_graph(
+    [oh.make_node("If", ["cond"], [name], name=name,
+                  then_branch=branch(name + "_then"),
+                  else_branch=branch(name + "_else")) for name in names],
+    "scope",
+    [oh.make_tensor_value_info("x", TensorProto.FLOAT, [3]),
+     oh.make_tensor_value_info("cond", TensorProto.BOOL, [])],
+    [oh.make_tensor_value_info(name, TensorProto.FLOAT, [3]) for name in names]
+)
+model = oh.make_model(graph, opset_imports=[oh.make_opsetid("", 18)], ir_version=9)
+with tempfile.TemporaryDirectory() as directory:
+    options = ort.SessionOptions()
+    options.enable_profiling = True
+    options.profile_file_prefix = str(Path(directory) / "profile")
+    session = ort.InferenceSession(
+        model.SerializeToString(), options, providers=["CPUExecutionProvider"]
+    )
+    session.run(None, {"x": np.array([-1, 0, 2], dtype=np.float32),
+                      "cond": np.array(True)})
+    print(json.dumps(read_profile(session)))
+`,
+        runner,
+      ],
+      { encoding: "utf8" },
+    ),
+  );
+  const children = result.nodes.filter((node) => node.op === "Relu");
+  assert.equal(children.length, 2);
+  assert.ok(children.every((node) => node.calls === 1));
+  assert.ok(
+    children.some((node) => node.name === "first [node 0] / shared [node 0]"),
+  );
+  assert.ok(
+    children.some((node) => node.name === "second [node 1] / shared [node 0]"),
+  );
+  const events = result.trace.filter(
+    (event) => event.name === "shared_kernel_time",
+  );
+  assert.equal(events.length, 2);
+  assert.equal(events[0].args.node_index, events[1].args.node_index);
+  assert.equal(
+    children.reduce((total, node) => total + node.durationUs, 0),
+    events.reduce((total, event) => total + event.dur, 0),
+  );
+});
+
+test("ONNX Runtime profiling returns real kernel timings and traces without retaining sessions", async (t) => {
+  const model = loadModel(
+    readFileSync(require.resolve("./models/relu.onnx")),
+    "relu.onnx",
+  );
+  const session = new RunSession();
+  t.after(() => session.close());
+  const request = {
+    engine: "onnxruntime",
+    keepLoaded: true,
+    inputs: ["float[1,3] input = {-1, 0, 2}"],
+  };
+  const predict = (settings) =>
+    runModel(
+      model,
+      [],
+      { ...request, settings },
+      python,
+      runner,
+      () => {},
+      new AbortController().signal,
+      session,
+    );
+  const ordinary = await predict({ enableProfiling: false });
+  assert.equal(ordinary.lifecycle.retained, true);
+  assert.equal(ordinary.profiling, undefined);
+  for (let index = 0; index < 2; ++index) {
+    const result = await predict({ enableProfiling: true });
+    assert.equal(result.lifecycle.reused, false);
+    assert.equal(result.lifecycle.retained, false);
+    assert.equal(session.alive, false);
+    assert.deepEqual(result.outputs, ordinary.outputs);
+    const { trace, nodes } = result.profiling;
+    assert.ok(trace.some((event) => event.cat === "Session"));
+    assert.ok(nodes.some((node) => node.op === "Relu"));
+    assert.ok(nodes.every((node) => node.calls > 0 && node.durationUs >= 0));
+    assert.ok(nodes.every((node) => node.provider === "CPUExecutionProvider"));
+    const kernelEvents = trace.filter(
+      (event) => event.cat === "Node" && event.name.endsWith("_kernel_time"),
+    );
+    assert.equal(
+      nodes.reduce((total, node) => total + node.calls, 0),
+      kernelEvents.length,
+    );
+    assert.equal(
+      nodes.reduce((total, node) => total + node.durationUs, 0),
+      kernelEvents.reduce((total, event) => total + event.dur, 0),
+    );
+    for (let i = 1; i < nodes.length; ++i)
+      assert.ok(nodes[i - 1].durationUs >= nodes[i].durationUs);
+  }
+  assert.equal((await predict({})).lifecycle.reused, false);
+  assert.equal((await predict({})).lifecycle.reused, true);
+  await assert.rejects(
+    predict({ enableProfiling: "yes" }),
+    /boolean Enable profiling/,
+  );
+});
+
 for (const engine of ["onnx-light", "onnxruntime"])
   test(`${engine} Run retains real sessions with fresh inputs and invalidates ownership/settings`, async (t) => {
     const session = new RunSession();

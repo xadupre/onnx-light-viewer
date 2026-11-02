@@ -152,6 +152,70 @@ test("regular run host reuses sessions, explicitly unloads and invalidates stage
   assert.equal(extension.messages.at(-1).result.lifecycle.reused, false);
 });
 
+test("Run profiling displays summaries and saves a host-owned Chrome trace", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "viewer-run-profile-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const extension = await openExtension(
+    undefined,
+    "onnxLightViewer.open",
+    true,
+  );
+  t.after(() => extension.dispose());
+  const source = path.join(directory, "source.onnx");
+  await copyFile(require.resolve("./models/relu.onnx"), source);
+  await extension.openFile(source);
+  const request = {
+    type: "run-model",
+    requestId: 1,
+    engine: "onnxruntime",
+    settings: { enableProfiling: true },
+    inputs: ["float[1,3] input = {-1, 0, 2}"],
+  };
+  await extension.receive(request);
+  const message = extension.messages.at(-1);
+  assert.equal(message.type, "run-result");
+  assert.ok(message.result.profiling.nodes.length > 0);
+  assert.equal(message.result.profiling.trace, undefined);
+  const file = path.join(directory, "trace.json");
+  extension.setSaveDestination(file);
+  const save = { type: "run-save", run: { requestId: 1 }, format: "profiling" };
+  await extension.receive(save);
+  assert.equal(extension.messages.at(-1).type, "run-save-info");
+  const trace = JSON.parse(await readFile(file, "utf8"));
+  assert.ok(
+    trace.some(
+      (event) => event.cat === "Node" && event.args.op_name === "Relu",
+    ),
+  );
+  assert.equal(extension.saveDialogs.at(-1).saveLabel, "Save profiling trace");
+  extension.setSaveDestination(undefined);
+  await extension.receive(save);
+  assert.equal(extension.messages.at(-1).status, "Save cancelled.");
+  const original = await readFile(source);
+  extension.setSaveDestination(source);
+  await extension.receive(save);
+  assert.equal(extension.messages.at(-1).type, "run-save-error");
+  assert.match(extension.messages.at(-1).error, /different destination/);
+  assert.deepEqual(await readFile(source), original);
+  const dialogs = extension.saveDialogs.length;
+  await extension.receive({ ...save, run: { requestId: 0 } });
+  assert.equal(extension.messages.at(-1).type, "run-save-error");
+  assert.equal(extension.saveDialogs.length, dialogs);
+  const staleFile = path.join(directory, "stale.json");
+  extension.setSaveDestination(staleFile);
+  const gate = extension.pauseNextSaveDialog();
+  const pendingSave = extension.receive(save);
+  await gate.opened;
+  await extension.receive({ ...request, requestId: 2, settings: {} });
+  assert.equal(extension.messages.at(-1).result.profiling, undefined);
+  gate.release();
+  await pendingSave;
+  await assert.rejects(readFile(staleFile), { code: "ENOENT" });
+  await extension.receive({ ...save, run: { requestId: 2 } });
+  assert.equal(extension.messages.at(-1).type, "run-save-error");
+  assert.equal(extension.saveDialogs.length, dialogs + 1);
+});
+
 test("Run inspection and saving use host-owned execution tensors for both engines", async (t) => {
   const directory = await mkdtemp(path.join(tmpdir(), "viewer-run-save-"));
   t.after(() => rm(directory, { recursive: true, force: true }));

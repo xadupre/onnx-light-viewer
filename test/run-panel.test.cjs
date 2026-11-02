@@ -361,6 +361,7 @@ for (const control of [
   "run-log-severity",
   "run-log-verbosity",
   "run-keep-loaded",
+  "run-profile",
 ])
   test(`Run releases the retained session when ${control} changes`, (t) => {
     const { dom, byId, api, messages } = panel(t);
@@ -569,7 +570,7 @@ test("Run requires dimensions, supports mixed input sources and retains engine l
   );
   assert.equal(
     JSON.stringify(run.settings),
-    JSON.stringify({ logSeverity: 0, logVerbosity: 2 }),
+    JSON.stringify({ logSeverity: 0, logVerbosity: 2, enableProfiling: false }),
   );
   assert.equal(
     JSON.stringify(run.inputs),
@@ -597,6 +598,86 @@ test("Run requires dimensions, supports mixed input sources and retains engine l
   assert.equal(byId("run-log-verbosity").value, "2");
 });
 
+test("ONNX Runtime profiling is opt-in, one-shot, displays safe timings and saves a trace", (t) => {
+  const { dom, byId, api, messages } = panel(t);
+  assert.equal(byId("run-profiling-options").hidden, true);
+  assert.equal(byId("run-profile").checked, false);
+  byId("run-engine").value = "onnxruntime";
+  byId("run-engine").dispatchEvent(new dom.window.Event("change"));
+  assert.equal(byId("run-profiling-options").hidden, false);
+  api.activate();
+  api.handleMessage({
+    type: "run-inputs",
+    requestId: messages.at(-1).requestId,
+    stages: [],
+    path: [],
+    inputs: [],
+  });
+  byId("run-keep-loaded").checked = true;
+  byId("run-profile").checked = true;
+  byId("run-profile").dispatchEvent(new dom.window.Event("change"));
+  assert.equal(byId("run-keep-loaded").disabled, true);
+  assert.doesNotMatch(byId("run-lifecycle").textContent, /keeps it loaded/);
+  const submit = byId("run-form").querySelector('button[type="submit"]');
+  submit.click();
+  const request = messages.at(-1);
+  assert.equal(request.settings.enableProfiling, true);
+  assert.equal(request.keepLoaded, false);
+  api.handleMessage({
+    type: "run-result",
+    requestId: request.requestId,
+    result: {
+      timeMs: 1,
+      outputs: [],
+      lifecycle: { loadMs: 2, reused: false, retained: false },
+      profiling: {
+        nodes: [
+          {
+            name: "<script>unsafe</script>",
+            op: "Relu",
+            provider: "CPUExecutionProvider",
+            calls: 1,
+            durationUs: 1250,
+          },
+        ],
+      },
+    },
+  });
+  const table = byId("run-results").querySelector("table");
+  assert.equal(table.getAttribute("aria-label"), "ONNX Runtime kernel timings");
+  assert.deepEqual(
+    [...table.tBodies[0].rows[0].cells].map((cell) => cell.textContent),
+    ["<script>unsafe</script>", "Relu", "CPUExecutionProvider", "1", "1.250"],
+  );
+  assert.equal(byId("run-results").querySelector("script"), null);
+  byId("run-results").querySelector("button").click();
+  assert.deepEqual(JSON.parse(JSON.stringify(messages.at(-1))), {
+    type: "run-save",
+    run: { requestId: request.requestId },
+    format: "profiling",
+  });
+  submit.click();
+  assert.equal(byId("run-results").textContent, "");
+  api.handleMessage({
+    type: "run-result",
+    requestId: messages.at(-1).requestId,
+    result: { timeMs: 1, outputs: [], profiling: { nodes: [] } },
+  });
+  assert.match(byId("run-results").textContent, /No kernel timing events/);
+  byId("run-profile").checked = false;
+  byId("run-profile").dispatchEvent(new dom.window.Event("change"));
+  assert.equal(byId("run-keep-loaded").disabled, false);
+  submit.click();
+  assert.equal(messages.at(-1).keepLoaded, true);
+  assert.equal(messages.at(-1).settings.enableProfiling, false);
+  api.reset();
+  api.handleMessage({
+    type: "run-result",
+    requestId: request.requestId,
+    result: { timeMs: 1, outputs: [], profiling: { nodes: [] } },
+  });
+  assert.equal(byId("run-results").textContent, "");
+});
 test("symbolic and unnamed dynamic dimensions with colliding labels remain independent", (t) => {
   const { byId, api, messages } = panel(t);
   api.activate();

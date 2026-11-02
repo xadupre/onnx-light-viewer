@@ -157,6 +157,23 @@ the option, changing engine/logging/model/stage, cancellation or an error releas
 the retained session. With the option off (the default), sessions are recreated
 and released for every run. Initialization time is separate from execution time.
 
+With **ONNX Runtime** selected, check **Enable profiling** before **Run model**.
+The results show kernel timings sorted slowest first: node, operator, execution
+provider, call count and total milliseconds. These are the runtime's optimized
+nodes, which may be fused rather than match the original graph. Profiling adds
+overhead and always creates and releases a fresh session, even if session reuse
+was previously selected. Turn profiling off to use session reuse again.
+**Save profiling trace…** exports the complete Chrome trace JSON, including
+session initialization and execution events, for a compatible timeline viewer.
+The trace stays available until the next run or model change; temporary profiling
+files are removed after execution.
+
+.. figure:: _static/feature-run-profiling.png
+   :alt: ONNX Runtime Run with profiling enabled, per-node kernel timings and a Save profiling trace button.
+   :width: 100%
+
+   Find slow kernels inline or save the complete execution timeline as JSON.
+
 Every symbolic or unnamed dynamic dimension needs an explicit non-negative size.
 Shared symbolic names use one field; unnamed dimensions are labeled ``input:axis``.
 For each input, choose **Random** (SDK-generated normal samples), **TensorProto

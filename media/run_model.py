@@ -29,16 +29,77 @@ def preview_values(value):
     return str(preview)
 
 
+def read_profile(session):
+    trace = json.loads(Path(session.end_profiling()).read_text(encoding="utf-8"))
+    events = [
+        event
+        for event in trace
+        if event.get("cat") == "Node"
+        and event.get("name", "").endswith("_kernel_time")
+    ]
+    events.sort(
+        key=lambda event: (
+            event.get("pid", 0),
+            event.get("tid", 0),
+            event.get("ts", 0),
+            -event["dur"],
+        )
+    )
+    nodes = {}
+    scopes = []
+    thread = None
+    for event in events:
+        current_thread = (event.get("pid"), event.get("tid"))
+        if current_thread != thread:
+            scopes.clear()
+            thread = current_thread
+        start = event.get("ts", 0)
+        end = start + event["dur"]
+        while scopes and (start >= scopes[-1][0] or end > scopes[-1][0]):
+            scopes.pop()
+        args = event.get("args", {})
+        name = event["name"].removesuffix("_kernel_time")
+        op = args.get("op_name", "")
+        provider = args.get("provider", "")
+        index = args.get("node_index")
+        key = (
+            scopes[-1][1] if scopes else (),
+            name,
+            op,
+            provider,
+            index,
+        )
+        node = nodes.get(key)
+        if node is None:
+            label = f"{name} [node {index}]" if index is not None else name
+            if scopes:
+                label = f"{scopes[-1][2]} / {label}"
+            node = dict(name=label, op=op, provider=provider, calls=0, durationUs=0)
+            nodes[key] = node
+        node["calls"] += 1
+        node["durationUs"] += event["dur"]
+        # Node indices are graph-local; enclosing control-flow kernels scope subgraphs.
+        if op in {"If", "Loop", "Scan"} and "ts" in event and event["dur"] > 0:
+            scopes.append((end, key, node["name"]))
+    return {
+        "trace": trace,
+        "nodes": sorted(nodes.values(), key=lambda node: node["durationUs"], reverse=True),
+    }
+
+
 def main(directory, cache=None, key=None):
     directory = Path(directory)
     settings = json.loads((directory / "settings.json").read_text(encoding="utf-8"))
-    reused = cache is not None and cache.get("key") == key
+    enable_profiling = settings.get("enableProfiling", False)
+    reused = not enable_profiling and cache is not None and cache.get("key") == key
     if reused:
         session, load_ms = cache["session"], cache["load_ms"]
     else:
         options = ort.SessionOptions()
         options.log_severity_level = settings["logSeverity"]
         options.log_verbosity_level = settings["logVerbosity"]
+        options.enable_profiling = enable_profiling
+        options.profile_file_prefix = str(directory / "profile")
         load_start = perf_counter()
         session = ort.InferenceSession(
             str(directory / "model.onnx"),
@@ -46,7 +107,7 @@ def main(directory, cache=None, key=None):
             providers=["CPUExecutionProvider"],
         )
         load_ms = (perf_counter() - load_start) * 1000
-    retained = settings.get("keepLoaded", False)
+    retained = settings.get("keepLoaded", False) and not enable_profiling
     if cache is not None:
         cache.clear()
         if retained:
@@ -59,6 +120,7 @@ def main(directory, cache=None, key=None):
     start = perf_counter()
     values = session.run(None, inputs)
     time_ms = (perf_counter() - start) * 1000
+    profiling = read_profile(session) if enable_profiling else None
     outputs = []
     previews = []
     for name, value in inputs.items():
@@ -97,6 +159,7 @@ def main(directory, cache=None, key=None):
                 "timeMs": time_ms,
                 "inputs": previews,
                 "outputs": outputs,
+                **({"profiling": profiling} if profiling is not None else {}),
                 "lifecycle": {
                     "loadMs": load_ms,
                     "reused": reused,

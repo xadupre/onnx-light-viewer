@@ -1493,6 +1493,9 @@ async function configurePanel(
                 result: {
                   timeMs: result.timeMs,
                   lifecycle: result.lifecycle,
+                  profiling: result.profiling
+                    ? { nodes: result.profiling.nodes }
+                    : undefined,
                   inputs: result.inputs?.map(preview),
                   outputs: result.outputs.map(preview),
                 },
@@ -1524,16 +1527,33 @@ async function configurePanel(
           runResult.revision === revision &&
           runResult.generation === generation;
         try {
-          if (message.format !== "protobuf" && message.format !== "statistics")
-            throw new Error("Choose TensorProto or statistics JSON.");
-          const tensorName = executedTensor(message.run).name;
+          if (
+            message.format !== "protobuf" &&
+            message.format !== "statistics" &&
+            message.format !== "profiling"
+          )
+            throw new Error(
+              "Choose TensorProto, statistics JSON or profiling JSON.",
+            );
+          const profiling = message.format === "profiling";
+          if (
+            profiling &&
+            (message.run?.requestId !== runResult?.requestId ||
+              !runResult?.result.profiling)
+          )
+            throw new Error("Run the model with profiling enabled first.");
+          const tensorName = profiling
+            ? "profiling trace"
+            : executedTensor(message.run).name;
           const uri = await vscode.window.showSaveDialog({
-            saveLabel:
-              message.format === "statistics"
+            saveLabel: profiling
+              ? "Save profiling trace"
+              : message.format === "statistics"
                 ? "Save statistics"
                 : "Save tensor",
-            filters:
-              message.format === "statistics"
+            filters: profiling
+              ? { "Chrome trace": ["json"] }
+              : message.format === "statistics"
                 ? { "Tensor statistics": ["json"] }
                 : { TensorProto: ["pb"] },
           });
@@ -1550,17 +1570,20 @@ async function configurePanel(
               : [];
             await assertSaveDestination(sources, uri);
             if (!isCurrent()) return;
-            const tensor = executedTensor(message.run);
-            const bytes =
-              message.format === "statistics"
+            const tensor = profiling ? undefined : executedTensor(message.run);
+            const bytes = profiling
+              ? Buffer.from(
+                  JSON.stringify(runResult!.result.profiling!.trace) + "\n",
+                )
+              : message.format === "statistics"
                 ? Buffer.from(
                     JSON.stringify(
-                      await tensorStatisticsFromProto(tensor.data!),
+                      await tensorStatisticsFromProto(tensor!.data!),
                       null,
                       2,
                     ) + "\n",
                   )
-                : tensor.data!;
+                : tensor!.data!;
             if (!isCurrent()) return;
             const published = await writeModelFile(uri, bytes, true, isCurrent);
             if (!published) return;
