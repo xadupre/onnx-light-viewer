@@ -482,7 +482,8 @@ void PreserveFunctionBodies(ol::ModelProto &model, const ol::ModelProto &origina
 
 bool HasRewritingChanges(const ol::RewritingProto &plan) {
   return !plan.rewrites().empty() || !plan.moved_nodes().empty() ||
-         !plan.added_functions().empty() || !plan.replaced_function_ids().empty();
+         !plan.added_functions().empty() || !plan.replaced_function_ids().empty() ||
+         !plan.required_opset_imports().empty();
 }
 
 size_t RewritingStepCount(const ol::RewritingProto &plan) {
@@ -490,10 +491,9 @@ size_t RewritingStepCount(const ol::RewritingProto &plan) {
                                  : plan.rewrites().size();
 }
 
-void CaptureNodeMoves(const ol::ModelProto &original, const ol::core::builder::GraphBuilder &source,
-                      ol::RewritingProto &plan) {
-  if (plan.moved_nodes().empty())
-    return;
+ol::core::builder::GraphBuilder CaptureNodeMoves(const ol::ModelProto &original,
+                                                 const ol::core::builder::GraphBuilder &source,
+                                                 ol::RewritingProto &plan) {
   auto relocated = source.ApplyRewritings(plan);
   const auto after = CaptureScopes(relocated);
   std::set<std::string> moved_functions;
@@ -533,6 +533,7 @@ void CaptureNodeMoves(const ol::ModelProto &original, const ol::core::builder::G
   plan.clear_hash_before();
   plan.clear_hash_after();
   plan = source.CaptureRewritings(plan);
+  return relocated;
 }
 
 bool IsGlobalPass(const std::string &name) {
@@ -1090,7 +1091,8 @@ private:
     }
     builder::GraphBuilder source(original);
     plan_ = source.CaptureRewritings(plan_);
-    CaptureNodeMoves(original, source, plan_);
+    if (!plan_.moved_nodes().empty())
+      CaptureNodeMoves(original, source, plan_);
     RewritingTrace trace(original.graph());
     history_.emplace_back();
     for (const auto &edit : plan_.rewrites()) {
@@ -1126,20 +1128,19 @@ private:
     batches_.push_back(target);
     plan_ = scenario.SharedCopy();
     ol::core::builder::GraphBuilder source(snapshot_);
-    auto rewritten = source.ApplyRewritings(plan_);
-    plan_.clear_rewrites();
-    for (size_t i = 0; i < ordinary_target; ++i)
-      *plan_.add_rewrites() = scenario.rewrites(i).SharedCopy();
     if (target != step_count) {
+      // Validate the complete saved hashes before replacing them with prefix hashes.
+      source.ApplyRewritings(scenario);
+      plan_.clear_rewrites();
+      for (size_t i = 0; i < ordinary_target; ++i)
+        *plan_.add_rewrites() = scenario.rewrites(i).SharedCopy();
       plan_.clear_moved_nodes();
       plan_.clear_hash_before();
       plan_.clear_hash_after();
       plan_ = source.CaptureRewritings(plan_);
-      rewritten = source.ApplyRewritings(plan_);
-    } else if (!plan_.moved_nodes().empty()) {
-      CaptureNodeMoves(snapshot_, source, plan_);
-      rewritten = source.ApplyRewritings(plan_);
     }
+    auto rewritten = plan_.moved_nodes().empty() ? source.ApplyRewritings(plan_)
+                                                 : CaptureNodeMoves(snapshot_, source, plan_);
     std::vector<FusionNodeKey> order;
     for (const auto &node : snapshot_.graph().node())
       order.push_back(NodeOrderKey(node));
