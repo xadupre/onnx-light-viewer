@@ -179,7 +179,7 @@ function createMemoryPanel({
     const y = (bytes) => (240 - (210 * bytes) / Math.max(1, peak)).toFixed(5);
     const curves = byId("memory-comparison-curves");
     curves.replaceChildren();
-    for (const item of configurations) {
+    for (const [configurationIndex, item] of configurations.entries()) {
       const trace = item.profile.events;
       const points = trace.length
         ? [
@@ -198,6 +198,7 @@ function createMemoryPanel({
           ? byId("memory-curve")
           : document.createElementNS("http://www.w3.org/2000/svg", "path");
       curve.setAttribute("class", "memory-curve");
+      curve.dataset.configurationIndex = String(configurationIndex);
       curve.setAttribute("d", points.join(" "));
       curve.style.stroke = item.color;
       curve.setAttribute("stroke-dasharray", item.dash);
@@ -344,10 +345,14 @@ function createMemoryPanel({
       !events.length || events.at(-1).afterBytes != null;
   }
 
-  function inspect(index, phase = "during") {
-    const event = profile?.events[index];
+  function inspect(
+    index,
+    phase = "during",
+    configuration = configurations.find((item) => item.profile === profile),
+  ) {
+    const event = configuration?.profile.events[index];
     if (!event) return;
-    inspectedIndex = index;
+    if (configuration.profile === profile) inspectedIndex = index;
     const bytes =
       phase === "before"
         ? (event.memory?.before_bytes ?? event.existingBytes)
@@ -363,7 +368,7 @@ function createMemoryPanel({
         ? value
         : undefined;
     const lines = [
-      configurations.find((item) => item.profile === profile).label,
+      configuration.label,
       `#${event.index + 1} ${event.opType}${event.node ? `: ${event.node}` : ""} — ${phase} execution`,
       `Memory: ${amount(bytes)}`,
       `Already allocated: ${amount(event.existingBytes)}`,
@@ -439,7 +444,15 @@ function createMemoryPanel({
     { passive: false },
   );
   svg.addEventListener("pointermove", (event) => {
-    if (!profile?.events.length) return;
+    const curve = event.target.closest(".memory-curve");
+    const configuration = curve
+      ? configurations[Number(curve.dataset.configurationIndex)]
+      : configurations.find((item) => item.profile === profile);
+    const trace = configuration?.profile;
+    if (!trace?.events.length) {
+      inspection.hidden = true;
+      return;
+    }
     const rect = svg.getBoundingClientRect();
     if (!rect.width) return;
     const width = Number(svg.getAttribute("viewBox").split(" ")[2]);
@@ -452,17 +465,18 @@ function createMemoryPanel({
       return;
     }
     const step = ((position - 60) * (chartEventCount() * 3 + 1)) / (width - 80);
-    if (step > profile.events.length * 3 + 1) {
+    if (step > trace.events.length * 3 + 1) {
       inspection.hidden = true;
       return;
     }
     const index = Math.min(
-      profile.events.length - 1,
+      trace.events.length - 1,
       Math.max(0, Math.floor((step - 1) / 3)),
     );
     inspect(
       index,
       step < 1 ? "before" : step >= index * 3 + 3 ? "after" : "during",
+      configuration,
     );
   });
   svg.addEventListener("pointerleave", () => {

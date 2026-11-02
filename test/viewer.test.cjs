@@ -2756,6 +2756,39 @@ test("memory configurations share scales and retain selectable estimates across 
     document.getElementById("memory-chart-peak").textContent,
     "48 bytes",
   );
+  const chart = document.getElementById("memory-chart");
+  chart.getBoundingClientRect = () => new window.DOMRect(0, 0, 1000, 330);
+  const hoverCurve = (curve, step, y) =>
+    curve.dispatchEvent(
+      new window.MouseEvent("pointermove", {
+        bubbles: true,
+        clientX: 60 + (920 * step) / 4,
+        clientY: y,
+      }),
+    );
+  const inspection = document.getElementById("memory-inspection");
+  for (const [step, y, phase, bytes] of [
+    [0.5, 187.5, "before", 12],
+    [2, 135, "during", 24],
+    [3.5, 187.5, "after", 12],
+  ]) {
+    hoverCurve(previousCurve, step, y);
+    assert.match(inspection.textContent, /Configuration 1: N <img src=x>=1/);
+    assert.match(
+      inspection.textContent,
+      new RegExp(`${phase} execution\\nMemory: .*${bytes} bytes`),
+    );
+  }
+  assert.equal(radios()[1].checked, true);
+  assert.equal(dimension.value, "2");
+  assert.equal(document.getElementById("memory-peak").textContent, "48 bytes");
+  assert.match(
+    document.getElementById("memory-events").textContent,
+    /batch-48/,
+  );
+  hoverCurve(selectedCurve, 2, 30);
+  assert.match(inspection.textContent, /Configuration 2: N <img src=x>=2/);
+  assert.match(inspection.textContent, /during execution\nMemory: .*48 bytes/);
   radios()[0].click();
   assert.equal(dimension.value, "1");
   assert.equal(document.getElementById("memory-peak").textContent, "24 bytes");
@@ -2826,6 +2859,22 @@ test("memory comparison handles empty and different-length traces on the same ev
     "an empty selected trace must not hide comparisons",
   );
   assert.equal(document.getElementById("memory-curve").getAttribute("d"), "");
+  chart.getBoundingClientRect = () => new window.DOMRect(0, 0, 1000, 330);
+  const longestCurve = document.querySelector(
+    '.memory-curve[aria-label^="Configuration 1:"]',
+  );
+  longestCurve.dispatchEvent(
+    new window.MouseEvent("pointermove", {
+      bubbles: true,
+      clientX: 60 + (920 * 8) / 10,
+      clientY: 135,
+    }),
+  );
+  assert.match(
+    document.getElementById("memory-inspection").textContent,
+    /Configuration 1:.*\n#3 Relu.*during execution\nMemory: .*8 bytes/,
+  );
+  assert.equal(document.getElementById("memory-curve").getAttribute("d"), "");
   const select = (index) =>
     document.querySelectorAll("#memory-configurations input")[index].click();
   select(1);
@@ -2833,7 +2882,6 @@ test("memory comparison handles empty and different-length traces on the same ev
     document.getElementById("memory-curve").getAttribute("d"),
     /H152\.00000/,
   );
-  chart.getBoundingClientRect = () => new window.DOMRect(0, 0, 1000, 330);
   const hover = (step) =>
     chart.dispatchEvent(
       new window.MouseEvent("pointermove", {
@@ -2853,6 +2901,19 @@ test("memory comparison handles empty and different-length traces on the same ev
   assert.equal(document.querySelectorAll(".memory-curve").length, 3);
   select(0);
   document.getElementById("memory-remove").click();
+  document
+    .querySelector('.memory-curve[aria-label^="Configuration 2:"]')
+    .dispatchEvent(
+      new window.MouseEvent("pointermove", {
+        bubbles: true,
+        clientX: 520,
+        clientY: 30,
+      }),
+    );
+  assert.match(
+    document.getElementById("memory-inspection").textContent,
+    /Configuration 2:.*\n#1 Relu.*during execution\nMemory: .*4 bytes/,
+  );
   select(0);
   assert.match(
     document.getElementById("memory-curve").getAttribute("d"),
