@@ -31,9 +31,19 @@ function createMemoryPanel({
   });
 
   function memoryDelta(before, after) {
-    return before == null || after == null
-      ? "Unavailable"
-      : deltaFormatter.format((after - before) / 1e6);
+    if (before == null || after == null) return "Unavailable";
+    const bytes = BigInt(after) - BigInt(before);
+    const absolute = bytes < 0n ? -bytes : bytes;
+    const whole = deltaFormatter
+      .formatToParts(absolute / 1_000_000n)
+      .filter(({ type }) => type === "integer" || type === "group")
+      .map(({ value }) => value)
+      .join("");
+    const fraction = Number(absolute % 1_000_000n) / 1e6;
+    return deltaFormatter
+      .formatToParts(bytes < 0n ? -fraction : fraction)
+      .map(({ type, value }) => (type === "integer" ? whole : value))
+      .join("");
   }
 
   function clearOverlay() {
