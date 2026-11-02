@@ -90,13 +90,11 @@ function createMemoryPanel({
     const values = document.createDocumentFragment();
     for (const configuration of configurations) {
       const compared = configuration.profile.events[event.index];
-      const delta =
-        phase === "peak"
-          ? memoryDelta(
-              compared?.memory?.before_bytes ?? compared?.existingBytes,
-              compared?.deviceBytes,
-            )
-          : memoryDelta(compared?.deviceBytes, compared?.afterBytes);
+      const before = compared?.memory?.before_bytes ?? compared?.existingBytes;
+      const delta = memoryDelta(
+        before,
+        phase === "peak" ? compared?.deviceBytes : compared?.afterBytes,
+      );
       const value = document.createElement("span");
       value.className = "memory-delta";
       value.style.color = configuration.color;
@@ -126,7 +124,7 @@ function createMemoryPanel({
         event.node || `node-${event.index}`,
         event.opType,
         deltaValues(event, "peak"),
-        deltaValues(event, "release"),
+        deltaValues(event, "net"),
         (event.decisions ?? [])
           .filter(({ action }) => action === "inplace")
           .map(({ input, output, kind }) => `${input} → ${output} (${kind})`)

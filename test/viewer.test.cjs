@@ -2877,7 +2877,7 @@ test("memory delta columns compare every configuration in its curve color", (t) 
           outputBytes: number * 1e6,
           scratchBytes: 0,
           deviceBytes: number * 2e6,
-          afterBytes: number * 1e6,
+          afterBytes: number * 1.5e6,
         })),
       },
     });
@@ -2891,9 +2891,9 @@ test("memory delta columns compare every configuration in its curve color", (t) 
       value.textContent.replace(/ \(local peak\)$/, ""),
     );
   assert.deepEqual(deltas(0, 3), ["+1", "+2", "+3"]);
-  assert.deepEqual(deltas(0, 4), ["-1", "-2", "-3"]);
+  assert.deepEqual(deltas(0, 4), ["+0.5", "+1", "+1.5"]);
   assert.deepEqual(deltas(1, 3), ["+1", "Unavailable", "+3"]);
-  assert.deepEqual(deltas(1, 4), ["-1", "Unavailable", "-3"]);
+  assert.deepEqual(deltas(1, 4), ["+0.5", "Unavailable", "+1.5"]);
   assert.equal(document.querySelectorAll("#memory-events tr").length, 100);
   assert.equal(
     document.querySelectorAll("#memory-events .memory-delta").length,
@@ -2912,13 +2912,13 @@ test("memory delta columns compare every configuration in its curve color", (t) 
   document.getElementById("memory-next").click();
   assert.equal(document.querySelector("#memory-events th").textContent, "101");
   assert.deepEqual(deltas(0, 3), ["+1", "Unavailable", "+3"]);
-  assert.deepEqual(deltas(0, 4), ["-1", "Unavailable", "-3"]);
+  assert.deepEqual(deltas(0, 4), ["+0.5", "Unavailable", "+1.5"]);
   document.querySelector("#memory-configurations input").click();
   assert.deepEqual(deltas(0, 3), ["+1", "+2", "+3"]);
   document.querySelectorAll("#memory-configurations input")[1].click();
   document.getElementById("memory-remove").click();
   assert.deepEqual(deltas(0, 3), ["+1", "+3"]);
-  assert.deepEqual(deltas(0, 4), ["-1", "-3"]);
+  assert.deepEqual(deltas(0, 4), ["+0.5", "+1.5"]);
   assert.match(entries(0, 3)[1].title, /^Configuration 3:/);
   document.getElementById("memory-peaks-only").click();
   assert.equal(document.querySelectorAll("#memory-events tr").length, 1);
@@ -3351,7 +3351,7 @@ test("memory hover inspects numerical and symbolic allocations at each phase, sa
       "Node",
       "Operator",
       "Peak delta (MB)",
-      "After-release delta (MB)",
+      "Net delta (MB)",
       "In-place",
       "Release",
       "Release shape",
@@ -3763,7 +3763,7 @@ test("memory steps allocate before each two-interval node and release into one-i
   );
   assert.equal(
     document.querySelector("#memory-events tr").cells[4].textContent,
-    "-0.00006",
+    "+0.00002",
   );
   assert.equal(document.querySelectorAll(".memory-node-number").length, 1);
   assert.equal(
@@ -3783,7 +3783,7 @@ test("memory steps allocate before each two-interval node and release into one-i
   assert.equal(document.getElementById("memory-final-status").hidden, true);
   assert.equal(
     document.querySelector("#memory-events tr").cells[4].textContent,
-    "-0.0001",
+    "-0.00002",
   );
   delete profile.events[0].afterBytes;
   display();
@@ -3796,9 +3796,9 @@ test("memory steps allocate before each two-interval node and release into one-i
     document.querySelector("#memory-events tr").cells[4].textContent,
     "Unavailable",
   );
-  for (const [before, during, after, peakDelta, releaseDelta] of [
-    [1_000_000, 2_500_000, 750_000, "+1.5", "-1.75"],
-    [0, 1, 1, "+0.000001", "+0"],
+  for (const [before, during, after, peakDelta, netDelta] of [
+    [1_000_000, 2_500_000, 750_000, "+1.5", "-0.25"],
+    [0, 1, 1, "+0.000001", "+0.000001"],
     [2_000_000, 2_000_000, 2_000_000, "+0", "+0"],
   ]) {
     Object.assign(profile.events[0], {
@@ -3813,7 +3813,7 @@ test("memory steps allocate before each two-interval node and release into one-i
       cells[3].textContent.replace(/ \(local peak\)$/, ""),
       peakDelta,
     );
-    assert.equal(cells[4].textContent, releaseDelta);
+    assert.equal(cells[4].textContent, netDelta);
   }
   profile.events = [];
   profile.peakBytes = null;
