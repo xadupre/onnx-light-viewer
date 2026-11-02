@@ -9,6 +9,7 @@
 #include <onnx_core/builder/graph_builder.h>
 #include <onnx_core/runtime/memory/simple_tensor.h>
 #include <onnx_proto/onnx_crypt.h>
+#include <set>
 #include <stdexcept>
 #include <tuple>
 #include <unordered_map>
@@ -71,6 +72,19 @@ public:
       RestoreModelPayloads(snapshot_, *source_, file_path_);
       if (!captured_plan_name_.empty()) {
         auto &plan = snapshot_.ref_rewritings().at(captured_plan_name_);
+        if (!plan.replaced_function_ids().empty()) {
+          std::set<std::string> replacements(plan.replaced_function_ids().begin(),
+                                             plan.replaced_function_ids().end());
+          const auto canonical =
+              ol::core::builder::GraphBuilder(snapshot_).ToModel(snapshot_.ir_version());
+          plan.clear_replaced_function_ids();
+          for (const auto &function : canonical.functions()) {
+            const auto key = ol::core::shapes::ShapesContext::LocalFunctionKey(
+                function.domain().value(), function.name().value(), function.overload().value());
+            if (replacements.erase(key))
+              plan.add_replaced_function_ids(key);
+          }
+        }
         plan = ol::core::builder::GraphBuilder(snapshot_).CaptureRewritings(plan);
       }
       std::vector<ol::EncodedValueProto *> encoded;
