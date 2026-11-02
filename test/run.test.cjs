@@ -1,4 +1,5 @@
 const assert = require("node:assert/strict");
+const { execFileSync } = require("node:child_process");
 const { readFileSync } = require("node:fs");
 const { test } = require("node:test");
 const {
@@ -66,6 +67,126 @@ test("regular execution works with asynchronously loaded models", async () => {
     model.runInputs()[0].text.replace("{}", "{1, 2, 3}"),
   ]);
   assert.match(result.outputs[0].text, /Values: \[1, 2, 3\]/);
+});
+
+test("native retained sessions serialize predictions, use fresh inputs and release independently", async () => {
+  const model = loadModel(
+    readFileSync(require.resolve("./models/relu.onnx")),
+    "relu.onnx",
+  );
+  const texts = [
+    "float[1,3] input = {-1, 0, 2}",
+    "float[1,3] input = {3, -4, 5}",
+    "float[1,3] input = {6, 7, -8}",
+  ];
+  const results = await Promise.all(
+    texts.map((text) => model.run([text], [], { keepLoaded: true })),
+  );
+  assert.equal(results.filter((result) => !result.lifecycle.reused).length, 1);
+  assert.ok(results.every((result) => result.lifecycle.retained));
+  for (const [index, expected] of [
+    "[0, 0, 2]",
+    "[3, 0, 5]",
+    "[6, 7, 0]",
+  ].entries())
+    assert.ok(results[index].outputs[0].text.includes(expected));
+  const clone = model.clone();
+  assert.equal(
+    (await clone.run([texts[0]], [], { keepLoaded: true })).lifecycle.reused,
+    false,
+  );
+  clone.releaseRunSession();
+  assert.equal(
+    (await model.run([texts[0]], [], { keepLoaded: true })).lifecycle.reused,
+    true,
+  );
+  model.releaseRunSession();
+  const pending = model.run([texts[0]], [], { keepLoaded: true });
+  model.releaseRunSession();
+  assert.equal((await pending).lifecycle.retained, false);
+  const afterRelease = await model.run([texts[0]], [], { keepLoaded: true });
+  assert.equal(afterRelease.lifecycle.reused, false);
+  const oneShot = await model.run([texts[0]]);
+  assert.equal(oneShot.lifecycle.reused, false);
+  assert.equal(oneShot.lifecycle.retained, false);
+});
+
+test("native Run failures release retained state before the next direct call", async (t) => {
+  const model = loadModel(
+    readFileSync(require.resolve("./models/relu.onnx")),
+    "relu.onnx",
+  );
+  t.after(() => model.releaseRunSession());
+  const inputs = ["float[1,3] input = {-1, 0, 2}"];
+  const predict = () => model.run(inputs, [], { keepLoaded: true });
+  for (const fail of [
+    () => assert.rejects(model.run(["not a tensor"], [], { keepLoaded: true })),
+    () =>
+      assert.throws(
+        () => model.run(inputs, [], { keepLoaded: "yes" }),
+        /boolean/,
+      ),
+    () =>
+      assert.throws(
+        () => model.run(inputs, [], { keepLoaded: true, verbose: 11 }),
+        /Verbosity/,
+      ),
+  ]) {
+    assert.equal((await predict()).lifecycle.retained, true);
+    assert.equal((await predict()).lifecycle.reused, true);
+    await fail();
+    assert.equal((await predict()).lifecycle.reused, false);
+  }
+});
+
+test("queued native predictions cannot reuse a session after a worker failure", () => {
+  execFileSync(
+    process.execPath,
+    [
+      "-e",
+      `
+const assert = require("node:assert/strict");
+const { readFileSync } = require("node:fs");
+const { loadModel } = require(${JSON.stringify(require.resolve("../dist/graph"))});
+(async () => {
+  const model = loadModel(readFileSync(${JSON.stringify(require.resolve("./models/relu.onnx"))}), "relu.onnx");
+  const inputs = ["float[1,3] input = {-1, 0, 2}"];
+  await model.run(inputs, [], { keepLoaded: true });
+  const results = await Promise.allSettled([
+    model.run(["not a tensor"], [], { keepLoaded: true }),
+    model.run(inputs, [], { keepLoaded: true }),
+  ]);
+  assert.equal(results[0].status, "rejected");
+  assert.equal(results[1].status, "rejected");
+  assert.match(results[1].reason.message, /session failed/);
+  const next = await model.run(inputs, [], { keepLoaded: true });
+  assert.equal(next.lifecycle.reused, false);
+  assert.equal(next.lifecycle.retained, true);
+  model.releaseRunSession();
+})().catch((error) => { console.error(error); process.exitCode = 1; });
+`,
+    ],
+    { env: { ...process.env, UV_THREADPOOL_SIZE: "1" }, timeout: 10000 },
+  );
+});
+
+test("a failing native worker does not release its replacement retained state", async (t) => {
+  const model = loadModel(
+    readFileSync(require.resolve("./models/relu.onnx")),
+    "relu.onnx",
+  );
+  t.after(() => model.releaseRunSession());
+  const inputs = ["float[1,3] input = {-1, 0, 2}"];
+  const failure = assert.rejects(
+    model.run(["not a tensor"], [], { keepLoaded: true }),
+  );
+  model.releaseRunSession();
+  const replacement = model.run(inputs, [], { keepLoaded: true });
+  await failure;
+  assert.equal((await replacement).lifecycle.retained, true);
+  const reused = await model.run(inputs, [], { keepLoaded: true });
+  assert.equal(reused.lifecycle.reused, true);
+  assert.equal(reused.lifecycle.retained, true);
 });
 
 test("regular execution supports no-input models and scalar integer/string outputs", async () => {

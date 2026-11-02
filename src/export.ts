@@ -865,25 +865,7 @@ export async function terminateExport(child: ChildProcess): Promise<void> {
     });
     return;
   }
-  const killGroup = (signal: NodeJS.Signals | 0) => {
-    try {
-      process.kill(-pid, signal);
-      return true;
-    } catch (error) {
-      if (!(
-        error instanceof Error &&
-        "code" in error &&
-        error.code === "ESRCH"
-      ))
-        throw error;
-      return false;
-    }
-  };
-  killGroup("SIGTERM");
-  await delay(2000);
-  killGroup("SIGKILL");
-  const deadline = Date.now() + 5000;
-  while (killGroup(0)) {
+  const liveWorkers = async () => {
     const processes = await new Promise<string>((resolve, reject) => {
       execFile(
         "ps",
@@ -895,10 +877,35 @@ export async function terminateExport(child: ChildProcess): Promise<void> {
         },
       );
     });
-    const workers = processes.split("\n").filter((line) => {
+    return processes.split("\n").filter((line) => {
       const [, group, state] = line.trim().split(/\s+/);
       return Number(group) === pid && !state?.startsWith("Z");
     });
+  };
+  const killGroup = async (signal: NodeJS.Signals | 0) => {
+    try {
+      process.kill(-pid, signal);
+      return true;
+    } catch (error) {
+      if (error instanceof Error && "code" in error) {
+        if (error.code === "ESRCH") return false;
+        // Accept macOS EPERM only after verifying that no live workers remain.
+        if (
+          error.code === "EPERM" &&
+          process.platform === "darwin" &&
+          !(await liveWorkers()).length
+        )
+          return false;
+      }
+      throw error;
+    }
+  };
+  if (!(await killGroup("SIGTERM"))) return;
+  await delay(2000);
+  if (!(await killGroup("SIGKILL"))) return;
+  const deadline = Date.now() + 5000;
+  while (await killGroup(0)) {
+    const workers = await liveWorkers();
     // Orphan zombies can remain in the group, but can no longer execute or write.
     if (!workers.length) return;
     if (Date.now() >= deadline)

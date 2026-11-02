@@ -262,11 +262,19 @@ test("Prompt and Settings align labels beside their controls, including session 
   for (const label of document.querySelectorAll(
     ".prompt-settings-grid label, #settings-panels label",
   )) {
+    const explained = label.closest("#prompt-settings-genai") !== null;
     assert.equal(
       dom.window.getComputedStyle(label).gridTemplateColumns,
-      "minmax(0, 1fr) minmax(0, 2fr)",
+      explained
+        ? "minmax(0, 1fr) minmax(0, 10rem) minmax(0, 1.5fr)"
+        : "minmax(0, 1fr) minmax(0, 2fr)",
     );
-    assert.ok(label.lastElementChild.matches("input, select, textarea"));
+    const control = explained ? label.children[1] : label.lastElementChild;
+    assert.ok(control.matches("input, select, textarea"));
+    if (explained) {
+      assert.ok(label.lastElementChild.matches(".prompt-option-help"));
+      assert.ok(label.lastElementChild.textContent.trim());
+    }
   }
   assert.ok(
     document
