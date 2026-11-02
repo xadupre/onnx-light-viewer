@@ -266,7 +266,7 @@ test("both engines execute unsaved function edits without mutating the retained 
   }
 });
 
-test("onnx-light forwards SDK event diagnostics only when verbosity is enabled", async () => {
+test("onnx-light forwards SDK stdout and event diagnostics only when verbosity is enabled", async (t) => {
   const model = loadModel(
     readFileSync(require.resolve("./models/relu.onnx")),
     "relu.onnx",
@@ -289,8 +289,94 @@ test("onnx-light forwards SDK event diagnostics only when verbosity is enabled",
     },
   );
   assert.match(logs, /Relu/);
+  assert.match(logs, /\[ReferenceEvaluator\].*Relu\(input\).*output/);
   assert.match(logs, /run.?node/i);
   assert.deepEqual(verbose.outputs, quiet.outputs);
+  assert.deepEqual(verbose.inputs, quiet.inputs);
+  assert.equal("log" in verbose, false);
+  const directory = await mkdtemp(path.join(tmpdir(), "viewer-run-logs-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const input = path.join(directory, "input.pb");
+  await writeFile(input, quiet.inputs[0].data);
+  const fromFile = await run(model, {
+    ...request,
+    settings: { verbose: 1 },
+    inputs: [{ name: "input", source: "protobuf", path: input }],
+  });
+  assert.deepEqual(fromFile.inputs, quiet.inputs);
+  assert.deepEqual(fromFile.outputs, quiet.outputs);
+  const replay = await run(model, {
+    ...request,
+    settings: { verbose: 1 },
+    inputs: [{ name: "input", source: "random" }],
+  });
+  assert.ok(replay.inputs[0].data instanceof Uint8Array);
+  assert.ok(replay.outputs[0].data instanceof Uint8Array);
+});
+
+test("onnx-light verbose execution forwards failures and isolates concurrent logs", async () => {
+  const model = loadModel(
+    readFileSync(require.resolve("./models/relu.onnx")),
+    "relu.onnx",
+  );
+  const request = {
+    engine: "onnx-light",
+    settings: { verbose: 1 },
+    inputs: ["float[1,3] input = {-1, 0, 2}"],
+  };
+  let failureLog = "";
+  await assert.rejects(
+    run(model, { ...request, inputs: [] }, (output) => {
+      failureLog = output;
+    }),
+    /input/i,
+  );
+  assert.match(failureLog, /input/i);
+  const logs = ["", ""];
+  const results = await Promise.all(
+    logs.map((_, index) =>
+      run(model, request, (output) => {
+        logs[index] = output;
+      }),
+    ),
+  );
+  for (const log of logs)
+    assert.equal(log.match(/\[ReferenceEvaluator\]/g).length, 1);
+  assert.deepEqual(results[0].outputs, results[1].outputs);
+});
+
+test("onnx-light verbose execution preserves unsaved edits and dynamic dimensions", async () => {
+  const model = loadModel(
+    readFileSync(require.resolve("./models/relu.onnx")),
+    "relu.onnx",
+  );
+  model.createFunctionPattern([0], "LoggedRun");
+  const preview = await model.previewFusion("LoggedRun");
+  const fused = await preview.model.applyFusion("LoggedRun", [
+    preview.matches[0].anchor,
+  ]);
+  const definition = fused.modelFunction(0);
+  const edited = fused.updateModelFunction(
+    0,
+    definition.text.replace("Relu", "Neg"),
+  );
+  const before = edited.graph();
+  const result = await run(edited, {
+    inputs: ["float[1,3] input = {-1, 0, 2}"],
+    settings: { verbose: 1 },
+  });
+  assert.match(result.outputs[0].text, /Values: \[1, -?0, -2\]/);
+  assert.deepEqual(edited.graph(), before);
+  const dynamic = loadModel(
+    readFileSync(require.resolve("./models/inference.onnx")),
+    "inference.onnx",
+  );
+  const random = await run(dynamic, {
+    inputs: [{ name: "x", source: "random" }],
+    dimensions: { "symbol:N": 2 },
+    settings: { verbose: 1 },
+  });
+  assert.equal(random.outputs.length, 1);
 });
 
 test("ONNX Runtime transport decodes UTF-16 stderr while preserving UTF-8 stdout and failure details", async () => {

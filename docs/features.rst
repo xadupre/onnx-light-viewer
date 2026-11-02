@@ -159,9 +159,10 @@ Integer values are parsed natively without JavaScript rounding.
 A trusted workspace is required.
 **Run model** displays execution time and actual input/output type, shape and values for
 tensors up to 32 elements. Larger tensors show metadata only. Native errors
-appear in the status; ONNX Runtime logs appear below it. Neither engine modifies
-the graph. ONNX Runtime executes a temporary snapshot that is
-removed after execution.
+appear in the status; engine logs appear below it. Set onnx-light's **Logging
+verbosity** above zero to see SDK stdout/stderr and execution events. Neither engine
+modifies the graph. ONNX Runtime and verbose onnx-light runs execute temporary
+snapshots that are removed after execution.
 
 For each executed tensor, **Statistics** opens SDK summaries, quartiles,
 histograms and a heatmap without running the model again. **Save statistics…**

@@ -123,6 +123,44 @@ test("Run window preserves Prompt and has accessible independent execution tabs"
   assert.equal(activations(), 1);
 });
 
+test("Run keeps native logs visible after completion and clears them for the next run", (t) => {
+  const { byId, api, messages } = panel(t);
+  api.activate();
+  api.handleMessage({
+    type: "run-inputs",
+    requestId: messages.at(-1).requestId,
+    stages: [],
+    path: [],
+    inputs: [],
+  });
+  byId("run-verbose").value = "1";
+  const submit = byId("run-form").querySelector('button[type="submit"]');
+  submit.click();
+  const request = messages.at(-1);
+  assert.equal(request.settings.verbose, 1);
+  const output = "[ReferenceEvaluator] <node> -> output\n";
+  api.handleMessage({
+    type: "run-log",
+    requestId: request.requestId,
+    output,
+  });
+  api.handleMessage({
+    type: "run-result",
+    requestId: request.requestId,
+    result: { timeMs: 1, outputs: [] },
+  });
+  assert.equal(byId("run-log").textContent, output);
+  assert.equal(byId("run-log").querySelector("node"), null);
+  submit.click();
+  assert.equal(byId("run-log").textContent, "");
+  api.handleMessage({
+    type: "run-log",
+    requestId: request.requestId,
+    output,
+  });
+  assert.equal(byId("run-log").textContent, "");
+});
+
 test("regular run sends exact text inputs, handles errors and ignores stale results", (t) => {
   const { byId, api, messages } = panel(t);
   api.activate();

@@ -1,6 +1,7 @@
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
+import { deserialize } from "node:v8";
 import { runProcess } from "./export";
 import { GraphPath, NativeModel, RunInputSource, RunResult } from "./graph";
 
@@ -107,9 +108,41 @@ export async function runModel(
   };
   signal.throwIfAborted();
   if (engine === "onnx-light") {
-    const { log, ...result } = await model.run(inputs, path, options);
-    if (log) progress(log);
-    return result;
+    if (options.verbose === 0) {
+      const { log, ...result } = await model.run(inputs, path, options);
+      if (log) progress(log);
+      return result;
+    }
+    const directory = await mkdtemp(join(tmpdir(), "onnx-light-run-"));
+    try {
+      await writeFile(join(directory, "model.onnx"), await model.serialize());
+      const sources = [];
+      for (const [index, input] of inputs.entries()) {
+        if (typeof input !== "string" && input.source === "protobuf") {
+          await writeFile(join(directory, `input-${index}.pb`), input.data);
+          sources.push({ name: input.name, source: input.source });
+        } else sources.push(input);
+      }
+      await writeFile(
+        join(directory, "request.json"),
+        JSON.stringify({ inputs: sources, options }),
+      );
+      await runProcess(
+        {
+          executable: process.execPath,
+          args: [resolve(__dirname, "..", "media", "run_model.cjs"), directory],
+        },
+        signal,
+        progress,
+        { ELECTRON_RUN_AS_NODE: "1" },
+        "onnx-light",
+      );
+      return deserialize(
+        await readFile(join(directory, "result.bin")),
+      ) as RunResult;
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   }
   const prepared = await model.prepareRun(inputs, path, options);
   signal.throwIfAborted();
