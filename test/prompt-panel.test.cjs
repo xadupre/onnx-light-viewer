@@ -735,7 +735,7 @@ test("section headings stay aligned across the 1000-column boundary", (t) => {
     assert.equal(row.cells.length, 1002);
 });
 
-test("engine settings pages retain independent controls with devices configured separately", (t) => {
+test("engine settings own their CPU and provider options while devices remain separate", (t) => {
   const { dom, byId, api, messages } = panel(t);
   const field = (page, name) =>
     byId(page).querySelector(`[data-setting="${name}"]`);
@@ -745,7 +745,15 @@ test("engine settings pages retain independent controls with devices configured 
   assert.equal(byId("prompt-settings-genai").hidden, true);
   assert.equal(byId("prompt-settings-engine"), null);
   assert.match(byId("prompt-settings-title").textContent, /onnx-light/);
-  field("prompt-device-fields", "threads").value = "2";
+  assert.equal(
+    byId("prompt-device-fields").querySelector("[data-setting]"),
+    null,
+  );
+  assert.equal(
+    byId("prompt-settings-genai").contains(byId("settings-device-model")),
+    true,
+  );
+  field("prompt-settings-light", "threads").value = "2";
   byId("prompt-keep-loaded").checked = true;
   byId("prompt-settings-back").click();
   byId("prompt-form").dispatchEvent(new dom.window.Event("submit"));
@@ -772,9 +780,9 @@ test("engine settings pages retain independent controls with devices configured 
   const provider = byId("settings-device-cuda");
   provider.checked = true;
   provider.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
-  assert.equal(field("prompt-device-fields", "cudaDeviceId").disabled, false);
-  field("prompt-device-fields", "cudaDeviceId").value = "1";
-  field("prompt-device-fields", "gpuMemoryMiB").value = "256";
+  assert.equal(field("prompt-settings-genai", "cudaDeviceId").disabled, false);
+  field("prompt-settings-genai", "cudaDeviceId").value = "1";
+  field("prompt-settings-genai", "gpuMemoryMiB").value = "256";
   field("prompt-settings-genai", "prepacking").value = "false";
   byId("prompt-settings-back").click();
   byId("prompt-form").dispatchEvent(new dom.window.Event("submit"));
@@ -787,7 +795,7 @@ test("engine settings pages retain independent controls with devices configured 
   assert.equal(second.options.sessionSettings.cudaDeviceId, 1);
   assert.equal(second.options.sessionSettings.prepacking, false);
   assert.equal(second.options.sessionSettings.threads, undefined);
-  assert.equal(field("prompt-device-fields", "threads").value, "2");
+  assert.equal(field("prompt-settings-light", "threads").value, "2");
 });
 
 test("model replacement preserves the settings page until the session settings shortcut is opened", (t) => {
@@ -847,7 +855,7 @@ test("loading and warmup appear before tokens, and unloading updates retained st
 
 test("invalid device settings stop generation and pipelines preserve SDK loading defaults", (t) => {
   const { dom, byId, api, messages } = panel(t);
-  const threads = byId("prompt-device-fields").querySelector(
+  const threads = byId("prompt-settings-light").querySelector(
     '[data-setting="threads"]',
   );
   threads.value = "-1";
@@ -856,7 +864,7 @@ test("invalid device settings stop generation and pipelines preserve SDK loading
     messages.some((message) => message.type === "run-prompt"),
     false,
   );
-  assert.equal(byId("prompt-session-page").hidden, true);
+  assert.equal(byId("prompt-session-page").hidden, false);
   threads.value = "1";
   api.handleMessage({
     type: "prompt-info",

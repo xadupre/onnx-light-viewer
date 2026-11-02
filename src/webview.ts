@@ -711,6 +711,7 @@ export function webviewHtml(
           <div id="prompt-settings-light" class="prompt-settings-grid">
             <h3>onnx-light (CPU)</h3>
             <p>CPU kernels only. Automatic graph optimization is not exposed by Generate; use Optimize separately. The SDK recreates internal generation sessions, but reuses the loaded model, context and supported static preparations.</p>
+            <label><span>CPU threads (0 = automatic)</span><input data-setting="threads" type="number" min="0" max="4096" placeholder="SDK default"></label>
             <h3>Memory and diagnostics</h3>
             <label>Persistent tensor initial capacity (tokens)<input data-setting="initialCapacity" type="number" min="0" max="1048576" placeholder="SDK default (32)"></label>
             <label>Log verbosity<input data-setting="verbose" type="number" min="0" max="10" placeholder="SDK default (0)"></label>
@@ -719,7 +720,16 @@ export function webviewHtml(
           <div id="prompt-settings-genai" class="prompt-settings-grid" hidden>
             <h3>ONNX Runtime GenAI</h3>
             <p>Leave a field blank or select "-" to use genai_config.json. If an option is absent from that file, the engine uses its built-in default. Enter a value or select another option to override it.</p>
+            <h3>CPU</h3>
+            <label><span>Intra-op threads (0 = automatic)</span><input data-setting="intraOpThreads" type="number" min="0" max="4096" placeholder="-"><small class="prompt-option-help">Set the thread count used within an operator.</small></label>
+            <label><span>Inter-op threads (0 = automatic)</span><input data-setting="interOpThreads" type="number" min="0" max="4096" placeholder="-"><small class="prompt-option-help">Set the thread count used to execute independent graph nodes in parallel execution mode.</small></label>
+            <label><span>CPU memory arena</span><select data-setting="cpuArena" data-boolean><option value="">-</option><option value="true">Enabled</option><option value="false">Disabled</option></select><small class="prompt-option-help">Reuse CPU allocations through the runtime memory arena.</small></label>
             <label><span>Parallel graph execution</span><select data-setting="parallelExecution" data-boolean><option value="">-</option><option value="true">Parallel</option><option value="false">Sequential</option></select><small class="prompt-option-help">Execute independent graph nodes concurrently rather than sequentially. This is not a weight-loading thread count.</small></label>
+            <h3>Execution providers</h3>
+            <label class="prompt-checkbox"><span>Use providers from genai_config.json</span><input id="settings-device-model" type="checkbox"><small class="prompt-option-help">Keep the exported provider configuration instead of the selections on Settings / Device.</small></label>
+            <label><span>CUDA device ID</span><input data-setting="cudaDeviceId" data-device="cuda" type="number" min="0" max="65535" placeholder="-" disabled><small class="prompt-option-help">Choose the CUDA device. Requires CUDA selected on Settings / Device and exported providers disabled. Blank preserves the provider default.</small></label>
+            <label><span>CUDA memory limit (MiB)</span><input data-setting="gpuMemoryMiB" data-device="cuda" type="number" min="1" max="1048576" placeholder="-" disabled><small class="prompt-option-help">Limit CUDA provider memory. Requires CUDA selected on Settings / Device and exported providers disabled. Blank preserves the provider default.</small></label>
+            <label><span>DirectML device ID</span><input data-setting="dmlDeviceId" data-device="dml" type="number" min="0" max="65535" placeholder="-" disabled><small class="prompt-option-help">Choose the DirectML device. Requires DirectML selected on Settings / Device and exported providers disabled. Blank preserves the provider default.</small></label>
             <h3>Initialization</h3>
             <p>GenAI exposes session initialization/prepacking controls, not a separate parallel weight-reader thread count. Graph execution mode is not a parallel-loading setting.</p>
             <label><span>Weight prepacking during initialization</span><select data-setting="prepacking" data-boolean><option value="">-</option><option value="true">Enabled</option><option value="false">Disabled</option></select><small class="prompt-option-help">Prepare constant weights for optimized kernels while loading. Disabling can reduce preparation costs but slow inference.</small></label>
@@ -925,18 +935,7 @@ export function webviewHtml(
           <label class="prompt-checkbox"><span>CPU (implicit fallback)</span><input id="settings-device-cpu" type="checkbox" checked disabled></label>
           <label class="prompt-checkbox"><span>CUDA</span><input id="settings-device-cuda" data-provider="cuda" type="checkbox"></label>
           <label class="prompt-checkbox"><span>DirectML</span><input id="settings-device-dml" data-provider="dml" type="checkbox"></label>
-          <label class="prompt-checkbox"><span>Use providers from genai_config.json</span><input id="settings-device-model" type="checkbox"></label>
           <p>GPU defaults are enabled only after a successful runtime device probe, not from the OS or installed package names. Manual choices are preserved during detection. Advanced JSON may disable CPU fallback; in that mode the device selections do not override providers.</p>
-          <h3>CPU</h3>
-          <label>onnx-light CPU threads (0 = automatic)<input data-setting="threads" data-engine="onnx-light" type="number" min="0" max="4096" placeholder="SDK default"></label>
-          <label>ONNX Runtime intra-op threads (0 = automatic)<input data-setting="intraOpThreads" data-engine="onnxruntime-genai" type="number" min="0" max="4096" placeholder="-"></label>
-          <label>ONNX Runtime inter-op threads (0 = automatic)<input data-setting="interOpThreads" data-engine="onnxruntime-genai" type="number" min="0" max="4096" placeholder="-"></label>
-          <label>ONNX Runtime CPU memory arena<select data-setting="cpuArena" data-engine="onnxruntime-genai" data-boolean><option value="">-</option><option value="true">Enabled</option><option value="false">Disabled</option></select></label>
-          <h3>CUDA</h3>
-          <label>CUDA device ID<input data-setting="cudaDeviceId" data-engine="onnxruntime-genai" data-device="cuda" type="number" min="0" max="65535" placeholder="Provider default" disabled></label>
-          <label>CUDA memory limit (MiB)<input data-setting="gpuMemoryMiB" data-engine="onnxruntime-genai" data-device="cuda" type="number" min="1" max="1048576" placeholder="Provider default" disabled></label>
-          <h3>DirectML</h3>
-          <label>DirectML device ID<input data-setting="dmlDeviceId" data-engine="onnxruntime-genai" data-device="dml" type="number" min="0" max="65535" placeholder="Provider default" disabled></label>
         </fieldset>
       </section>
     </section>

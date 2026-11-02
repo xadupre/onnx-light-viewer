@@ -80,12 +80,18 @@ function createPromptPanel({ byId, postMessage }) {
   byId("prompt-keep-loaded").addEventListener("change", () => {
     if (!byId("prompt-keep-loaded").checked) release();
   });
-  sessionFields.addEventListener("change", release);
-  deviceFields.addEventListener("change", () => {
-    for (const field of deviceFields.querySelectorAll("[data-device]"))
+  const updateDeviceFields = () => {
+    for (const field of sessionFields.querySelectorAll("[data-device]"))
       field.disabled =
         byId("settings-device-model").checked ||
         !byId(`settings-device-${field.dataset.device}`).checked;
+  };
+  sessionFields.addEventListener("change", () => {
+    updateDeviceFields();
+    release();
+  });
+  deviceFields.addEventListener("change", () => {
+    updateDeviceFields();
     if (busy) pendingDeviceRelease = true;
     else if (available) release();
   });
@@ -99,12 +105,9 @@ function createPromptPanel({ byId, postMessage }) {
     const settings = {};
     const sessionOptions = {};
     let lastSessionOption;
-    for (const field of [
-      ...pane.querySelectorAll(
-        "[data-setting], [data-config], [data-session-option]",
-      ),
-      ...deviceFields.querySelectorAll(`[data-engine="${engine}"]`),
-    ]) {
+    for (const field of pane.querySelectorAll(
+      "[data-setting], [data-config], [data-session-option]",
+    )) {
       if (field.dataset.config || field.dataset.sessionOption) {
         field.setCustomValidity("");
         if (field.value.includes("\0"))
@@ -122,10 +125,7 @@ function createPromptPanel({ byId, postMessage }) {
       )
         continue;
       if (!field.checkValidity()) {
-        if (deviceFields.contains(field)) {
-          byId("settings-tab").click();
-          byId("settings-device-tab").click();
-        } else byId("prompt-settings-open").click();
+        byId("prompt-settings-open").click();
         field.reportValidity();
         return;
       }
