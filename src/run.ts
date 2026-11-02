@@ -115,7 +115,8 @@ export async function runModel(
     }
     const directory = await mkdtemp(join(tmpdir(), "onnx-light-run-"));
     try {
-      await writeFile(join(directory, "model.onnx"), await model.serialize());
+      const snapshot = await model.prepareRun([], path, options);
+      await writeFile(join(directory, "model.onnx"), snapshot.model);
       const sources = [];
       for (const [index, input] of inputs.entries()) {
         if (typeof input !== "string" && input.source === "protobuf") {

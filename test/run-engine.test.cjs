@@ -379,6 +379,33 @@ test("onnx-light verbose execution preserves unsaved edits and dynamic dimension
   assert.equal(random.outputs.length, 1);
 });
 
+test("onnx-light verbose execution uses the selected pipeline stage snapshot", async () => {
+  const model = await loadModelFile(
+    require.resolve("./models/tiny.pipe-onnx"),
+    "tiny.pipe-onnx",
+  );
+  const stage = [{ pipeline: "decode" }];
+  const request = {
+    inputs: ["float[1,1,3] inputs_embeds = {1, 2, 3}"],
+    dimensions: { "symbol:batch": 1, "symbol:sequence": 1 },
+  };
+  const quiet = await runModel(model, stage, request, python, runner, () => {});
+  let logs = "";
+  const verbose = await runModel(
+    model,
+    stage,
+    { ...request, settings: { verbose: 1 } },
+    python,
+    runner,
+    (output) => {
+      logs = output;
+    },
+  );
+  assert.deepEqual(verbose.inputs, quiet.inputs);
+  assert.deepEqual(verbose.outputs, quiet.outputs);
+  assert.match(logs, /\[ReferenceEvaluator\]/);
+});
+
 test("ONNX Runtime transport decodes UTF-16 stderr while preserving UTF-8 stdout and failure details", async () => {
   let logs = "";
   const stdout = "stdout caf\u00e9";
