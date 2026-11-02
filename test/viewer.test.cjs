@@ -2664,6 +2664,246 @@ function showMemoryProfile({ document, window, messages }, bytes, path = []) {
   });
 }
 
+test("memory configurations share scales and retain selectable estimates across dimension edits and errors", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  load(demoGraph);
+  document.getElementById("memory-tab").click();
+  send({
+    type: "memory-inputs",
+    requestId: messages.at(-1).requestId,
+    dimensions: [{ key: "symbol:N", label: "N <img src=x>", defaultValue: 1 }],
+    stages: [],
+    path: [],
+  });
+  const dimension = document.querySelector("#memory-dimensions input");
+  const submit = (value) => {
+    dimension.value = String(value);
+    dimension.dispatchEvent(new window.Event("input", { bubbles: true }));
+    document
+      .getElementById("memory-form")
+      .dispatchEvent(new window.Event("submit", { cancelable: true }));
+    return messages.at(-1).requestId;
+  };
+  const estimate = (requestId, bytes) =>
+    send({
+      type: "memory-profile",
+      requestId,
+      profile: {
+        name: "Comparison",
+        device: "CPU",
+        peakBytes: bytes,
+        events: [
+          {
+            index: 0,
+            node: `batch-${bytes}`,
+            opType: "Relu",
+            existingBytes: bytes / 2,
+            outputBytes: bytes / 2,
+            scratchBytes: 0,
+            deviceBytes: bytes,
+            afterBytes: bytes / 2,
+          },
+        ],
+      },
+    });
+  const radios = () => [
+    ...document.querySelectorAll("#memory-configurations input"),
+  ];
+  const first = submit(1);
+  estimate(first, 24);
+  assert.equal(radios().length, 1);
+  estimate(first, 24);
+  assert.equal(
+    radios().length,
+    1,
+    "duplicate responses must not add configurations",
+  );
+  const second = submit(2);
+  assert.equal(document.getElementById("memory-results").hidden, false);
+  assert.equal(radios()[0].disabled, true);
+  assert.equal(document.getElementById("memory-remove").disabled, true);
+  estimate(second, 48);
+  assert.equal(radios().length, 2);
+  assert.equal(document.querySelector("#memory-configurations img"), null);
+  assert.match(
+    document.getElementById("memory-configurations").textContent,
+    /N <img src=x>=1.*24 bytes/,
+  );
+  assert.match(
+    document.getElementById("memory-configurations").textContent,
+    /N <img src=x>=2.*48 bytes/,
+  );
+  const selectedCurve = document.getElementById("memory-curve");
+  const previousCurve = document.querySelector(
+    "#memory-comparison-curves path",
+  );
+  assert.notEqual(selectedCurve.style.stroke, previousCurve.style.stroke);
+  assert.match(selectedCurve.getAttribute("d"), /V30\.00000/);
+  assert.match(previousCurve.getAttribute("d"), /V135\.00000/);
+  assert.equal(
+    document.getElementById("memory-chart-peak").textContent,
+    "48 bytes",
+  );
+  radios()[0].click();
+  assert.equal(dimension.value, "1");
+  assert.equal(document.getElementById("memory-peak").textContent, "24 bytes");
+  assert.match(
+    document.getElementById("memory-events").textContent,
+    /batch-24/,
+  );
+  document
+    .getElementById("memory-chart")
+    .dispatchEvent(new window.KeyboardEvent("keydown", { key: "ArrowRight" }));
+  assert.match(
+    document.getElementById("memory-inspection").textContent,
+    /Configuration 1: N <img src=x>=1/,
+  );
+  const failed = submit(3);
+  send({
+    type: "memory-error",
+    requestId: failed,
+    error: "Unsupported dimensions",
+  });
+  assert.equal(radios().length, 2);
+  assert.equal(radios()[0].disabled, false);
+  assert.equal(document.getElementById("memory-results").hidden, false);
+  assert.match(
+    document.getElementById("memory-status").textContent,
+    /Unsupported dimensions/,
+  );
+  estimate(second, 96);
+  assert.equal(
+    radios().length,
+    2,
+    "stale estimates must not add configurations",
+  );
+  document.getElementById("model-tab").click();
+  document.getElementById("memory-tab").click();
+  assert.equal(radios().length, 2, "tab navigation preserves configurations");
+  radios()[1].click();
+  assert.equal(dimension.value, "2");
+  document.getElementById("memory-remove").click();
+  assert.equal(radios().length, 1);
+  assert.equal(
+    document.getElementById("memory-chart-peak").textContent,
+    "24 bytes",
+  );
+  assert.equal(
+    document.querySelectorAll("#memory-comparison-curves path").length,
+    0,
+  );
+  document.getElementById("memory-remove").click();
+  assert.equal(radios().length, 0);
+  assert.equal(document.getElementById("memory-results").hidden, true);
+  assert.equal(document.getElementById("memory-inspection").hidden, true);
+  assert.equal(document.getElementById("memory-run").disabled, false);
+});
+
+test("memory comparison handles empty and different-length traces on the same event axis", (t) => {
+  const viewer = openViewer(t);
+  const { document, window, load } = viewer;
+  load(demoGraph);
+  showMemoryProfile(viewer, [8, 16, 8]);
+  showMemoryProfile(viewer, [4]);
+  showMemoryProfile(viewer, []);
+  assert.equal(document.querySelectorAll(".memory-curve").length, 3);
+  const chart = document.getElementById("memory-chart");
+  assert.equal(
+    chart.hasAttribute("hidden"),
+    false,
+    "an empty selected trace must not hide comparisons",
+  );
+  assert.equal(document.getElementById("memory-curve").getAttribute("d"), "");
+  const select = (index) =>
+    document.querySelectorAll("#memory-configurations input")[index].click();
+  select(1);
+  assert.match(
+    document.getElementById("memory-curve").getAttribute("d"),
+    /H152\.00000/,
+  );
+  chart.getBoundingClientRect = () => new window.DOMRect(0, 0, 1000, 330);
+  const hover = (step) =>
+    chart.dispatchEvent(
+      new window.MouseEvent("pointermove", {
+        clientX: 60 + (920 * step) / 10,
+        clientY: 100,
+      }),
+    );
+  hover(2);
+  assert.match(
+    document.getElementById("memory-inspection").textContent,
+    /Memory: .*4 bytes/,
+  );
+  hover(8);
+  assert.equal(document.getElementById("memory-inspection").hidden, true);
+  document.getElementById("memory-zoom-in").click();
+  assert.equal(chart.getAttribute("viewBox"), "0 0 2000 330");
+  assert.equal(document.querySelectorAll(".memory-curve").length, 3);
+  select(0);
+  document.getElementById("memory-remove").click();
+  select(0);
+  assert.match(
+    document.getElementById("memory-curve").getAttribute("d"),
+    /H290\.00000/,
+  );
+  for (const curve of document.querySelectorAll(".memory-curve"))
+    assert.doesNotMatch(curve.getAttribute("d"), /NaN|Infinity/);
+});
+
+test("memory comparison is cleared on pipeline stage and model changes", (t) => {
+  const viewer = openViewer(t);
+  const { document, window, messages, load } = viewer;
+  load({ ...demoGraph, pipeline: true });
+  const path = [{ pipeline: "embedding" }];
+  showMemoryProfile(viewer, [8], path);
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: {
+        type: "memory-inputs",
+        requestId: messages.at(-1).requestId,
+        dimensions: [],
+        stages: [
+          { name: "embedding", path },
+          { name: "prefill", path: [{ pipeline: "prefill" }] },
+        ],
+        path,
+      },
+    }),
+  );
+  const stage = document.getElementById("memory-stage");
+  stage.selectedIndex = 1;
+  stage.dispatchEvent(new window.Event("change"));
+  assert.equal(
+    document.querySelectorAll("#memory-configurations input").length,
+    0,
+  );
+  assert.equal(document.getElementById("memory-results").hidden, true);
+  assert.equal(messages.at(-1).path[0].pipeline, "prefill");
+  showMemoryProfile(viewer, [16], [{ pipeline: "prefill" }]);
+  assert.equal(
+    document.querySelectorAll("#memory-configurations input").length,
+    1,
+  );
+  const previousRequest = messages.at(-1).requestId;
+  load(demoGraph);
+  assert.equal(
+    document.querySelectorAll("#memory-configurations input").length,
+    0,
+  );
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: {
+        type: "memory-profile",
+        requestId: previousRequest,
+        profile: {},
+      },
+    }),
+  );
+  assert.equal(document.getElementById("memory-results").hidden, true);
+});
+
 test("memory local peaks handle empty, constant, endpoint and plateau traces", (t) => {
   for (const [bytes, expected] of [
     [[], []],
@@ -2757,6 +2997,7 @@ test("memory peak links focus node indices in the estimated graph or pipeline st
         new window.MessageEvent("message", {
           data: {
             type: "graph",
+            preserveMemory: true,
             graph: {
               ...demoGraph,
               breadcrumbs: [{ name: "Estimated", path: estimatedPath }],
@@ -2775,9 +3016,10 @@ test("memory peak links focus node indices in the estimated graph or pipeline st
       document.querySelector(".graph-node.selected").dataset.id,
       "node-0",
     );
+    assert.equal(document.getElementById("memory-results").hidden, false);
     assert.equal(
-      document.getElementById("memory-results").hidden,
-      currentPath.length > 0 || estimatedPath.length > 0,
+      document.querySelectorAll("#memory-configurations input").length,
+      1,
     );
   }
 });
@@ -2990,6 +3232,9 @@ test("memory inspection ignores scalar and array allocation buckets", (t) => {
       /Inputs:\n  tensor: .*12 bytes.*symbolic: Unavailable bytes\n/,
     ],
   ]) {
+    document
+      .getElementById("memory-form")
+      .dispatchEvent(new window.Event("submit", { cancelable: true }));
     window.dispatchEvent(
       new window.MessageEvent("message", {
         data: {
@@ -3182,6 +3427,9 @@ test("memory zoom reveals more graduations and operator labels with priority and
   assert.equal(chart.style.width, "1600px");
   events[1].opType = "Relu";
   events[2].opType = "Relu";
+  document
+    .getElementById("memory-form")
+    .dispatchEvent(new window.Event("submit", { cancelable: true }));
   display();
   assert.ok(labels().includes("#1 LayerNormalization"));
 });
@@ -3245,12 +3493,17 @@ test("memory steps allocate before each two-interval node and release into one-i
       },
     ],
   };
-  const display = () =>
+  const display = () => {
+    document.getElementById("memory-remove").click();
+    document
+      .getElementById("memory-form")
+      .dispatchEvent(new window.Event("submit", { cancelable: true }));
     send({
       type: "memory-profile",
       requestId: messages.at(-1).requestId,
       profile,
     });
+  };
   display();
   const path = document.getElementById("memory-curve").getAttribute("d");
   const coordinates = path.match(/-?\d+(?:\.\d+)?/g).map(Number);
@@ -14218,9 +14471,26 @@ test("draws native in-place decisions behind operator contents and clears stale 
   });
   estimate(profile);
   assert.equal(node.querySelectorAll(".node-inplace-links").length, 1);
+  const navigateGraph = (path) =>
+    window.dispatchEvent(
+      new window.MessageEvent("message", {
+        data: {
+          type: "graph",
+          preserveMemory: true,
+          graph: { ...graph, breadcrumbs: [{ name: "Graph", path }] },
+        },
+      }),
+    );
+  navigateGraph([{ node: 0, attribute: 0, graph: 0 }]);
+  assert.equal(document.querySelector(".node-inplace-links"), null);
+  navigateGraph([]);
+  assert.ok(document.querySelector(".node-inplace-links"));
   document
     .getElementById("memory-dimensions")
     .dispatchEvent(new window.Event("input", { bubbles: true }));
+  assert.equal(document.querySelector(".node-inplace-links"), null);
+  navigateGraph([{ node: 0, attribute: 0, graph: 0 }]);
+  navigateGraph([]);
   assert.equal(document.querySelector(".node-inplace-links"), null);
   estimate(profile);
   estimate(profile, [{ node: 0, attribute: 0, graph: 0 }]);

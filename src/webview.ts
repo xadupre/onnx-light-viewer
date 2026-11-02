@@ -516,6 +516,7 @@ export function webviewHtml(
     <section id="memory-view" role="tabpanel" aria-labelledby="memory-tab" tabindex="0" hidden>
       <h2>Memory profiling</h2>
       <p>Estimate CPU tensor memory without executing the model. Profiling covers the complete root graph, or one selected pipeline stage, independently of the displayed subgraph.</p>
+      <p>Estimate with different dimensions to compare configurations on the same plot. Select a configuration to inspect its details. Changing the model or pipeline stage clears the comparison.</p>
       <p>One event per node in execution order, accounting for native lifetime and potential in-place reuse decisions. Function/control-flow internals and allocator overhead are not included. Scratch estimates depend on registered estimators; zero can mean unavailable.</p>
       <form id="memory-form">
         <div id="memory-stage-field" hidden><label for="memory-stage">Pipeline stage</label><select id="memory-stage"></select></div>
@@ -525,6 +526,7 @@ export function webviewHtml(
       <p id="memory-status" role="status">Open a model to estimate its memory.</p>
       <div id="memory-results" hidden>
         <h3 id="memory-model-name"></h3>
+        <fieldset><legend>Configurations (select one to inspect)</legend><div id="memory-configurations"></div><button id="memory-remove" type="button">Remove selected configuration</button></fieldset>
         <dl class="status-details"><dt>Estimated peak</dt><dd id="memory-peak"></dd><dt>Device</dt><dd id="memory-device"></dd></dl>
         <nav aria-label="Memory chart zoom"><button id="memory-zoom-out" type="button" aria-label="Zoom out">−</button><button id="memory-zoom-in" type="button" aria-label="Zoom in">+</button><button id="memory-zoom-reset" type="button">Reset zoom</button><span id="memory-zoom-level">100%</span></nav>
         <div id="memory-chart-scroll">
@@ -537,7 +539,8 @@ export function webviewHtml(
           <path id="memory-operator-intervals" class="memory-operator-interval"></path>
           <g id="memory-node-numbers"></g>
           <g id="memory-operator-labels"></g>
-          <path id="memory-curve"></path>
+          <g id="memory-comparison-curves"></g>
+          <path id="memory-curve" class="memory-curve"></path>
         </svg>
         </div>
         <pre id="memory-inspection" role="status" hidden></pre>

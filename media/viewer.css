@@ -376,13 +376,25 @@ p {
   font-size: 14px;
 }
 .memory-axis,
-#memory-curve {
+.memory-curve {
   fill: none;
   stroke: var(--text);
 }
-#memory-curve {
+.memory-curve {
   stroke: var(--mint);
   stroke-width: 2;
+}
+#memory-configurations label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  overflow-wrap: anywhere;
+}
+.memory-configuration-swatch {
+  width: 24px;
+  border-top: 3px solid;
+  flex-shrink: 0;
 }
 .memory-node-interval {
   fill: var(--muted);
