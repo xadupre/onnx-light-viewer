@@ -1742,6 +1742,65 @@ for (const platform of ["darwin", "linux"]) {
   }
 }
 
+for (const signal of ["SIGTERM", "SIGKILL", 0]) {
+  for (const state of ["zombies", "missing", "live", "probe-error"]) {
+    test(`macOS cancellation verifies EPERM at ${signal}: ${state}`, async () => {
+      const permissionError = Object.assign(new Error("kill EPERM"), {
+        code: "EPERM",
+      });
+      const probeError = new Error("Cannot inspect exporter workers.");
+      const posix = {};
+      let probes = 0;
+      runInNewContext(readFileSync(require.resolve("../dist/export"), "utf8"), {
+        exports: posix,
+        require(name) {
+          if (name === "node:timers/promises")
+            return { setTimeout: async () => {} };
+          if (name !== "node:child_process") return require(name);
+          return {
+            execFile(command, args, options, callback) {
+              assert.equal(command, "ps");
+              assert.deepEqual(Array.from(args), [
+                "-A",
+                "-o",
+                "pid=,pgid=,stat=",
+              ]);
+              assert.equal(options.timeout, 1000);
+              probes++;
+              callback(
+                state === "probe-error" ? probeError : null,
+                state === "live"
+                  ? "12346 12345 R+\n12347 12345 Z\n"
+                  : state === "zombies"
+                    ? "12346 12345 Z+\n12347 99999 R\n"
+                    : "12347 99999 R\n",
+              );
+            },
+          };
+        },
+        process: {
+          platform: "darwin",
+          kill(pid, requestedSignal) {
+            assert.equal(pid, -12345);
+            if (requestedSignal === signal) throw permissionError;
+          },
+        },
+        Date,
+        Error,
+      });
+      const operation = posix.terminateExport({ pid: 12345 });
+      if (state === "live" || state === "probe-error")
+        await assert.rejects(
+          operation,
+          (error) =>
+            error === (state === "live" ? permissionError : probeError),
+        );
+      else await operation;
+      assert.equal(probes, 1);
+    });
+  }
+}
+
 for (const inheritedOutput of [true, false]) {
   test(
     `cancelling stops exporter workers with ${inheritedOutput ? "inherited" : "closed"} output before returning`,

@@ -62,7 +62,6 @@ function createPromptPanel({ byId, postMessage }) {
     byId("settings-engine-tab").click();
   });
   byId("prompt-settings-back").addEventListener("click", () => {
-    byId("execution-prompt-tab").click();
     byId("prompt-tab").click();
   });
   byId("prompt-generation-open").addEventListener("click", () => {
@@ -70,7 +69,6 @@ function createPromptPanel({ byId, postMessage }) {
     byId("settings-generation-tab").click();
   });
   byId("prompt-generation-back").addEventListener("click", () => {
-    byId("execution-prompt-tab").click();
     byId("prompt-tab").click();
   });
   const release = () => {
@@ -91,33 +89,6 @@ function createPromptPanel({ byId, postMessage }) {
     if (busy) pendingDeviceRelease = true;
     else if (available) release();
   });
-  byId("prompt-config-add").addEventListener("click", () => {
-    const row = document.createElement("div");
-    row.className = "prompt-settings-grid";
-    for (const [name, maximum] of [
-      ["key", 1024],
-      ["value", 8192],
-    ]) {
-      const label = document.createElement("label");
-      label.textContent = `Configuration ${name}`;
-      const input = document.createElement("input");
-      input.dataset.config = name;
-      input.maxLength = maximum;
-      if (name === "key") input.setAttribute("list", "prompt-config-keys");
-      label.append(input);
-      row.append(label);
-    }
-    const remove = document.createElement("button");
-    remove.type = "button";
-    remove.textContent = "Remove entry";
-    remove.addEventListener("click", () => {
-      row.remove();
-      release();
-    });
-    row.append(remove);
-    byId("prompt-config-entries").append(row);
-    row.querySelector("input").focus();
-  });
   const readSettings = () => {
     const engine = byId("prompt-engine").value;
     const pane = byId(
@@ -126,22 +97,29 @@ function createPromptPanel({ byId, postMessage }) {
         : "prompt-settings-genai",
     );
     const settings = {};
+    const sessionOptions = {};
+    let lastSessionOption;
     for (const field of [
-      ...pane.querySelectorAll("[data-setting]"),
+      ...pane.querySelectorAll(
+        "[data-setting], [data-config], [data-session-option]",
+      ),
       ...deviceFields.querySelectorAll(`[data-engine="${engine}"]`),
     ]) {
-      if (field.hasAttribute("data-json")) {
+      if (field.dataset.config || field.dataset.sessionOption) {
         field.setCustomValidity("");
-        if (!field.value.trim()) continue;
-        try {
-          const value = JSON.parse(field.value);
-          if (!value || typeof value !== "object" || Array.isArray(value))
-            throw new Error("Expected an object");
-        } catch {
-          field.setCustomValidity("Enter a valid session options JSON object.");
-        }
+        if (field.value.includes("\0"))
+          field.setCustomValidity("Null characters are not supported.");
+        else if (new Blob([field.value]).size > 8192)
+          field.setCustomValidity(
+            "Configuration values cannot exceed 8192 UTF-8 bytes.",
+          );
       }
-      if (field.disabled || (field.value === "" && field.type !== "checkbox"))
+      if (
+        field.disabled ||
+        (!field.value.trim() &&
+          field.type !== "checkbox" &&
+          !field.validity.badInput)
+      )
         continue;
       if (!field.checkValidity()) {
         if (deviceFields.contains(field)) {
@@ -151,7 +129,7 @@ function createPromptPanel({ byId, postMessage }) {
         field.reportValidity();
         return;
       }
-      settings[field.dataset.setting] =
+      const value =
         field.type === "checkbox"
           ? field.checked
           : field.type === "number"
@@ -159,6 +137,11 @@ function createPromptPanel({ byId, postMessage }) {
             : field.hasAttribute("data-boolean")
               ? field.value === "true"
               : field.value;
+      if (field.dataset.config || field.dataset.sessionOption) {
+        sessionOptions[field.dataset.config || field.dataset.sessionOption] =
+          field.dataset.config ? String(value) : value;
+        lastSessionOption = field;
+      } else settings[field.dataset.setting] = value;
     }
     if (engine === "onnxruntime-genai") {
       if (!byId("settings-device-model").checked)
@@ -168,47 +151,14 @@ function createPromptPanel({ byId, postMessage }) {
             (provider) => byId(`settings-device-${provider}`).checked,
           ),
         ];
-      const entries = Object.create(null);
-      for (const row of byId("prompt-config-entries").children) {
-        const key = row.querySelector('[data-config="key"]');
-        const value = row.querySelector('[data-config="value"]');
-        const name = key.value.trim();
-        key.setCustomValidity("");
-        if (!name && !value.value) continue;
-        if (
-          !name ||
-          new Blob([key.value]).size > 1024 ||
-          ["__proto__", "prototype", "constructor"].includes(name) ||
-          name.includes("\0") ||
-          Object.hasOwn(entries, name)
-        )
-          key.setCustomValidity("Enter a unique, nonempty configuration key.");
-        value.setCustomValidity(
-          value.value.includes("\0")
-            ? "Null characters are not supported."
-            : new Blob([value.value]).size > 8192
-              ? "Configuration values cannot exceed 8192 UTF-8 bytes."
-              : "",
-        );
-        if (!key.checkValidity() || !value.checkValidity()) {
-          byId("prompt-settings-open").click();
-          (!key.checkValidity() ? key : value).reportValidity();
-          return;
-        }
-        entries[name] = value.value;
-      }
-      if (Object.keys(entries).length)
-        settings.sessionOptions = JSON.stringify({
-          ...JSON.parse(settings.sessionOptions || "{}"),
-          ...entries,
-        });
-      const field = pane.querySelector('[data-setting="sessionOptions"]');
-      if (settings.sessionOptions?.length > field.maxLength) {
-        field.setCustomValidity(
-          `Combined session options exceed ${field.maxLength} characters. Remove configuration entries or shorten values / advanced JSON.`,
+      if (lastSessionOption)
+        settings.sessionOptions = JSON.stringify(sessionOptions);
+      if (settings.sessionOptions?.length > 65536) {
+        lastSessionOption.setCustomValidity(
+          "Combined session options exceed 65536 characters. Clear options or shorten their values.",
         );
         byId("prompt-settings-open").click();
-        field.reportValidity();
+        lastSessionOption.reportValidity();
         return;
       }
     }

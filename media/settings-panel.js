@@ -43,16 +43,35 @@ function createSettingsPanel({
     "onnx-light": "prompt-settings-light",
   };
   function selectEngine(selected) {
+    const regularRun =
+      !byId("settings-view").hidden && !byId("run-session-page").hidden;
+    if (
+      regularRun &&
+      byId("run-fields").disabled &&
+      byId("run-engine").value !== selected
+    )
+      return;
     for (const engine of engines) {
       const active = engine === selected;
       const tab = byId(`settings-${engine}-tab`);
-      const view = byId(engineViews[engine]);
+      const view = byId(
+        regularRun
+          ? engine === "onnx-light"
+            ? "run-logging-light"
+            : "run-logging-ort"
+          : engineViews[engine],
+      );
+      tab.setAttribute("aria-controls", view.id);
       tab.setAttribute("aria-selected", String(active));
       tab.tabIndex = active ? 0 : -1;
       view.setAttribute("role", "tabpanel");
       view.setAttribute("aria-labelledby", tab.id);
       view.tabIndex = 0;
       view.hidden = !active;
+    }
+    if (regularRun && byId("run-engine").value !== selected) {
+      byId("run-engine").value = selected;
+      byId("run-engine").dispatchEvent(new Event("change"));
     }
     byId("prompt-settings-title").textContent =
       selected === "onnx-light"
