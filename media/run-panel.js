@@ -418,7 +418,17 @@ function createRunPanel({
             const reference = { requestId, kind, index };
             const statistics = document.createElement("button");
             statistics.type = "button";
-            statistics.textContent = "Statistics";
+            statistics.className = "icon-button tensor-statistics-button";
+            statistics.title = `Inspect values or statistics for ${output.name}`;
+            statistics.setAttribute("aria-label", statistics.title);
+            statistics.setAttribute("aria-haspopup", "dialog");
+            statistics.setAttribute(
+              "aria-controls",
+              "tensor-statistics-dialog",
+            );
+            statistics.append(
+              byId("tensors-tab").querySelector("svg").cloneNode(true),
+            );
             statistics.addEventListener("click", () =>
               openStatistics(
                 tensors
@@ -439,7 +449,9 @@ function createRunPanel({
                 format: "protobuf",
               }),
             );
-            results.append(statistics, save);
+            heading.className = "tensor-statistics-heading";
+            heading.append(statistics);
+            results.append(save);
           });
         }
       }

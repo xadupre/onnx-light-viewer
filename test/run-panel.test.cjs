@@ -72,6 +72,31 @@ test("Run displays executed inputs and outputs with per-tensor inspection and sa
   );
   const buttons = byId("run-results").querySelectorAll("button");
   assert.equal(buttons.length, 4);
+  for (const [index, tensor] of [input, output].entries()) {
+    const icon = buttons[index * 2];
+    assert.ok(icon.classList.contains("tensor-statistics-button"));
+    assert.ok(icon.querySelector("svg"));
+    assert.equal(icon.parentElement.tagName, "H3");
+    assert.equal(
+      icon.getAttribute("aria-label"),
+      `Inspect values or statistics for ${tensor.name}`,
+    );
+    assert.equal(icon.getAttribute("aria-haspopup"), "dialog");
+    assert.equal(
+      icon.getAttribute("aria-controls"),
+      "tensor-statistics-dialog",
+    );
+    icon.click();
+    assert.equal(inspections.at(-1)[1], tensor.name);
+    assert.equal(
+      JSON.stringify(inspections.at(-1)[2]),
+      JSON.stringify({
+        requestId,
+        kind: index === 0 ? "inputs" : "outputs",
+        index: 0,
+      }),
+    );
+  }
   buttons[0].click();
   assert.equal(inspections[0][1], input.name);
   assert.equal(
