@@ -492,19 +492,27 @@ In-memory only; unsupported operators may fail.
 
    Refresh inferred shapes without modifying the source file.
 
-Symbolic dimension names
-^^^^^^^^^^^^^^^^^^^^^^^^
+Symbolic dimension names and equalities
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-In **Symbolic**, choose **Shorten dimension names** to remove a common namespace
-prefix, such as ``component.model.``. This edits the model; **Save** keeps the
-renamed dimensions. No weight payloads are read during renaming.
+Open **Symbolic** to list all distinct stored symbolic dimension labels, including
+nested graphs, functions and pipeline stages. To declare two dimensions equal,
+select the name to **Replace**, select the name to **Keep**, then choose
+**Declare equal**. Every exact occurrence of the replaced label becomes the kept
+label; expressions containing that label as a substring are not rewritten.
+Only declare an equality you know is valid for your model.
+
+Choose **Shorten dimension names** to remove a common namespace prefix, such as
+``component.model.``. Both actions edit the model, preserve the edit through
+**Unfuse**, and require **Save** to keep the changed labels on disk.
+No weight payloads are read during renaming.
 See :doc:`features/inspection`.
 
 .. figure:: _static/feature-symbolic.png
-   :alt: Symbolic controls alongside a graph with shortened dimension names.
+   :alt: Symbolic panel listing dimension labels with Replace and Keep selectors to declare an equality.
    :width: 100%
 
-   Refresh, verify and simplify dimension names from one panel.
+   List symbolic dimensions and choose which name to keep when declaring an equality.
 
 Static metadata
 ^^^^^^^^^^^^^^^

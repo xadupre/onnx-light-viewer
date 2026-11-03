@@ -146,6 +146,92 @@ function submitOpen(document, window) {
     .dispatchEvent(new window.Event("submit", { cancelable: true }));
 }
 
+test("Symbolic lists safe labels, declares equalities and discards stale lists", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const byId = (id) => document.getElementById(id);
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  const names = ["batch", "batch_size", "<img src=x>"];
+  assert.equal(byId("merge-dimensions").disabled, true);
+  load(demoGraph);
+  byId("show-symbolic").click();
+  const listing = messages.at(-1);
+  assert.equal(listing.type, "symbolic-dimensions");
+  send({ ...listing, names });
+  assert.deepEqual(
+    [...byId("symbolic-dimensions").children].map((item) => item.textContent),
+    names,
+  );
+  assert.equal(byId("symbolic-dimensions").querySelector("img"), null);
+  assert.equal(byId("merge-dimensions").disabled, false);
+  byId("dimension-target").value = "batch";
+  byId("dimension-target").dispatchEvent(new window.Event("change"));
+  assert.equal(byId("merge-dimensions").disabled, true);
+  byId("dimension-source").value = "batch_size";
+  byId("dimension-source").dispatchEvent(new window.Event("change"));
+  byId("merge-dimensions").click();
+  assert.equal(messages.at(-1).type, "merge-dimensions");
+  assert.equal(messages.at(-1).source, "batch_size");
+  assert.equal(messages.at(-1).target, "batch");
+  assert.equal(byId("merge-dimensions").disabled, true);
+  send({ ...listing, names: ["stale"] });
+  assert.equal(
+    byId("symbolic-dimensions").textContent.includes("stale"),
+    false,
+  );
+  send({
+    type: "dimension-info",
+    source: "batch_size",
+    target: "batch",
+    count: 2,
+    names: ["batch"],
+  });
+  assert.match(
+    byId("dimension-status").textContent,
+    /Replaced "batch_size" with "batch"/,
+  );
+  assert.equal(byId("merge-dimensions").disabled, true);
+  load(demoGraph);
+  const refresh = messages.at(-1);
+  send({ ...listing, names });
+  assert.equal(byId("symbolic-dimensions").children.length, 0);
+  send({ ...refresh, names: [] });
+  assert.match(byId("symbolic-dimensions-status").textContent, /No symbolic/);
+  byId("show-symbolic").click();
+  byId("show-symbolic").click();
+  send({ ...messages.at(-1), error: "<img src=x>" });
+  assert.match(
+    byId("symbolic-dimensions-status").textContent,
+    /Could not list/,
+  );
+  assert.equal(byId("symbolic-dimensions-status").querySelector("img"), null);
+});
+
+test("Symbolic reloads labels after a cancelled Open or a graph arriving before loading completes", (t) => {
+  const { document, window, messages, events, load } = openViewer(t);
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  load(demoGraph);
+  document.getElementById("show-symbolic").click();
+  for (const status of ["CANCELLED", "SUCCEEDED"]) {
+    send({ ...messages.at(-1), names: ["batch", "batch_size"] });
+    document.getElementById("open-model").click();
+    submitOpen(document, window);
+    const request = messages.at(-1);
+    assert.equal(request.type, "open");
+    assert.equal(document.getElementById("merge-dimensions").disabled, true);
+    if (status === "SUCCEEDED") load(demoGraph);
+    const entry = events.find(
+      (event) =>
+        event.type === "interaction" && event.entry.id === request.actionId,
+    ).entry;
+    send({ type: "log-entry", entry: { ...entry, status } });
+    assert.equal(messages.at(-1).type, "symbolic-dimensions");
+    send({ ...messages.at(-1), names: ["batch", "batch_size"] });
+    assert.equal(document.getElementById("merge-dimensions").disabled, false);
+  }
+});
+
 test("Symbolic edits preserve graph view, fusion undo and pending rewritings", async (t) => {
   const { document, window, messages, load } = openViewer(t);
   const button = document.getElementById("shorten-dimensions");

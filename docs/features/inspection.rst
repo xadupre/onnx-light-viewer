@@ -43,6 +43,9 @@ its models, preserving different versions of the same domain.
 
 Open **Symbolic** for **Refresh shapes**, **Refresh metadata**,
 **Refresh positions**, **Verify** and **Shorten dimension names**.
+The panel also lists symbolic dimension labels across the whole model. Select
+**Replace** and **Keep**, then **Declare equal** to merge two labels. This changes
+exact stored names, not expressions containing them. **Save** persists the edit.
 The application logo links to the repository, immediately before the **Model** tab.
 
 Use **Verify** in **Symbolic** to run onnx-light's ``VerifyModel``

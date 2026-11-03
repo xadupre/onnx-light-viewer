@@ -2192,3 +2192,20 @@ button:disabled {
   background: var(--vscode-inputValidation-errorBackground, #5a1d1d);
   font-weight: bold;
 }
+#symbolic-dimensions {
+  max-height: 180px;
+  overflow: auto;
+  overflow-wrap: anywhere;
+}
+
+#merge-dimensions-form {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+}
+
+#merge-dimensions-form p,
+#merge-dimensions {
+  grid-column: 1 / -1;
+}

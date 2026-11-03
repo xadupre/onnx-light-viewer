@@ -401,6 +401,11 @@ function requestAction(type, action, parameters = {}) {
 }
 
 function setLoading(pending, message = "") {
+  const wasLoading = byId("model-view").getAttribute("aria-busy") === "true";
+  if (pending) {
+    symbolicDimensionRequest++;
+    showSymbolicDimensions([]);
+  }
   if (pending) tensorStatisticsPanel.reset();
   if (pending) {
     promptPanel.reset();
@@ -425,6 +430,15 @@ function setLoading(pending, message = "") {
   ])
     byId(id).disabled =
       pending || !hasModel || byId(id).getAttribute("aria-busy") === "true";
+  updateDimensionEnabled();
+  if (pending) {
+    for (const id of [
+      "dimension-source",
+      "dimension-target",
+      "merge-dimensions",
+    ])
+      byId(id).disabled = true;
+  }
   for (const id of ["undo-fusion", "unfuse-last", "unfuse-all"])
     byId(id).disabled =
       pending ||
@@ -443,6 +457,7 @@ function setLoading(pending, message = "") {
       hasModel &&
       (displayedGraph?.canFuse ?? displayedGraph?.breadcrumbs?.length === 1),
   );
+  if (!pending && wasLoading) requestSymbolicDimensions();
 }
 
 function showLoadError(error) {
@@ -1067,6 +1082,10 @@ function dimensionStatus(
 ) {
   const button = byId("shorten-dimensions");
   button.setAttribute("aria-busy", String(pending));
+  if (pending) {
+    symbolicDimensionRequest++;
+    byId("symbolic-dimensions-status").textContent = "";
+  }
   updateDimensionEnabled();
   refreshButtonStatus("shorten-dimensions", status, message);
   byId("dimension-status").textContent = message;
@@ -1078,7 +1097,56 @@ function updateDimensionEnabled() {
     button.getAttribute("aria-busy") === "true" ||
     replacementPending ||
     !hasModel ||
+    byId("model-view").getAttribute("aria-busy") === "true" ||
     svg.getAttribute("aria-busy") === "true";
+  for (const id of ["dimension-source", "dimension-target"])
+    byId(id).disabled = button.disabled || !byId(id).options.length;
+  byId("merge-dimensions").disabled =
+    button.disabled ||
+    !byId("dimension-source").value ||
+    !byId("dimension-target").value ||
+    byId("dimension-source").value === byId("dimension-target").value;
+}
+
+let symbolicDimensionRequest = 0;
+
+function showSymbolicDimensions(names) {
+  const list = byId("symbolic-dimensions");
+  list.replaceChildren();
+  for (const name of names) {
+    const item = document.createElement("li");
+    item.textContent = name;
+    list.append(item);
+  }
+  for (const [id, index] of [
+    ["dimension-source", 0],
+    ["dimension-target", 1],
+  ]) {
+    const select = byId(id);
+    select.replaceChildren();
+    for (const name of names) {
+      const option = document.createElement("option");
+      option.value = name;
+      option.textContent = name;
+      select.append(option);
+    }
+    select.selectedIndex = Math.min(index, names.length - 1);
+  }
+  byId("symbolic-dimensions-status").textContent = names.length
+    ? `${names.length} distinct symbolic dimension${names.length === 1 ? "" : "s"}.`
+    : "No symbolic dimensions.";
+  updateDimensionEnabled();
+}
+
+function requestSymbolicDimensions() {
+  if (byId("symbolic-panel").hidden || !hasModel || replacementPending) return;
+  showSymbolicDimensions([]);
+  byId("symbolic-dimensions-status").textContent =
+    "Listing symbolic dimensions…";
+  vscode.postMessage({
+    type: "symbolic-dimensions",
+    requestId: ++symbolicDimensionRequest,
+  });
 }
 
 function updateReleases() {
@@ -2654,6 +2722,9 @@ function render(graph, metadata) {
   byId("refresh-positions").disabled = false;
   if (metadata) acceptMetadata(metadata);
   else if (metadataVisible) requestMetadata();
+  symbolicDimensionRequest++;
+  showSymbolicDimensions([]);
+  requestSymbolicDimensions();
 }
 
 svg.addEventListener("pointerdown", (event) => {
@@ -2866,6 +2937,20 @@ byId("shorten-dimensions").addEventListener("click", () => {
   if (svg.getAttribute("aria-busy") === "true") return;
   dimensionStatus(true, "Renaming dynamic dimensions...");
   requestAction("shorten-dimensions", "Shorten dynamic dimension names");
+});
+byId("show-symbolic").addEventListener("click", requestSymbolicDimensions);
+for (const id of ["dimension-source", "dimension-target"])
+  byId(id).addEventListener("change", updateDimensionEnabled);
+byId("merge-dimensions-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  if (byId("merge-dimensions").disabled) return;
+  const source = byId("dimension-source").value;
+  const target = byId("dimension-target").value;
+  dimensionStatus(true, "Merging symbolic dimensions…");
+  requestAction("merge-dimensions", "Merge symbolic dimensions", {
+    source,
+    target,
+  });
 });
 byId("refresh-positions").addEventListener("click", () => {
   const entry = newAction("Refresh positions");
@@ -3115,6 +3200,13 @@ window.addEventListener("message", (event) => {
       `Metadata analysis failed: ${event.data.error}`,
       RefreshStatus.FAILED,
     );
+  } else if (event.data?.type === "symbolic-dimensions") {
+    if (event.data.requestId !== symbolicDimensionRequest) return;
+    if (event.data.error) {
+      showSymbolicDimensions([]);
+      byId("symbolic-dimensions-status").textContent =
+        `Could not list symbolic dimensions: ${event.data.error}`;
+    } else showSymbolicDimensions(event.data.names);
   } else if (event.data?.type === "dimension-info") {
     if (event.data.graph) {
       displayedGraph = event.data.graph;
@@ -3153,10 +3245,14 @@ window.addEventListener("message", (event) => {
     dimensionStatus(
       false,
       event.data.count
-        ? `${event.data.count} dynamic dimension${event.data.count === 1 ? "" : "s"} renamed; removed prefix "${event.data.prefix}". Save to keep the changes.`
+        ? event.data.source
+          ? `Replaced "${event.data.source}" with "${event.data.target}". Save to keep the changes.`
+          : `${event.data.count} dynamic dimension${event.data.count === 1 ? "" : "s"} renamed; removed prefix "${event.data.prefix}". Save to keep the changes.`
         : "No common namespace prefix to remove.",
       event.data.count ? RefreshStatus.UPDATED : RefreshStatus.UNCHANGED,
     );
+    if (event.data.names) showSymbolicDimensions(event.data.names);
+    else requestSymbolicDimensions();
   } else if (event.data?.type === "dimension-error") {
     dimensionStatus(
       false,
@@ -3164,6 +3260,7 @@ window.addEventListener("message", (event) => {
       RefreshStatus.FAILED,
     );
   } else if (event.data?.type === "shape-info") {
+    requestSymbolicDimensions();
     const updates = updateTensorInformation(event.data.tensors);
     inspect(inspectedView);
     refreshStatus(
