@@ -667,11 +667,16 @@ function attentionMemoryModel(
   });
 }
 
-test("memory estimates include registered Attention scratch in device totals and peaks", async () => {
+test("memory estimates include SDK worst-case Attention scratch in device totals and peaks", async () => {
   const model = attentionMemoryModel([1, 2, 4, 8]);
   const original = model.graph();
   const profile = await model.memoryProfile({});
   assert.equal(profile.events[0].scratchBytes, 128);
+  assert.equal(
+    profile.events[0].scratchBytes,
+    profile.events[0].memory.during_bytes -
+      profile.events[0].memory.total_bytes,
+  );
   assert.equal(profile.events[0].deviceBytes, 640);
   assert.equal(profile.peakBytes, 640);
   assert.deepEqual(model.graph(), original);

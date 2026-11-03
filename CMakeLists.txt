@@ -8,22 +8,22 @@ endif()
 
 include(FetchContent)
 
-set(ONNX_LIGHT_VERSION "0.2.4.1")
+set(ONNX_LIGHT_VERSION "0.2.5")
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
   set(_asset "onnx-light-cpp-linux-x86_64.tar.gz")
-  set(_sha256 "1e6fa287f59dfac0df4998d92a9681648cf4fbdce99e3331f0d945304f800272")
+  set(_sha256 "96de7f7799f218acec77ddf5bb14771028122253bcf98ca896d36e72bac83da1")
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$")
   set(_asset "onnx-light-cpp-linux-aarch64.tar.gz")
-  set(_sha256 "fec1875ec8da3f4b0ddeb221b8de7ffea1fd69ed37c2047979474c2f6b555777")
+  set(_sha256 "ab1dcab710427a2366276f5dc26f4d3f46a8af1297fd9f762c8d25caa30fd04c")
 elseif(APPLE)
   set(_asset "onnx-light-cpp-macos-universal2.tar.gz")
-  set(_sha256 "ffa1d1d11f41969a66ee6271806b065b68be8f04a87b8e7b97d3fef196de67c5")
+  set(_sha256 "cc43feb08c5e962b08995ee85bea638374ac440b67601c5e0814e72020af6dd6")
 elseif(WIN32 AND NODE_ARCH STREQUAL "x64")
   set(_asset "onnx-light-cpp-windows-AMD64.zip")
-  set(_sha256 "f634bddd1eeadb747ca4cce94a003478bcff762ae31747f5ae0f2d6ff38198c6")
+  set(_sha256 "c1f8af8d402d3d1b0b95272a7816b3a64aa616655f3452d51be05eb9c1955f63")
 elseif(WIN32 AND NODE_ARCH STREQUAL "arm64")
   set(_asset "onnx-light-cpp-windows-ARM64.zip")
-  set(_sha256 "c78f2980a827204bd04d23f3083837ff9f6f5d82e89e179dd78593f0ce0625ce")
+  set(_sha256 "d475332e8fb5dc30fa611c410d5eb7d41b119f13cde364b07ab734b51f45c38a")
 else()
   message(FATAL_ERROR "No published onnx-light C++ release for ${CMAKE_SYSTEM_NAME}/${CMAKE_SYSTEM_PROCESSOR}/${NODE_ARCH}.")
 endif()
@@ -50,7 +50,7 @@ file(DOWNLOAD
   TLS_VERIFY ON
 )
 
-set(ONNX_LIGHT_CPU_VERSION "0.2.4")
+set(ONNX_LIGHT_CPU_VERSION "0.2.5")
 set(ONNX_LIGHT_CPU_BUILD_PYTHON OFF CACHE BOOL "" FORCE)
 set(ONNX_LIGHT_CPU_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(ONNX_LIGHT_CPU_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
@@ -59,7 +59,7 @@ set(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT ON CACHE BOOL "" FORCE)
 FetchContent_Declare(
   onnx_light_cpu
   URL "https://github.com/xadupre/onnx-light-cpu/archive/refs/tags/${ONNX_LIGHT_CPU_VERSION}.tar.gz"
-  URL_HASH "SHA256=0797be15b92caf1b5c7c1f015a557303934438a0a4f3fb714e9286405abaa8a7"
+  URL_HASH "SHA256=b30dc73b499b5c2c1309a74e170228dc681afd92f8eda29a0688ce6017d68f89"
   DOWNLOAD_EXTRACT_TIMESTAMP TRUE
 )
 FetchContent_MakeAvailable(onnx_light_cpu)

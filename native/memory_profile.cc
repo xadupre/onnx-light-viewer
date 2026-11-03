@@ -3,6 +3,7 @@
 #include <cmath>
 #include <map>
 #include <onnx_core/compute/compute_context.h>
+#include <onnx_core/symbolic/symbolic_helper.h>
 #include <onnx_extensions/kernels/kernel_dispatch_table.h>
 #include <onnx_extensions/shapes/dispatch_table.h>
 #include <onnx_proto/onnx_helper.h>
@@ -158,7 +159,8 @@ public:
         const auto existing = scalar(ol::core::compute::kNodeMemoryAlreadyAllocatedBytesKey);
         const auto outputs = scalar(ol::core::compute::kNodeMemoryOutputAllocationBytesKey);
         const auto tensors = scalar(ol::core::compute::kNodeMemoryTotalBytesKey);
-        const auto scratch = context.NodePeakMemory(index);
+        const auto scratch =
+            Bytes(ol::core::symbolic::ToDimType(context.NodePeakMemory(index).worst_case));
         if (scratch < 0 || scratch > maxSafeBytes - tensors)
           throw std::runtime_error("Estimated memory exceeds the exact integer range.");
         const auto &node = graph.node(index);
