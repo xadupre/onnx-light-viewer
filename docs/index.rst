@@ -16,6 +16,8 @@ Version: |release|
    :alt: Code coverage
 
 ONNX Light Viewer explores ONNX models in VS Code, powered by native onnx-light.
+onnx-light speeds up model loading by loading a single ONNX file without loading
+its weights.
 Open local files, cached public Hugging Face models or bundled backend test
 graphs. Search and navigate nodes, nested subgraphs and model-local functions;
 inspect operators, small tensor values and Markdown schema documentation.
