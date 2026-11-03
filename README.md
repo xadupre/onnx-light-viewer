@@ -9,6 +9,8 @@
 [![Code coverage](https://codecov.io/gh/xadupre/onnx-light-viewer/branch/main/graph/badge.svg)](https://codecov.io/gh/xadupre/onnx-light-viewer)
 
 ONNX Light Viewer explores ONNX models in VS Code, powered by native onnx-light.
+onnx-light speeds up model loading by loading a single ONNX file without loading
+its weights.
 The current viewer inspects models without executing them or changing source
 files.
 

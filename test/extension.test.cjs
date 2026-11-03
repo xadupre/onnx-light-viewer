@@ -2977,7 +2977,18 @@ test("opens outside-workspace models through the path dialog and saves encrypted
   submit("memory-form");
   await flush();
   assert.equal(document.getElementById("memory-results").hidden, false);
-  assert.equal(document.getElementById("memory-peak").textContent, "512 bytes");
+  assert.equal(
+    document.getElementById("memory-peak").textContent,
+    "Unresolved (symbolic bounds)",
+  );
+  assert.match(
+    document.getElementById("memory-status").textContent,
+    /Symbolic bounds are unresolved/,
+  );
+  assert.doesNotMatch(
+    document.getElementById("memory-curve").getAttribute("d"),
+    /NaN|Infinity/,
+  );
   assert.equal(document.querySelectorAll("#memory-events tr").length, 5);
   document.getElementById("model-tab").click();
   document.getElementById("save-model").click();

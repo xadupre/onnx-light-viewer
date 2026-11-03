@@ -17,6 +17,7 @@ test("SDK replay skips expire above onnx-light 0.2.3", () => {
     "0.2.4",
     "0.2.4.1",
     "0.2.4-rc.1",
+    "0.2.5",
     "0.2.10",
     "0.3.0",
     "1.0.0",
@@ -34,34 +35,34 @@ function workflow(name) {
 
 const documentation = workflow("documentation.yml");
 
-test("native builds use onnx-light 0.2.4.1 with pinned checksums", () => {
+test("native builds use onnx-light 0.2.5 with pinned checksums", () => {
   const cmake = readFileSync(
     path.resolve(__dirname, "..", "CMakeLists.txt"),
     "utf8",
   );
   const version = cmake.match(/set\(ONNX_LIGHT_VERSION "([^"]+)"\)/)[1];
-  assert.equal(version, "0.2.4.1");
+  assert.equal(version, "0.2.5");
   assert.equal([...cmake.matchAll(/set\(_sha256 "[a-f0-9]{64}"\)/g)].length, 5);
   for (const [asset, sha256] of [
     [
       "onnx-light-cpp-linux-x86_64.tar.gz",
-      "1e6fa287f59dfac0df4998d92a9681648cf4fbdce99e3331f0d945304f800272",
+      "96de7f7799f218acec77ddf5bb14771028122253bcf98ca896d36e72bac83da1",
     ],
     [
       "onnx-light-cpp-linux-aarch64.tar.gz",
-      "fec1875ec8da3f4b0ddeb221b8de7ffea1fd69ed37c2047979474c2f6b555777",
+      "ab1dcab710427a2366276f5dc26f4d3f46a8af1297fd9f762c8d25caa30fd04c",
     ],
     [
       "onnx-light-cpp-macos-universal2.tar.gz",
-      "ffa1d1d11f41969a66ee6271806b065b68be8f04a87b8e7b97d3fef196de67c5",
+      "cc43feb08c5e962b08995ee85bea638374ac440b67601c5e0814e72020af6dd6",
     ],
     [
       "onnx-light-cpp-windows-AMD64.zip",
-      "f634bddd1eeadb747ca4cce94a003478bcff762ae31747f5ae0f2d6ff38198c6",
+      "c1f8af8d402d3d1b0b95272a7816b3a64aa616655f3452d51be05eb9c1955f63",
     ],
     [
       "onnx-light-cpp-windows-ARM64.zip",
-      "c78f2980a827204bd04d23f3083837ff9f6f5d82e89e179dd78593f0ce0625ce",
+      "d475332e8fb5dc30fa611c410d5eb7d41b119f13cde364b07ab734b51f45c38a",
     ],
   ]) {
     assert.ok(
@@ -69,14 +70,14 @@ test("native builds use onnx-light 0.2.4.1 with pinned checksums", () => {
     );
   }
   assert.match(cmake, /URL_HASH "SHA256=\$\{_sha256\}"/);
-  assert.match(cmake, /set\(ONNX_LIGHT_CPU_VERSION "0\.2\.4"\)/);
+  assert.match(cmake, /set\(ONNX_LIGHT_CPU_VERSION "0\.2\.5"\)/);
   assert.match(
     cmake,
     /https:\/\/github\.com\/xadupre\/onnx-light-cpu\/archive\/refs\/tags\/\$\{ONNX_LIGHT_CPU_VERSION\}\.tar\.gz/,
   );
   assert.match(
     cmake,
-    /URL_HASH "SHA256=0797be15b92caf1b5c7c1f015a557303934438a0a4f3fb714e9286405abaa8a7"/,
+    /URL_HASH "SHA256=b30dc73b499b5c2c1309a74e170228dc681afd92f8eda29a0688ce6017d68f89"/,
   );
   assert.match(
     cmake,
@@ -84,38 +85,28 @@ test("native builds use onnx-light 0.2.4.1 with pinned checksums", () => {
   );
 });
 
-test("Python tooling uses full onnx-light 0.2.4.1 wheels", () => {
-  const version = "0.2.4.1";
-  assert.ok(
-    workflow("coverage.yml").includes(
-      `https://github.com/xadupre/onnx-light/releases/download/${version}/onnx_light-${version}-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl#sha256=cfbf0abd65d8d86536155923ae876a53af770685c7441807854b433f5b6905c8`,
-    ),
+test("Python tooling pins both SDKs to 0.2.5 without conflicting direct URLs", () => {
+  const coverage = workflow("coverage.yml");
+  assert.match(coverage, /-r test\/requirements\.txt/);
+  assert.doesNotMatch(
+    coverage,
+    /https:\/\/github\.com\/xadupre\/onnx-light\/releases\/download\//,
   );
   const requirements = readFileSync(
     path.resolve(__dirname, "requirements.txt"),
     "utf8",
   );
-  assert.match(requirements, /^onnx-light==0\.2\.4\.1$/m);
-  assert.ok(
-    requirements.includes(
-      `https://github.com/xadupre/onnx-light/releases/download/${version}/onnx_light-${version}-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl#sha256=cfbf0abd65d8d86536155923ae876a53af770685c7441807854b433f5b6905c8`,
-    ),
-  );
-  assert.ok(
-    requirements.includes(
-      `https://github.com/xadupre/onnx-light/releases/download/${version}/onnx_light-${version}-cp312-cp312-win_amd64.whl#sha256=935063505d4cd1389c178c7a4effa6118acaf4855c69e805fe51ea960830f8fc`,
-    ),
-  );
-  assert.ok(
-    requirements.includes(
-      `https://github.com/xadupre/onnx-light/releases/download/${version}/onnx_light-${version}-cp312-cp312-macosx_13_0_universal2.whl#sha256=c6ccc23829e373c38d885a6c9aac9a0db0a1eb6bceaad5748f5598f2bd82cfdf ; sys_platform == "darwin" and platform_machine == "arm64" and python_version == "3.12"`,
-    ),
+  assert.match(requirements, /^onnx-light==0\.2\.5$/m);
+  assert.doesNotMatch(requirements, /^onnx-light\s*@/m);
+  assert.match(
+    requirements,
+    /^--find-links https:\/\/github\.com\/xadupre\/onnx-light\/releases\/expanded_assets\/0\.2\.5$/m,
   );
   assert.match(
     requirements,
-    /^--find-links https:\/\/github\.com\/xadupre\/onnx-light-cpu\/releases\/expanded_assets\/0\.2\.4$/m,
+    /^--find-links https:\/\/github\.com\/xadupre\/onnx-light-cpu\/releases\/expanded_assets\/0\.2\.5$/m,
   );
-  assert.match(requirements, /^onnx-light-cpu==0\.2\.4$/m);
+  assert.match(requirements, /^onnx-light-cpu==0\.2\.5$/m);
 });
 
 test("CI runs unit tests on Linux, Windows and macOS ARM64 without building documentation", () => {
