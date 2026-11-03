@@ -169,12 +169,15 @@ test("Run profiling displays summaries and saves a host-owned Chrome trace", asy
     requestId: 1,
     engine: "onnxruntime",
     settings: { enableProfiling: true },
+    repeat: 3,
     inputs: ["float[1,3] input = {-1, 0, 2}"],
   };
   await extension.receive(request);
   const message = extension.messages.at(-1);
   assert.equal(message.type, "run-result");
+  assert.equal(message.result.repeat, 3);
   assert.ok(message.result.profiling.nodes.length > 0);
+  assert.equal(message.result.profiling.nodes[0].calls, 3);
   assert.equal(message.result.profiling.trace, undefined);
   const file = path.join(directory, "trace.json");
   extension.setSaveDestination(file);
@@ -187,6 +190,7 @@ test("Run profiling displays summaries and saves a host-owned Chrome trace", asy
       (event) => event.cat === "Node" && event.args.op_name === "Relu",
     ),
   );
+  assert.equal(trace.filter((event) => event.name === "model_run").length, 3);
   assert.equal(extension.saveDialogs.at(-1).saveLabel, "Save profiling trace");
   extension.setSaveDestination(undefined);
   await extension.receive(save);
@@ -541,7 +545,12 @@ test("a fresh validated prompt does not reuse a previous generation's captured p
   const extension = await openExtension(undefined, undefined, true);
   t.after(() => extension.dispose());
   await extension.resolveCustomEditor(model);
-  const options = { engine: "onnxruntime-genai", prompt: "H", maxTokens: 1 };
+  const options = {
+    engine: "onnxruntime-genai",
+    prompt: "H",
+    maxTokens: 1,
+    sessionSettings: { profile: true },
+  };
   await extension.receive({
     type: "run-prompt",
     requestId: 1,
@@ -549,6 +558,14 @@ test("a fresh validated prompt does not reuse a previous generation's captured p
     options,
   });
   assert.equal(extension.messages.at(-1).type, "prompt-result");
+  const result = extension.messages.at(-1).result;
+  assert.ok(result.profiling.nodes.length > 0);
+  assert.equal(result.profiling.trace, undefined);
+  const profiles = await readdir(result.profileDirectory);
+  const trace = JSON.parse(
+    await readFile(path.join(result.profileDirectory, profiles[0]), "utf8"),
+  );
+  assert.ok(trace.some((event) => event.cat === "Node"));
   const nativeEvents = extension.messages.filter(({ type }) =>
     ["prompt-lifecycle", "prompt-token"].includes(type),
   ).length;

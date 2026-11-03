@@ -1536,6 +1536,7 @@ async function configurePanel(
                 requestId: message.requestId,
                 result: {
                   timeMs: result.timeMs,
+                  repeat: result.repeat,
                   lifecycle: result.lifecycle,
                   profiling: result.profiling
                     ? { nodes: result.profiling.nodes }
@@ -1747,7 +1748,12 @@ async function configurePanel(
               await postMessage({
                 type: "prompt-result",
                 requestId: message.requestId,
-                result,
+                result: {
+                  ...result,
+                  profiling: result.profiling
+                    ? { nodes: result.profiling.nodes }
+                    : undefined,
+                },
               });
             }
           }

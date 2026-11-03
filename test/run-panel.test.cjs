@@ -17,6 +17,9 @@ function panel(t) {
   const inspections = [];
   let statisticsResets = 0;
   dom.window.eval(
+    readFileSync(require.resolve("../media/profiling-panel.js"), "utf8"),
+  );
+  dom.window.eval(
     readFileSync(require.resolve("../media/run-panel.js"), "utf8"),
   );
   const api = dom.window.createRunPanel({
@@ -677,6 +680,12 @@ test("ONNX Runtime profiling is opt-in, one-shot, displays safe timings and save
     ["<script>unsafe</script>", "Relu", "CPUExecutionProvider", "1", "1.250"],
   );
   assert.equal(byId("run-results").querySelector("script"), null);
+  const plots = byId("run-results").querySelectorAll('svg[role="img"]');
+  assert.equal(plots.length, 2);
+  assert.match(plots[0].getAttribute("aria-label"), /Node totals/);
+  assert.match(plots[1].getAttribute("aria-label"), /Operator totals/);
+  assert.equal(plots[0].querySelector("rect").getAttribute("width"), "310");
+  assert.match(plots[0].querySelector("desc").textContent, /unsafe.*1.250 ms/);
   byId("run-results").querySelector("button").click();
   assert.deepEqual(JSON.parse(JSON.stringify(messages.at(-1))), {
     type: "run-save",
@@ -704,6 +713,56 @@ test("ONNX Runtime profiling is opt-in, one-shot, displays safe timings and save
     result: { timeMs: 1, outputs: [], profiling: { nodes: [] } },
   });
   assert.equal(byId("run-results").textContent, "");
+});
+
+test("Run repetitions are ORT-only, bounded integers and report the returned mean", (t) => {
+  const { dom, byId, api, messages } = panel(t);
+  const repeat = byId("run-repeat");
+  assert.equal(repeat.value, "1");
+  assert.equal(repeat.disabled, true);
+  assert.equal(byId("run-repeat-options").hidden, true);
+  byId("run-engine").value = "onnxruntime";
+  byId("run-engine").dispatchEvent(new dom.window.Event("change"));
+  assert.equal(repeat.disabled, false);
+  assert.equal(byId("run-repeat-options").hidden, false);
+  api.activate();
+  api.handleMessage({
+    type: "run-inputs",
+    requestId: messages.at(-1).requestId,
+    stages: [],
+    path: [],
+    inputs: [],
+  });
+  const submit = byId("run-form").querySelector('button[type="submit"]');
+  for (const invalid of ["", "0", "101", "1.5"]) {
+    repeat.value = invalid;
+    submit.click();
+    assert.equal(
+      messages.some(({ type }) => type === "run-model"),
+      false,
+    );
+  }
+  repeat.value = "100";
+  submit.click();
+  const request = messages.at(-1);
+  assert.equal(request.repeat, 100);
+  assert.equal(request.settings.repeat, undefined);
+  api.handleMessage({
+    type: "run-result",
+    requestId: request.requestId,
+    result: { timeMs: 2.5, repeat: 100, outputs: [] },
+  });
+  assert.match(
+    byId("run-status").textContent,
+    /100 repetitions; mean 2.500 ms/,
+  );
+  byId("run-engine").value = "onnx-light";
+  byId("run-engine").dispatchEvent(new dom.window.Event("change"));
+  repeat.value = "0";
+  submit.click();
+  assert.equal(messages.at(-1).repeat, 1);
+  assert.equal(repeat.disabled, true);
+  assert.equal(byId("run-repeat-options").hidden, true);
 });
 test("symbolic and unnamed dynamic dimensions with colliding labels remain independent", (t) => {
   const { byId, api, messages } = panel(t);

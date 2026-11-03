@@ -233,6 +233,140 @@ test("ONNX Runtime profiling returns real kernel timings and traces without reta
   );
 });
 
+test("ONNX Runtime releases non-final outputs before starting the next repetition", () => {
+  const runs = JSON.parse(
+    execFileSync(
+      python,
+      [
+        "-c",
+        `
+import json
+import runpy
+import shutil
+import sys
+import tempfile
+import weakref
+from pathlib import Path
+from types import SimpleNamespace
+import numpy as np
+import onnx
+import onnxruntime as ort
+from onnx import numpy_helper
+
+sessions = []
+class TrackedSession:
+    def __init__(self, *args, **kwargs):
+        self.session = ort.InferenceSession(*args, **kwargs)
+        self.outputs = []
+        self.calls = 0
+        sessions.append(self)
+
+    def run(self, *args, **kwargs):
+        assert all(value() is None for value in self.outputs), "Previous outputs are still alive"
+        values = self.session.run(*args, **kwargs)
+        self.outputs = [weakref.ref(value) for value in values]
+        self.calls += 1
+        return values
+
+    def __getattr__(self, name):
+        return getattr(self.session, name)
+
+main = runpy.run_path(sys.argv[1])["main"]
+main.__globals__["ort"] = SimpleNamespace(
+    SessionOptions=ort.SessionOptions, InferenceSession=TrackedSession
+)
+runs = []
+for profiling, repeat in [(False, 1), (False, 3), (True, 3)]:
+    with tempfile.TemporaryDirectory() as temporary:
+        directory = Path(temporary)
+        shutil.copyfile(sys.argv[2], directory / "model.onnx")
+        (directory / "input-0.pb").write_bytes(
+            numpy_helper.from_array(np.array([[-1, 0, 2]], dtype=np.float32), "input").SerializeToString()
+        )
+        (directory / "settings.json").write_text(json.dumps({
+            "inputs": 1, "logSeverity": 3, "logVerbosity": 0,
+            "enableProfiling": profiling, "repeat": repeat,
+        }), encoding="utf-8")
+        main(directory)
+        result = json.loads((directory / "result.json").read_text(encoding="utf-8"))
+        output = onnx.TensorProto.FromString((directory / "output-0.pb").read_bytes())
+        assert all(value() is None for value in sessions[-1].outputs)
+        if profiling:
+            assert next(node["calls"] for node in result["profiling"]["nodes"] if node["op"] == "Relu") == repeat
+        runs.append({
+            "repeat": result["repeat"], "profiling": profiling,
+            "calls": sessions[-1].calls, "values": numpy_helper.to_array(output).tolist(),
+        })
+print(json.dumps(runs))
+`,
+        runner,
+        require.resolve("./models/relu.onnx"),
+      ],
+      { encoding: "utf8" },
+    ),
+  );
+  assert.deepEqual(
+    runs,
+    [
+      [false, 1],
+      [false, 3],
+      [true, 3],
+    ].map(([profiling, repeat]) => ({
+      repeat,
+      profiling,
+      calls: repeat,
+      values: [[0, 0, 2]],
+    })),
+  );
+});
+
+test("ONNX Runtime repeat reuses the same inputs and session and profiles every execution", async (t) => {
+  const model = loadModel(
+    readFileSync(require.resolve("./models/relu.onnx")),
+    "relu.onnx",
+  );
+  const session = new RunSession();
+  t.after(() => session.close());
+  const request = {
+    engine: "onnxruntime",
+    inputs: ["float[1,3] input = {-1, 0, 2}"],
+    repeat: 3,
+    keepLoaded: true,
+  };
+  const predict = (changes = {}) =>
+    runModel(
+      model,
+      [],
+      { ...request, ...changes },
+      python,
+      runner,
+      () => {},
+      new AbortController().signal,
+      session,
+    );
+  const result = await predict({ settings: { enableProfiling: true } });
+  assert.equal(result.repeat, 3);
+  assert.ok(result.timeMs >= 0);
+  assert.equal(result.lifecycle.retained, false);
+  assert.equal(
+    result.profiling.nodes.find((node) => node.op === "Relu").calls,
+    3,
+  );
+  assert.equal(
+    result.profiling.trace.filter((event) => event.name === "model_run").length,
+    3,
+  );
+  const first = await predict();
+  assert.equal(first.lifecycle.reused, false);
+  assert.equal(first.lifecycle.retained, true);
+  const second = await predict({ repeat: 2 });
+  assert.equal(second.lifecycle.reused, true);
+  assert.equal(second.repeat, 2);
+  assert.deepEqual(second.outputs, result.outputs);
+  for (const repeat of [0, -1, 1.5, 101, "3", true])
+    await assert.rejects(predict({ repeat }), /Repeat must be an integer/);
+});
+
 for (const engine of ["onnx-light", "onnxruntime"])
   test(`${engine} Run retains real sessions with fresh inputs and invalidates ownership/settings`, async (t) => {
     const session = new RunSession();

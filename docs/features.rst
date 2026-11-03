@@ -158,7 +158,10 @@ the retained session. With the option off (the default), sessions are recreated
 and released for every run. Initialization time is separate from execution time.
 
 With **ONNX Runtime** selected, check **Enable profiling** before **Run model**.
-The results show kernel timings sorted slowest first: node, operator, execution
+Set **Repetitions** (1–100, default 1) to execute the same inputs repeatedly in one
+session. Execution time is the mean per repetition; outputs are from the last.
+The results plot total kernel time by node and operator across all repetitions,
+and show timings sorted slowest first: node, operator, execution
 provider, call count and total milliseconds. These are the runtime's optimized
 nodes, which may be fused rather than match the original graph. Profiling adds
 overhead and always creates and releases a fresh session, even if session reuse
@@ -169,10 +172,10 @@ The trace stays available until the next run or model change; temporary profilin
 files are removed after execution.
 
 .. figure:: _static/feature-run-profiling.png
-   :alt: ONNX Runtime Run with profiling enabled, per-node kernel timings and a Save profiling trace button.
+   :alt: ONNX Runtime Run with Repetitions, profiling plots by node and operator, kernel timings and a Save profiling trace button.
    :width: 100%
 
-   Find slow kernels inline or save the complete execution timeline as JSON.
+   Repeat inference, find slow kernels in plots or save the complete timeline.
 
 Every symbolic or unnamed dynamic dimension needs an explicit non-negative size.
 Shared symbolic names use one field; unnamed dimensions are labeled ``input:axis``.
@@ -341,7 +344,23 @@ these controls are not exposed in Settings.
 GenAI exposes initialization/prepacking and session-thread controls, not a
 separate parallel weight-reader thread count. Parallel graph execution is not
 parallel loading. Profiles add overhead and are written under
-``.prompt-profiles`` beside the model; unload GenAI to finalize its profile.
+``.prompt-profiles`` beside the model.
+
+With **onnxruntime-genai**, use **Repetitions** (1–100, default 1) to generate from
+the same prompt repeatedly in one session, resetting generation state each time.
+Only the last repetition's tokens, timings and HF comparisons are displayed;
+sampling may produce different tokens across repetitions. Enable **Profiling**
+directly on **Run → Prompt** or in **Settings → Engine**. A profiled run creates
+a fresh session and unloads it automatically to finalize the trace, regardless
+of **Keep the current model loaded**. Results plot total kernel time by node
+and operator, including the one-token warmup and all repetitions.
+Each profiled run has its own directory under ``.prompt-profiles``.
+
+.. figure:: _static/feature-prompt-profiling.png
+   :alt: ONNX Runtime GenAI Prompt with Repetitions and Profiling controls and kernel timing plots by node and operator.
+   :width: 100%
+
+   Profile repeated generations without opening an external trace viewer.
 
 onnx-light 0.2.3 uses the SDK's synchronous ``GenerationOptions.on_step`` observer
 for live tokens, genuine per-token timings and bounded raw last-position logits.

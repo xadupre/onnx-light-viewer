@@ -27,6 +27,7 @@ function createRunPanel({
   const engine = byId("run-engine");
   const keepLoaded = byId("run-keep-loaded");
   const profile = byId("run-profile");
+  const repeat = byId("run-repeat");
   const profilingEnabled = () =>
     engine.value === "onnxruntime" && profile.checked;
   const retainSession = () => keepLoaded.checked && !profilingEnabled();
@@ -78,6 +79,8 @@ function createRunPanel({
     byId("run-log-verbosity").disabled = light;
     byId("run-profiling-options").hidden = light;
     profile.disabled = light;
+    byId("run-repeat-options").hidden = light;
+    repeat.disabled = light;
     keepLoaded.disabled = profilingEnabled();
     showLifecycle();
   };
@@ -166,6 +169,7 @@ function createRunPanel({
       path: JSON.parse(stage.value),
       engine: engine.value,
       keepLoaded: retainSession(),
+      repeat: engine.value === "onnxruntime" ? Number(repeat.value) : 1,
       settings:
         engine.value === "onnx-light"
           ? { verbose: Number(byId("run-verbose").value) }
@@ -412,7 +416,10 @@ function createRunPanel({
         cleanup = "";
         showLifecycle();
       } else {
-        status.textContent = `Completed in ${message.result.timeMs.toFixed(3)} ms (execution only).`;
+        status.textContent =
+          message.result.repeat > 1
+            ? `Completed ${message.result.repeat} repetitions; mean ${message.result.timeMs.toFixed(3)} ms (execution only).`
+            : `Completed in ${message.result.timeMs.toFixed(3)} ms (execution only).`;
         showLifecycle(message.result.lifecycle);
         if (message.result.profiling) {
           const title = document.createElement("h2");
@@ -459,7 +466,13 @@ function createRunPanel({
           }
           if (!body.rows.length)
             help.textContent += " No kernel timing events were recorded.";
-          results.append(title, help, save, table);
+          results.append(
+            title,
+            help,
+            save,
+            renderProfilingPlots(message.result.profiling),
+            table,
+          );
         }
         for (const kind of ["inputs", "outputs"]) {
           const tensors = message.result[kind] || [];

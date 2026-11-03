@@ -46,6 +46,30 @@ function createPromptPanel({ byId, postMessage }) {
   const lifecycleStatus = byId("prompt-lifecycle");
   const sessionFields = byId("prompt-session-fields");
   const deviceFields = byId("prompt-device-fields");
+  const engine = byId("prompt-engine");
+  const repeat = byId("prompt-repeat");
+  const profile = byId("prompt-profile");
+  const profileToggle = byId("prompt-profile-toggle");
+  const profilingEnabled = () =>
+    engine.value === "onnxruntime-genai" && profile.checked;
+  const updateExecutionOptions = () => {
+    const light = engine.value === "onnx-light";
+    byId("prompt-repeat-options").hidden = light;
+    repeat.disabled = light;
+    profileToggle.disabled = light;
+    profileToggle.setAttribute("aria-pressed", String(profile.checked));
+    profileToggle.textContent = profile.checked
+      ? "Disable ONNX Runtime profiling"
+      : "Enable ONNX Runtime profiling";
+    byId("prompt-keep-loaded").disabled = profilingEnabled();
+  };
+  profileToggle.addEventListener("click", () => {
+    profile.checked = !profile.checked;
+    profile.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  profile.addEventListener("change", updateExecutionOptions);
+  engine.addEventListener("change", updateExecutionOptions);
+  updateExecutionOptions();
   const showSettingsEngine = () => {
     const light = byId("prompt-engine").value === "onnx-light";
     byId(`settings-${light ? "onnx-light" : "onnxruntime"}-tab`).click();
@@ -367,7 +391,7 @@ function createPromptPanel({ byId, postMessage }) {
     const profile = document.createElement("p");
     profile.hidden = !result.profileDirectory;
     profile.textContent = result.profileDirectory
-      ? `Profiles: ${result.profileDirectory}. Unload GenAI to finalize its profile.`
+      ? `Profiles: ${result.profileDirectory}.`
       : "";
     content.replaceChildren(
       prompt,
@@ -377,6 +401,15 @@ function createPromptPanel({ byId, postMessage }) {
       profile,
       table,
     );
+    if (result.profiling) {
+      if (result.engine === "onnxruntime-genai") {
+        const scope = document.createElement("p");
+        scope.textContent =
+          "GenAI profiling totals include warmup (one input token and one generation step) plus all repetitions, not just the displayed token sequence.";
+        content.append(scope);
+      }
+      content.append(renderProfilingPlots(result.profiling));
+    }
   };
   const run = (validation) => {
     if (busy || !available) return;
@@ -393,6 +426,10 @@ function createPromptPanel({ byId, postMessage }) {
       return;
     }
     if (!validation) {
+      if (!repeat.checkValidity()) {
+        repeat.reportValidity();
+        return;
+      }
       for (const id of ["prompt-temperature", "prompt-max-tokens"]) {
         const field = byId(id);
         if (!field.checkValidity()) {
@@ -408,7 +445,8 @@ function createPromptPanel({ byId, postMessage }) {
         prompt: byId("prompt-text").value,
         maxTokens: Number(byId("prompt-max-tokens").value),
         temperature: Number(byId("prompt-temperature").value),
-        keepLoaded: byId("prompt-keep-loaded").checked,
+        keepLoaded: byId("prompt-keep-loaded").checked && !profilingEnabled(),
+        repeat: engine.value === "onnxruntime-genai" ? Number(repeat.value) : 1,
         sessionSettings,
       };
       showLifecycle();
@@ -485,6 +523,7 @@ function createPromptPanel({ byId, postMessage }) {
         engine.value = message.info.engines.includes("onnxruntime-genai")
           ? "onnxruntime-genai"
           : (message.info.engines[0] ?? "onnx-light");
+        updateExecutionOptions();
         setBusy(false);
         status.textContent = available
           ? "Ready. ONNX engines and tokenization use native C++ libraries; Python can locate SDK libraries and run Hugging Face validation."
@@ -537,6 +576,8 @@ function createPromptPanel({ byId, postMessage }) {
         status.textContent = result.reference
           ? "Validation completed."
           : "Generation completed.";
+        if (result.repeat > 1)
+          status.textContent += ` ${result.repeat} repetitions; showing tokens and token timings from the last repetition.`;
       }
       return true;
     },

@@ -385,6 +385,7 @@ export interface PreparedRun {
 
 export interface RunResult {
   timeMs: number;
+  repeat?: number;
   inputs?: RunTensor[];
   outputs: RunTensor[];
   profiling?: {

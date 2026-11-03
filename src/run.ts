@@ -132,6 +132,13 @@ export async function runModel(
     const engine = request.engine ?? "onnx-light";
     if (engine !== "onnx-light" && engine !== "onnxruntime")
       throw new Error("Choose a supported execution engine.");
+    const repeat = request.repeat ?? 1;
+    if (
+      !Number.isSafeInteger(repeat) ||
+      (repeat as number) < 1 ||
+      (repeat as number) > 100
+    )
+      throw new Error("Repeat must be an integer from 1 to 100.");
     if (!Array.isArray(request.inputs))
       throw new Error("Expected model inputs.");
     if (
@@ -333,6 +340,7 @@ export async function runModel(
           logSeverity: logging.logSeverity ?? 2,
           logVerbosity: logging.logVerbosity ?? 0,
           enableProfiling,
+          repeat: engine === "onnxruntime" ? repeat : 1,
           inputs: prepared.inputs.length,
           keepLoaded,
         }),

@@ -675,6 +675,14 @@ export function webviewHtml(
         <fieldset id="prompt-fields" class="form-grid" disabled>
           <label for="prompt-engine">Engine</label>
           <select id="prompt-engine"><option value="onnx-light">onnx-light</option><option value="onnxruntime-genai" selected disabled>onnxruntime-genai</option></select>
+          <div id="prompt-repeat-options" class="form-grid" hidden>
+            <label for="prompt-repeat">Repetitions</label>
+            <input id="prompt-repeat" type="number" min="1" max="100" step="1" value="1" required disabled aria-describedby="prompt-repeat-help">
+            <p id="prompt-repeat-help">Repeat generation 1–100 times. Only the last repetition's tokens and token timings are displayed.</p>
+            <span>Profiling</span>
+            <button id="prompt-profile-toggle" type="button" aria-pressed="false" aria-describedby="prompt-profile-help">Enable ONNX Runtime profiling</button>
+            <p id="prompt-profile-help">Profiling adds overhead and forces a fresh session, released after generation to finalize the trace. GenAI profiles include warmup (one input token and one generation step) plus all repetitions. The Engine settings profiling control uses the same setting.</p>
+          </div>
           <label for="prompt-text">Prompt</label>
           <textarea id="prompt-text" rows="3" required>The capital of France is</textarea>
           <label for="prompt-keep-loaded">Keep the current model loaded between prompts</label>
@@ -706,7 +714,7 @@ export function webviewHtml(
       </div>
       <div id="prompt-session-page" hidden>
         <h2 id="prompt-settings-title">Engine session settings</h2>
-        <p>Applied on the next prompt run, without modifying the model or its exported configuration. A change unloads the retained session. Blank values preserve SDK/model defaults. Profiling adds overhead and writes to .prompt-profiles beside the model; GenAI finalizes its profile when unloaded.</p>
+        <p>Applied on the next prompt run, without modifying the model or its exported configuration. A change unloads the retained session. Blank values preserve SDK/model defaults. Profiling adds overhead and writes to .prompt-profiles beside the model; GenAI uses a fresh session and finalizes its profile before returning results.</p>
         <fieldset id="prompt-session-fields">
           <div id="prompt-settings-light" class="prompt-settings-grid">
             <h3>onnx-light (CPU)</h3>
@@ -741,7 +749,7 @@ export function webviewHtml(
             <label><span>Log verbosity</span><input data-setting="logVerbosity" type="number" min="0" max="2147483647" placeholder="-"><small class="prompt-option-help">Control the detail of verbose logs; relevant when severity is 0.</small></label>
             <label><span>Log ID</span><input data-setting="logId" type="text" maxlength="4096" placeholder="-"><small class="prompt-option-help">Identify this session in runtime log messages.</small></label>
             <label><span>Custom operators library</span><input data-setting="customOpsLibrary" type="text" maxlength="4096" placeholder="-"><small class="prompt-option-help">Load a native shared library that registers additional ONNX Runtime operators.</small></label>
-            <label class="prompt-checkbox"><span>Enable ONNX Runtime profiling</span><input data-setting="profile" type="checkbox"><small class="prompt-option-help">Record execution timings in .prompt-profiles beside the model. Adds overhead; the profile is finalized when the session is unloaded.</small></label>
+            <label class="prompt-checkbox"><span>Enable ONNX Runtime profiling</span><input id="prompt-profile" data-setting="profile" type="checkbox"><small class="prompt-option-help">Record execution timings in a unique .prompt-profiles/run-* directory beside the model. Includes warmup (one input token and one generation step) plus all repetitions. Adds overhead; creates a fresh session and unloads it after generation to finalize the profile.</small></label>
             <h3>Session configuration entries</h3>
             <p>Options are listed below with their purpose; no configuration keys or JSON need to be entered. Blank values leave the exported configuration unchanged. Availability depends on the installed runtime; runtime errors are reported on Prompt. <a href="https://github.com/microsoft/onnxruntime/blob/main/include/onnxruntime/core/session/onnxruntime_session_options_config_keys.h">Official configuration keys and value documentation</a>.</p>
             <div id="prompt-config-entries" class="prompt-settings-grid">${sessionConfiguration}</div>
@@ -750,7 +758,7 @@ export function webviewHtml(
       </div>
       </section>
       <section id="execution-run-view" role="tabpanel" aria-labelledby="execution-run-tab" tabindex="0" hidden>
-        <p>Execute the current model once, including unsaved graph edits. Both engines use CPU; ONNX Runtime requires onnx, numpy and onnxruntime in the Settings Python environment. For pipelines, select a stage. Specify every dynamic dimension, then use random inputs, inline TensorProto files (.pb), or ONNX tensor text such as <code>float[3] X = {-1, 0, 2}</code>. Integer values remain exact. Inputs and outputs show type, shape and values for tensors up to 32 elements. Inspect statistics or save full tensors (.pb) and statistics (.json).</p>
+        <p>Execute the current model, including unsaved graph edits. Both engines use CPU; ONNX Runtime requires onnx, numpy and onnxruntime in the Settings Python environment. For pipelines, select a stage. Specify every dynamic dimension, then use random inputs, inline TensorProto files (.pb), or ONNX tensor text such as <code>float[3] X = {-1, 0, 2}</code>. Integer values remain exact. Inputs and outputs show type, shape and values for tensors up to 32 elements. Inspect statistics or save full tensors (.pb) and statistics (.json).</p>
         <p id="run-lifecycle" role="status"></p>
         <button id="run-settings-open" type="button">Settings</button>
         <form id="run-form">
@@ -759,6 +767,11 @@ export function webviewHtml(
             <select id="run-stage"><option value="[]">Root graph</option></select>
             <label for="run-engine">Engine</label>
             <select id="run-engine"><option value="onnx-light">onnx-light</option><option value="onnxruntime">ONNX Runtime</option></select>
+            <div id="run-repeat-options" class="form-grid" hidden>
+              <label for="run-repeat">Repetitions</label>
+              <input id="run-repeat" type="number" min="1" max="100" step="1" value="1" required disabled aria-describedby="run-repeat-help">
+              <p id="run-repeat-help">Repeat execution 1–100 times. Execution time is the mean across repetitions.</p>
+            </div>
             <label for="run-keep-loaded">Session lifetime</label>
             <label><input id="run-keep-loaded" type="checkbox"> Keep session loaded between runs (reuse the model and session, with fresh inputs)</label>
             <div id="run-profiling-options" class="form-grid" hidden>
@@ -1253,6 +1266,7 @@ export function webviewHtml(
   <script nonce="${nonce}" src="${resource("memory-panel.js")}"></script>
   <script nonce="${nonce}" src="${resource("tensor-list-panel.js")}"></script>
   <script nonce="${nonce}" src="${resource("tensor-statistics-panel.js")}"></script>
+  <script nonce="${nonce}" src="${resource("profiling-panel.js")}"></script>
   <script nonce="${nonce}" src="${resource("prompt-panel.js")}"></script>
   <script nonce="${nonce}" src="${resource("run-panel.js")}"></script>
   <script nonce="${nonce}" src="${resource("vendor/dagre.min.js")}"></script>
