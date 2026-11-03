@@ -1392,6 +1392,9 @@ function updateConnection(connection) {
   if (!connection.group) return;
   const { path, hit, text, information } = connection;
   const { x, y } = connectionLabelPosition(connection);
+  const multiline =
+    connection.nameLines?.length > 1 || connection.informationLines?.length > 1;
+  const labelX = multiline ? x - connection.labelWidth / 2 : x;
   const data = connectionPath(connection);
   path.setAttribute("d", data);
   hit.setAttribute("d", data);
@@ -1403,9 +1406,9 @@ function updateConnection(connection) {
       connection.informationLines ?? [tensorDescription(connection.name)],
     ],
   ]) {
-    label.setAttribute("x", x);
+    label.setAttribute("x", labelX);
     label.setAttribute("y", baseline);
-    label.setAttribute("text-anchor", "middle");
+    label.setAttribute("text-anchor", multiline ? "start" : "middle");
     const value = label === information ? label.querySelector("tspan") : label;
     if (
       value.children.length !== lines.length ||
@@ -1413,10 +1416,10 @@ function updateConnection(connection) {
     )
       value.replaceChildren(
         ...lines.map((line, index) =>
-          element("tspan", { x, dy: index ? 14 : 0 }, line),
+          element("tspan", { x: labelX, dy: index ? 14 : 0 }, line),
         ),
       );
-    for (const line of value.children) line.setAttribute("x", x);
+    for (const line of value.children) line.setAttribute("x", labelX);
     baseline += lines.length * 14;
   }
 }
@@ -1891,14 +1894,14 @@ function wrapConnectionLabel(text, context) {
   if (context.measureText(text).width <= 216) return [text];
   const lines = [];
   let line = "";
-  for (const character of text) {
-    if (line && context.measureText(line + character).width > 216) {
-      lines.push(line);
+  for (const word of text.match(/\S+\s*/gu) ?? []) {
+    if (line && context.measureText((line + word).trimEnd()).width > 216) {
+      lines.push(line.trimEnd());
       line = "";
     }
-    line += character;
+    line += word;
   }
-  lines.push(line);
+  lines.push(line.trimEnd());
   return lines;
 }
 

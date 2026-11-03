@@ -11820,6 +11820,27 @@ test("dashes graph input arcs only for standard ONNX Shape consumers", (t) => {
     assert.equal(output.classList.contains("edge-shape"), false);
 });
 
+test("edge labels wrap at word boundaries without splitting long words", (t) => {
+  const { window } = openViewer(t);
+  const context = { measureText: (text) => ({ width: text.length * 6 }) };
+  const wrap = (text) => Array.from(window.wrapConnectionLabel(text, context));
+  assert.deepEqual(wrap(""), [""]);
+  assert.deepEqual(wrap("FLOAT [batch, sequence]"), [
+    "FLOAT [batch, sequence]",
+  ]);
+  assert.deepEqual(
+    wrap("FLOAT [batch, head_count, sequence_length, head_dimension]"),
+    ["FLOAT [batch, head_count,", "sequence_length, head_dimension]"],
+  );
+  const word = "a_very_long_symbolic_dimension_that_exceeds_the_label_width";
+  assert.deepEqual(wrap(word), [word]);
+  assert.deepEqual(wrap(`FLOAT [batch, ${word} end]`), [
+    "FLOAT [batch,",
+    word,
+    "end]",
+  ]);
+});
+
 test("arc shape labels wrap and refresh without losing full descriptions", (t) => {
   const { document, window, load } = openViewer(t);
   const shape = ["batch", "head_count", "sequence_length", "head_dimension"];
@@ -11830,7 +11851,12 @@ test("arc shape labels wrap and refresh without losing full descriptions", (t) =
   );
   const description = `FLOAT [${shape.join(", ")}]`;
   assert.ok(description.length > 34 && description.length <= 68);
-  assert.equal(information.querySelector("tspan").textContent, description);
+  assert.equal(
+    [...information.querySelector("tspan").children]
+      .map((line) => line.textContent)
+      .join(" "),
+    description,
+  );
   const longerShape = [...shape, ...shape];
   const fullDescription = `FLOAT [${longerShape.join(", ")}]`;
   window.dispatchEvent(
@@ -11841,7 +11867,12 @@ test("arc shape labels wrap and refresh without losing full descriptions", (t) =
       },
     }),
   );
-  assert.equal(information.querySelector("tspan").textContent, fullDescription);
+  assert.equal(
+    [...information.querySelector("tspan").children]
+      .map((line) => line.textContent)
+      .join(" "),
+    fullDescription,
+  );
   assert.ok(information.querySelector("tspan").children.length > 2);
   for (const line of information.querySelector("tspan").children) {
     assert.ok(line.textContent.length <= 36);
@@ -14614,9 +14645,9 @@ test("shows longer carried-result names and complete hover information after sha
   );
   const text = connection.querySelector(".tensor-label");
   assert.equal(text.textContent, name);
-  assert.ok(text.children.length > 1);
+  assert.equal(text.children.length, 1);
   for (const line of text.children) {
-    assert.ok(line.textContent.length <= 36);
+    assert.equal(line.textContent, name);
     assert.equal(line.getAttribute("x"), text.getAttribute("x"));
   }
   assert.equal(text.getAttribute("aria-label"), name);
@@ -14674,10 +14705,10 @@ test("edge labels stay horizontal and centered on curved, routed and dragged arc
   window.updateConnection(connection);
   for (const text of [connection.text, connection.information]) {
     assert.equal(text.getAttribute("transform"), null);
-    assert.equal(text.getAttribute("text-anchor"), "middle");
-    assert.equal(Number(text.getAttribute("x")), 100);
+    assert.equal(text.getAttribute("text-anchor"), "start");
+    assert.equal(Number(text.getAttribute("x")), 50);
     for (const line of text.querySelectorAll("tspan[dy]"))
-      assert.equal(Number(line.getAttribute("x")), 100);
+      assert.equal(Number(line.getAttribute("x")), 50);
   }
   assert.equal(Number(connection.text.getAttribute("y")), 89);
   assert.equal(Number(connection.information.getAttribute("y")), 103);
@@ -14697,9 +14728,9 @@ test("edge labels stay horizontal and centered on curved, routed and dragged arc
   window.updateConnection(connection);
   for (const text of [connection.text, connection.information]) {
     assert.equal(text.getAttribute("transform"), null);
-    assert.equal(Number(text.getAttribute("x")), dragged.x);
+    assert.equal(Number(text.getAttribute("x")), dragged.x - 50);
     for (const line of text.querySelectorAll("tspan[dy]"))
-      assert.equal(Number(line.getAttribute("x")), dragged.x);
+      assert.equal(Number(line.getAttribute("x")), dragged.x - 50);
   }
   delete connection.route;
   connection.to = { x: 0, y: 200 };
@@ -14712,6 +14743,14 @@ test("edge labels stay horizontal and centered on curved, routed and dragged arc
     JSON.parse(JSON.stringify(window.connectionLabelPosition(connection))),
     { x: 0, y: 0 },
   );
+  connection.informationLines = ["FLOAT []"];
+  connection.labelHeight = 28;
+  window.updateConnection(connection);
+  for (const text of [connection.text, connection.information]) {
+    assert.equal(text.getAttribute("text-anchor"), "middle");
+    assert.equal(Number(text.getAttribute("x")), 0);
+    assert.equal(text.querySelectorAll("tspan[dy]").length, 1);
+  }
 });
 
 test("virtualization retains a multiline label when only its bottom is in the viewport", (t) => {
