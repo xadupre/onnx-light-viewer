@@ -624,7 +624,7 @@ export function webviewHtml(
       <h2>Memory profiling</h2>
       <p>Estimate CPU tensor memory without executing the model. Profiling covers the complete root graph, or one selected pipeline stage, independently of the displayed subgraph.</p>
       <p>Estimate with different dimensions to compare configurations on the same plot. Select a configuration to inspect its details. Changing the model or pipeline stage clears the comparison.</p>
-      <p>One event per node in execution order, accounting for native lifetime and potential in-place reuse decisions. Function/control-flow internals and allocator overhead are not included. Scratch estimates depend on registered estimators; zero can mean unavailable.</p>
+      <p>One event per node in execution order, accounting for native lifetime and potential in-place reuse decisions. Function/control-flow internals and allocator overhead are not included. Scratch uses SDK worst-case bounds; unknown bounds remain symbolic, not zero. Symbolic phases leave gaps in the plot.</p>
       <form id="memory-form">
         <div id="memory-stage-field" hidden><label for="memory-stage">Pipeline stage</label><select id="memory-stage"></select></div>
         <fieldset><legend>Dynamic dimensions</legend><p>Last successfully profiled values are restored by dimension name across models and VS Code sessions. New dimensions default to 1.</p><div id="memory-dimensions"></div><p id="memory-no-dimensions" hidden>No dynamic dimensions to fill.</p></fieldset>
@@ -639,7 +639,7 @@ export function webviewHtml(
         <div id="memory-chart-scroll">
         <svg id="memory-chart" viewBox="0 0 1000 330" tabindex="0" role="img" aria-labelledby="memory-chart-title memory-chart-description">
           <title id="memory-chart-title">Estimated device memory by execution event</title>
-          <desc id="memory-chart-description">Hover to inspect memory before, during and after a node. Use left/right arrows to inspect nodes, zoom buttons or Ctrl+wheel to zoom, and scroll horizontally. Step plot: one interval between nodes, two intervals during each node. Outputs and scratch are allocated before execution; releases happen after execution. Highlighted rectangles identify common compute-heavy operations, not measured timings.</desc>
+          <desc id="memory-chart-description">Hover to inspect memory before, during and after a node. Use left/right arrows to inspect nodes, zoom buttons or Ctrl+wheel to zoom, and scroll horizontally. Step plot: one interval between nodes, two intervals during each node. Outputs and scratch are allocated before execution; releases happen after execution. Symbolic phases are not plotted; inspect nodes for SDK expressions. Highlighted rectangles identify common compute-heavy operations, not measured timings.</desc>
           <path class="memory-axis" d="M60,20V240H980"></path>
           <text id="memory-chart-peak" x="60" y="16"></text><text x="10" y="244">0</text>
           <path id="memory-node-intervals" class="memory-node-interval"></path>
@@ -651,7 +651,7 @@ export function webviewHtml(
         </svg>
         </div>
         <pre id="memory-inspection" role="status" hidden></pre>
-        <p id="memory-final-status" role="status" hidden>Final post-release memory is unavailable for this profile. The curve stops at the last available value.</p>
+        <p id="memory-final-status" role="status" hidden>Final post-release memory is unavailable or symbolic. Its numerical value is not plotted.</p>
         <h3>Estimated execution events</h3>
         <p>Each delta column lists all configurations in their curve colors; hover a value to identify its configuration. Net delta compares memory after releases with memory before output allocation. Other columns and the local-peak filter follow the selected configuration.</p>
         <p id="memory-peaks-count"></p>

@@ -297,6 +297,7 @@ export interface MemoryBreakdown<T extends number | string> {
 export interface MemoryProfile {
   name: string;
   device: string;
+  /** Null for no nodes or when any SDK worst-case bound remains symbolic. */
   peakBytes: number | null;
   events: {
     index: number;
@@ -304,12 +305,13 @@ export interface MemoryProfile {
     opType: string;
     existingBytes: number;
     outputBytes: number;
-    scratchBytes: number;
-    deviceBytes: number;
+    scratchBytes: number | string;
+    scratchAverageBytes: number | string | null;
+    deviceBytes: number | string;
     /** SDK post-release snapshot, including the final node. */
-    afterBytes: number | null;
-    memory: MemoryBreakdown<number>;
-    /** SDK expressions on the original symbolic shapes; scratch is not symbolic. */
+    afterBytes: number | string | null;
+    memory: MemoryBreakdown<number | string>;
+    /** SDK expressions on the original symbolic shapes, including worst-case scratch. */
     symbolicMemory: MemoryBreakdown<string>;
     decisions: {
       action: "inplace" | "release" | "release_shape_tag";

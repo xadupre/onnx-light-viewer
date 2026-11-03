@@ -366,6 +366,7 @@ test("native CPU support supplies custom shapes and memory estimates before patt
   assert.equal(profile.events.length, 1);
   assert.equal(profile.peakBytes, 40);
   assert.equal(profile.events[0].scratchBytes, 0);
+  assert.equal(profile.events[0].scratchAverageBytes, 0);
   assert.equal(profile.events[0].outputs[0].shape, "[2,2]");
   assert.deepEqual(
     source
@@ -427,10 +428,10 @@ test("memory estimates bind anonymous and repeated dimensions and retain zero-si
     model.memoryProfileInputs().map(({ key }) => key),
     ["input:0:0", "symbol:N"],
   );
-  assert.equal(
-    (await model.memoryProfile({ "input:0:0": 2, "symbol:N": 3 })).peakBytes,
-    144,
-  );
+  const nonempty = await model.memoryProfile({ "input:0:0": 2, "symbol:N": 3 });
+  assert.equal(nonempty.peakBytes, null);
+  assert.equal(nonempty.events[0].memory.total_bytes, 144);
+  assert.match(nonempty.events[0].scratchBytes, /^peak_memory_/);
   const original = model.graph();
   for (const dimensions of [
     { "input:0:0": 2, "symbol:N": 0 },
@@ -438,8 +439,9 @@ test("memory estimates bind anonymous and repeated dimensions and retain zero-si
     { "input:0:0": 0, "symbol:N": 0 },
   ]) {
     const profile = await model.memoryProfile(dimensions);
-    assert.equal(profile.peakBytes, 0);
-    assert.equal(profile.events[0].deviceBytes, 0);
+    assert.equal(profile.peakBytes, null);
+    assert.equal(profile.events[0].memory.total_bytes, 0);
+    assert.equal(profile.events[0].deviceBytes, profile.events[0].scratchBytes);
     assert.equal(
       profile.events[0].outputs[0].shape,
       `[${dimensions["input:0:0"]},${dimensions["symbol:N"]},${dimensions["symbol:N"]}]`,
@@ -447,7 +449,9 @@ test("memory estimates bind anonymous and repeated dimensions and retain zero-si
   }
   assert.deepEqual(model.graph(), original);
   const empty = memoryTestModel([Number.MAX_SAFE_INTEGER, 0]);
-  assert.equal((await empty.memoryProfile({})).peakBytes, 0);
+  const emptyProfile = await empty.memoryProfile({});
+  assert.equal(emptyProfile.peakBytes, null);
+  assert.equal(emptyProfile.events[0].memory.total_bytes, 0);
 });
 
 test("native memory estimates concretize symbolic inputs without editing the model", async () => {
@@ -459,7 +463,11 @@ test("native memory estimates concretize symbolic inputs without editing the mod
   const profile = await model.memoryProfile({ "symbol:N": 2 });
   assert.equal(profile.device, "CPU");
   assert.equal(profile.events.length, original.nodes.length);
-  assert.equal(profile.peakBytes, 132);
+  assert.equal(profile.peakBytes, null);
+  assert.equal(
+    Math.max(...profile.events.map((event) => event.memory.total_bytes)),
+    132,
+  );
   assert.equal(typeof profile.events[0].memory.total_bytes, "number");
   assert.equal(typeof profile.events[0].symbolicMemory.total_bytes, "string");
   assert.match(profile.events[0].symbolicMemory.total_bytes, /N/);
@@ -474,11 +482,17 @@ test("native memory estimates concretize symbolic inputs without editing the mod
     }
   }
   assert.equal(profile.events[1].outputBytes, 0);
-  for (const event of profile.events)
+  for (const event of profile.events) {
     assert.equal(
-      event.deviceBytes,
-      event.existingBytes + event.outputBytes + event.scratchBytes,
+      event.memory.total_bytes,
+      event.existingBytes + event.outputBytes,
     );
+    assert.equal(event.deviceBytes, event.memory.during_bytes);
+    assert.match(event.scratchBytes, /^peak_memory_/);
+    assert.equal(event.scratchAverageBytes, null);
+    assert.ok(event.deviceBytes.includes(event.scratchBytes));
+    assert.ok(event.symbolicMemory.during_bytes.includes(event.scratchBytes));
+  }
   assert.deepEqual(
     profile.events.map((event) => event.afterBytes),
     profile.events.map((event) => event.memory.after_bytes),
@@ -510,10 +524,22 @@ test("native memory estimates concretize symbolic inputs without editing the mod
     tag: "weight",
   });
   const larger = await model.memoryProfile({ "symbol:N": 4 });
-  assert.ok(larger.peakBytes > profile.peakBytes);
+  assert.equal(larger.peakBytes, null);
+  assert.ok(
+    larger.events.at(-1).memory.total_bytes >
+      profile.events.at(-1).memory.total_bytes,
+  );
   assert.deepEqual(model.graph(), original);
   const relu = loadModel(modelBytes("relu.onnx"), "relu.onnx");
-  assert.equal((await relu.memoryProfile({})).peakBytes, 24);
+  const reluProfile = await relu.memoryProfile({});
+  const event = reluProfile.events[0];
+  assert.equal(reluProfile.peakBytes, null);
+  assert.match(event.scratchBytes, /^peak_memory_/);
+  assert.equal(event.scratchAverageBytes, null);
+  assert.equal(event.deviceBytes, `${event.scratchBytes}+24`);
+  assert.equal(event.memory.during_bytes, event.deviceBytes);
+  assert.equal(event.memory.released_bytes, event.scratchBytes);
+  assert.equal(event.afterBytes, 24);
 });
 
 test("memory profiles transport SDK shape-release decisions and concrete scalar shapes", async () => {
@@ -672,6 +698,7 @@ test("memory estimates include SDK worst-case Attention scratch in device totals
   const original = model.graph();
   const profile = await model.memoryProfile({});
   assert.equal(profile.events[0].scratchBytes, 128);
+  assert.equal(profile.events[0].scratchAverageBytes, 128);
   assert.equal(
     profile.events[0].scratchBytes,
     profile.events[0].memory.during_bytes -
@@ -680,6 +707,12 @@ test("memory estimates include SDK worst-case Attention scratch in device totals
   assert.equal(profile.events[0].deviceBytes, 640);
   assert.equal(profile.peakBytes, 640);
   assert.deepEqual(model.graph(), original);
+  const symbolic = attentionMemoryModel([1, 2, "S", 8]);
+  const bound = await symbolic.memoryProfile({ "symbol:S": 4 });
+  assert.equal(bound.peakBytes, profile.peakBytes);
+  assert.equal(bound.events[0].scratchBytes, 128);
+  assert.equal(bound.events[0].scratchAverageBytes, 128);
+  assert.match(bound.events[0].symbolicMemory.during_bytes, /S/);
 });
 
 test("memory estimates include LinearAttention scratch with and without past state", async () => {
