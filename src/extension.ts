@@ -4153,7 +4153,7 @@ async function configurePanel(
               if (!isCurrent()) return;
               let equalities: { source: string; target: string }[] | undefined;
               if (merging) {
-                const names = native.symbolicDimensions();
+                const names = new Set(native.symbolicDimensions());
                 const requested: unknown = message.equalities ?? [
                   { source: message.source, target: message.target },
                 ];
@@ -4167,8 +4167,8 @@ async function configurePanel(
                       typeof entry.source === "string" &&
                       typeof entry.target === "string" &&
                       entry.source !== entry.target &&
-                      names.includes(entry.source) &&
-                      names.includes(entry.target),
+                      names.has(entry.source) &&
+                      names.has(entry.target),
                   )
                 )
                   throw new Error(
@@ -4187,18 +4187,8 @@ async function configurePanel(
                     "Each replaced dimension must have one canonical name to keep.",
                   );
               }
-              const merge = (original: typeof native) => {
-                let model = original;
-                let count = 0;
-                for (const { source, target } of equalities ?? []) {
-                  const edited = model.mergeDimensions(source, target);
-                  model = edited.model;
-                  count += edited.count;
-                }
-                return { model, count, prefix: "" };
-              };
               const edited = equalities
-                ? merge(native)
+                ? { ...native.mergeDimensionsBatch(equalities), prefix: "" }
                 : native.shortenDimensionNames();
               if (!edited.count) {
                 await postMessage({
@@ -4212,7 +4202,9 @@ async function configurePanel(
                 ? {
                     ...current.rewritingQueue,
                     model: equalities
-                      ? merge(current.rewritingQueue.model).model
+                      ? current.rewritingQueue.model.mergeDimensionsBatch(
+                          equalities,
+                        ).model
                       : current.rewritingQueue.model.shortenDimensionNames(
                           edited.prefix,
                         ).model,

@@ -288,6 +288,50 @@ public:
   }
 };
 
+using DimensionMapping = std::unordered_map<std::string, std::string>;
+
+void AddDimensionEquality(DimensionMapping &mapping, const Napi::Value &source_value,
+                          const Napi::Value &target_value) {
+  if (!source_value.IsString() || !target_value.IsString())
+    throw std::runtime_error("Expected source and target symbolic dimension names.");
+  const auto source = source_value.As<Napi::String>().Utf8Value();
+  const auto target = target_value.As<Napi::String>().Utf8Value();
+  if (source.empty() || target.empty() || source == target)
+    throw std::runtime_error("Choose two different non-empty symbolic dimension names.");
+  if (!mapping.emplace(source, target).second)
+    throw std::runtime_error("Each replaced dimension must have one canonical name to keep.");
+}
+
+Napi::Object MergeDimensionMapping(Napi::Env env, const std::shared_ptr<StoredModel> &model,
+                                   const DimensionMapping &mapping) {
+  DimensionEdit edit;
+  auto copy = edit.Copy(model);
+  size_t count = 0;
+  std::unordered_map<std::string, std::string> expressions;
+  for (auto *value : edit.names.values) {
+    const std::string expression(value->sv());
+    const auto [cached, inserted] = expressions.try_emplace(expression, expression);
+    if (inserted) {
+      if (const auto exact = mapping.find(expression); exact != mapping.end())
+        cached->second = exact->second;
+      else
+        for (const auto &token : ol::core::expressions::parse_expression_tokens(expression))
+          if (mapping.contains(token)) {
+            cached->second = ol::core::expressions::rename_expression(expression, mapping);
+            break;
+          }
+    }
+    if (cached->second != expression) {
+      *value = cached->second;
+      ++count;
+    }
+  }
+  auto result = Napi::Object::New(env);
+  result.Set("model", ModelHandle(env, copy));
+  result.Set("count", Napi::Number::New(env, count));
+  return result;
+}
+
 } // namespace
 
 void AddDimensionMethods(Napi::Env env, Napi::Object result, std::shared_ptr<StoredModel> model) {
@@ -306,45 +350,46 @@ void AddDimensionMethods(Napi::Env env, Napi::Object result, std::shared_ptr<Sto
                  return call.Env().Undefined();
                }
              }));
-  result.Set(
-      "mergeDimensions",
-      Napi::Function::New(env, [model](const Napi::CallbackInfo &call) -> Napi::Value {
-        try {
-          if (call.Length() != 2 || !call[0].IsString() || !call[1].IsString())
-            throw std::runtime_error("Expected source and target symbolic dimension names.");
-          const auto source = call[0].As<Napi::String>().Utf8Value();
-          const auto target = call[1].As<Napi::String>().Utf8Value();
-          if (source.empty() || target.empty() || source == target)
-            throw std::runtime_error("Choose two different non-empty symbolic dimension names.");
-          DimensionEdit edit;
-          auto copy = edit.Copy(model);
-          size_t count = 0;
-          std::unordered_map<std::string, std::string> expressions;
-          for (auto *value : edit.names.values)
-            if (value->sv() == source) {
-              *value = target;
-              ++count;
-            } else {
-              const std::string expression(value->sv());
-              const auto [cached, inserted] = expressions.try_emplace(expression, expression);
-              if (inserted &&
-                  ol::core::expressions::parse_expression_tokens(expression).contains(source))
-                cached->second =
-                    ol::core::expressions::rename_expression(expression, {{source, target}});
-              if (cached->second != expression) {
-                *value = cached->second;
-                ++count;
-              }
-            }
-          auto result = Napi::Object::New(call.Env());
-          result.Set("model", ModelHandle(call.Env(), copy));
-          result.Set("count", Napi::Number::New(call.Env(), count));
-          return result;
-        } catch (const std::exception &error) {
-          Napi::Error::New(call.Env(), error.what()).ThrowAsJavaScriptException();
-          return call.Env().Undefined();
-        }
-      }));
+  result.Set("mergeDimensions",
+             Napi::Function::New(env, [model](const Napi::CallbackInfo &call) -> Napi::Value {
+               try {
+                 if (call.Length() != 2)
+                   throw std::runtime_error("Expected source and target symbolic dimension names.");
+                 DimensionMapping mapping;
+                 AddDimensionEquality(mapping, call[0], call[1]);
+                 return MergeDimensionMapping(call.Env(), model, mapping);
+               } catch (const std::exception &error) {
+                 Napi::Error::New(call.Env(), error.what()).ThrowAsJavaScriptException();
+                 return call.Env().Undefined();
+               }
+             }));
+  result.Set("mergeDimensionsBatch",
+             Napi::Function::New(env, [model](const Napi::CallbackInfo &call) -> Napi::Value {
+               try {
+                 if (call.Length() != 1 || !call[0].IsArray())
+                   throw std::runtime_error("Expected an array of symbolic dimension equalities.");
+                 const auto entries = call[0].As<Napi::Array>();
+                 if (!entries.Length())
+                   throw std::runtime_error("Choose at least one symbolic dimension equality.");
+                 DimensionMapping mapping;
+                 for (uint32_t index = 0; index < entries.Length(); ++index) {
+                   const auto entry = entries.Get(index);
+                   if (!entry.IsObject() || entry.IsArray())
+                     throw std::runtime_error(
+                         "Expected source and target symbolic dimension names.");
+                   const auto equality = entry.As<Napi::Object>();
+                   AddDimensionEquality(mapping, equality.Get("source"), equality.Get("target"));
+                 }
+                 for (const auto &[source, target] : mapping)
+                   if (mapping.contains(target))
+                     throw std::runtime_error(
+                         "Each replaced dimension must have one canonical name to keep.");
+                 return MergeDimensionMapping(call.Env(), model, mapping);
+               } catch (const std::exception &error) {
+                 Napi::Error::New(call.Env(), error.what()).ThrowAsJavaScriptException();
+                 return call.Env().Undefined();
+               }
+             }));
   result.Set("dimensionPrefix",
              Napi::Function::New(env, [model](const Napi::CallbackInfo &call) -> Napi::Value {
                try {

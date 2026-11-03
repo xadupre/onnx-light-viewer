@@ -8000,6 +8000,22 @@ test("Symbolic applies a batch of equivalences together and rejects invalid grou
   await extension.receive({ type: "shorten-dimensions" });
   assert.equal(extension.messages.at(-1).type, "dimension-info");
   const names = extension.messages.at(-1).names;
+  await extension.receive({
+    type: "preview-fusion",
+    pattern: "TransposeTranspose",
+    requestId: 1,
+  });
+  const preview = extension.messages.at(-1);
+  assert.equal(preview.type, "fusion-preview");
+  await extension.receive({
+    type: "apply-fusion",
+    previewId: preview.previewId,
+    candidates: [0],
+    requestId: 2,
+  });
+  assert.equal(extension.messages.at(-1).type, "fusion-info");
+  await extension.receive({ type: "undo-fusion" });
+  assert.ok(extension.messages.at(-1).file.pendingRewritings.length);
   const equalities = [
     { source: "batch", target: "sequence_len" },
     { source: "past_sequence_len", target: "sequence_len" },
@@ -8024,6 +8040,10 @@ test("Symbolic applies a batch of equivalences together and rejects invalid grou
   assert.deepEqual(result.equalities, equalities);
   assert.deepEqual(result.names, ["sequence_len"]);
   assert.deepEqual(original.symbolicDimensions(), originalNames);
+  await extension.receive({ type: "replay-rewritings", requestId: 3 });
+  assert.equal(extension.messages.at(-1).type, "optimization-info");
+  await extension.receive({ type: "symbolic-dimensions", requestId: 4 });
+  assert.deepEqual(extension.messages.at(-1).names, ["sequence_len"]);
   await extension.receive({ type: "navigate", path: [{ function: 0 }] });
   assert.deepEqual(
     extension.messages.at(-1).graph.tensors.find(({ name }) => name === "fx")

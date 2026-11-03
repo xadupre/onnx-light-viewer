@@ -14,6 +14,20 @@ namespace {
 namespace viewer = onnx_light_viewer;
 namespace ol = viewer::ol;
 
+Napi::Value SnapshotDepth(const Napi::CallbackInfo &info) {
+  void *wrapped = nullptr;
+  if (info.Length() != 1 || !info[0].IsObject() ||
+      napi_unwrap(info.Env(), info[0], &wrapped) != napi_ok || !wrapped) {
+    Napi::Error::New(info.Env(), "Expected a native model handle.").ThrowAsJavaScriptException();
+    return info.Env().Undefined();
+  }
+  const auto &model = *static_cast<std::shared_ptr<viewer::StoredModel> *>(wrapped);
+  size_t depth = 0;
+  for (auto source = model->backing; source; source = source->backing)
+    ++depth;
+  return Napi::Number::New(info.Env(), depth);
+}
+
 Napi::Value TensorVisits(const Napi::CallbackInfo &info) {
   ol::ModelProto model;
   auto &layout = *model.add_struct_types();
@@ -221,6 +235,7 @@ Napi::Value TraceRewritings(const Napi::CallbackInfo &info) {
 }
 
 Napi::Object Init(Napi::Env env, Napi::Object exports) {
+  exports.Set("snapshotDepth", Napi::Function::New(env, SnapshotDepth));
   exports.Set("traceRewritings", Napi::Function::New(env, TraceRewritings));
   exports.Set("rewritingPlans", Napi::Function::New(env, RewritingPlans));
   exports.Set("captureRewritingPlans", Napi::Function::New(env, CaptureRewritingPlans));

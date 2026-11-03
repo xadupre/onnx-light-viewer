@@ -1,4 +1,5 @@
 import type {
+  DimensionEquality,
   DimensionMerge,
   DimensionRename,
   FusionDiagnostic,
@@ -96,7 +97,7 @@ export class PipelineModel implements NativeModel {
     private readonly previous?: PipelineModel,
     private readonly fusionOrder: PipelineRole[] = [],
     private readonly undoDimensionEdits: readonly (
-      string | { source: string; target: string }
+      string | readonly DimensionEquality[]
     )[] = [],
   ) {}
 
@@ -183,24 +184,29 @@ export class PipelineModel implements NativeModel {
     source: string,
     target: string,
   ) => DimensionMerge<PipelineModel> = (source, target) => {
+    return this.mergeDimensionsBatch([{ source, target }]);
+  };
+
+  mergeDimensionsBatch: (
+    equalities: readonly DimensionEquality[],
+  ) => DimensionMerge<PipelineModel> = (equalities) => {
+    const edits = equalities.map(({ source, target }) => ({ source, target }));
     let count = 0;
     const models: Partial<Record<PipelineRole, NativeModel>> = {};
     for (const [role, model] of this.stages()) {
-      const edited = model.mergeDimensions(source, target);
+      const edited = model.mergeDimensionsBatch(edits);
       models[role] = edited.model;
       count += edited.count;
     }
     return {
-      model: count
-        ? new PipelineModel(
-            this.data,
-            this.fileName,
-            models,
-            this.previous,
-            this.fusionOrder,
-            [...this.undoDimensionEdits, { source, target }],
-          )
-        : this.clone(),
+      model: new PipelineModel(
+        this.data,
+        this.fileName,
+        models,
+        this.previous,
+        this.fusionOrder,
+        count ? [...this.undoDimensionEdits, edits] : this.undoDimensionEdits,
+      ),
       count,
     };
   };
@@ -256,7 +262,7 @@ export class PipelineModel implements NativeModel {
       restored =
         typeof edit === "string"
           ? restored.shortenDimensionNames(edit).model
-          : restored.mergeDimensions(edit.source, edit.target).model;
+          : restored.mergeDimensionsBatch(edit).model;
     return restored;
   };
 

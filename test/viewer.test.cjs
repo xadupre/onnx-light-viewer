@@ -176,11 +176,18 @@ test("Symbolic lists safe labels, declares equalities and discards stale lists",
   const rows = [...byId("symbolic-dimensions").children];
   assert.ok(rows.every((row) => row.children[1].textContent === "="));
   rows[1].querySelector("button").click();
+  rows[0].querySelector(".dimension-drop").focus();
   rows[0]
     .querySelector(".dimension-drop")
     .dispatchEvent(
       new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
     );
+  assert.equal(
+    document.activeElement,
+    byId("symbolic-dimensions").firstElementChild.querySelector(
+      ".dimension-drop",
+    ),
+  );
   assert.equal(messages.at(-1), listing);
   assert.equal(byId("merge-dimensions").disabled, false);
   byId("merge-dimensions").click();
@@ -283,7 +290,13 @@ test("Symbolic drag-and-drop groups equivalences, resets and rejects stale or bu
   assert.equal(byId("symbolic-dimensions").children.length, 4);
   assert.equal(byId("merge-dimensions").disabled, true);
   drag("b", "a");
-  drag("d", "c");
+  button("d").click();
+  const destination = zone("c");
+  destination.focus();
+  destination.dispatchEvent(
+    new window.KeyboardEvent("keydown", { key: " ", bubbles: true }),
+  );
+  assert.equal(document.activeElement, zone("c"));
   byId("merge-dimensions").click();
   assert.deepEqual(JSON.parse(JSON.stringify(messages.at(-1).equalities)), [
     { source: "b", target: "a" },

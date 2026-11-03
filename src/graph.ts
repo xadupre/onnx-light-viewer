@@ -449,6 +449,10 @@ export interface NativeModel {
   symbolicDimensions(): string[];
   /** Renames a dimension, including in expressions, throughout a snapshot and its undo lineage. */
   mergeDimensions(source: string, target: string): DimensionMerge;
+  /** Applies a complete source-to-canonical mapping in one snapshot traversal. */
+  mergeDimensionsBatch(
+    equalities: readonly DimensionEquality[],
+  ): DimensionMerge;
   /** Edits dimension labels on an independent snapshot, retaining edits through undo and Save. */
   shortenDimensionNames(prefix?: string): DimensionRename;
   /** Inspects stored data without execution; optionally returns values instead of statistics below 32 elements. */
@@ -577,6 +581,11 @@ export interface NativeModel {
   metadata(path?: GraphPath): GraphMetadata;
   /** Checks the entire retained model, or every pipeline stage, without editing it. */
   verify(): void;
+}
+
+export interface DimensionEquality {
+  source: string;
+  target: string;
 }
 
 export interface DimensionMerge<Model extends NativeModel = NativeModel> {

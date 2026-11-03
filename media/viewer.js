@@ -1143,12 +1143,17 @@ function moveSymbolicDimension(source, target) {
       dimensionEquivalences.set(name, target);
   selectedSymbolicDimension = undefined;
   draggedSymbolicDimension = undefined;
-  renderDimensionEquivalences();
+  renderDimensionEquivalences(
+    byId("symbolic-dimensions").contains(document.activeElement)
+      ? target
+      : undefined,
+  );
 }
 
-function renderDimensionEquivalences() {
+function renderDimensionEquivalences(focusTarget) {
   const list = byId("symbolic-dimensions");
   list.replaceChildren();
+  let destination;
   const dimensionButton = (name) => {
     const button = document.createElement("button");
     button.type = "button";
@@ -1194,6 +1199,7 @@ function renderDimensionEquivalences() {
     equal.textContent = "=";
     equal.setAttribute("aria-hidden", "true");
     const zone = document.createElement("div");
+    if (name === focusTarget) destination = zone;
     zone.className = "dimension-drop";
     zone.setAttribute("role", "group");
     zone.setAttribute("aria-label", `Dimensions equal to ${name}`);
@@ -1234,6 +1240,7 @@ function renderDimensionEquivalences() {
     list.append(item);
   }
   updateDimensionEnabled();
+  destination?.focus();
 }
 
 function requestSymbolicDimensions() {
