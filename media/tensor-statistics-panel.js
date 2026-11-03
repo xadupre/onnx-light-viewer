@@ -210,6 +210,27 @@ function createTensorStatisticsPanel({ byId, postMessage }) {
       ? `Heatmap: blue (low) ${low} → red (high) ${high}. Gray: non-finite. SDK 32 × 32 summary${execution ? " of the executed tensor" : ", not model execution"}.`
       : "Heatmap unavailable: no finite values. Gray: non-finite.";
     const heatmapFigure = figure("Heatmap — SDK 32 × 32 summary", heatmap);
+    if (values.length) {
+      const rows =
+        statistics.shape.length >= 2 ? BigInt(statistics.shape[0]) : 1n;
+      const columns =
+        statistics.shape.length >= 2
+          ? statistics.shape
+              .slice(1)
+              .reduce((size, dimension) => size * BigInt(dimension), 1n)
+          : BigInt(statistics.count);
+      function pixelSpan(size) {
+        const whole = size / 32n;
+        const fraction = Number(size % 32n) / 32;
+        return fraction
+          ? `${whole}${String(fraction).slice(1)}`
+          : String(whole);
+      }
+      const pixelSize = document.createElement("p");
+      pixelSize.className = "tensor-statistics-pixel-size";
+      pixelSize.textContent = `Pixel shape: [${pixelSpan(rows)}, ${pixelSpan(columns)}]`;
+      heatmapFigure.append(pixelSize);
+    }
     heatmapFigure.append(legend);
     charts.append(
       figure("Histogram — values per bin", histogram),

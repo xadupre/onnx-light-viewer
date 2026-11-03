@@ -155,24 +155,46 @@ test("Symbolic lists safe labels, declares equalities and discards stale lists",
   assert.equal(byId("merge-dimensions").disabled, true);
   load(demoGraph);
   byId("show-symbolic").click();
+  assert.equal(byId("merge-dimensions-form").hidden, true);
+  assert.equal(
+    messages.some(({ type }) => type === "symbolic-dimensions"),
+    false,
+  );
+  byId("edit-dimensions").click();
+  assert.equal(byId("edit-dimensions").getAttribute("aria-expanded"), "true");
   const listing = messages.at(-1);
   assert.equal(listing.type, "symbolic-dimensions");
   send({ ...listing, names });
   assert.deepEqual(
-    [...byId("symbolic-dimensions").children].map((item) => item.textContent),
+    [...byId("symbolic-dimensions").querySelectorAll(".dimension-name")].map(
+      (item) => item.textContent,
+    ),
     names,
   );
   assert.equal(byId("symbolic-dimensions").querySelector("img"), null);
-  assert.equal(byId("merge-dimensions").disabled, false);
-  byId("dimension-target").value = "batch";
-  byId("dimension-target").dispatchEvent(new window.Event("change"));
   assert.equal(byId("merge-dimensions").disabled, true);
-  byId("dimension-source").value = "batch_size";
-  byId("dimension-source").dispatchEvent(new window.Event("change"));
+  const rows = [...byId("symbolic-dimensions").children];
+  assert.ok(rows.every((row) => row.children[1].textContent === "="));
+  rows[1].querySelector("button").click();
+  rows[0].querySelector(".dimension-drop").focus();
+  rows[0]
+    .querySelector(".dimension-drop")
+    .dispatchEvent(
+      new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+    );
+  assert.equal(
+    document.activeElement,
+    byId("symbolic-dimensions").firstElementChild.querySelector(
+      ".dimension-drop",
+    ),
+  );
+  assert.equal(messages.at(-1), listing);
+  assert.equal(byId("merge-dimensions").disabled, false);
   byId("merge-dimensions").click();
   assert.equal(messages.at(-1).type, "merge-dimensions");
-  assert.equal(messages.at(-1).source, "batch_size");
-  assert.equal(messages.at(-1).target, "batch");
+  assert.deepEqual(JSON.parse(JSON.stringify(messages.at(-1).equalities)), [
+    { source: "batch_size", target: "batch" },
+  ]);
   assert.equal(byId("merge-dimensions").disabled, true);
   send({ ...listing, names: ["stale"] });
   assert.equal(
@@ -181,14 +203,13 @@ test("Symbolic lists safe labels, declares equalities and discards stale lists",
   );
   send({
     type: "dimension-info",
-    source: "batch_size",
-    target: "batch",
+    equalities: [{ source: "batch_size", target: "batch" }],
     count: 2,
     names: ["batch"],
   });
   assert.match(
     byId("dimension-status").textContent,
-    /Replaced "batch_size" with "batch"/,
+    /Applied 1 dimension equivalence/,
   );
   assert.equal(byId("merge-dimensions").disabled, true);
   load(demoGraph);
@@ -213,6 +234,7 @@ test("Symbolic reloads labels after a cancelled Open or a graph arriving before 
     window.dispatchEvent(new window.MessageEvent("message", { data }));
   load(demoGraph);
   document.getElementById("show-symbolic").click();
+  document.getElementById("edit-dimensions").click();
   for (const status of ["CANCELLED", "SUCCEEDED"]) {
     send({ ...messages.at(-1), names: ["batch", "batch_size"] });
     document.getElementById("open-model").click();
@@ -228,8 +250,71 @@ test("Symbolic reloads labels after a cancelled Open or a graph arriving before 
     send({ type: "log-entry", entry: { ...entry, status } });
     assert.equal(messages.at(-1).type, "symbolic-dimensions");
     send({ ...messages.at(-1), names: ["batch", "batch_size"] });
-    assert.equal(document.getElementById("merge-dimensions").disabled, false);
+    assert.equal(document.getElementById("merge-dimensions").disabled, true);
+    assert.equal(document.querySelector(".dimension-name").disabled, false);
   }
+});
+
+test("Symbolic drag-and-drop groups equivalences, resets and rejects stale or busy drags", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const byId = (id) => document.getElementById(id);
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  const button = (name) =>
+    [...byId("symbolic-dimensions").querySelectorAll(".dimension-name")].find(
+      (button) => button.textContent === name,
+    );
+  const zone = (name) =>
+    button(name).parentElement.querySelector(".dimension-drop");
+  const drag = (source, target) => {
+    const dataTransfer = { setData() {}, effectAllowed: "", dropEffect: "" };
+    for (const [element, type] of [
+      [button(source), "dragstart"],
+      [zone(target), "dragover"],
+      [zone(target), "drop"],
+    ]) {
+      const event = new window.Event(type, { bubbles: true, cancelable: true });
+      Object.defineProperty(event, "dataTransfer", { value: dataTransfer });
+      element.dispatchEvent(event);
+    }
+  };
+  load(demoGraph);
+  byId("show-symbolic").click();
+  byId("edit-dimensions").click();
+  send({ ...messages.at(-1), names: ["a", "b", "c", "d"] });
+  drag("b", "a");
+  drag("a", "c");
+  assert.equal(zone("c").textContent, "ab");
+  assert.equal(byId("symbolic-dimensions").children.length, 2);
+  byId("reset-dimensions").click();
+  assert.equal(byId("symbolic-dimensions").children.length, 4);
+  assert.equal(byId("merge-dimensions").disabled, true);
+  drag("b", "a");
+  button("d").click();
+  const destination = zone("c");
+  destination.focus();
+  destination.dispatchEvent(
+    new window.KeyboardEvent("keydown", { key: " ", bubbles: true }),
+  );
+  assert.equal(document.activeElement, zone("c"));
+  byId("merge-dimensions").click();
+  assert.deepEqual(JSON.parse(JSON.stringify(messages.at(-1).equalities)), [
+    { source: "b", target: "a" },
+    { source: "d", target: "c" },
+  ]);
+  drag("a", "c");
+  assert.equal(byId("symbolic-dimensions").children.length, 2);
+  send({ type: "dimension-error", error: "SDK error" });
+  assert.equal(byId("merge-dimensions").disabled, false);
+  assert.match(byId("dimension-status").textContent, /SDK error/);
+  byId("edit-dimensions").click();
+  assert.equal(byId("merge-dimensions-form").hidden, true);
+  assert.equal(byId("symbolic-dimensions").children.length, 0);
+  byId("edit-dimensions").click();
+  const listing = messages.at(-1);
+  load(demoGraph);
+  send({ ...listing, names: ["stale"] });
+  assert.equal(byId("symbolic-dimensions").children.length, 0);
 });
 
 test("Symbolic edits preserve graph view, fusion undo and pending rewritings", async (t) => {
@@ -1875,6 +1960,10 @@ test("tensor statistics lazily browses selection, renders SDK summaries and cach
     /-2 to 0: 2 values/,
   );
   assert.match(content.textContent, /blue \(low\).*red \(high\)/);
+  assert.equal(
+    content.querySelector(".tensor-statistics-pixel-size").textContent,
+    "Pixel shape: [0.0625, 0.09375]",
+  );
   const summary = content.querySelector(".status-details");
   const details = content.querySelector(".tensor-statistics-details");
   const quartiles = content.querySelector(".tensor-statistics-quartiles");
@@ -1952,6 +2041,45 @@ test("tensor statistics lazily browses selection, renders SDK summaries and cach
   assert.match(content.textContent, /Average0.5/);
   inspectTensor(document, "other-weight");
   assert.equal(requests().length, 3, "failures are not cached");
+});
+
+test("tensor statistics describes heatmap pixel dimensions for matrices, flattened tensors and vectors exactly", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  for (const [shape, expected] of [
+    [["64", "128"], "Pixel shape: [2, 4]"],
+    [["65", "3", "33"], "Pixel shape: [2.03125, 3.09375]"],
+    [["64"], "Pixel shape: [0.03125, 2]"],
+    [["9007199254740993", "32"], "Pixel shape: [281474976710656.03125, 1]"],
+    [["0", "8"], undefined],
+  ]) {
+    load(weightsGraph());
+    document.getElementById("tensors-tab").click();
+    inspectTensor(document, "weight");
+    const count = shape.reduce(
+      (size, dimension) => size * BigInt(dimension),
+      1n,
+    );
+    window.dispatchEvent(
+      new window.MessageEvent("message", {
+        data: {
+          type: "tensor-statistics-info",
+          requestId: messages.at(-1).requestId,
+          statistics: {
+            ...tensorStatistics(),
+            shape,
+            count: String(count),
+            ...(count === 0n ? { rectangleMap: [], rectangleShape: [] } : {}),
+          },
+        },
+      }),
+    );
+    const description = document.querySelector(".tensor-statistics-pixel-size");
+    if (expected === undefined) {
+      assert.equal(description, null);
+    } else {
+      assert.equal(description.textContent, expected);
+    }
+  }
 });
 
 test("tensor statistics ignores changed names, close, Escape, reload and navigation responses", (t) => {
@@ -2274,6 +2402,8 @@ test("tensor statistics renders non-finite scalar summaries safely and invalidat
   const request = messages.find((m) => m.type === "tensor-statistics");
   const statistics = {
     ...tensorStatistics(),
+    shape: [],
+    count: "1",
     min: "-Infinity",
     max: "Infinity",
     mean: "NaN",
@@ -2298,6 +2428,12 @@ test("tensor statistics renders non-finite scalar summaries safely and invalidat
     /MaximumInfinity/,
   );
   assert.doesNotMatch(byId("tensor-statistics-content").innerHTML, /hsl\(NaN/);
+  assert.equal(
+    byId("tensor-statistics-content").querySelector(
+      ".tensor-statistics-pixel-size",
+    ).textContent,
+    "Pixel shape: [0.03125, 0.03125]",
+  );
   window.dispatchEvent(
     new window.MessageEvent("message", {
       data: { type: "load-state", pending: true },

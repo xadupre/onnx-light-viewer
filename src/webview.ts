@@ -213,18 +213,18 @@ export function webviewHtml(
               <button id="refresh-positions" class="icon-button" disabled title="Restore the hierarchical layout and reset manually moved positions" aria-label="Refresh node positions">${refreshIcon}Refresh positions</button>
               <button id="verify-model" class="icon-button" disabled title="Verify the entire model or all pipeline stages with onnx-light, without changing them" aria-label="Verify model" aria-describedby="verify-status"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg>Verify</button>
               <button id="shorten-dimensions" class="icon-button" disabled title="Remove the shared namespace prefix from dynamic dimension names in the model; Save keeps these edits" aria-describedby="dimension-status">Shorten dimension names</button>
+              <button id="edit-dimensions" class="icon-button" disabled aria-expanded="false" aria-controls="merge-dimensions-form">Make dimensions equivalent</button>
             </div>
             <p>Remove the common prefix from dynamic dimensions, for example component.model.batch becomes batch. Save keeps the renamed dimensions.</p>
-            <h3>Symbolic dimensions</h3>
-            <p id="symbolic-dimensions-status" role="status">Open this panel with a model loaded to list its symbolic dimensions.</p>
-            <ul id="symbolic-dimensions"></ul>
-            <form id="merge-dimensions-form">
-              <p>Declare two dimensions equal by replacing one name everywhere with the name to keep. This changes stored labels, not symbolic expressions. Save keeps the edit.</p>
-              <label for="dimension-source">Replace</label>
-              <select id="dimension-source" disabled></select>
-              <label for="dimension-target">Keep</label>
-              <select id="dimension-target" disabled></select>
-              <button id="merge-dimensions" type="submit" disabled aria-describedby="dimension-status">Declare equal</button>
+            <form id="merge-dimensions-form" hidden>
+              <h3>Symbolic dimensions</h3>
+              <p>Drag a dimension to the right of the equals sign on the line of the name to keep. Or select a dimension, then its destination. Apply replaces these names throughout the model, including in expressions. Save keeps the edit.</p>
+              <p id="symbolic-dimensions-status" role="status"></p>
+              <ul id="symbolic-dimensions"></ul>
+              <div class="symbolic-actions">
+                <button id="merge-dimensions" type="submit" disabled aria-describedby="dimension-status">Apply replacements</button>
+                <button id="reset-dimensions" type="button" disabled>Reset equivalences</button>
+              </div>
             </form>
             <p id="shape-status" role="status"></p>
             <p id="metadata-status" role="status"></p>

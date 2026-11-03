@@ -23,6 +23,7 @@ const {
   rewritingPlans,
   captureRewritingPlans,
   traceRewritings,
+  snapshotDepth,
 } = require("../build/native/Release/test_model_storage.node");
 const {
   decodeGraph,
@@ -113,33 +114,29 @@ function memoryTestModel(
   );
 }
 
-test("lists and merges exact symbolic labels without changing the original or other dimensions", async () => {
+test("lists atomic dimensions and replaces their occurrences inside expressions without changing the original", async () => {
   const original = memoryTestModel([
     "batch",
     "batch_size",
-    "batch + 1",
+    "batch_size + batch + 1",
     8,
     null,
   ]);
-  assert.deepEqual(original.symbolicDimensions(), [
-    "batch",
-    "batch + 1",
-    "batch_size",
-  ]);
+  assert.deepEqual(original.symbolicDimensions(), ["batch", "batch_size"]);
   const before = Buffer.from(await original.serialize());
   const edited = original.mergeDimensions("batch_size", "batch");
-  assert.equal(edited.count, 2);
-  assert.deepEqual(edited.model.symbolicDimensions(), ["batch", "batch + 1"]);
+  assert.equal(edited.count, 4);
+  assert.deepEqual(edited.model.symbolicDimensions(), ["batch"]);
   assert.deepEqual(edited.model.graph().tensors[0].shape, [
     "batch",
     "batch",
-    "batch + 1",
+    "batch+batch+1",
     "8",
     "?",
   ]);
   assert.deepEqual(Buffer.from(await original.serialize()), before);
   const reloaded = loadModel(await edited.model.serialize(), "merged.onnx");
-  assert.deepEqual(reloaded.symbolicDimensions(), ["batch", "batch + 1"]);
+  assert.deepEqual(reloaded.symbolicDimensions(), ["batch"]);
   reloaded.verify();
   for (const args of [
     [],
@@ -155,6 +152,15 @@ test("lists and merges exact symbolic labels without changing the original or ot
   assert.equal(unchanged.count, 0);
   assert.deepEqual(unchanged.model.graph(), original.graph());
   assert.deepEqual(memoryTestModel([8, null]).symbolicDimensions(), []);
+  const distinct = memoryTestModel([
+    "batch",
+    "batch_size",
+    "batch + batch_size",
+  ]);
+  assert.deepEqual(
+    distinct.mergeDimensions("batch", "n").model.graph().tensors[0].shape,
+    ["n", "batch_size", "n+batch_size"],
+  );
 });
 
 test("symbolic listing reads nested-only metadata without changing the model", async () => {
@@ -213,6 +219,38 @@ test("symbolic listing reads nested-only metadata without changing the model", a
       "root",
     ]);
   assert.deepEqual(Buffer.from(await model.serialize()), before);
+});
+
+test("batch dimension equalities retain one snapshot generation and replace expressions together", async () => {
+  const dimensions = Array.from({ length: 1000 }, (_, i) => `d${i}`);
+  const original = memoryTestModel(["keep", ...dimensions, "d0 + d1 + d2"]);
+  const equalities = dimensions.map((source) => ({ source, target: "keep" }));
+  const before = Buffer.from(await original.serialize());
+  const edited = original.mergeDimensionsBatch(equalities);
+  assert.equal(edited.count, 2002);
+  assert.equal(snapshotDepth(edited.model), snapshotDepth(original) + 1);
+  assert.deepEqual(edited.model.symbolicDimensions(), ["keep"]);
+  assert.deepEqual(edited.model.graph().tensors[0].shape, [
+    "keep",
+    ...dimensions.map(() => "keep"),
+    "keep+keep+keep",
+  ]);
+  assert.deepEqual(Buffer.from(await original.serialize()), before);
+  const reloaded = loadModel(await edited.model.serialize(), "batch.onnx");
+  assert.deepEqual(reloaded.symbolicDimensions(), ["keep"]);
+  for (const invalid of [
+    null,
+    [],
+    [null],
+    [{ source: "d0", target: "" }],
+    [{ source: "d0", target: "d0" }],
+    [equalities[0], equalities[0]],
+    [
+      { source: "d0", target: "d1" },
+      { source: "d1", target: "keep" },
+    ],
+  ])
+    assert.throws(() => original.mergeDimensionsBatch(invalid), /dimension/i);
 });
 
 test("symbolic equality edits include nested metadata, fusion undo and canonical Save", async () => {
@@ -295,6 +333,55 @@ test("pipeline symbolic equalities span stages and survive undo, shortening and 
   edited.graph(true, staticPath);
   assert.deepEqual(original.graph(false, staticPath), before);
   assert.ok(original.symbolicDimensions().includes(source));
+});
+
+test("pipeline batch equalities survive nested metadata, undo and Save without retaining caller mutations", async () => {
+  const stage = loadModel(
+    modelBytes("prefixed-dimensions.onnx"),
+    "prefill",
+  ).shortenDimensionNames().model;
+  const original = loadModel(
+    pipelineBytes({
+      embedding: await memoryTestModel(["batch", "sequence_len"]).serialize(),
+      prefill: await stage.serialize(),
+    }),
+    "batch.pipe-onnx",
+  );
+  const path = [{ pipeline: "prefill" }];
+  const preview = await original.previewFusion(
+    "TransposeTranspose",
+    undefined,
+    path,
+  );
+  const fused = await preview.model.applyFusion(
+    "TransposeTranspose",
+    [preview.matches[0].anchor],
+    path,
+  );
+  const equalities = [
+    { source: "past_sequence_len", target: "batch" },
+    { source: "sequence_len", target: "batch" },
+  ];
+  const edited = fused.mergeDimensionsBatch(equalities).model;
+  equalities[0].target = "wrong";
+  equalities.push({ source: "batch", target: "wrong" });
+  for (const model of [edited, edited.undoFusion()]) {
+    assert.deepEqual(model.symbolicDimensions(), ["batch"]);
+    assert.deepEqual(
+      model
+        .graph(false, [...path, { function: 0 }])
+        .tensors.find(({ name }) => name === "fx").shape,
+      ["batch", "batch+batch"],
+    );
+    const saved = loadModel(await model.serialize(), "batch.pipe-onnx");
+    assert.deepEqual(saved.symbolicDimensions(), ["batch"]);
+    saved.verify();
+  }
+  assert.deepEqual(original.symbolicDimensions(), [
+    "batch",
+    "past_sequence_len",
+    "sequence_len",
+  ]);
 });
 
 test("shortens symbolic dimension prefixes throughout model metadata and saves the edit", async () => {
