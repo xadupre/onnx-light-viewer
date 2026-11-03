@@ -545,7 +545,12 @@ test("a fresh validated prompt does not reuse a previous generation's captured p
   const extension = await openExtension(undefined, undefined, true);
   t.after(() => extension.dispose());
   await extension.resolveCustomEditor(model);
-  const options = { engine: "onnxruntime-genai", prompt: "H", maxTokens: 1 };
+  const options = {
+    engine: "onnxruntime-genai",
+    prompt: "H",
+    maxTokens: 1,
+    sessionSettings: { profile: true },
+  };
   await extension.receive({
     type: "run-prompt",
     requestId: 1,
@@ -553,6 +558,14 @@ test("a fresh validated prompt does not reuse a previous generation's captured p
     options,
   });
   assert.equal(extension.messages.at(-1).type, "prompt-result");
+  const result = extension.messages.at(-1).result;
+  assert.ok(result.profiling.nodes.length > 0);
+  assert.equal(result.profiling.trace, undefined);
+  const profiles = await readdir(result.profileDirectory);
+  const trace = JSON.parse(
+    await readFile(path.join(result.profileDirectory, profiles[0]), "utf8"),
+  );
+  assert.ok(trace.some((event) => event.cat === "Node"));
   const nativeEvents = extension.messages.filter(({ type }) =>
     ["prompt-lifecycle", "prompt-token"].includes(type),
   ).length;

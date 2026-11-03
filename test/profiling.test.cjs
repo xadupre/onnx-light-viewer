@@ -1,6 +1,42 @@
 const assert = require("node:assert/strict");
+const { execFileSync } = require("node:child_process");
 const { test } = require("node:test");
 const { summarizeProfile } = require("../media/profiling.cjs");
+
+test("deeply nested profiles aggregate repeated scopes within a bounded heap", () => {
+  const nodes = JSON.parse(
+    execFileSync(
+      process.execPath,
+      [
+        "--max-old-space-size=64",
+        "-e",
+        `
+const { summarizeProfile } = require(process.argv[1]);
+const trace = [];
+for (let run = 0; run < 2; run++)
+  for (let branch = 0; branch < 2; branch++)
+    for (let depth = 0; depth < 64; depth++)
+      trace.push({
+        cat: "Node",
+        name: (depth === 0 ? "branch" + branch : "nested") + "_kernel_time",
+        ts: run * 1000 + branch * 300 + depth,
+        dur: 256 - depth * 2,
+        args: { op_name: depth === 63 ? "Relu" : "If", node_index: 0 },
+      });
+console.log(JSON.stringify(summarizeProfile(trace).nodes));
+`,
+        require.resolve("../media/profiling.cjs"),
+      ],
+      { encoding: "utf8", timeout: 10000 },
+    ),
+  );
+  assert.equal(nodes.length, 128);
+  assert.ok(nodes.every((node) => node.calls === 2));
+  const leaves = nodes.filter((node) => node.op === "Relu");
+  assert.equal(leaves.length, 2);
+  assert.ok(leaves[0].name.startsWith("branch0 [node 0] / "));
+  assert.ok(leaves[1].name.startsWith("branch1 [node 0] / "));
+});
 
 test("GenAI profile summaries preserve graph-local identities and repeated calls", () => {
   const event = (name, index, ts, dur, op = "Relu", tid = 1) => ({

@@ -1748,7 +1748,12 @@ async function configurePanel(
               await postMessage({
                 type: "prompt-result",
                 requestId: message.requestId,
-                result,
+                result: {
+                  ...result,
+                  profiling: result.profiling
+                    ? { nodes: result.profiling.nodes }
+                    : undefined,
+                },
               });
             }
           }

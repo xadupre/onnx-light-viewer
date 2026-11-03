@@ -35,25 +35,29 @@ function summarizeProfile(trace) {
     const provider = args.provider ?? "";
     const parent = scopes.at(-1);
     const key = JSON.stringify([
-      parent?.key,
+      parent?.id,
       name,
       op,
       provider,
       args.node_index,
     ]);
-    let node = nodes.get(key);
-    if (!node) {
+    let entry = nodes.get(key);
+    if (!entry) {
       const label =
         args.node_index == null ? name : `${name} [node ${args.node_index}]`;
-      node = {
-        name: parent ? `${parent.name} / ${label}` : label,
-        op,
-        provider,
-        calls: 0,
-        durationUs: 0,
+      entry = {
+        id: nodes.size,
+        node: {
+          name: parent ? `${parent.name} / ${label}` : label,
+          op,
+          provider,
+          calls: 0,
+          durationUs: 0,
+        },
       };
-      nodes.set(key, node);
+      nodes.set(key, entry);
     }
+    const { id, node } = entry;
     node.calls++;
     node.durationUs += event.dur;
     if (
@@ -61,11 +65,13 @@ function summarizeProfile(trace) {
       event.ts != null &&
       event.dur > 0
     )
-      scopes.push({ end, key, name: node.name });
+      scopes.push({ end, id, name: node.name });
   }
   return {
     trace,
-    nodes: [...nodes.values()].sort((a, b) => b.durationUs - a.durationUs),
+    nodes: [...nodes.values()]
+      .map((entry) => entry.node)
+      .sort((a, b) => b.durationUs - a.durationUs),
   };
 }
 
