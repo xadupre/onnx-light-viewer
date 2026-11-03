@@ -3,6 +3,7 @@
 #include <set>
 #include <stdexcept>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace onnx_light_viewer {
 namespace {
@@ -157,20 +158,138 @@ struct DimensionEdit {
   }
 };
 
+class DimensionLabelCollector {
+public:
+  std::set<std::string> names;
+  std::unordered_set<const StoredModel *> visited;
+
+  void Shape(const ol::TensorShapeProto &shape) {
+    for (const auto &dim : shape.dim())
+      if (!dim.dim_param().empty())
+        names.emplace(dim.dim_param());
+  }
+
+  void Type(const ol::TypeProto &type) {
+    if (type.has_tensor_type() && type.tensor_type().has_shape())
+      Shape(type.tensor_type().shape());
+    if (type.has_sparse_tensor_type() && type.sparse_tensor_type().has_shape())
+      Shape(type.sparse_tensor_type().shape());
+    if (type.has_sequence_type() && type.sequence_type().has_elem_type())
+      Type(type.sequence_type().elem_type());
+    if (type.has_optional_type() && type.optional_type().has_elem_type())
+      Type(type.optional_type().elem_type());
+    if (type.has_map_type() && type.map_type().has_value_type())
+      Type(type.map_type().value_type());
+    if (type.has_struct_type())
+      Structure(type.struct_type());
+  }
+
+  void Structure(const ol::StructTypeProto &type) {
+    if (type.has_array() && type.array().has_element_type())
+      Type(type.array().element_type());
+    if (type.has_structure())
+      for (const auto &field : type.structure().field())
+        if (field.has_type())
+          Type(field.type());
+    if (type.has_encoder())
+      Function(type.encoder());
+    if (type.has_decoder())
+      Function(type.decoder());
+  }
+
+  void Attribute(const ol::AttributeProto &attribute) {
+    if (attribute.has_tp())
+      Type(attribute.tp());
+    for (const auto &type : attribute.type_protos())
+      Type(type);
+    if (attribute.has_g())
+      Graph(attribute.g());
+    for (const auto &graph : attribute.graphs())
+      Graph(graph);
+  }
+
+  void Nodes(const ol::utils::RepeatedProtoField<ol::NodeProto> &nodes) {
+    for (const auto &node : nodes) {
+      for (const auto &attribute : node.attribute())
+        Attribute(attribute);
+      for (const auto &configuration : node.device_configurations())
+        for (const auto &spec : configuration.sharding_spec())
+          for (const auto &dim : spec.sharded_dim())
+            for (const auto &sharding : dim.simple_sharding())
+              if (!sharding.dim_param().empty())
+                names.emplace(sharding.dim_param());
+    }
+  }
+
+  void Values(const ol::utils::RepeatedProtoField<ol::ValueInfoProto> &values) {
+    for (const auto &value : values)
+      if (value.has_type())
+        Type(value.type());
+  }
+
+  void Graph(const ol::GraphProto &graph) {
+    Values(graph.input());
+    Values(graph.output());
+    Values(graph.value_info());
+    Nodes(graph.node());
+    for (const auto &initializer : graph.extended_initializer())
+      if (initializer.has_encoded_value()) {
+        const auto &value = initializer.encoded_value();
+        if (value.has_logical_type())
+          Type(value.logical_type());
+        if (value.has_struct_type())
+          Structure(value.struct_type());
+      }
+  }
+
+  void Function(const ol::FunctionProto &function) {
+    Values(function.value_info());
+    Nodes(function.node());
+    for (const auto &attribute : function.attribute_proto())
+      Attribute(attribute);
+  }
+
+  void Plan(const ol::RewritingProto &plan) {
+    for (const auto &function : plan.added_functions())
+      Function(function);
+    for (const auto &edit : plan.rewrites()) {
+      Nodes(edit.added_nodes());
+      Nodes(edit.initializer_calls());
+    }
+  }
+
+  void Stored(const StoredModel &source) {
+    if (!visited.insert(&source).second)
+      return;
+    const auto &model = *source.model;
+    if (model.has_graph())
+      Graph(model.graph());
+    for (const auto &function : model.functions())
+      Function(function);
+    for (const auto &type : model.struct_types())
+      Structure(type);
+    for (const auto &[name, plan] : model.rewritings())
+      Plan(plan);
+    for (const auto &plan : source.fusion_plans)
+      Plan(plan);
+    for (const auto *snapshot :
+         {source.fusion_base.get(), source.fusion_previous.get(), source.rewriting_base.get()})
+      if (snapshot)
+        Stored(*snapshot);
+  }
+};
+
 } // namespace
 
 void AddDimensionMethods(Napi::Env env, Napi::Object result, std::shared_ptr<StoredModel> model) {
   result.Set("symbolicDimensions",
              Napi::Function::New(env, [model](const Napi::CallbackInfo &call) -> Napi::Value {
                try {
-                 DimensionEdit edit;
-                 edit.Copy(model);
-                 std::set<std::string> names;
-                 for (const auto *value : edit.names.values)
-                   names.emplace(value->sv());
-                 auto result = Napi::Array::New(call.Env(), names.size());
+                 DimensionLabelCollector labels;
+                 labels.Stored(*model);
+                 auto result = Napi::Array::New(call.Env(), labels.names.size());
                  uint32_t index = 0;
-                 for (const auto &name : names)
+                 for (const auto &name : labels.names)
                    result.Set(index++, name);
                  return result;
                } catch (const std::exception &error) {

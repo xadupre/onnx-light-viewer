@@ -157,6 +157,64 @@ test("lists and merges exact symbolic labels without changing the original or ot
   assert.deepEqual(memoryTestModel([8, null]).symbolicDimensions(), []);
 });
 
+test("symbolic listing reads nested-only metadata without changing the model", async () => {
+  const value = (name, dimension) =>
+    Buffer.concat([
+      bytesField(1, name),
+      bytesField(
+        2,
+        bytesField(
+          1,
+          Buffer.concat([
+            varintField(1, 1),
+            bytesField(2, bytesField(1, bytesField(2, dimension))),
+          ]),
+        ),
+      ),
+    ]);
+  const source = memoryTestModel(["root"], {
+    nodes: [
+      Buffer.concat([
+        bytesField(1, "x"),
+        bytesField(2, "y"),
+        bytesField(4, "Metadata"),
+        bytesField(7, "example"),
+        bytesField(
+          5,
+          Buffer.concat([
+            bytesField(1, "body"),
+            varintField(20, 5),
+            bytesField(6, bytesField(13, value("nested", "nested_only"))),
+          ]),
+        ),
+      ]),
+    ],
+    extraOpsets: [["example", 1]],
+  });
+  const model = loadModel(
+    Buffer.concat([
+      Buffer.from(await source.serialize()),
+      bytesField(
+        25,
+        Buffer.concat([
+          bytesField(1, "MetadataFunction"),
+          bytesField(10, "example"),
+          bytesField(12, value("function", "function_only")),
+        ]),
+      ),
+    ]),
+    "nested-labels.onnx",
+  );
+  const before = Buffer.from(await model.serialize());
+  for (let index = 0; index < 3; index++)
+    assert.deepEqual(model.symbolicDimensions(), [
+      "function_only",
+      "nested_only",
+      "root",
+    ]);
+  assert.deepEqual(Buffer.from(await model.serialize()), before);
+});
+
 test("symbolic equality edits include nested metadata, fusion undo and canonical Save", async () => {
   const original = loadModel(
     modelBytes("prefixed-dimensions.onnx"),
