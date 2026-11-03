@@ -1536,6 +1536,7 @@ async function configurePanel(
                 requestId: message.requestId,
                 result: {
                   timeMs: result.timeMs,
+                  repeat: result.repeat,
                   lifecycle: result.lifecycle,
                   profiling: result.profiling
                     ? { nodes: result.profiling.nodes }

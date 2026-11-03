@@ -12,6 +12,9 @@ function panel(t) {
   t.after(() => dom.window.close());
   const messages = [];
   dom.window.eval(
+    readFileSync(require.resolve("../media/profiling-panel.js"), "utf8"),
+  );
+  dom.window.eval(
     readFileSync(require.resolve("../media/prompt-panel.js"), "utf8"),
   );
   const byId = (id) => dom.window.document.getElementById(id);
@@ -27,6 +30,160 @@ function panel(t) {
   });
   return { dom, byId, api, messages };
 }
+
+test("Prompt repetitions are bounded, ORT-only and token timings describe the last repetition", (t) => {
+  const { dom, byId, api, messages } = panel(t);
+  const repeat = byId("prompt-repeat");
+  assert.equal(repeat.value, "1");
+  assert.equal(repeat.disabled, true);
+  assert.equal(byId("prompt-repeat-options").hidden, true);
+  api.handleMessage({
+    type: "prompt-info",
+    requestId: messages.at(-1).requestId,
+    info: { available: true, engines: ["onnx-light", "onnxruntime-genai"] },
+  });
+  assert.equal(repeat.disabled, false);
+  assert.equal(byId("prompt-repeat-options").hidden, false);
+  const submit = byId("prompt-form").querySelector('button[type="submit"]');
+  for (const invalid of ["", "0", "101", "1.5"]) {
+    repeat.value = invalid;
+    submit.click();
+    assert.equal(
+      messages.some(({ type }) => type === "run-prompt"),
+      false,
+    );
+  }
+  repeat.value = "100";
+  submit.click();
+  const request = messages.at(-1);
+  assert.equal(request.options.repeat, 100);
+  api.handleMessage({
+    type: "prompt-token",
+    requestId: request.requestId,
+    index: 0,
+    token: { id: 1, text: "last", timeMs: 2, score: 1 },
+  });
+  api.handleMessage({
+    type: "prompt-result",
+    requestId: request.requestId,
+    result: {
+      engine: "onnxruntime-genai",
+      prompt: "test",
+      repeat: 100,
+      tokens: [{ id: 1, text: "last", timeMs: 2, score: 1 }],
+    },
+  });
+  assert.match(
+    byId("prompt-status").textContent,
+    /100 repetitions.*last repetition/,
+  );
+  assert.equal(
+    byId("prompt-results").querySelectorAll(".prompt-token-table tbody tr")[1]
+      .cells.length,
+    2,
+  );
+  byId("prompt-engine").value = "onnx-light";
+  byId("prompt-engine").dispatchEvent(new dom.window.Event("change"));
+  repeat.value = "0";
+  submit.click();
+  assert.equal(messages.at(-1).options.repeat, 1);
+  assert.equal(repeat.disabled, true);
+  assert.equal(byId("prompt-repeat-options").hidden, true);
+});
+
+test("Prompt's direct profiling toggle shares Engine settings, forces release and renders aggregated plots", (t) => {
+  const { dom, byId, api, messages } = panel(t);
+  api.handleMessage({
+    type: "prompt-info",
+    requestId: messages.at(-1).requestId,
+    info: { available: true, engines: ["onnxruntime-genai"] },
+  });
+  const profile = byId("prompt-settings-genai").querySelector(
+    '[data-setting="profile"]',
+  );
+  const toggle = byId("prompt-profile-toggle");
+  assert.equal(profile, byId("prompt-profile"));
+  byId("prompt-keep-loaded").checked = true;
+  toggle.click();
+  assert.equal(profile.checked, true);
+  assert.equal(toggle.getAttribute("aria-pressed"), "true");
+  assert.equal(messages.at(-1).type, "prompt-release");
+  assert.equal(byId("prompt-keep-loaded").disabled, true);
+  assert.match(
+    byId("prompt-profile-help").textContent,
+    /fresh session.*released/,
+  );
+  profile.checked = false;
+  profile.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+  assert.equal(toggle.getAttribute("aria-pressed"), "false");
+  assert.equal(byId("prompt-keep-loaded").disabled, false);
+  toggle.click();
+  byId("prompt-form").querySelector('button[type="submit"]').click();
+  const request = messages.at(-1);
+  assert.equal(request.options.sessionSettings.profile, true);
+  assert.equal(request.options.keepLoaded, false);
+  api.handleMessage({
+    type: "prompt-result",
+    requestId: request.requestId,
+    result: {
+      engine: "onnxruntime-genai",
+      prompt: "test",
+      tokens: [],
+      profiling: {
+        trace: [],
+        nodes: [
+          {
+            name: "<script>unsafe</script>",
+            op: "Add",
+            provider: "CPU",
+            calls: 2,
+            durationUs: 2000,
+          },
+          {
+            name: "second",
+            op: "Add",
+            provider: "CPU",
+            calls: 1,
+            durationUs: 1000,
+          },
+          {
+            name: "third",
+            op: "Relu",
+            provider: "CPU",
+            calls: 1,
+            durationUs: 1500,
+          },
+        ],
+      },
+    },
+  });
+  const plots = byId("prompt-results").querySelectorAll('svg[role="img"]');
+  assert.equal(plots.length, 2);
+  assert.equal(plots[0].querySelectorAll("rect").length, 3);
+  assert.equal(plots[1].querySelectorAll("rect").length, 2);
+  assert.match(
+    plots[1].querySelector("desc").textContent,
+    /^Add: 3.000 ms; Relu: 1.500 ms$/,
+  );
+  assert.deepEqual(
+    [...plots[1].querySelectorAll("rect")].map((bar) =>
+      bar.getAttribute("width"),
+    ),
+    ["310", "155"],
+  );
+  assert.equal(byId("prompt-results").querySelector("script"), null);
+  assert.match(
+    byId("prompt-results").textContent,
+    /profiling totals include warmup \(one input token and one generation step\) plus all repetitions/,
+  );
+  assert.match(
+    byId("prompt-profile-help").textContent,
+    /warmup \(one input token and one generation step\) plus all repetitions/,
+  );
+  assert.match(plots[0].querySelector("title").textContent, /<script>unsafe/);
+  api.reset();
+  assert.equal(byId("prompt-results").querySelector("svg"), null);
+});
 
 test("ONNX Runtime settings send diagnostics and predefined session options", (t) => {
   const { dom, byId, api, messages } = panel(t);

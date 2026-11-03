@@ -169,12 +169,15 @@ test("Run profiling displays summaries and saves a host-owned Chrome trace", asy
     requestId: 1,
     engine: "onnxruntime",
     settings: { enableProfiling: true },
+    repeat: 3,
     inputs: ["float[1,3] input = {-1, 0, 2}"],
   };
   await extension.receive(request);
   const message = extension.messages.at(-1);
   assert.equal(message.type, "run-result");
+  assert.equal(message.result.repeat, 3);
   assert.ok(message.result.profiling.nodes.length > 0);
+  assert.equal(message.result.profiling.nodes[0].calls, 3);
   assert.equal(message.result.profiling.trace, undefined);
   const file = path.join(directory, "trace.json");
   extension.setSaveDestination(file);
@@ -187,6 +190,7 @@ test("Run profiling displays summaries and saves a host-owned Chrome trace", asy
       (event) => event.cat === "Node" && event.args.op_name === "Relu",
     ),
   );
+  assert.equal(trace.filter((event) => event.name === "model_run").length, 3);
   assert.equal(extension.saveDialogs.at(-1).saveLabel, "Save profiling trace");
   extension.setSaveDestination(undefined);
   await extension.receive(save);

@@ -91,6 +91,9 @@ def main(directory, cache=None, key=None):
     directory = Path(directory)
     settings = json.loads((directory / "settings.json").read_text(encoding="utf-8"))
     enable_profiling = settings.get("enableProfiling", False)
+    repeat = settings.get("repeat", 1)
+    if type(repeat) is not int or not 1 <= repeat <= 100:
+        raise ValueError("Repeat must be an integer from 1 to 100.")
     reused = not enable_profiling and cache is not None and cache.get("key") == key
     if reused:
         session, load_ms = cache["session"], cache["load_ms"]
@@ -118,8 +121,9 @@ def main(directory, cache=None, key=None):
         tensor.ParseFromString((directory / f"input-{index}.pb").read_bytes())
         inputs[tensor.name] = numpy_helper.to_array(tensor)
     start = perf_counter()
-    values = session.run(None, inputs)
-    time_ms = (perf_counter() - start) * 1000
+    for _ in range(repeat):
+        values = session.run(None, inputs)
+    time_ms = (perf_counter() - start) * 1000 / repeat
     profiling = read_profile(session) if enable_profiling else None
     outputs = []
     previews = []
@@ -157,6 +161,7 @@ def main(directory, cache=None, key=None):
         json.dumps(
             {
                 "timeMs": time_ms,
+                "repeat": repeat,
                 "inputs": previews,
                 "outputs": outputs,
                 **({"profiling": profiling} if profiling is not None else {}),

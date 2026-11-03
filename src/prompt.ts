@@ -11,7 +11,7 @@ import {
 } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { readProvenance, runProcess } from "./export";
-import { loadModelFile } from "./graph";
+import { loadModelFile, RunResult } from "./graph";
 import { PromptSession } from "./promptSession";
 
 export interface PromptToken {
@@ -41,6 +41,8 @@ export interface PromptResult {
   reference?: { tokens: PromptToken[]; loadMs?: number; warmupMs?: number };
   lifecycle?: PromptLifecycle;
   profileDirectory?: string;
+  profiling?: RunResult["profiling"];
+  repeat?: number;
   discrepancies?: PromptDiscrepancy[];
   limitations?: string[];
   signature: string;
@@ -60,6 +62,7 @@ interface PromptOptions {
   temperature: number;
   validate: boolean;
   keepLoaded: boolean;
+  repeat: number;
   referenceSource?: string;
   sessionSettings: Record<string, string | number | boolean | string[]>;
 }
@@ -103,6 +106,10 @@ function optionsFrom(value: unknown): PromptOptions {
     (options.validate !== undefined && typeof options.validate !== "boolean") ||
     (options.keepLoaded !== undefined &&
       typeof options.keepLoaded !== "boolean") ||
+    (options.repeat !== undefined &&
+      (!Number.isSafeInteger(options.repeat) ||
+        (options.repeat as number) < 1 ||
+        (options.repeat as number) > 100)) ||
     Object.keys(options).some(
       (key) =>
         ![
@@ -112,13 +119,14 @@ function optionsFrom(value: unknown): PromptOptions {
           "temperature",
           "validate",
           "keepLoaded",
+          "repeat",
           "referenceSource",
           "sessionSettings",
         ].includes(key),
     )
   )
     throw new Error(
-      "Choose a supported engine, prompt, 1–4096 output tokens and a finite non-negative temperature.",
+      "Choose a supported engine, prompt, 1–4096 output tokens, 1–100 repeats and a finite non-negative temperature.",
     );
   if (
     options.referenceSource !== undefined &&
@@ -138,6 +146,10 @@ function optionsFrom(value: unknown): PromptOptions {
     temperature: (options.temperature as number | undefined) ?? 0,
     validate: options.validate === true,
     keepLoaded: options.keepLoaded === true,
+    repeat:
+      options.engine === "onnxruntime-genai"
+        ? ((options.repeat as number | undefined) ?? 1)
+        : 1,
     ...(typeof options.referenceSource === "string"
       ? { referenceSource: options.referenceSource }
       : {}),
@@ -485,6 +497,8 @@ export async function runPrompt(
 ): Promise<PromptResult> {
   signal.throwIfAborted();
   const options = optionsFrom(value);
+  if (options.engine === "onnxruntime-genai" && options.sessionSettings.profile)
+    options.keepLoaded = false;
   if (options.keepLoaded && !session)
     throw new Error("Keeping a model loaded requires a panel session owner.");
   if (!options.validate) previous = undefined;
@@ -585,6 +599,7 @@ export async function runPrompt(
     prompt: options.prompt,
     maxTokens: options.maxTokens,
     temperature: options.temperature,
+    repeat: options.repeat,
   });
   const signature = (tokens: PromptToken[], capture: Buffer) =>
     createHmac("sha256", signingKey)
@@ -615,15 +630,18 @@ export async function runPrompt(
     const input = join(request, "input.json");
     const output = join(request, "output.json");
     const capture = join(request, "logits.json");
-    const profileDirectory = join(dirname(modelPath), ".prompt-profiles");
+    let profileDirectory = join(dirname(modelPath), ".prompt-profiles");
     const referenceEnvironment = {
       PYTHONUNBUFFERED: "1",
       CUDA_VISIBLE_DEVICES: "",
       HF_HUB_OFFLINE: "1",
       TRANSFORMERS_OFFLINE: "1",
     };
-    if (options.sessionSettings.profile)
+    if (options.sessionSettings.profile) {
       await mkdir(profileDirectory, { recursive: true });
+      if (options.engine === "onnxruntime-genai")
+        profileDirectory = await mkdtemp(join(profileDirectory, "run-"));
+    }
     if (previousCapture)
       await writeFile(capture, previousCapture, {
         mode: 0o600,
@@ -639,6 +657,8 @@ export async function runPrompt(
           lifecycle: previous.lifecycle,
           limitations: previous.limitations,
           profileDirectory: previous.profileDirectory,
+          profiling: previous.profiling,
+          repeat: previous.repeat,
         }),
         { mode: 0o600, flag: "wx" },
       );
@@ -687,6 +707,12 @@ export async function runPrompt(
         output,
         createHmac("sha256", signingKey)
           .update(JSON.stringify(sessionContext))
+          .update(
+            options.engine === "onnxruntime-genai" &&
+              options.sessionSettings.profile
+              ? profileDirectory
+              : "",
+          )
           .digest("hex"),
         signal,
         progress,

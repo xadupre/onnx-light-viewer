@@ -1,9 +1,15 @@
-const { readFileSync, writeFileSync, writeSync } = require("node:fs");
+const {
+  readFileSync,
+  readdirSync,
+  writeFileSync,
+  writeSync,
+} = require("node:fs");
 const { execFileSync } = require("node:child_process");
 const { dirname, isAbsolute, join, resolve } = require("node:path");
 const { createInterface } = require("node:readline");
 const native = require("../dist/native/onnx_light_viewer.node");
 const { genaiSessionOptions } = require("./prompt-settings.cjs");
+const { summarizeProfile } = require("./profiling.cjs");
 
 const emit = (event) => writeSync(1, `\x1e${JSON.stringify(event)}\n`);
 
@@ -35,6 +41,10 @@ function run(input, output, sessionKey) {
   if (runtimePath && !isAbsolute(runtimePath))
     throw new Error("ORT_LIB_PATH must be an absolute path.");
   const settings = request.sessionSettings ?? {};
+  const repeat =
+    request.engine === "onnxruntime-genai" ? (request.repeat ?? 1) : 1;
+  if (!Number.isSafeInteger(repeat) || repeat < 1 || repeat > 100)
+    throw new Error("Repeat must be an integer from 1 to 100.");
   const { options, providers } = genaiSessionOptions(
     settings,
     settings.profile
@@ -52,12 +62,30 @@ function run(input, output, sessionKey) {
     libraryPath,
     runtimePath,
   };
-  const generate = () =>
-    native.runNativePrompt(
-      nativeRequest,
-      (token, index) => emit({ type: "token", token, index }),
-      (lifecycle) => emit({ type: "lifecycle", lifecycle }),
-    );
+  const retained =
+    request.keepLoaded &&
+    !(request.engine === "onnxruntime-genai" && settings.profile);
+  const generate = () => {
+    let capture;
+    let firstLifecycle;
+    for (let iteration = 0; iteration < repeat; iteration++) {
+      const last = iteration === repeat - 1;
+      capture = native.runNativePrompt(
+        { ...nativeRequest, keepLoaded: !last || retained },
+        (token, index) => {
+          if (last) emit({ type: "token", token, index });
+        },
+        (lifecycle) => {
+          if (iteration === 0) {
+            firstLifecycle = { ...lifecycle, retained: Boolean(retained) };
+            emit({ type: "lifecycle", lifecycle: firstLifecycle });
+          }
+        },
+      );
+    }
+    capture.lifecycle = firstLifecycle;
+    return capture;
+  };
   let capture;
   try {
     capture = generate();
@@ -128,10 +156,33 @@ print(json.dumps({"libraryPath": str(library), "runtimePath": runtime}))
     engine: request.engine,
     tokens: capture.tokens,
     lifecycle: capture.lifecycle,
+    repeat,
   };
   if (settings.profile) {
     result.profileDirectory = request.profileDirectory;
-    if (request.engine === "onnx-light")
+    if (request.engine === "onnxruntime-genai") {
+      const profiles = readdirSync(request.profileDirectory)
+        .filter((name) => name.startsWith("genai-") && name.endsWith(".json"))
+        .sort();
+      const summaries = profiles.map((name) => {
+        const trace = JSON.parse(
+          readFileSync(join(request.profileDirectory, name), "utf8"),
+        );
+        if (!Array.isArray(trace))
+          throw new Error("ONNX Runtime returned an invalid profiling trace.");
+        const profile = summarizeProfile(trace);
+        if (profiles.length > 1)
+          for (const node of profile.nodes)
+            node.name = `${name} / ${node.name}`;
+        return profile;
+      });
+      result.profiling = {
+        trace: summaries.flatMap((profile) => profile.trace),
+        nodes: summaries
+          .flatMap((profile) => profile.nodes)
+          .sort((a, b) => b.durationUs - a.durationUs),
+      };
+    } else
       writeFileSync(
         join(
           request.profileDirectory,

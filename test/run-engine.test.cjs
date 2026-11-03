@@ -233,6 +233,53 @@ test("ONNX Runtime profiling returns real kernel timings and traces without reta
   );
 });
 
+test("ONNX Runtime repeat reuses the same inputs and session and profiles every execution", async (t) => {
+  const model = loadModel(
+    readFileSync(require.resolve("./models/relu.onnx")),
+    "relu.onnx",
+  );
+  const session = new RunSession();
+  t.after(() => session.close());
+  const request = {
+    engine: "onnxruntime",
+    inputs: ["float[1,3] input = {-1, 0, 2}"],
+    repeat: 3,
+    keepLoaded: true,
+  };
+  const predict = (changes = {}) =>
+    runModel(
+      model,
+      [],
+      { ...request, ...changes },
+      python,
+      runner,
+      () => {},
+      new AbortController().signal,
+      session,
+    );
+  const result = await predict({ settings: { enableProfiling: true } });
+  assert.equal(result.repeat, 3);
+  assert.ok(result.timeMs >= 0);
+  assert.equal(result.lifecycle.retained, false);
+  assert.equal(
+    result.profiling.nodes.find((node) => node.op === "Relu").calls,
+    3,
+  );
+  assert.equal(
+    result.profiling.trace.filter((event) => event.name === "model_run").length,
+    3,
+  );
+  const first = await predict();
+  assert.equal(first.lifecycle.reused, false);
+  assert.equal(first.lifecycle.retained, true);
+  const second = await predict({ repeat: 2 });
+  assert.equal(second.lifecycle.reused, true);
+  assert.equal(second.repeat, 2);
+  assert.deepEqual(second.outputs, result.outputs);
+  for (const repeat of [0, -1, 1.5, 101, "3", true])
+    await assert.rejects(predict({ repeat }), /Repeat must be an integer/);
+});
+
 for (const engine of ["onnx-light", "onnxruntime"])
   test(`${engine} Run retains real sessions with fresh inputs and invalidates ownership/settings`, async (t) => {
     const session = new RunSession();

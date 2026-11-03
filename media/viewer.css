@@ -2047,8 +2047,25 @@ button:disabled {
 #run-logging,
 #run-logging-light,
 #run-logging-ort,
-#run-profiling-options {
+#run-profiling-options,
+#run-repeat-options,
+#prompt-repeat-options {
   grid-column: 1 / -1;
+}
+
+.profiling-plots svg {
+  display: block;
+  width: 100%;
+  max-width: 60rem;
+  font-size: 13px;
+}
+
+.profiling-plots text {
+  fill: var(--vscode-foreground);
+}
+
+.profiling-plots rect {
+  fill: var(--vscode-charts-blue, #3794ff);
 }
 
 .run-file-controls {
