@@ -11820,7 +11820,7 @@ test("dashes graph input arcs only for standard ONNX Shape consumers", (t) => {
     assert.equal(output.classList.contains("edge-shape"), false);
 });
 
-test("arc shape labels show twice the previous text budget and refresh without losing full descriptions", (t) => {
+test("arc shape labels wrap and refresh without losing full descriptions", (t) => {
   const { document, window, load } = openViewer(t);
   const shape = ["batch", "head_count", "sequence_length", "head_dimension"];
   const tensors = [{ name: "input", type: "FLOAT", shape }];
@@ -11841,10 +11841,12 @@ test("arc shape labels show twice the previous text budget and refresh without l
       },
     }),
   );
-  assert.equal(
-    information.querySelector("tspan").textContent,
-    `${fullDescription.slice(0, 67)}…`,
-  );
+  assert.equal(information.querySelector("tspan").textContent, fullDescription);
+  assert.ok(information.querySelector("tspan").children.length > 2);
+  for (const line of information.querySelector("tspan").children) {
+    assert.ok(line.textContent.length <= 36);
+    assert.equal(line.getAttribute("x"), information.getAttribute("x"));
+  }
   assert.equal(information.getAttribute("aria-label"), fullDescription);
   assert.equal(
     information.querySelector("title").textContent,
@@ -14611,8 +14613,12 @@ test("shows longer carried-result names and complete hover information after sha
     `.connection[aria-label="Connection: ${name}"]`,
   );
   const text = connection.querySelector(".tensor-label");
-  assert.ok(text.textContent.length > 15);
-  assert.ok(text.textContent.length <= 36);
+  assert.equal(text.textContent, name);
+  assert.ok(text.children.length > 1);
+  for (const line of text.children) {
+    assert.ok(line.textContent.length <= 36);
+    assert.equal(line.getAttribute("x"), text.getAttribute("x"));
+  }
   assert.equal(text.getAttribute("aria-label"), name);
   assert.equal(
     connection.querySelector(":scope > title").textContent,
@@ -14630,16 +14636,23 @@ test("shows longer carried-result names and complete hover information after sha
     connection.querySelector(":scope > title").textContent,
     `${name}: INT64 []`,
   );
+  const information = connection.querySelector(".tensor-info > tspan");
+  assert.equal(information.textContent, "INT64 []");
+  assert.equal(information.children.length, 1);
 });
 
-test("edge labels follow routed and curved tangents, stay upright, and rotate both lines after dragging", (t) => {
+test("edge labels stay horizontal and centered on curved, routed and dragged arcs", (t) => {
   const { document, window } = openViewer(t);
   const connection = {
     from: { x: 0, y: 0 },
     to: { x: 200, y: 200 },
     fromHeight: 0,
     toHeight: 0,
+    name: "value",
+    nameLines: ["value"],
+    informationLines: ["FLOAT [", "batch, sequence]"],
     labelWidth: 100,
+    labelHeight: 42,
     group: document.createElementNS("http://www.w3.org/2000/svg", "g"),
   };
   for (const name of ["path", "hit", "text", "information"])
@@ -14647,45 +14660,61 @@ test("edge labels follow routed and curved tangents, stay upright, and rotate bo
       "http://www.w3.org/2000/svg",
       name === "path" || name === "hit" ? "path" : "text",
     );
-  const curved = window.connectionLabelPosition(connection);
-  assert.ok(
-    curved.angle > 15 && curved.angle < 40,
-    "cubic midpoint follows its tangent rather than the 45-degree endpoint chord",
+  connection.information.append(
+    document.createElementNS("http://www.w3.org/2000/svg", "tspan"),
   );
+  const curved = window.connectionLabelPosition(connection);
+  assert.ok(Math.abs(curved.x - 100) < 1e-8);
+  assert.ok(Math.abs(curved.y - 100) < 1e-8);
   connection.route = {
     from: { ...connection.from },
     to: { ...connection.to },
     points: [{ x: 100, y: 100 }],
   };
-  assert.equal(window.connectionLabelPosition(connection).angle, 45);
   window.updateConnection(connection);
-  assert.equal(connection.text.getAttribute("transform"), "rotate(45 100 100)");
-  assert.equal(
-    connection.information.getAttribute("transform"),
-    connection.text.getAttribute("transform"),
+  for (const text of [connection.text, connection.information]) {
+    assert.equal(text.getAttribute("transform"), null);
+    assert.equal(text.getAttribute("text-anchor"), "middle");
+    assert.equal(Number(text.getAttribute("x")), 100);
+    for (const line of text.querySelectorAll("tspan[dy]"))
+      assert.equal(Number(line.getAttribute("x")), 100);
+  }
+  assert.equal(Number(connection.text.getAttribute("y")), 89);
+  assert.equal(Number(connection.information.getAttribute("y")), 103);
+  assert.deepEqual(
+    [...connection.information.querySelectorAll("tspan[dy]")].map((line) =>
+      Number(line.getAttribute("dy")),
+    ),
+    [0, 14],
   );
   const bounds = window.connectionLabelBounds(connection);
-  assert.ok(bounds.left < 100 && bounds.right > 170);
-  assert.ok(bounds.top < 100 && bounds.bottom > 170);
+  assert.equal(bounds.left, 46);
+  assert.equal(bounds.right, 154);
+  assert.equal(bounds.top, 75);
+  assert.equal(bounds.bottom, 125);
   connection.to.x = -200;
   const dragged = window.connectionLabelPosition(connection);
-  assert.ok(dragged.angle >= -90 && dragged.angle < 0);
   window.updateConnection(connection);
-  assert.equal(
-    connection.text.getAttribute("transform"),
-    `rotate(${dragged.angle} ${dragged.x} ${dragged.y})`,
-  );
+  for (const text of [connection.text, connection.information]) {
+    assert.equal(text.getAttribute("transform"), null);
+    assert.equal(Number(text.getAttribute("x")), dragged.x);
+    for (const line of text.querySelectorAll("tspan[dy]"))
+      assert.equal(Number(line.getAttribute("x")), dragged.x);
+  }
   delete connection.route;
   connection.to = { x: 0, y: 200 };
-  assert.equal(window.connectionLabelPosition(connection).angle, 90);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(window.connectionLabelPosition(connection))),
+    { x: 0, y: 100 },
+  );
   connection.to = { x: 0, y: 0 };
   assert.deepEqual(
     JSON.parse(JSON.stringify(window.connectionLabelPosition(connection))),
-    { x: 0, y: 0, angle: 0 },
+    { x: 0, y: 0 },
   );
 });
 
-test("virtualization retains a rotated label when only its far end is in the viewport", (t) => {
+test("virtualization retains a multiline label when only its bottom is in the viewport", (t) => {
   const { window } = openViewer(t);
   const connection = {
     from: { x: 0, y: 0 },
@@ -14693,6 +14722,7 @@ test("virtualization retains a rotated label when only its far end is in the vie
     fromHeight: 0,
     toHeight: 0,
     labelWidth: 100,
+    labelHeight: 210,
   };
   let visible;
   const crossings = new Set();
@@ -14730,31 +14760,21 @@ test("staggered carried-result labels avoid neighboring labels and follow a grou
   assert.equal(labels.length, 3);
   const boxes = () =>
     labels.map((label) => {
-      const info = label.parentElement.querySelector(".tensor-info tspan");
-      const [angle, x, y] = label
-        .getAttribute("transform")
-        .slice(7, -1)
-        .split(" ")
-        .map(Number);
-      const radians = (angle * Math.PI) / 180;
-      const width =
-        Math.max(label.textContent.length, info.textContent.length) * 6;
-      const corners = [];
-      for (const dx of [8, width + 12])
-        for (const dy of [-12, 18])
-          corners.push({
-            x: x + dx * Math.cos(radians) - dy * Math.sin(radians),
-            y: y + dx * Math.sin(radians) + dy * Math.cos(radians),
-          });
+      const info = label.parentElement.querySelector(".tensor-info > tspan");
+      const lines = [...label.children, ...info.children];
+      const x = Number(label.getAttribute("x"));
+      const y = Number(label.getAttribute("y"));
+      const halfWidth =
+        Math.max(...lines.map((line) => line.textContent.length * 6)) / 2 + 4;
       return {
-        x: Math.min(...corners.map((point) => point.x)),
-        y: Math.min(...corners.map((point) => point.y)),
-        right: Math.max(...corners.map((point) => point.x)),
-        bottom: Math.max(...corners.map((point) => point.y)),
+        x: x - halfWidth,
+        y: y - 14,
+        right: x + halfWidth,
+        bottom: y + lines.length * 14 - 6,
       };
     });
   const before = boxes();
-  assert.ok(new Set(before.map(({ y }) => y)).size > 1);
+  assert.ok(new Set(before.map(({ x, y }) => `${x},${y}`)).size > 1);
   for (const rect of document.querySelectorAll(
     ".graph-node > rect, .graph-port > rect",
   )) {
@@ -14768,7 +14788,7 @@ test("staggered carried-result labels avoid neighboring labels and follow a grou
     for (const box of before)
       assert.ok(
         box.right < left || box.x > right || box.bottom < top || box.y > bottom,
-        "rotated labels must not cover nodes or ports",
+        "centered labels must not cover nodes or ports",
       );
   }
   for (let index = 0; index < before.length; index++)
@@ -14850,6 +14870,7 @@ test("crowded label placement bounds spatial comparisons across candidate attemp
         nodeViews: new Map(),
         camera: undefined,
         shortName: window.shortName,
+        wrapConnectionLabel: window.wrapConnectionLabel,
         tensorDescription: window.tensorDescription,
         connectionLabelPosition: window.connectionLabelPosition,
         connectionLabelBounds: window.connectionLabelBounds,
@@ -14905,6 +14926,7 @@ test("label re-placement refreshes connection visibility and crossing batches on
     camera: undefined,
     virtualized: true,
     shortName: window.shortName,
+    wrapConnectionLabel: window.wrapConnectionLabel,
     tensorDescription: window.tensorDescription,
     graphSpatialIndex: window.graphSpatialIndex,
     connectionLabelPosition: window.connectionLabelPosition,
@@ -14940,7 +14962,7 @@ test("Fit drops initial label extents when refreshed tensor descriptions shrink"
   const graph = {
     ...demoGraph,
     outputs: [name],
-    tensors: [{ name, type: "FLOAT", shape: ["long_dimension".repeat(8)] }],
+    tensors: [{ name, type: "FLOAT", shape: ["long_dimension".repeat(200)] }],
     nodes: [{ ...demoGraph.nodes[0], outputs: [name] }],
   };
   const fitted = () => {
