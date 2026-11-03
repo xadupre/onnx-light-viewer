@@ -7992,6 +7992,46 @@ test("Symbolic lists all labels and merges a chosen equality into the saved mode
   }
 });
 
+test("Symbolic applies a batch of equivalences together and rejects invalid groups without editing", async (t) => {
+  const extension = await openExtension("prefixed-dimensions.onnx");
+  t.after(() => extension.dispose());
+  const original = extension.nativeModels.at(-1);
+  const originalNames = original.symbolicDimensions();
+  await extension.receive({ type: "shorten-dimensions" });
+  assert.equal(extension.messages.at(-1).type, "dimension-info");
+  const names = extension.messages.at(-1).names;
+  const equalities = [
+    { source: "batch", target: "sequence_len" },
+    { source: "past_sequence_len", target: "sequence_len" },
+  ];
+  for (const invalid of [
+    [],
+    null,
+    "invalid",
+    [null],
+    [equalities[0], equalities[0]],
+    [equalities[0], { source: "sequence_len", target: "batch" }],
+    [equalities[0], { source: "missing", target: "sequence_len" }],
+  ]) {
+    await extension.receive({ type: "merge-dimensions", equalities: invalid });
+    assert.equal(extension.messages.at(-1).type, "dimension-error");
+    await extension.receive({ type: "symbolic-dimensions", requestId: 1 });
+    assert.deepEqual(extension.messages.at(-1).names, names);
+  }
+  await extension.receive({ type: "merge-dimensions", equalities });
+  const result = extension.messages.at(-1);
+  assert.equal(result.type, "dimension-info");
+  assert.deepEqual(result.equalities, equalities);
+  assert.deepEqual(result.names, ["sequence_len"]);
+  assert.deepEqual(original.symbolicDimensions(), originalNames);
+  await extension.receive({ type: "navigate", path: [{ function: 0 }] });
+  assert.deepEqual(
+    extension.messages.at(-1).graph.tensors.find(({ name }) => name === "fx")
+      .shape,
+    ["sequence_len", "sequence_len+sequence_len"],
+  );
+});
+
 test("dimension renaming edits the retained model, preserves navigation and saves the new names", async (t) => {
   const extension = await openExtension("prefixed-dimensions.onnx");
   t.after(() => extension.dispose());

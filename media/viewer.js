@@ -431,14 +431,6 @@ function setLoading(pending, message = "") {
     byId(id).disabled =
       pending || !hasModel || byId(id).getAttribute("aria-busy") === "true";
   updateDimensionEnabled();
-  if (pending) {
-    for (const id of [
-      "dimension-source",
-      "dimension-target",
-      "merge-dimensions",
-    ])
-      byId(id).disabled = true;
-  }
   for (const id of ["undo-fusion", "unfuse-last", "unfuse-all"])
     byId(id).disabled =
       pending ||
@@ -1099,47 +1091,159 @@ function updateDimensionEnabled() {
     !hasModel ||
     byId("model-view").getAttribute("aria-busy") === "true" ||
     svg.getAttribute("aria-busy") === "true";
-  for (const id of ["dimension-source", "dimension-target"])
-    byId(id).disabled = button.disabled || !byId(id).options.length;
-  byId("merge-dimensions").disabled =
-    button.disabled ||
-    !byId("dimension-source").value ||
-    !byId("dimension-target").value ||
-    byId("dimension-source").value === byId("dimension-target").value;
+  byId("edit-dimensions").disabled = button.disabled;
+  const unchanged = !dimensionEqualities().length;
+  byId("merge-dimensions").disabled = button.disabled || unchanged;
+  byId("reset-dimensions").disabled = button.disabled || unchanged;
+  for (const name of byId("symbolic-dimensions").querySelectorAll("button")) {
+    name.disabled = button.disabled;
+    name.draggable = !button.disabled;
+  }
+  for (const zone of byId("symbolic-dimensions").querySelectorAll(
+    ".dimension-drop",
+  )) {
+    zone.setAttribute("aria-disabled", String(button.disabled));
+    zone.tabIndex = button.disabled ? -1 : 0;
+  }
 }
 
 let symbolicDimensionRequest = 0;
+const dimensionEquivalences = new Map();
+let selectedSymbolicDimension;
+let draggedSymbolicDimension;
 
 function showSymbolicDimensions(names) {
-  const list = byId("symbolic-dimensions");
-  list.replaceChildren();
-  for (const name of names) {
-    const item = document.createElement("li");
-    item.textContent = name;
-    list.append(item);
-  }
-  for (const [id, index] of [
-    ["dimension-source", 0],
-    ["dimension-target", 1],
-  ]) {
-    const select = byId(id);
-    select.replaceChildren();
-    for (const name of names) {
-      const option = document.createElement("option");
-      option.value = name;
-      option.textContent = name;
-      select.append(option);
-    }
-    select.selectedIndex = Math.min(index, names.length - 1);
-  }
+  dimensionEquivalences.clear();
+  for (const name of names) dimensionEquivalences.set(name, name);
+  selectedSymbolicDimension = undefined;
+  draggedSymbolicDimension = undefined;
+  renderDimensionEquivalences();
   byId("symbolic-dimensions-status").textContent = names.length
     ? `${names.length} distinct symbolic dimension${names.length === 1 ? "" : "s"}.`
     : "No symbolic dimensions.";
+}
+
+function dimensionEqualities() {
+  return [...dimensionEquivalences]
+    .filter(([source, target]) => source !== target)
+    .map(([source, target]) => ({ source, target }));
+}
+
+function moveSymbolicDimension(source, target) {
+  if (
+    byId("shorten-dimensions").disabled ||
+    !dimensionEquivalences.has(source) ||
+    dimensionEquivalences.get(target) !== target ||
+    source === target
+  )
+    return;
+  const moveGroup = dimensionEquivalences.get(source) === source;
+  for (const [name, canonical] of dimensionEquivalences)
+    if (name === source || (moveGroup && canonical === source))
+      dimensionEquivalences.set(name, target);
+  selectedSymbolicDimension = undefined;
+  draggedSymbolicDimension = undefined;
+  renderDimensionEquivalences();
+}
+
+function renderDimensionEquivalences() {
+  const list = byId("symbolic-dimensions");
+  list.replaceChildren();
+  const dimensionButton = (name) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "dimension-name";
+    button.textContent = name;
+    button.dataset.dimension = name;
+    button.setAttribute("aria-pressed", "false");
+    button.addEventListener("click", () => {
+      selectedSymbolicDimension =
+        selectedSymbolicDimension === name ? undefined : name;
+      for (const other of list.querySelectorAll(".dimension-name"))
+        other.setAttribute(
+          "aria-pressed",
+          String(other.dataset.dimension === selectedSymbolicDimension),
+        );
+    });
+    button.addEventListener("dragstart", (event) => {
+      if (button.disabled) {
+        event.preventDefault();
+        return;
+      }
+      draggedSymbolicDimension = name;
+      event.dataTransfer.setData("text/plain", name);
+      event.dataTransfer.effectAllowed = "move";
+    });
+    button.addEventListener("dragend", () => {
+      draggedSymbolicDimension = undefined;
+      for (const zone of list.querySelectorAll(".dimension-drop"))
+        zone.classList.remove("drop-target");
+    });
+    return button;
+  };
+  const aliasesByTarget = new Map();
+  for (const [name, target] of dimensionEquivalences) {
+    if (name === target) continue;
+    if (!aliasesByTarget.has(target)) aliasesByTarget.set(target, []);
+    aliasesByTarget.get(target).push(name);
+  }
+  for (const [name, canonical] of dimensionEquivalences) {
+    if (name !== canonical) continue;
+    const item = document.createElement("li");
+    const equal = document.createElement("span");
+    equal.textContent = "=";
+    equal.setAttribute("aria-hidden", "true");
+    const zone = document.createElement("div");
+    zone.className = "dimension-drop";
+    zone.setAttribute("role", "group");
+    zone.setAttribute("aria-label", `Dimensions equal to ${name}`);
+    const place = () => {
+      if (selectedSymbolicDimension)
+        moveSymbolicDimension(selectedSymbolicDimension, name);
+    };
+    zone.addEventListener("click", (event) => {
+      if (event.target === zone) place();
+    });
+    zone.addEventListener("keydown", (event) => {
+      if (
+        event.target === zone &&
+        (event.key === "Enter" || event.key === " ")
+      ) {
+        event.preventDefault();
+        place();
+      }
+    });
+    zone.addEventListener("dragover", (event) => {
+      if (draggedSymbolicDimension && !byId("shorten-dimensions").disabled) {
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "move";
+        zone.classList.add("drop-target");
+      }
+    });
+    zone.addEventListener("dragleave", () =>
+      zone.classList.remove("drop-target"),
+    );
+    zone.addEventListener("drop", (event) => {
+      event.preventDefault();
+      zone.classList.remove("drop-target");
+      moveSymbolicDimension(draggedSymbolicDimension, name);
+    });
+    for (const alias of aliasesByTarget.get(name) ?? [])
+      zone.append(dimensionButton(alias));
+    item.append(dimensionButton(name), equal, zone);
+    list.append(item);
+  }
   updateDimensionEnabled();
 }
 
 function requestSymbolicDimensions() {
-  if (byId("symbolic-panel").hidden || !hasModel || replacementPending) return;
+  if (
+    byId("symbolic-panel").hidden ||
+    byId("merge-dimensions-form").hidden ||
+    !hasModel ||
+    replacementPending
+  )
+    return;
   showSymbolicDimensions([]);
   byId("symbolic-dimensions-status").textContent =
     "Listing symbolic dimensions…";
@@ -2939,17 +3043,25 @@ byId("shorten-dimensions").addEventListener("click", () => {
   requestAction("shorten-dimensions", "Shorten dynamic dimension names");
 });
 byId("show-symbolic").addEventListener("click", requestSymbolicDimensions);
-for (const id of ["dimension-source", "dimension-target"])
-  byId(id).addEventListener("change", updateDimensionEnabled);
+byId("edit-dimensions").addEventListener("click", () => {
+  const form = byId("merge-dimensions-form");
+  form.hidden = !form.hidden;
+  byId("edit-dimensions").setAttribute("aria-expanded", String(!form.hidden));
+  if (form.hidden) {
+    symbolicDimensionRequest++;
+    showSymbolicDimensions([]);
+  } else requestSymbolicDimensions();
+});
+byId("reset-dimensions").addEventListener("click", () => {
+  showSymbolicDimensions([...dimensionEquivalences.keys()]);
+});
 byId("merge-dimensions-form").addEventListener("submit", (event) => {
   event.preventDefault();
   if (byId("merge-dimensions").disabled) return;
-  const source = byId("dimension-source").value;
-  const target = byId("dimension-target").value;
+  const equalities = dimensionEqualities();
   dimensionStatus(true, "Merging symbolic dimensions…");
   requestAction("merge-dimensions", "Merge symbolic dimensions", {
-    source,
-    target,
+    equalities,
   });
 });
 byId("refresh-positions").addEventListener("click", () => {
@@ -3245,9 +3357,11 @@ window.addEventListener("message", (event) => {
     dimensionStatus(
       false,
       event.data.count
-        ? event.data.source
-          ? `Replaced "${event.data.source}" with "${event.data.target}". Save to keep the changes.`
-          : `${event.data.count} dynamic dimension${event.data.count === 1 ? "" : "s"} renamed; removed prefix "${event.data.prefix}". Save to keep the changes.`
+        ? event.data.equalities
+          ? `Applied ${event.data.equalities.length} dimension equivalence${event.data.equalities.length === 1 ? "" : "s"}. Save to keep the changes.`
+          : event.data.source
+            ? `Replaced "${event.data.source}" with "${event.data.target}". Save to keep the changes.`
+            : `${event.data.count} dynamic dimension${event.data.count === 1 ? "" : "s"} renamed; removed prefix "${event.data.prefix}". Save to keep the changes.`
         : "No common namespace prefix to remove.",
       event.data.count ? RefreshStatus.UPDATED : RefreshStatus.UNCHANGED,
     );

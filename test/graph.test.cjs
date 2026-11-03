@@ -113,33 +113,29 @@ function memoryTestModel(
   );
 }
 
-test("lists and merges exact symbolic labels without changing the original or other dimensions", async () => {
+test("lists atomic dimensions and replaces their occurrences inside expressions without changing the original", async () => {
   const original = memoryTestModel([
     "batch",
     "batch_size",
-    "batch + 1",
+    "batch_size + batch + 1",
     8,
     null,
   ]);
-  assert.deepEqual(original.symbolicDimensions(), [
-    "batch",
-    "batch + 1",
-    "batch_size",
-  ]);
+  assert.deepEqual(original.symbolicDimensions(), ["batch", "batch_size"]);
   const before = Buffer.from(await original.serialize());
   const edited = original.mergeDimensions("batch_size", "batch");
-  assert.equal(edited.count, 2);
-  assert.deepEqual(edited.model.symbolicDimensions(), ["batch", "batch + 1"]);
+  assert.equal(edited.count, 4);
+  assert.deepEqual(edited.model.symbolicDimensions(), ["batch"]);
   assert.deepEqual(edited.model.graph().tensors[0].shape, [
     "batch",
     "batch",
-    "batch + 1",
+    "batch+batch+1",
     "8",
     "?",
   ]);
   assert.deepEqual(Buffer.from(await original.serialize()), before);
   const reloaded = loadModel(await edited.model.serialize(), "merged.onnx");
-  assert.deepEqual(reloaded.symbolicDimensions(), ["batch", "batch + 1"]);
+  assert.deepEqual(reloaded.symbolicDimensions(), ["batch"]);
   reloaded.verify();
   for (const args of [
     [],
@@ -155,6 +151,15 @@ test("lists and merges exact symbolic labels without changing the original or ot
   assert.equal(unchanged.count, 0);
   assert.deepEqual(unchanged.model.graph(), original.graph());
   assert.deepEqual(memoryTestModel([8, null]).symbolicDimensions(), []);
+  const distinct = memoryTestModel([
+    "batch",
+    "batch_size",
+    "batch + batch_size",
+  ]);
+  assert.deepEqual(
+    distinct.mergeDimensions("batch", "n").model.graph().tensors[0].shape,
+    ["n", "batch_size", "n+batch_size"],
+  );
 });
 
 test("symbolic listing reads nested-only metadata without changing the model", async () => {

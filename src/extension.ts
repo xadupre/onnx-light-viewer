@@ -965,6 +965,7 @@ async function configurePanel(
         location?: unknown;
         source?: unknown;
         target?: unknown;
+        equalities?: unknown;
         password?: unknown;
         confirmation?: unknown;
         overwrite?: unknown;
@@ -4150,26 +4151,54 @@ async function configurePanel(
                 () => void sendStatus(),
               );
               if (!isCurrent()) return;
-              let equality: { source: string; target: string } | undefined;
+              let equalities: { source: string; target: string }[] | undefined;
               if (merging) {
                 const names = native.symbolicDimensions();
+                const requested: unknown = message.equalities ?? [
+                  { source: message.source, target: message.target },
+                ];
                 if (
-                  typeof message.source !== "string" ||
-                  typeof message.target !== "string" ||
-                  message.source === message.target ||
-                  !names.includes(message.source) ||
-                  !names.includes(message.target)
+                  !Array.isArray(requested) ||
+                  !requested.length ||
+                  !requested.every(
+                    (entry) =>
+                      entry !== null &&
+                      typeof entry === "object" &&
+                      typeof entry.source === "string" &&
+                      typeof entry.target === "string" &&
+                      entry.source !== entry.target &&
+                      names.includes(entry.source) &&
+                      names.includes(entry.target),
+                  )
                 )
                   throw new Error(
                     "Choose two different existing symbolic dimensions.",
                   );
-                equality = { source: message.source, target: message.target };
+                equalities = requested.map(({ source, target }) => ({
+                  source,
+                  target,
+                }));
+                const sources = new Set(equalities.map(({ source }) => source));
+                if (
+                  sources.size !== equalities.length ||
+                  equalities.some(({ target }) => sources.has(target))
+                )
+                  throw new Error(
+                    "Each replaced dimension must have one canonical name to keep.",
+                  );
               }
-              const edited = equality
-                ? {
-                    ...native.mergeDimensions(equality.source, equality.target),
-                    prefix: "",
-                  }
+              const merge = (original: typeof native) => {
+                let model = original;
+                let count = 0;
+                for (const { source, target } of equalities ?? []) {
+                  const edited = model.mergeDimensions(source, target);
+                  model = edited.model;
+                  count += edited.count;
+                }
+                return { model, count, prefix: "" };
+              };
+              const edited = equalities
+                ? merge(native)
                 : native.shortenDimensionNames();
               if (!edited.count) {
                 await postMessage({
@@ -4182,11 +4211,8 @@ async function configurePanel(
               const rewritingQueue = current.rewritingQueue
                 ? {
                     ...current.rewritingQueue,
-                    model: equality
-                      ? current.rewritingQueue.model.mergeDimensions(
-                          equality.source,
-                          equality.target,
-                        ).model
+                    model: equalities
+                      ? merge(current.rewritingQueue.model).model
                       : current.rewritingQueue.model.shortenDimensionNames(
                           edited.prefix,
                         ).model,
@@ -4221,7 +4247,10 @@ async function configurePanel(
                 graph,
                 prefix: edited.prefix,
                 count: edited.count,
-                ...equality,
+                ...(equalities && {
+                  equalities,
+                  ...(equalities.length === 1 ? equalities[0] : {}),
+                }),
                 names: edited.model.symbolicDimensions(),
               });
             },

@@ -445,8 +445,9 @@ export interface NativeModel {
   ): Promise<PreparedRun>;
   /** Common namespace prefix; null for static models, empty when none is shared. */
   dimensionPrefix(): string | null;
+  /** Lists distinct variables, including those referenced inside dimension expressions. */
   symbolicDimensions(): string[];
-  /** Replaces an exact stored label throughout an independent snapshot and its undo lineage. */
+  /** Renames a dimension, including in expressions, throughout a snapshot and its undo lineage. */
   mergeDimensions(source: string, target: string): DimensionMerge;
   /** Edits dimension labels on an independent snapshot, retaining edits through undo and Save. */
   shortenDimensionNames(prefix?: string): DimensionRename;

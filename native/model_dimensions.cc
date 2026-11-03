@@ -1,5 +1,6 @@
 /** @file Application-owned edits of symbolic dimension labels. */
 #include "model.h"
+#include <onnx_light/onnx_core/expressions/expressions.h>
 #include <set>
 #include <stdexcept>
 #include <unordered_map>
@@ -161,12 +162,20 @@ struct DimensionEdit {
 class DimensionLabelCollector {
 public:
   std::set<std::string> names;
+  std::unordered_set<std::string> expressions;
   std::unordered_set<const StoredModel *> visited;
+
+  void Expression(const std::string &expression) {
+    if (!expressions.insert(expression).second)
+      return;
+    const auto tokens = ol::core::expressions::parse_expression_tokens(expression);
+    names.insert(tokens.begin(), tokens.end());
+  }
 
   void Shape(const ol::TensorShapeProto &shape) {
     for (const auto &dim : shape.dim())
       if (!dim.dim_param().empty())
-        names.emplace(dim.dim_param());
+        Expression(std::string(dim.dim_param()));
   }
 
   void Type(const ol::TypeProto &type) {
@@ -217,7 +226,7 @@ public:
           for (const auto &dim : spec.sharded_dim())
             for (const auto &sharding : dim.simple_sharding())
               if (!sharding.dim_param().empty())
-                names.emplace(sharding.dim_param());
+                Expression(std::string(sharding.dim_param()));
     }
   }
 
@@ -297,33 +306,45 @@ void AddDimensionMethods(Napi::Env env, Napi::Object result, std::shared_ptr<Sto
                  return call.Env().Undefined();
                }
              }));
-  result.Set("mergeDimensions",
-             Napi::Function::New(env, [model](const Napi::CallbackInfo &call) -> Napi::Value {
-               try {
-                 if (call.Length() != 2 || !call[0].IsString() || !call[1].IsString())
-                   throw std::runtime_error("Expected source and target symbolic dimension names.");
-                 const auto source = call[0].As<Napi::String>().Utf8Value();
-                 const auto target = call[1].As<Napi::String>().Utf8Value();
-                 if (source.empty() || target.empty() || source == target)
-                   throw std::runtime_error(
-                       "Choose two different non-empty symbolic dimension names.");
-                 DimensionEdit edit;
-                 auto copy = edit.Copy(model);
-                 size_t count = 0;
-                 for (auto *value : edit.names.values)
-                   if (value->sv() == source) {
-                     *value = target;
-                     ++count;
-                   }
-                 auto result = Napi::Object::New(call.Env());
-                 result.Set("model", ModelHandle(call.Env(), copy));
-                 result.Set("count", Napi::Number::New(call.Env(), count));
-                 return result;
-               } catch (const std::exception &error) {
-                 Napi::Error::New(call.Env(), error.what()).ThrowAsJavaScriptException();
-                 return call.Env().Undefined();
-               }
-             }));
+  result.Set(
+      "mergeDimensions",
+      Napi::Function::New(env, [model](const Napi::CallbackInfo &call) -> Napi::Value {
+        try {
+          if (call.Length() != 2 || !call[0].IsString() || !call[1].IsString())
+            throw std::runtime_error("Expected source and target symbolic dimension names.");
+          const auto source = call[0].As<Napi::String>().Utf8Value();
+          const auto target = call[1].As<Napi::String>().Utf8Value();
+          if (source.empty() || target.empty() || source == target)
+            throw std::runtime_error("Choose two different non-empty symbolic dimension names.");
+          DimensionEdit edit;
+          auto copy = edit.Copy(model);
+          size_t count = 0;
+          std::unordered_map<std::string, std::string> expressions;
+          for (auto *value : edit.names.values)
+            if (value->sv() == source) {
+              *value = target;
+              ++count;
+            } else {
+              const std::string expression(value->sv());
+              const auto [cached, inserted] = expressions.try_emplace(expression, expression);
+              if (inserted &&
+                  ol::core::expressions::parse_expression_tokens(expression).contains(source))
+                cached->second =
+                    ol::core::expressions::rename_expression(expression, {{source, target}});
+              if (cached->second != expression) {
+                *value = cached->second;
+                ++count;
+              }
+            }
+          auto result = Napi::Object::New(call.Env());
+          result.Set("model", ModelHandle(call.Env(), copy));
+          result.Set("count", Napi::Number::New(call.Env(), count));
+          return result;
+        } catch (const std::exception &error) {
+          Napi::Error::New(call.Env(), error.what()).ThrowAsJavaScriptException();
+          return call.Env().Undefined();
+        }
+      }));
   result.Set("dimensionPrefix",
              Napi::Function::New(env, [model](const Napi::CallbackInfo &call) -> Napi::Value {
                try {

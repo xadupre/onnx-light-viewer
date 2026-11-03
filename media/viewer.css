@@ -2193,19 +2193,45 @@ button:disabled {
   font-weight: bold;
 }
 #symbolic-dimensions {
-  max-height: 180px;
+  max-height: 360px;
   overflow: auto;
   overflow-wrap: anywhere;
+  padding: 0;
+  list-style: none;
 }
 
-#merge-dimensions-form {
+#symbolic-dimensions li {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   gap: 8px;
   align-items: center;
+  margin-bottom: 8px;
 }
 
-#merge-dimensions-form p,
-#merge-dimensions {
-  grid-column: 1 / -1;
+.dimension-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  cursor: grab;
+}
+
+.dimension-name[aria-pressed="true"] {
+  outline: 2px solid var(--mint);
+}
+
+.dimension-drop {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  min-height: 36px;
+  padding: 4px;
+  border: 1px dashed var(--border);
+  border-radius: 4px;
+}
+
+.dimension-drop.drop-target,
+.dimension-drop:focus-visible {
+  outline: 2px solid var(--mint);
 }
