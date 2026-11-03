@@ -445,6 +445,9 @@ export interface NativeModel {
   ): Promise<PreparedRun>;
   /** Common namespace prefix; null for static models, empty when none is shared. */
   dimensionPrefix(): string | null;
+  symbolicDimensions(): string[];
+  /** Replaces an exact stored label throughout an independent snapshot and its undo lineage. */
+  mergeDimensions(source: string, target: string): DimensionMerge;
   /** Edits dimension labels on an independent snapshot, retaining edits through undo and Save. */
   shortenDimensionNames(prefix?: string): DimensionRename;
   /** Inspects stored data without execution; optionally returns values instead of statistics below 32 elements. */
@@ -575,11 +578,16 @@ export interface NativeModel {
   verify(): void;
 }
 
-export interface DimensionRename<Model extends NativeModel = NativeModel> {
+export interface DimensionMerge<Model extends NativeModel = NativeModel> {
   model: Model;
-  prefix: string;
   /** Stored labels updated, including retained canonical and undo snapshots. */
   count: number;
+}
+
+export interface DimensionRename<
+  Model extends NativeModel = NativeModel,
+> extends DimensionMerge<Model> {
+  prefix: string;
 }
 
 /** Stored ONNX metadata property, preserved as a key/value pair. */

@@ -4099,7 +4099,36 @@ async function configurePanel(
         }
         if (!isCurrent()) return;
         await postMessage({ type: "verify-info" });
-      } else if (message?.type === "shorten-dimensions") {
+      } else if (message?.type === "symbolic-dimensions") {
+        const owner = model;
+        const revision = graphRevision;
+        const isCurrent = () =>
+          active && model === owner && graphRevision === revision;
+        try {
+          const native = await nativeModel(
+            requireModel(),
+            log,
+            () => void sendStatus(),
+          );
+          if (!isCurrent()) return;
+          await postMessage({
+            type: "symbolic-dimensions",
+            requestId: message.requestId,
+            names: native.symbolicDimensions(),
+          });
+        } catch (error) {
+          if (!isCurrent()) return;
+          await postMessage({
+            type: "symbolic-dimensions",
+            requestId: message.requestId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      } else if (
+        message?.type === "shorten-dimensions" ||
+        message?.type === "merge-dimensions"
+      ) {
+        const merging = message.type === "merge-dimensions";
         const owner = model;
         const revision = graphRevision;
         const request = ++dimensionRequest;
@@ -4110,7 +4139,9 @@ async function configurePanel(
           dimensionRequest === request;
         try {
           await log.run(
-            "Shorten dynamic dimension names",
+            merging
+              ? "Merge symbolic dimensions"
+              : "Shorten dynamic dimension names",
             async () => {
               const current = requireModel();
               const native = await nativeModel(
@@ -4119,7 +4150,27 @@ async function configurePanel(
                 () => void sendStatus(),
               );
               if (!isCurrent()) return;
-              const edited = native.shortenDimensionNames();
+              let equality: { source: string; target: string } | undefined;
+              if (merging) {
+                const names = native.symbolicDimensions();
+                if (
+                  typeof message.source !== "string" ||
+                  typeof message.target !== "string" ||
+                  message.source === message.target ||
+                  !names.includes(message.source) ||
+                  !names.includes(message.target)
+                )
+                  throw new Error(
+                    "Choose two different existing symbolic dimensions.",
+                  );
+                equality = { source: message.source, target: message.target };
+              }
+              const edited = equality
+                ? {
+                    ...native.mergeDimensions(equality.source, equality.target),
+                    prefix: "",
+                  }
+                : native.shortenDimensionNames();
               if (!edited.count) {
                 await postMessage({
                   type: "dimension-info",
@@ -4131,9 +4182,14 @@ async function configurePanel(
               const rewritingQueue = current.rewritingQueue
                 ? {
                     ...current.rewritingQueue,
-                    model: current.rewritingQueue.model.shortenDimensionNames(
-                      edited.prefix,
-                    ).model,
+                    model: equality
+                      ? current.rewritingQueue.model.mergeDimensions(
+                          equality.source,
+                          equality.target,
+                        ).model
+                      : current.rewritingQueue.model.shortenDimensionNames(
+                          edited.prefix,
+                        ).model,
                   }
                 : undefined;
               const graph = edited.model.graph(
@@ -4165,6 +4221,8 @@ async function configurePanel(
                 graph,
                 prefix: edited.prefix,
                 count: edited.count,
+                ...equality,
+                names: edited.model.symbolicDimensions(),
               });
             },
             message.actionId,

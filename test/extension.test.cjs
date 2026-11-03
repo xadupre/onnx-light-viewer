@@ -6363,6 +6363,8 @@ test("statistics failures are explicit and can be retried without using nested c
 
 test("ignores stale recovery results and errors after replacing a local model", async () => {
   for (const type of [
+    "symbolic-dimensions",
+    "merge-dimensions",
     "navigate",
     "get-statistics",
     "memory-inputs",
@@ -6470,6 +6472,8 @@ test("shares concurrent native recovery and keeps inferred state for navigation"
 
 test("ignores delayed recovery results and errors after disposing the panel", async () => {
   for (const message of [
+    { type: "symbolic-dimensions", requestId: 1 },
+    { type: "merge-dimensions", source: "a", target: "b" },
     { type: "navigate", path: [] },
     { type: "get-statistics", requestId: 1 },
     { type: "memory-inputs", requestId: 1 },
@@ -7940,6 +7944,52 @@ test("navigates retained subgraphs, scopes refreshes and reports invalid paths w
   assert.equal(extension.reads.length, reads);
   await extension.open("relu.onnx");
   assert.equal(extension.messages.at(-1).graph.breadcrumbs.length, 1);
+});
+
+test("Symbolic lists all labels and merges a chosen equality into the saved model", async (t) => {
+  const extension = await openExtension("prefixed-dimensions.onnx");
+  t.after(() => extension.dispose());
+  const original = extension.nativeModels.at(-1);
+  await extension.receive({ type: "symbolic-dimensions", requestId: 7 });
+  assert.equal(extension.messages.at(-1).requestId, 7);
+  assert.deepEqual(
+    extension.messages.at(-1).names,
+    original.symbolicDimensions(),
+  );
+  const source = "component.model.past_sequence_len + sequence_len";
+  const target = "component.model.batch";
+  await extension.receive({ type: "navigate", path: [{ function: 0 }] });
+  await extension.receive({ type: "merge-dimensions", source, target });
+  const result = extension.messages.at(-1);
+  assert.equal(result.type, "dimension-info");
+  assert.equal(result.source, source);
+  assert.equal(result.target, target);
+  assert.equal(result.names.includes(source), false);
+  assert.deepEqual(result.graph.breadcrumbs.at(-1).path, [{ function: 0 }]);
+  assert.deepEqual(
+    result.graph.tensors.find(({ name }) => name === "fx").shape,
+    [target, target],
+  );
+  assert.ok(original.symbolicDimensions().includes(source));
+  const root = await mkdtemp(path.join(tmpdir(), "onnx-dimension-merge-"));
+  t.after(() => rm(root, { force: true, recursive: true }));
+  const saved = path.join(root, "merged.onnx");
+  await extension.save(saved);
+  const model = require("../dist/graph").loadModel(
+    await readFile(saved),
+    "merged.onnx",
+  );
+  assert.deepEqual(model.symbolicDimensions(), result.names);
+  model.verify();
+  for (const [source, target] of [
+    ["missing", "component.model.batch"],
+    ["component.model.batch", "component.model.batch"],
+    [null, "component.model.batch"],
+  ]) {
+    await extension.receive({ type: "merge-dimensions", source, target });
+    assert.equal(extension.messages.at(-1).type, "dimension-error");
+    assert.match(extension.messages.at(-1).error, /different existing/);
+  }
 });
 
 test("dimension renaming edits the retained model, preserves navigation and saves the new names", async (t) => {

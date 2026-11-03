@@ -1,5 +1,6 @@
 /** @file Application-owned edits of symbolic dimension labels. */
 #include "model.h"
+#include <set>
 #include <stdexcept>
 #include <unordered_map>
 
@@ -159,6 +160,51 @@ struct DimensionEdit {
 } // namespace
 
 void AddDimensionMethods(Napi::Env env, Napi::Object result, std::shared_ptr<StoredModel> model) {
+  result.Set("symbolicDimensions",
+             Napi::Function::New(env, [model](const Napi::CallbackInfo &call) -> Napi::Value {
+               try {
+                 DimensionEdit edit;
+                 edit.Copy(model);
+                 std::set<std::string> names;
+                 for (const auto *value : edit.names.values)
+                   names.emplace(value->sv());
+                 auto result = Napi::Array::New(call.Env(), names.size());
+                 uint32_t index = 0;
+                 for (const auto &name : names)
+                   result.Set(index++, name);
+                 return result;
+               } catch (const std::exception &error) {
+                 Napi::Error::New(call.Env(), error.what()).ThrowAsJavaScriptException();
+                 return call.Env().Undefined();
+               }
+             }));
+  result.Set("mergeDimensions",
+             Napi::Function::New(env, [model](const Napi::CallbackInfo &call) -> Napi::Value {
+               try {
+                 if (call.Length() != 2 || !call[0].IsString() || !call[1].IsString())
+                   throw std::runtime_error("Expected source and target symbolic dimension names.");
+                 const auto source = call[0].As<Napi::String>().Utf8Value();
+                 const auto target = call[1].As<Napi::String>().Utf8Value();
+                 if (source.empty() || target.empty() || source == target)
+                   throw std::runtime_error(
+                       "Choose two different non-empty symbolic dimension names.");
+                 DimensionEdit edit;
+                 auto copy = edit.Copy(model);
+                 size_t count = 0;
+                 for (auto *value : edit.names.values)
+                   if (value->sv() == source) {
+                     *value = target;
+                     ++count;
+                   }
+                 auto result = Napi::Object::New(call.Env());
+                 result.Set("model", ModelHandle(call.Env(), copy));
+                 result.Set("count", Napi::Number::New(call.Env(), count));
+                 return result;
+               } catch (const std::exception &error) {
+                 Napi::Error::New(call.Env(), error.what()).ThrowAsJavaScriptException();
+                 return call.Env().Undefined();
+               }
+             }));
   result.Set("dimensionPrefix",
              Napi::Function::New(env, [model](const Napi::CallbackInfo &call) -> Napi::Value {
                try {
