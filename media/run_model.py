@@ -121,8 +121,10 @@ def main(directory, cache=None, key=None):
         tensor.ParseFromString((directory / f"input-{index}.pb").read_bytes())
         inputs[tensor.name] = numpy_helper.to_array(tensor)
     start = perf_counter()
-    for _ in range(repeat):
+    for iteration in range(repeat):
         values = session.run(None, inputs)
+        if iteration < repeat - 1:
+            del values
     time_ms = (perf_counter() - start) * 1000 / repeat
     profiling = read_profile(session) if enable_profiling else None
     outputs = []

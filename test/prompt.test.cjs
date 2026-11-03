@@ -734,6 +734,86 @@ test("GenAI repeat profiles every generation and streams only the final sequence
     await assert.rejects(predict({ repeat }), /1–100 repeats/);
 });
 
+test("GenAI repetitions capture vocabulary logits only for the final sequence", async (t) => {
+  const { root, model } = await fixture(t);
+  for (const [repeat, captureBudget] of [
+    [1, 1024],
+    [3, 1024],
+    [3, 0],
+  ]) {
+    const name = `${repeat}-${captureBudget}`;
+    const input = path.join(root, `${name}-input.json`);
+    const output = path.join(root, `${name}-output.json`);
+    const capturePath = path.join(root, `${name}-capture.json`);
+    const audit = path.join(root, `${name}-audit.json`);
+    await writeFile(
+      input,
+      JSON.stringify({
+        ...options,
+        modelPath: model,
+        source: root,
+        repeat,
+        captureBudget,
+        capturePath,
+        keepLoaded: false,
+      }),
+    );
+    await execute(
+      process.execPath,
+      [
+        "-e",
+        `
+const { writeFileSync } = require("node:fs");
+const { resolve, dirname } = require("node:path");
+const [runner, input, output, audit] = process.argv.slice(1);
+const native = require(resolve(dirname(runner), "../dist/native/onnx_light_viewer.node"));
+const generate = native.runNativePrompt;
+const calls = [];
+native.runNativePrompt = (request, ...callbacks) => {
+  const result = generate(request, ...callbacks);
+  calls.push({
+    budget: request.captureBudget,
+    rows: result.logits?.length ?? null,
+    retained: request.keepLoaded,
+  });
+  return result;
+};
+process.argv = [process.execPath, runner, input, output];
+require(runner);
+writeFileSync(audit, JSON.stringify(calls));
+`,
+        path.resolve(__dirname, "../media/run_prompt.cjs"),
+        input,
+        output,
+        audit,
+      ],
+      { env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" } },
+    );
+    const calls = JSON.parse(await readFile(audit, "utf8"));
+    assert.deepEqual(
+      calls,
+      Array.from({ length: repeat }, (_, index) => {
+        const last = index === repeat - 1;
+        return {
+          budget: last ? captureBudget : 0,
+          rows: last && captureBudget ? options.maxTokens : null,
+          retained: !last,
+        };
+      }),
+    );
+    const result = JSON.parse(await readFile(output, "utf8"));
+    assert.deepEqual(
+      result.tokens.map((token) => token.score),
+      [4, 4, 4],
+    );
+    const capture = JSON.parse(await readFile(capturePath, "utf8"));
+    assert.equal(
+      capture.logits?.length ?? null,
+      captureBudget ? options.maxTokens : null,
+    );
+  }
+});
+
 test("GenAI applies advanced session options without changing the exported configuration", async (t) => {
   const { root, model } = await fixture(t);
   const configPath = path.join(root, "genai_config.json");

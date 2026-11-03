@@ -71,7 +71,11 @@ function run(input, output, sessionKey) {
     for (let iteration = 0; iteration < repeat; iteration++) {
       const last = iteration === repeat - 1;
       capture = native.runNativePrompt(
-        { ...nativeRequest, keepLoaded: !last || retained },
+        {
+          ...nativeRequest,
+          keepLoaded: !last || retained,
+          captureBudget: last ? request.captureBudget : 0,
+        },
         (token, index) => {
           if (last) emit({ type: "token", token, index });
         },
