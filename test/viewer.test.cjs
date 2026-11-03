@@ -3391,7 +3391,10 @@ test("memory hover inspects numerical and symbolic allocations at each phase, sa
     inspection.textContent,
     /New output tensors:\n  tensor: .*60 bytes/,
   );
-  assert.match(inspection.textContent, /scratch excluded\): 8\+36\*N bytes/);
+  assert.match(
+    inspection.textContent,
+    /including worst-case scratch\): 8\+36\*N bytes/,
+  );
   assert.match(inspection.textContent, /in: x: FLOAT \[2,3\]/);
   assert.match(
     inspection.textContent,
@@ -3420,6 +3423,138 @@ test("memory hover inspects numerical and symbolic allocations at each phase, sa
   assert.equal(inspection.hidden, true);
   load(demoGraph);
   assert.equal(document.getElementById("memory-results").hidden, true);
+});
+
+test("memory symbolic bounds remain inspectable without invented peaks or chart values", (t) => {
+  const viewer = openViewer(t);
+  const { document, window, messages, load } = viewer;
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  load(demoGraph);
+  showMemoryProfile(viewer, [20]);
+  document
+    .getElementById("memory-form")
+    .dispatchEvent(new window.Event("submit", { cancelable: true }));
+  const scratch = "peak_memory_max_<img src=x>";
+  const events = [100, `${scratch}+10`, 100, 200].map((deviceBytes, index) => ({
+    index,
+    node: `node${index}`,
+    opType: "Relu",
+    existingBytes: 10,
+    outputBytes: 10,
+    scratchBytes: index === 1 ? scratch : 0,
+    scratchAverageBytes: index === 1 ? null : 0,
+    deviceBytes,
+    afterBytes: index === 1 ? `${scratch}+5` : 10,
+    memory: { before_bytes: index === 2 ? `${scratch}+5` : 10 },
+    symbolicMemory: { during_bytes: String(deviceBytes) },
+  }));
+  send({
+    type: "memory-profile",
+    requestId: messages.at(-1).requestId,
+    profile: { name: "Symbolic", device: "CPU", peakBytes: null, events },
+  });
+  assert.equal(document.getElementById("memory-results").hidden, false);
+  assert.equal(
+    document.getElementById("memory-peak").textContent,
+    "Unresolved (symbolic bounds)",
+  );
+  assert.match(
+    document.getElementById("memory-configurations").textContent,
+    /Unresolved \(symbolic bounds\)/,
+  );
+  assert.match(
+    document.getElementById("memory-status").textContent,
+    /phases are not plotted or ranked/,
+  );
+  const rows = document.querySelectorAll("#memory-events tr");
+  assert.equal(
+    rows[1].cells[3].lastElementChild.textContent,
+    "Unresolved (symbolic)",
+  );
+  assert.equal(
+    rows[1].cells[4].lastElementChild.textContent,
+    "Unresolved (symbolic)",
+  );
+  assert.equal(
+    rows[2].cells[3].lastElementChild.textContent,
+    "Unresolved (symbolic)",
+  );
+  assert.ok(rows[1].cells[3].lastElementChild.title.includes(scratch));
+  assert.equal(rows[1].querySelector("img"), null);
+  const path = document.getElementById("memory-curve").getAttribute("d");
+  assert.equal(
+    path.match(/M/g).length,
+    2,
+    "unknown phases must disconnect the curve",
+  );
+  for (const curve of document.querySelectorAll(".memory-curve"))
+    assert.doesNotMatch(curve.getAttribute("d"), /NaN|Infinity|peak_memory/);
+  const chart = document.getElementById("memory-chart");
+  chart.getBoundingClientRect = () => new window.DOMRect(0, 0, 1000, 330);
+  chart.dispatchEvent(
+    new window.MouseEvent("pointermove", {
+      clientX: 60 + (920 * 5) / 13,
+      clientY: 100,
+    }),
+  );
+  const inspection = document.getElementById("memory-inspection");
+  assert.ok(
+    inspection.textContent.includes(`Memory: ${scratch}+10 bytes (symbolic)`),
+  );
+  assert.ok(
+    inspection.textContent.includes(
+      `Scratch (worst case): ${scratch} bytes (symbolic)`,
+    ),
+  );
+  assert.match(inspection.textContent, /Scratch \(average case\): Unavailable/);
+  assert.equal(inspection.querySelector("img"), null);
+  document.getElementById("memory-peaks-only").click();
+  assert.deepEqual(
+    [...document.querySelectorAll("#memory-events th")].map(
+      (cell) => cell.textContent,
+    ),
+    ["4"],
+  );
+  document.querySelector("#memory-configurations input").click();
+  assert.equal(document.getElementById("memory-peak").textContent, "20 bytes");
+  assert.match(
+    document.getElementById("memory-status").textContent,
+    /Symbolic bounds are unresolved/,
+  );
+  document
+    .getElementById("memory-form")
+    .dispatchEvent(new window.Event("submit", { cancelable: true }));
+  send({
+    type: "memory-profile",
+    requestId: messages.at(-1).requestId,
+    profile: {
+      name: "All symbolic",
+      device: "CPU",
+      peakBytes: null,
+      events: [{ ...events[1], index: 0, memory: { before_bytes: scratch } }],
+    },
+  });
+  assert.equal(document.getElementById("memory-curve").getAttribute("d"), "");
+  assert.equal(
+    chart.hasAttribute("hidden"),
+    false,
+    "numeric comparisons remain visible",
+  );
+  assert.equal(document.getElementById("memory-final-status").hidden, false);
+  chart.dispatchEvent(
+    new window.KeyboardEvent("keydown", { key: "ArrowRight" }),
+  );
+  assert.ok(inspection.textContent.includes(scratch));
+  for (let index = 0; index < 2; index++) {
+    document.querySelector("#memory-configurations input").click();
+    document.getElementById("memory-remove").click();
+  }
+  assert.equal(document.getElementById("memory-curve").getAttribute("d"), "");
+  assert.equal(
+    document.getElementById("memory-chart-peak").textContent,
+    "No numeric bounds",
+  );
 });
 
 test("memory inspection ignores scalar and array allocation buckets", (t) => {

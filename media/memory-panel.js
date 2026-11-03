@@ -32,6 +32,8 @@ function createMemoryPanel({
 
   function memoryDelta(before, after) {
     if (before == null || after == null) return "Unavailable";
+    if (typeof before === "string" || typeof after === "string")
+      return "Unresolved (symbolic)";
     const bytes = BigInt(after) - BigInt(before);
     const absolute = bytes < 0n ? -bytes : bytes;
     const whole = deltaFormatter
@@ -99,14 +101,15 @@ function createMemoryPanel({
     for (const configuration of configurations) {
       const compared = configuration.profile.events[event.index];
       const before = compared?.memory?.before_bytes ?? compared?.existingBytes;
-      const delta = memoryDelta(
-        before,
-        phase === "peak" ? compared?.deviceBytes : compared?.afterBytes,
-      );
+      const after =
+        phase === "peak" ? compared?.deviceBytes : compared?.afterBytes;
+      const delta = memoryDelta(before, after);
       const value = document.createElement("span");
       value.className = "memory-delta";
       value.style.color = configuration.color;
       value.title = configuration.label;
+      if (typeof before === "string" || typeof after === "string")
+        value.title += `\nBefore: ${before} bytes\n${phase === "peak" ? "During" : "After"}: ${after} bytes`;
       value.textContent =
         delta +
         (phase === "peak" &&
@@ -193,10 +196,15 @@ function createMemoryPanel({
 
   function chart() {
     const events = profile.events;
-    const peak = configurations.reduce(
-      (maximum, item) => Math.max(maximum, item.profile.peakBytes ?? 0),
-      0,
-    );
+    let peak;
+    for (const { profile } of configurations)
+      for (const event of profile.events)
+        for (const bytes of [
+          event.memory?.before_bytes ?? event.existingBytes,
+          event.deviceBytes,
+          event.afterBytes,
+        ])
+          if (Number.isFinite(bytes)) peak = Math.max(peak ?? 0, bytes);
     const eventCount = chartEventCount();
     const width = Math.max(1000, scroll.clientWidth) * zoom;
     const plotWidth = width - 80;
@@ -209,22 +217,40 @@ function createMemoryPanel({
     byId("memory-zoom-out").disabled = zoom === 1;
     const x = (step) =>
       (60 + (plotWidth * step) / (eventCount * 3 + 1)).toFixed(5);
-    const y = (bytes) => (240 - (210 * bytes) / Math.max(1, peak)).toFixed(5);
+    const y = (bytes) =>
+      (240 - (210 * bytes) / Math.max(1, peak ?? 0)).toFixed(5);
     const curves = byId("memory-comparison-curves");
     curves.replaceChildren();
     for (const [configurationIndex, item] of configurations.entries()) {
       const trace = item.profile.events;
-      const points = trace.length
-        ? [
-            `M${x(0)},${y(trace[0].memory?.before_bytes ?? trace[0].existingBytes)}`,
-          ]
-        : [];
+      const initial = trace[0]?.memory?.before_bytes ?? trace[0]?.existingBytes;
+      let connected = Number.isFinite(initial);
+      const points = connected ? [`M${x(0)},${y(initial)}`] : [];
       for (const [index, event] of trace.entries()) {
         const allocate = index * 3 + 1;
         const release = allocate + 2;
-        points.push(`H${x(allocate)} V${y(event.deviceBytes)} H${x(release)}`);
-        if (event.afterBytes != null)
-          points.push(`V${y(event.afterBytes)} H${x(release + 1)}`);
+        const before = event.memory?.before_bytes ?? event.existingBytes;
+        if (!connected && Number.isFinite(before)) {
+          points.push(`M${x(index * 3)},${y(before)}`);
+          connected = true;
+        }
+        if (Number.isFinite(event.deviceBytes)) {
+          points.push(
+            `${connected ? `H${x(allocate)} V` : `M${x(allocate)},`}${y(event.deviceBytes)} H${x(release)}`,
+          );
+          connected = true;
+        } else {
+          if (connected) points.push(`H${x(allocate)}`);
+          connected = false;
+        }
+        if (Number.isFinite(event.afterBytes)) {
+          points.push(
+            `${connected ? "V" : `M${x(release)},`}${y(event.afterBytes)} H${x(release + 1)}`,
+          );
+          connected = true;
+        } else if (event.afterBytes != null) {
+          connected = false;
+        }
       }
       const curve =
         item.profile === profile
@@ -246,7 +272,8 @@ function createMemoryPanel({
     }
     byId("memory-node-intervals").setAttribute("d", intervals.join(" "));
     byId("memory-chart").toggleAttribute("hidden", eventCount === 0);
-    byId("memory-chart-peak").textContent = formatFileSize(peak);
+    byId("memory-chart-peak").textContent =
+      peak == null ? "No numeric bounds" : formatFileSize(peak);
     const append = (parent, tag, attributes, text) => {
       const element = document.createElementNS(
         "http://www.w3.org/2000/svg",
@@ -375,7 +402,7 @@ function createMemoryPanel({
     }
     byId("memory-operator-intervals").setAttribute("d", markers.join(" "));
     byId("memory-final-status").hidden =
-      !events.length || events.at(-1).afterBytes != null;
+      !events.length || Number.isFinite(events.at(-1).afterBytes);
   }
 
   function inspect(
@@ -395,7 +422,9 @@ function createMemoryPanel({
     const amount = (value) =>
       value == null
         ? "Unavailable"
-        : `${formatFileSize(value)} (${value} bytes)`;
+        : typeof value === "string"
+          ? `${value} bytes (symbolic)`
+          : `${formatFileSize(value)} (${value} bytes)`;
     const tagMap = (value) =>
       Object.prototype.toString.call(value) === "[object Object]"
         ? value
@@ -406,7 +435,8 @@ function createMemoryPanel({
       `Memory: ${amount(bytes)}`,
       `Already allocated: ${amount(event.existingBytes)}`,
       `New outputs: ${amount(event.outputBytes)}`,
-      `Scratch: ${amount(event.scratchBytes)}`,
+      `Scratch (worst case): ${amount(event.scratchBytes)}`,
+      `Scratch (average case): ${amount(event.scratchAverageBytes)}`,
       `After release: ${amount(event.afterBytes)}`,
       "Allocation breakdown during execution (SDK categories):",
     ];
@@ -436,7 +466,7 @@ function createMemoryPanel({
           ? "after_bytes"
           : "during_bytes";
     lines.push(
-      `Symbolic tensor memory (${phase}, scratch excluded): ${event.symbolicMemory?.[key] ?? "Unavailable"} bytes`,
+      `Symbolic memory (${phase}${phase === "during" ? ", including worst-case scratch" : ""}): ${event.symbolicMemory?.[key] ?? "Unavailable"} bytes`,
     );
     for (const direction of ["inputs", "outputs"])
       for (const tensor of event[direction] ?? [])
@@ -701,7 +731,7 @@ function createMemoryPanel({
       label.append(
         radio,
         swatch,
-        `${configuration.label} — peak: ${configuration.profile.peakBytes == null ? "Unavailable (no nodes)" : formatFileSize(configuration.profile.peakBytes)}`,
+        `${configuration.label} — peak: ${peakLabel(configuration.profile)}`,
       );
       legend.append(label);
     }
@@ -715,6 +745,11 @@ function createMemoryPanel({
       )
         end++;
       if (
+        Number.isFinite(bytes) &&
+        (start === 0 ||
+          Number.isFinite(profile.events[start - 1].deviceBytes)) &&
+        (end === profile.events.length - 1 ||
+          Number.isFinite(profile.events[end + 1].deviceBytes)) &&
         (start === 0 || bytes > profile.events[start - 1].deviceBytes) &&
         (end === profile.events.length - 1 ||
           bytes > profile.events[end + 1].deviceBytes)
@@ -725,15 +760,33 @@ function createMemoryPanel({
     peakIndices = new Set(peaks.map((event) => event.index));
     byId("memory-peaks-count").textContent =
       `${peaks.length.toLocaleString()} local peak${peaks.length === 1 ? "" : "s"}. Select a node to show it in Model.`;
-    byId("memory-peak").textContent =
-      profile.peakBytes === null
-        ? "Unavailable (no nodes)"
-        : formatFileSize(profile.peakBytes);
+    byId("memory-peak").textContent = peakLabel(profile);
     byId("memory-device").textContent = profile.device;
     byId("memory-model-name").textContent = profile.name || "Unnamed model";
     chart();
     table();
     status.textContent = `${profile.events.length.toLocaleString()} estimated node events. No model execution was performed.`;
+    if (
+      configurations.some(({ profile }) =>
+        profile.events.some((event) =>
+          [
+            event.memory?.before_bytes ?? event.existingBytes,
+            event.deviceBytes,
+            event.afterBytes,
+          ].some((bytes) => typeof bytes === "string"),
+        ),
+      )
+    )
+      status.textContent +=
+        " Symbolic bounds are unresolved: those phases are not plotted or ranked as local peaks. Inspect nodes for SDK expressions.";
+  }
+
+  function peakLabel(profile) {
+    return profile.peakBytes == null
+      ? profile.events.length
+        ? "Unresolved (symbolic bounds)"
+        : "Unavailable (no nodes)"
+      : formatFileSize(profile.peakBytes);
   }
 
   byId("memory-remove").addEventListener("click", () => {

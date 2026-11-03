@@ -3,6 +3,7 @@
 #include <cmath>
 #include <map>
 #include <onnx_core/compute/compute_context.h>
+#include <onnx_core/symbolic/symbolic_helper.h>
 #include <onnx_extensions/kernels/kernel_dispatch_table.h>
 #include <onnx_extensions/shapes/dispatch_table.h>
 #include <onnx_proto/onnx_helper.h>
@@ -64,6 +65,21 @@ int64_t Bytes(const ol::core::expressions::DimType &value) {
   return *bytes;
 }
 
+void ValidateAmount(const ol::core::expressions::DimType &value) {
+  if (const auto *expression = std::get_if<std::string>(&value)) {
+    if (expression->empty())
+      throw std::runtime_error("Memory estimate contains an empty symbolic bound.");
+  } else {
+    Bytes(value);
+  }
+}
+
+Napi::Value Amount(Napi::Env env, const ol::core::expressions::DimType &value) {
+  if (const auto *expression = std::get_if<std::string>(&value))
+    return Napi::String::New(env, *expression);
+  return Napi::Number::New(env, Bytes(value));
+}
+
 class MemoryWorker : public Napi::AsyncWorker {
 public:
   MemoryWorker(Napi::Env env, std::shared_ptr<StoredModel> source,
@@ -113,6 +129,7 @@ public:
       symbolic.ComputeValueAndNodeTags(symbolic_snapshot.graph());
       symbolic.ComputeInPlaceReuseGraph(symbolic_snapshot.graph(), symbolic.Shapes(), false,
                                         symbolic.ValueTags());
+      symbolic.ComputePeakMemory(symbolic_snapshot.graph(), ol::core::symbolic::Device::kCPU);
       auto &graph = snapshot_.ref_graph();
       bind(graph, true);
       ol::core::compute::ComputeContext context;
@@ -146,32 +163,41 @@ public:
         const auto &memory = context.NodeMemory(index);
         for (const auto &[key, entry] : memory) {
           if (const auto *value = std::get_if<ol::core::expressions::DimType>(&entry)) {
-            Bytes(*value);
+            ValidateAmount(*value);
           } else {
             for (const auto &[tag, amount] : std::get<ol::core::compute::TaggedMemory>(entry))
-              Bytes(amount);
+              ValidateAmount(amount);
           }
         }
         const auto scalar = [&](const char *key) {
-          return Bytes(std::get<ol::core::expressions::DimType>(memory.at(key)));
+          return std::get<ol::core::expressions::DimType>(memory.at(key));
         };
-        const auto existing = scalar(ol::core::compute::kNodeMemoryAlreadyAllocatedBytesKey);
-        const auto outputs = scalar(ol::core::compute::kNodeMemoryOutputAllocationBytesKey);
-        const auto tensors = scalar(ol::core::compute::kNodeMemoryTotalBytesKey);
-        const auto scratch = context.NodePeakMemory(index);
-        if (scratch < 0 || scratch > maxSafeBytes - tensors)
-          throw std::runtime_error("Estimated memory exceeds the exact integer range.");
+        const auto existing = Bytes(scalar(ol::core::compute::kNodeMemoryAlreadyAllocatedBytesKey));
+        const auto outputs = Bytes(scalar(ol::core::compute::kNodeMemoryOutputAllocationBytesKey));
+        const auto &estimate = context.NodePeakMemory(index);
+        const auto scratch = ol::core::symbolic::ToDimType(estimate.worst_case);
+        ValidateAmount(scratch);
+        std::optional<ol::core::expressions::DimType> average;
+        if (estimate.average_case) {
+          average = ol::core::symbolic::ToDimType(*estimate.average_case);
+          ValidateAmount(*average);
+        }
+        const auto total = scalar(ol::core::compute::kNodeMemoryDuringBytesKey);
         const auto &node = graph.node(index);
         events_.push_back({existing,
                            outputs,
                            scratch,
-                           tensors + scratch,
+                           average,
+                           total,
                            {},
                            describe(node.input()),
                            describe(node.output()),
                            memory,
                            symbolic.NodeMemory(index)});
-        peak_ = std::max(peak_, tensors + scratch);
+        if (const auto *bytes = std::get_if<int64_t>(&total))
+          peak_ = std::max(peak_, *bytes);
+        else
+          unresolved_peak_ = true;
       }
       for (const auto &decision : context.Events())
         events_.at(decision.node_index).decisions.push_back(decision);
@@ -184,8 +210,9 @@ public:
     auto result = Napi::Object::New(Env());
     result.Set("name", std::string(snapshot_.graph().name()));
     result.Set("device", "CPU");
-    result.Set("peakBytes", events_.empty() ? Napi::Value(Env().Null())
-                                            : Napi::Value(Napi::Number::New(Env(), peak_)));
+    result.Set("peakBytes", events_.empty() || unresolved_peak_
+                                ? Napi::Value(Env().Null())
+                                : Napi::Value(Napi::Number::New(Env(), peak_)));
     auto events = Napi::Array::New(Env(), events_.size());
     for (uint32_t index = 0; index < events_.size(); ++index) {
       const auto &node = snapshot_.graph().node(index);
@@ -196,12 +223,12 @@ public:
       item.Set("opType", std::string(node.op_type()));
       item.Set("existingBytes", Napi::Number::New(Env(), event.existing));
       item.Set("outputBytes", Napi::Number::New(Env(), event.outputs));
-      item.Set("scratchBytes", Napi::Number::New(Env(), event.scratch));
-      item.Set("deviceBytes", Napi::Number::New(Env(), event.total));
-      item.Set(
-          "afterBytes",
-          Napi::Number::New(Env(), Bytes(std::get<ol::core::expressions::DimType>(event.memory.at(
-                                       ol::core::compute::kNodeMemoryAfterBytesKey)))));
+      item.Set("scratchBytes", Amount(Env(), event.scratch));
+      item.Set("scratchAverageBytes",
+               event.average ? Amount(Env(), *event.average) : Napi::Value(Env().Null()));
+      item.Set("deviceBytes", Amount(Env(), event.total));
+      item.Set("afterBytes", Amount(Env(), std::get<ol::core::expressions::DimType>(event.memory.at(
+                                               ol::core::compute::kNodeMemoryAfterBytesKey))));
       auto decisions = Napi::Array::New(Env(), event.decisions.size());
       for (uint32_t i = 0; i < event.decisions.size(); ++i) {
         const auto &decision = event.decisions[i];
@@ -235,7 +262,10 @@ private:
     std::string name, type, shape, tag;
   };
   struct Event {
-    int64_t existing, outputs, scratch, total;
+    int64_t existing, outputs;
+    ol::core::expressions::DimType scratch;
+    std::optional<ol::core::expressions::DimType> average;
+    ol::core::expressions::DimType total;
     ol::core::compute::ComputeEventLog decisions;
     std::vector<Tensor> inputs, output_tensors;
     ol::core::compute::NodeMemoryProfile memory, symbolic_memory;
@@ -245,7 +275,7 @@ private:
     const auto value = [&](const ol::core::expressions::DimType &amount) -> Napi::Value {
       if (symbolic)
         return Napi::String::New(Env(), ol::core::expressions::dim_to_string(amount));
-      return Napi::Number::New(Env(), Bytes(amount));
+      return Amount(Env(), amount);
     };
     for (const auto &[key, entry] : memory) {
       if (const auto *scalar = std::get_if<ol::core::expressions::DimType>(&entry)) {
@@ -280,6 +310,7 @@ private:
   std::map<std::string, int64_t> dimensions_;
   std::vector<Event> events_;
   int64_t peak_ = 0;
+  bool unresolved_peak_ = false;
 };
 } // namespace
 

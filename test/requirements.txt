@@ -1,10 +1,8 @@
-# Full wheels for CI: reduced builds do not include the CPU runtime.
-onnx-light @ https://github.com/xadupre/onnx-light/releases/download/0.2.4.1/onnx_light-0.2.4.1-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl#sha256=cfbf0abd65d8d86536155923ae876a53af770685c7441807854b433f5b6905c8 ; sys_platform == "linux" and platform_machine == "x86_64" and python_version == "3.12"
-onnx-light @ https://github.com/xadupre/onnx-light/releases/download/0.2.4.1/onnx_light-0.2.4.1-cp312-cp312-win_amd64.whl#sha256=935063505d4cd1389c178c7a4effa6118acaf4855c69e805fe51ea960830f8fc ; sys_platform == "win32" and platform_machine == "AMD64" and python_version == "3.12"
-onnx-light @ https://github.com/xadupre/onnx-light/releases/download/0.2.4.1/onnx_light-0.2.4.1-cp312-cp312-macosx_13_0_universal2.whl#sha256=c6ccc23829e373c38d885a6c9aac9a0db0a1eb6bceaad5748f5598f2bd82cfdf ; sys_platform == "darwin" and platform_machine == "arm64" and python_version == "3.12"
---find-links https://github.com/xadupre/onnx-light-cpu/releases/expanded_assets/0.2.4
-onnx-light==0.2.4.1
-onnx-light-cpu==0.2.4
+# CPU wheels select matching full onnx-light wheels with the CPU runtime.
+--find-links https://github.com/xadupre/onnx-light/releases/expanded_assets/0.2.5
+--find-links https://github.com/xadupre/onnx-light-cpu/releases/expanded_assets/0.2.5
+onnx-light==0.2.5
+onnx-light-cpu==0.2.5
 huggingface-hub>=0.34,<2
 # Supply real native GenAI/ORT shared libraries for prompt integration tests.
 onnxruntime-genai==0.17.0
