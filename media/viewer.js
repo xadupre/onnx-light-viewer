@@ -1391,16 +1391,34 @@ function updateConnection(connection) {
   if (selectedConnection === connection) updateConnectionHighlight();
   if (!connection.group) return;
   const { path, hit, text, information } = connection;
-  const { x, y, angle } = connectionLabelPosition(connection);
+  const { x, y } = connectionLabelPosition(connection);
   const data = connectionPath(connection);
   path.setAttribute("d", data);
   hit.setAttribute("d", data);
-  text.setAttribute("x", x + 10);
-  text.setAttribute("y", y);
-  information.setAttribute("x", x + 10);
-  information.setAttribute("y", y + 14);
-  for (const label of [text, information])
-    label.setAttribute("transform", `rotate(${angle} ${x} ${y})`);
+  let baseline = y - (connection.labelHeight ?? 28) / 2 + 10;
+  for (const [label, lines] of [
+    [text, connection.nameLines ?? [connection.name]],
+    [
+      information,
+      connection.informationLines ?? [tensorDescription(connection.name)],
+    ],
+  ]) {
+    label.setAttribute("x", x);
+    label.setAttribute("y", baseline);
+    label.setAttribute("text-anchor", "middle");
+    const value = label === information ? label.querySelector("tspan") : label;
+    if (
+      value.children.length !== lines.length ||
+      lines.some((line, index) => value.children[index].textContent !== line)
+    )
+      value.replaceChildren(
+        ...lines.map((line, index) =>
+          element("tspan", { x, dy: index ? 14 : 0 }, line),
+        ),
+      );
+    for (const line of value.children) line.setAttribute("x", x);
+    baseline += lines.length * 14;
+  }
 }
 
 function selectConnection(connection) {
@@ -1841,41 +1859,47 @@ function connectionLabelPosition(connection) {
     const segment = Math.hypot(end.x - start.x, end.y - start.y);
     if (remaining <= segment && segment) {
       const fraction = remaining / segment;
-      let angle =
-        (Math.atan2(end.y - start.y, end.x - start.x) * 180) / Math.PI;
-      if (angle > 90) angle -= 180;
-      if (angle < -90) angle += 180;
-      const radians = (angle * Math.PI) / 180;
-      const offset = connection.labelOffset ?? 0;
       return {
-        x: start.x + (end.x - start.x) * fraction - Math.sin(radians) * offset,
-        y: start.y + (end.y - start.y) * fraction + Math.cos(radians) * offset,
-        angle,
+        x:
+          start.x +
+          (end.x - start.x) * fraction +
+          (connection.labelOffset ?? 0),
+        y: start.y + (end.y - start.y) * fraction,
       };
     }
     remaining -= segment;
   }
-  return { ...points[0], angle: 0 };
+  return {
+    x: points[0].x + (connection.labelOffset ?? 0),
+    y: points[0].y,
+  };
 }
 
 function connectionLabelBounds(connection) {
-  const { x, y, angle } = connectionLabelPosition(connection);
-  const radians = (angle * Math.PI) / 180;
-  const cosine = Math.cos(radians),
-    sine = Math.sin(radians);
-  const corners = [];
-  for (const dx of [8, 12 + (connection.labelWidth ?? 480)])
-    for (const dy of [-12, 18])
-      corners.push({
-        x: x + dx * cosine - dy * sine,
-        y: y + dx * sine + dy * cosine,
-      });
+  const { x, y } = connectionLabelPosition(connection);
+  const halfWidth = (connection.labelWidth ?? 216) / 2 + 4;
+  const halfHeight = (connection.labelHeight ?? 28) / 2 + 4;
   return {
-    left: Math.min(...corners.map((point) => point.x)),
-    top: Math.min(...corners.map((point) => point.y)),
-    right: Math.max(...corners.map((point) => point.x)),
-    bottom: Math.max(...corners.map((point) => point.y)),
+    left: x - halfWidth,
+    top: y - halfHeight,
+    right: x + halfWidth,
+    bottom: y + halfHeight,
   };
+}
+
+function wrapConnectionLabel(text, context) {
+  if (context.measureText(text).width <= 216) return [text];
+  const lines = [];
+  let line = "";
+  for (const character of text) {
+    if (line && context.measureText(line + character).width > 216) {
+      lines.push(line);
+      line = "";
+    }
+    line += character;
+  }
+  lines.push(line);
+  return lines;
 }
 
 function arrangeConnectionLabels() {
@@ -1884,11 +1908,16 @@ function arrangeConnectionLabels() {
   const entries = connections.map((connection) => {
     connection.labelFraction = 0.5;
     connection.labelOffset = 0;
-    connection.labelWidth = Math.max(
-      context.measureText(shortName(connection.name, 36)).width,
-      context.measureText(shortName(tensorDescription(connection.name), 68))
-        .width,
+    connection.nameLines = wrapConnectionLabel(connection.name, context);
+    connection.informationLines = wrapConnectionLabel(
+      tensorDescription(connection.name),
+      context,
     );
+    const lines = [...connection.nameLines, ...connection.informationLines];
+    connection.labelWidth = Math.max(
+      ...lines.map((line) => context.measureText(line).width),
+    );
+    connection.labelHeight = lines.length * 14;
     return {
       connection,
       bounds: connectionLabelBounds(connection),
@@ -2365,16 +2394,9 @@ function render(graph, metadata) {
             selectConnection(connection);
           }
         });
-        const text = label(
-          group,
-          0,
-          0,
-          shortName(name, 36),
-          "tensor-label",
-          "start",
-        );
+        const text = label(group, 0, 0, "", "tensor-label");
         text.setAttribute("aria-label", name);
-        const information = tensorLabel(group, 0, 0, name, 68, "start");
+        const information = tensorLabel(group, 0, 0, name, 68);
         Object.assign(connection, {
           group,
           from,
