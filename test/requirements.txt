@@ -1,8 +1,8 @@
 # CPU wheels select matching full onnx-light wheels with the CPU runtime.
---find-links https://github.com/xadupre/onnx-light/releases/expanded_assets/0.2.5
---find-links https://github.com/xadupre/onnx-light-cpu/releases/expanded_assets/0.2.5
-onnx-light==0.2.5
-onnx-light-cpu==0.2.5
+--find-links https://github.com/xadupre/onnx-light/releases/expanded_assets/0.2.6
+--find-links https://github.com/xadupre/onnx-light-cpu/releases/expanded_assets/0.2.6
+onnx-light==0.2.6
+onnx-light-cpu==0.2.6
 huggingface-hub>=0.34,<2
 # Supply real native GenAI/ORT shared libraries for prompt integration tests.
 onnxruntime-genai==0.17.0

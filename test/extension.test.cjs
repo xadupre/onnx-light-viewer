@@ -2977,13 +2977,10 @@ test("opens outside-workspace models through the path dialog and saves encrypted
   submit("memory-form");
   await flush();
   assert.equal(document.getElementById("memory-results").hidden, false);
-  assert.equal(
-    document.getElementById("memory-peak").textContent,
-    "Unresolved (symbolic bounds)",
-  );
+  assert.equal(document.getElementById("memory-peak").textContent, "928 bytes");
   assert.match(
     document.getElementById("memory-status").textContent,
-    /Symbolic bounds are unresolved/,
+    /5 estimated node events/,
   );
   assert.doesNotMatch(
     document.getElementById("memory-curve").getAttribute("d"),
@@ -7956,7 +7953,7 @@ test("Symbolic lists all labels and merges a chosen equality into the saved mode
     extension.messages.at(-1).names,
     original.symbolicDimensions(),
   );
-  const source = "component.model.past_sequence_len + sequence_len";
+  const source = "component.model.past_sequence_len";
   const target = "component.model.batch";
   await extension.receive({ type: "navigate", path: [{ function: 0 }] });
   await extension.receive({ type: "merge-dimensions", source, target });
@@ -7968,7 +7965,7 @@ test("Symbolic lists all labels and merges a chosen equality into the saved mode
   assert.deepEqual(result.graph.breadcrumbs.at(-1).path, [{ function: 0 }]);
   assert.deepEqual(
     result.graph.tensors.find(({ name }) => name === "fx").shape,
-    [target, target],
+    [target, `${target}+sequence_len`],
   );
   assert.ok(original.symbolicDimensions().includes(source));
   const root = await mkdtemp(path.join(tmpdir(), "onnx-dimension-merge-"));
