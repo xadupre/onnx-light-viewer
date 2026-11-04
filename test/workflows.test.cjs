@@ -85,7 +85,7 @@ test("native builds use onnx-light 0.2.6 with pinned checksums", () => {
   );
 });
 
-test("Python tooling pins both SDKs to 0.2.6 without conflicting direct URLs", () => {
+test("Python tooling pins both SDKs to 0.2.6 and selects full Linux SDK wheels", () => {
   const coverage = workflow("coverage.yml");
   assert.match(coverage, /-r test\/requirements\.txt/);
   assert.doesNotMatch(
@@ -97,7 +97,16 @@ test("Python tooling pins both SDKs to 0.2.6 without conflicting direct URLs", (
     "utf8",
   );
   assert.match(requirements, /^onnx-light==0\.2\.6$/m);
-  assert.doesNotMatch(requirements, /^onnx-light\s*@/m);
+  for (const [python, abi] of [
+    ["3.12", "cp312"],
+    ["3.13", "cp313"],
+    ["3.14", "cp314"],
+  ])
+    assert.ok(
+      requirements.includes(
+        `onnx-light @ https://github.com/xadupre/onnx-light/releases/download/0.2.6/onnx_light-0.2.6-${abi}-${abi}-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl ; sys_platform == "linux" and platform_machine == "x86_64" and python_version == "${python}"`,
+      ),
+    );
   assert.match(
     requirements,
     /^--find-links https:\/\/github\.com\/xadupre\/onnx-light\/releases\/expanded_assets\/0\.2\.6$/m,
