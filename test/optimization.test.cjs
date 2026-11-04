@@ -258,7 +258,8 @@ test(
           `
 import json, os, sys
 print(json.dumps({
-    "executable": sys._base_executable,
+    # Keep the configured environment's native extensions and site initialization.
+    "executable": sys.executable,
     "paths": [path for path in sys.path if os.path.isabs(path)],
 }))
 `,
