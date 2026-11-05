@@ -870,8 +870,6 @@ async function openExtension(
           return items.find(({ label }) => label === repositoryFileSelection);
         if (options.title === "Choose exported ONNX model")
           return items.find(({ label }) => label === exportedFileSelection);
-        if (options.title === "Choose a model from the ZIP package")
-          return items.find(({ label }) => label === repositoryFileSelection);
         return backendSelection === undefined
           ? undefined
           : {
@@ -1034,9 +1032,6 @@ async function openExtension(
     openDialogs,
     setOpenSelection: (filePath) => {
       selection = filePath ? [vscode.Uri.file(filePath)] : undefined;
-    },
-    selectPackageModel: (name) => {
-      repositoryFileSelection = name;
     },
     failNextOpenDialog: (message) => {
       openDialogFailure = new Error(message);
@@ -1208,138 +1203,6 @@ test("retains webview context while hidden for both editor creation paths", asyn
   extension.dispose();
 });
 
-test("ZIP packages extract models and assets and retain the selected model for reload and saving", async (t) => {
-  const { zipSync, unzipSync } = require("fflate");
-  const directory = await mkdtemp(path.join(tmpdir(), "viewer-package-host-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
-  const archive = path.join(directory, "runtime.zip");
-  await writeFile(
-    archive,
-    zipSync({
-      "decoder/model.onnx": await readFile(
-        require.resolve("./models/relu.onnx"),
-      ),
-      "decoder/weights.bin": Buffer.from("preserved asset"),
-      "embedding/model.onnx": await readFile(
-        require.resolve("./models/initializers.onnx"),
-      ),
-      "genai_config.json": Buffer.from("{}"),
-    }),
-  );
-  const extension = await openExtension(
-    undefined,
-    "onnxLightViewer.open",
-    true,
-  );
-  t.after(() => extension.dispose());
-  extension.setWorkspaceFolders([]);
-  extension.selectPackageModel(path.join("decoder", "model.onnx"));
-  await extension.openFile(archive);
-  assert.deepEqual(extension.errors, []);
-  const choice = extension.picks.find(
-    ({ options }) => options.title === "Choose a model from the ZIP package",
-  );
-  assert.equal(choice.items.length, 2);
-  const selected = choice.items.find(
-    ({ label }) => label === path.join("decoder", "model.onnx"),
-  ).path;
-  assert.equal(
-    extension.messages.findLast(({ type }) => type === "graph").file
-      .saveDirectory,
-    directory,
-  );
-  assert.equal(
-    await readFile(path.join(path.dirname(selected), "weights.bin"), "utf8"),
-    "preserved asset",
-  );
-  await extension.receive({ type: "refresh-shapes" });
-  assert.deepEqual(extension.errors, []);
-  await extension.receive({
-    type: "save",
-    storage: "zip",
-    location: path.join(path.dirname(selected), "do-not-delete-my-copy.zip"),
-    overwrite: false,
-  });
-  assert.match(extension.messages.at(-1).error, /outside the temporary ZIP/);
-  const destination = path.join(directory, "saved.zip");
-  await extension.receive({
-    type: "save",
-    storage: "zip",
-    location: destination,
-    overwrite: false,
-  });
-  assert.equal(extension.messages.at(-1).type, "save-info");
-  const saved = unzipSync(await readFile(destination));
-  assert.ok(saved["model-copy.onnx"]);
-  const restored = require("../dist/graph").loadModel(
-    saved["model-copy.onnx"],
-    "restored.onnx",
-  );
-  assert.equal(restored.graph().nodes[0].opType, "Relu");
-  await extension.receive({
-    type: "save",
-    storage: "zip",
-    location: archive,
-    overwrite: true,
-  });
-  assert.equal(extension.messages.at(-1).type, "save-error");
-  extension.dispose();
-  await new Promise((resolve) => setTimeout(resolve, 50));
-  await assert.rejects(stat(selected), { code: "ENOENT" });
-  assert.ok((await stat(destination)).isFile());
-});
-
-test("ZIP package selection cancellation and invalid packages leave the current graph unchanged", async (t) => {
-  const { zipSync } = require("fflate");
-  const extension = await openExtension(
-    "relu.onnx",
-    "onnxLightViewer.open",
-    true,
-  );
-  t.after(() => extension.dispose());
-  const before = extension.messages.filter(
-    ({ type }) => type === "graph",
-  ).length;
-  const bytes = await readFile(require.resolve("./models/relu.onnx"));
-  await extension.openBytes(
-    "runtime.zip",
-    zipSync({ "a.onnx": bytes, "b.onnx": bytes }),
-  );
-  assert.equal(
-    extension.messages.filter(({ type }) => type === "graph").length,
-    before,
-  );
-  assert.deepEqual(extension.errors, []);
-  await extension.openBytes("invalid.zip", Buffer.from("not a ZIP"));
-  assert.equal(extension.messages.at(-1).type, "load-error");
-});
-
-test("pipelines save as ZIP packages with external weights and can be reopened", async (t) => {
-  const directory = await mkdtemp(path.join(tmpdir(), "viewer-pipeline-zip-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
-  const extension = await openExtension(
-    "tiny.pipe-onnx",
-    "onnxLightViewer.open",
-    true,
-  );
-  t.after(() => extension.dispose());
-  const destination = path.join(directory, "pipeline.zip");
-  await extension.receive({
-    type: "save",
-    storage: "zip",
-    location: destination,
-    overwrite: false,
-  });
-  assert.equal(extension.messages.at(-1).type, "save-info");
-  await extension.openFile(destination);
-  assert.deepEqual(extension.errors, []);
-  const graph = extension.messages.findLast(
-    ({ type }) => type === "graph",
-  ).graph;
-  assert.equal(graph.pipeline, true);
-  assert.equal(graph.pipelineStages.length, 3);
-});
-
 test("the Explorer context menu offers ONNX Light Viewer only for supported model filenames", () => {
   const { contributes } = require("../package.json");
   const menu = contributes.menus["explorer/context"].find(
@@ -1358,8 +1221,6 @@ test("the Explorer context menu offers ONNX Light Viewer only for supported mode
     "MODEL.ONNX",
     "MODEL.ONNX.ENC",
     "MODEL.PIPE-ONNX",
-    "runtime.zip",
-    "RUNTIME.ZIP",
   ])
     assert.ok(filename.test(name), name);
   for (const name of [
@@ -3014,14 +2875,7 @@ test("native path selection preserves the picker and returns a path without load
   });
   assert.deepEqual(extension.openDialogs.at(-1), {
     canSelectMany: false,
-    filters: {
-      "ONNX models, pipelines and ZIP packages": [
-        "onnx",
-        "enc",
-        "pipe-onnx",
-        "zip",
-      ],
-    },
+    filters: { "ONNX models and pipelines": ["onnx", "enc", "pipe-onnx"] },
     openLabel: "Open ONNX graph",
   });
   extension.setOpenSelection(undefined);

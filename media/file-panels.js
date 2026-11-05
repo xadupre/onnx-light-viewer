@@ -414,10 +414,10 @@ function createFilePanels({
     byId("save-encryption").hidden = !encrypted;
     byId("save-password").required = encrypted;
     byId("save-confirmation").required = encrypted;
-    if (event.target.name === "save-format")
+    if (event.target.name === "save-format" && !pipelineFile)
       byId("save-file").value = byId("save-file").value.replace(
-        /\.(?:onnx(?:\.enc)?|pipe-onnx)(?:\.zip)?$/i,
-        `.${pipelineFile ? "pipe-onnx" : "onnx"}${encrypted ? ".enc" : ""}${document.querySelector('input[name="save-format"]:checked').value === "zip" ? ".zip" : ""}`,
+        /\.onnx(?:\.enc)?$/i,
+        `.onnx${encrypted ? ".enc" : ""}`,
       );
     byId("save-options-error").textContent = "";
   });
@@ -436,7 +436,6 @@ function createFilePanels({
         "embedded-encrypted",
         "external-plain",
         "reuse-plain",
-        "zip",
       ].includes(format) ||
       (external &&
         (!Number.isSafeInteger(maxExternalFileSize) ||
@@ -468,13 +467,7 @@ function createFilePanels({
       overwrite: byId("save-overwrite").checked,
       includeRewritings: byId("save-rewritings").checked,
       storage:
-        format === "zip"
-          ? "zip"
-          : format === "reuse-plain"
-            ? "reuse"
-            : external
-              ? "external"
-              : "embedded",
+        format === "reuse-plain" ? "reuse" : external ? "external" : "embedded",
       encrypted: format === "embedded-encrypted",
       ...(external ? { maxExternalFileSize } : {}),
     });
@@ -723,10 +716,7 @@ function createFilePanels({
         (document.querySelector('input[name="save-format"]:checked').value ===
         "embedded-encrypted"
           ? ".enc"
-          : document.querySelector('input[name="save-format"]:checked')
-                .value === "zip"
-            ? ".zip"
-            : "");
+          : "");
     }
   }
   function startSaving() {

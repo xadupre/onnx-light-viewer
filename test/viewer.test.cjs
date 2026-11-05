@@ -5819,7 +5819,7 @@ test("shows matching adjacent Open/Save sidebar buttons and an explicit storage/
   assert.equal(dialog.hidden, false);
   assert.equal(dialog.tagName, "SECTION");
   assert.equal(dialog.closest("aside"), open.closest("aside"));
-  assert.equal(form.querySelectorAll('input[type="radio"]').length, 6);
+  assert.equal(form.querySelectorAll('input[type="radio"]').length, 5);
   assert.equal(
     form.querySelector('input[value="external-encrypted"]').disabled,
     true,
@@ -5868,57 +5868,6 @@ test("shows matching adjacent Open/Save sidebar buttons and an explicit storage/
   open.click();
   submitOpen(document, window);
   assert.equal(messages.at(-1).type, "open");
-});
-
-test("ZIP saves select the package transport and update model and pipeline filenames", (t) => {
-  const { document, window, messages, load } = openViewer(t);
-  load(demoGraph);
-  window.dispatchEvent(
-    new window.MessageEvent("message", {
-      data: {
-        type: "graph",
-        graph: demoGraph,
-        file: { directory: "/models", savePath: "model-copy.onnx" },
-      },
-    }),
-  );
-  const zip = document.querySelector('input[name="save-format"][value="zip"]');
-  zip.checked = true;
-  zip.dispatchEvent(new window.Event("change", { bubbles: true }));
-  assert.equal(
-    document.getElementById("save-file").value,
-    "model-copy.onnx.zip",
-  );
-  assert.equal(document.getElementById("weight-file-size").disabled, true);
-  document
-    .getElementById("save-form")
-    .dispatchEvent(new window.Event("submit", { cancelable: true }));
-  assert.equal(messages.at(-1).storage, "zip");
-  assert.equal(messages.at(-1).encrypted, false);
-  window.dispatchEvent(
-    new window.MessageEvent("message", {
-      data: {
-        type: "graph",
-        graph: demoGraph,
-        file: {
-          directory: "/models",
-          savePath: "pipeline-copy.pipe-onnx",
-          pipeline: true,
-        },
-      },
-    }),
-  );
-  assert.equal(
-    document.getElementById("save-file").value,
-    "pipeline-copy.pipe-onnx.zip",
-  );
-  const plain = document.querySelector('input[value="embedded-plain"]');
-  plain.checked = true;
-  plain.dispatchEvent(new window.Event("change", { bubbles: true }));
-  assert.equal(
-    document.getElementById("save-file").value,
-    "pipeline-copy.pipe-onnx",
-  );
 });
 
 test("chooses saved rewriting scenarios, applies next or remaining steps and recovers from errors", (t) => {

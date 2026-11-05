@@ -65,38 +65,8 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(onnx_light_cpu)
 set_target_properties(lib_onnx_light_cpu_backend_test PROPERTIES EXCLUDE_FROM_ALL TRUE)
 
-set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-set(BUILD_TESTS OFF CACHE BOOL "" FORCE)
-set(INSTALL_PROJECT OFF CACHE BOOL "" FORCE)
-set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
-FetchContent_Declare(miniz
-  URL "https://codeload.github.com/richgel999/miniz/tar.gz/refs/tags/3.1.0"
-  URL_HASH "SHA256=09569fc19d060ac9f5999ba9356728c2494ebe6a24ac0eb0a6b6ae3d396cfea6"
-  DOWNLOAD_EXTRACT_TIMESTAMP TRUE
-)
-FetchContent_MakeAvailable(miniz)
-set_target_properties(miniz PROPERTIES POSITION_INDEPENDENT_CODE ON)
-
-FetchContent_Declare(nlohmann_json
-  URL "https://github.com/nlohmann/json/releases/download/v3.11.3/json.tar.xz"
-  URL_HASH "SHA256=d6c65aca6b1ed68e7a182f4757257b107ae403032760ed6ef121c9d55e81757d"
-  DOWNLOAD_EXTRACT_TIMESTAMP TRUE
-)
-FetchContent_MakeAvailable(nlohmann_json)
-set(MODEL_PACKAGE_BUILD_SHARED OFF CACHE BOOL "" FORCE)
-set(MODEL_PACKAGE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-set(ONNX_RUNTIME_MODEL_PACKAGE_COMMIT "45053e8f92df1c7a1daa68cb852acd2d200e287b")
-FetchContent_Declare(ort_model_package
-  URL "https://codeload.github.com/microsoft/onnxruntime/tar.gz/${ONNX_RUNTIME_MODEL_PACKAGE_COMMIT}"
-  URL_HASH "SHA256=26359d57369afc00412eb48199f28e33a4920db4e01b59733702dcaebde8de62"
-  SOURCE_SUBDIR model_package
-  DOWNLOAD_EXTRACT_TIMESTAMP TRUE
-)
-FetchContent_MakeAvailable(ort_model_package)
-
 add_library(onnx_light_viewer SHARED
   native/addon.cc
-  native/zip_package.cc
   native/model.cc
   native/model_io.cc
   native/pipeline.cc
@@ -121,7 +91,6 @@ target_compile_definitions(onnx_light_viewer PRIVATE
 )
 target_include_directories(onnx_light_viewer PRIVATE ${CMAKE_JS_INC} "${_genai_headers}")
 target_link_libraries(onnx_light_viewer PRIVATE
-  miniz model_package nlohmann_json::nlohmann_json
   onnx_light::lib_onnx_op onnx_light::lib_onnx_shape
   onnx_light::lib_onnx_patterns
   onnx_light::lib_onnx_manipulations
@@ -188,7 +157,4 @@ file(DOWNLOAD
 )
 configure_file("${onnx_light_cpu_SOURCE_DIR}/LICENSE" "${_output}/onnx-light-cpu.LICENSE" COPYONLY)
 configure_file("${onnx_light_cpu_SOURCE_DIR}/ml_cpu_compute/LICENSE" "${_output}/ml-cpu-compute.LICENSE" COPYONLY)
-configure_file("${miniz_SOURCE_DIR}/LICENSE" "${_output}/miniz.LICENSE" COPYONLY)
-configure_file("${ort_model_package_SOURCE_DIR}/LICENSE" "${_output}/onnxruntime-model-package.LICENSE" COPYONLY)
-configure_file("${nlohmann_json_SOURCE_DIR}/LICENSE.MIT" "${_output}/nlohmann-json.LICENSE" COPYONLY)
 file(COPY "${onnx_light_cpp_SOURCE_DIR}/share/licenses/" DESTINATION "${_output}/licenses")

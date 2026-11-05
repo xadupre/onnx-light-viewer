@@ -23,10 +23,8 @@ TypeScript 7 uses the Node.js ambient types explicitly enabled in ``tsconfig.jso
 and rebuild it with ``npm run build:native`` after editing C++.
 
 The first native build downloads the published onnx-light C++ archive pinned
-in ``CMakeLists.txt`` and verifies its SHA-256 checksum. It also builds the pinned
-miniz and standalone ONNX Runtime ``model_package`` sources for package I/O;
-the latter uses nlohmann/json but does not link ONNX Runtime's inference engine.
-onnx-light is not rebuilt. Downloaded dependencies are reused from
+in ``CMakeLists.txt`` and verifies its SHA-256 checksum. Only the Node-API binding
+is compiled; onnx-light is not rebuilt. The archive is reused from
 ``build/native/``. The binding must match the extension host's OS and architecture,
 including Linux for Remote WSL.
 
