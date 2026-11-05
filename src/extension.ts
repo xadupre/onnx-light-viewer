@@ -4,8 +4,16 @@
  */
 import * as vscode from "vscode";
 import { randomBytes } from "node:crypto";
-import { mkdir, open, stat } from "node:fs/promises";
-import { dirname, isAbsolute, join, posix, relative, resolve } from "node:path";
+import { mkdir, open, realpath, stat } from "node:fs/promises";
+import {
+  dirname,
+  isAbsolute,
+  join,
+  posix,
+  relative,
+  resolve,
+  sep,
+} from "node:path";
 import { homedir } from "node:os";
 import {
   listBackendTests,
@@ -514,7 +522,7 @@ async function configurePanel(
 ): Promise<void> {
   panelSessions.get(panel)?.();
   let active = true;
-  const packages = new Set<() => Promise<void>>();
+  const packages = new Map<string, () => Promise<void>>();
   const readGraph = async (
     source: vscode.Uri,
     log: ActionLog,
@@ -545,10 +553,10 @@ async function configurePanel(
       if (!selected || !active) return;
       const loaded = await readModelGraph(vscode.Uri.file(selected), log);
       if (!loaded || !active) return;
-      packages.add(extracted.dispose);
+      packages.set(extracted.directory, extracted.dispose);
       return { ...loaded, sourceArchive: source };
     } finally {
-      if (!packages.has(extracted.dispose)) await extracted.dispose();
+      if (!packages.has(extracted.directory)) await extracted.dispose();
     }
   };
   const postMessage = (message: unknown) =>
@@ -725,10 +733,12 @@ async function configurePanel(
     return model;
   };
   const directoryUri = () =>
-    model?.source
-      ? vscode.Uri.joinPath(model.source.uri, "..")
-      : (vscode.workspace.workspaceFolders?.[0]?.uri ??
-        vscode.Uri.file(homedir()));
+    model?.sourceArchive
+      ? vscode.Uri.joinPath(model.sourceArchive, "..")
+      : model?.source
+        ? vscode.Uri.joinPath(model.source.uri, "..")
+        : (vscode.workspace.workspaceFolders?.[0]?.uri ??
+          vscode.Uri.file(homedir()));
   const saveDirectoryUri = () => {
     const root = vscode.workspace.workspaceFolders?.[0]?.uri;
     return root
@@ -3866,6 +3876,26 @@ async function configurePanel(
               await prepareSaveDirectory(
                 vscode.Uri.joinPath(destination, ".."),
               );
+              if (packages.size && destination.scheme === "file") {
+                const targetDirectory = await realpath(
+                  dirname(destination.fsPath),
+                );
+                for (const directory of packages.keys()) {
+                  const path = relative(
+                    await realpath(directory),
+                    targetDirectory,
+                  );
+                  if (
+                    path === "" ||
+                    (!isAbsolute(path) &&
+                      path !== ".." &&
+                      !path.startsWith(`..${sep}`))
+                  )
+                    throw new Error(
+                      "Save outside the temporary ZIP extraction folder.",
+                    );
+                }
+              }
               if (format.reuse) {
                 if (
                   !source ||
@@ -4372,7 +4402,7 @@ async function configurePanel(
     },
   );
   const dispose = () => {
-    for (const cleanup of packages)
+    for (const cleanup of packages.values())
       void cleanup().catch((error: unknown) =>
         log.record(
           "FAILED",

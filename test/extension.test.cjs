@@ -1232,6 +1232,7 @@ test("ZIP packages extract models and assets and retain the selected model for r
     true,
   );
   t.after(() => extension.dispose());
+  extension.setWorkspaceFolders([]);
   extension.selectPackageModel(path.join("decoder", "model.onnx"));
   await extension.openFile(archive);
   assert.deepEqual(extension.errors, []);
@@ -1243,11 +1244,23 @@ test("ZIP packages extract models and assets and retain the selected model for r
     ({ label }) => label === path.join("decoder", "model.onnx"),
   ).path;
   assert.equal(
+    extension.messages.findLast(({ type }) => type === "graph").file
+      .saveDirectory,
+    directory,
+  );
+  assert.equal(
     await readFile(path.join(path.dirname(selected), "weights.bin"), "utf8"),
     "preserved asset",
   );
   await extension.receive({ type: "refresh-shapes" });
   assert.deepEqual(extension.errors, []);
+  await extension.receive({
+    type: "save",
+    storage: "zip",
+    location: path.join(path.dirname(selected), "do-not-delete-my-copy.zip"),
+    overwrite: false,
+  });
+  assert.match(extension.messages.at(-1).error, /outside the temporary ZIP/);
   const destination = path.join(directory, "saved.zip");
   await extension.receive({
     type: "save",
@@ -1273,6 +1286,7 @@ test("ZIP packages extract models and assets and retain the selected model for r
   extension.dispose();
   await new Promise((resolve) => setTimeout(resolve, 50));
   await assert.rejects(stat(selected), { code: "ENOENT" });
+  assert.ok((await stat(destination)).isFile());
 });
 
 test("ZIP package selection cancellation and invalid packages leave the current graph unchanged", async (t) => {
