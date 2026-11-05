@@ -52,6 +52,10 @@ Napi::Object Initialize(Napi::Env env, Napi::Object exports) {
               Napi::Function::New(env, onnx_light_viewer::ReleaseNativePrompt));
   exports.Set("preparePromptPipeline",
               Napi::Function::New(env, onnx_light_viewer::PreparePromptPipeline));
+  exports.Set("extractModelPackage",
+              Napi::Function::New(env, onnx_light_viewer::ExtractModelPackage));
+  exports.Set("createModelPackage",
+              Napi::Function::New(env, onnx_light_viewer::CreateModelPackage));
   return exports;
 }
 

@@ -1,5 +1,6 @@
 const assert = require("node:assert/strict");
 const fs = require("node:fs/promises");
+const { tmpdir } = require("node:os");
 const { join, isAbsolute, relative } = require("node:path");
 const { test } = require("node:test");
 const { strToU8, unzipSync, zipSync } = require("fflate");
@@ -102,54 +103,22 @@ test("round-trips assets large enough to use asynchronous ZIP workers", async (t
   );
 });
 
-function declaredBytes(length) {
-  return Object.defineProperty(new Uint8Array(), "length", { value: length });
-}
-
-test("rejects output entries whose sizes require ZIP64 before compression", async () => {
-  for (const size of [0xffffffff, 0x100000000]) {
-    await assert.rejects(
-      createModelPackage("model.onnx", declaredBytes(size), []),
-      /ZIP64 packages is unsupported/,
-    );
-  }
+test("native writer uses real typed-array lengths rather than JavaScript properties", async () => {
+  const input = Object.defineProperty(model.slice(), "length", {
+    value: 0xffffffff,
+  });
+  const contents = unzipSync(await createModelPackage("model.onnx", input, []));
+  assert.deepEqual(contents["model.onnx"], model);
 });
 
-test("rejects combined output requiring ZIP64 even with individually valid sizes", async () => {
-  await assert.rejects(
-    createModelPackage("model.onnx", declaredBytes(2 ** 31), [
-      { name: "weights/data", bytes: declaredBytes(2 ** 31) },
-    ]),
-    /ZIP64 packages is unsupported/,
-  );
-});
-
-test("accounts for ZIP headers, central directory, and worst-case compression expansion", async () => {
-  const nameSize = Buffer.byteLength("model.onnx");
-  const sizeBeforeCentralDirectory = Math.floor(
-    ((0xffffffff - 22 - 30 - nameSize - 11) * 7000) / 7005,
-  );
-  const compressedBound =
-    sizeBeforeCentralDirectory +
-    5 * (1 + Math.ceil(sizeBeforeCentralDirectory / 7000));
-  assert.ok(compressedBound + 22 + 30 + nameSize < 0xffffffff);
-  assert.ok(compressedBound + 22 + 76 + 2 * nameSize >= 0xffffffff);
-  for (const size of [sizeBeforeCentralDirectory, 0xffffffff - 1024]) {
-    await assert.rejects(
-      createModelPackage("model.onnx", declaredBytes(size), []),
-      /ZIP64 packages is unsupported/,
-    );
-  }
-});
-
-test("rejects output entry counts requiring ZIP64 before processing contents", async () => {
+test("rejects output entry counts over the package limit before processing contents", async () => {
   const weights = Array.from({ length: 0xffff - 1 }, (_, index) => ({
     name: `weights/${index}`,
     bytes: new Uint8Array(),
   }));
   await assert.rejects(
     createModelPackage("model.onnx", model, weights),
-    /ZIP64 packages is unsupported/,
+    /package limit/,
   );
 });
 
@@ -167,14 +136,15 @@ const unsafeNames = [
   "a./model.onnx",
   "a /model.onnx",
   "NUL.onnx",
+  "COM¹.onnx",
+  "CONOUT$.onnx",
   "weights:stream",
+  "bad\nname.onnx",
+  "invalid?.onnx",
 ];
 
 for (const name of unsafeNames) {
-  test(`rejects unsafe archive and output name ${JSON.stringify(name)} before creating a directory`, async (t) => {
-    const makeDirectory = t.mock.method(fs, "mkdtemp", () => {
-      throw new Error("Should not create a directory");
-    });
+  test(`rejects unsafe archive and output name ${JSON.stringify(name)}`, async () => {
     await assert.rejects(
       extractModelPackage(archive({ "model.onnx": model, [name]: model })),
       /Unsafe ZIP entry name/,
@@ -183,7 +153,6 @@ for (const name of unsafeNames) {
       createModelPackage("model.onnx", model, [{ name, bytes: model }]),
       /Unsafe ZIP entry name/,
     );
-    assert.equal(makeDirectory.mock.callCount(), 0);
   });
 }
 
@@ -228,6 +197,7 @@ for (const entries of [
   { "model.onnx": model, "asset/": new Uint8Array(), asset: model },
   { "model.onnx": model, "MODEL.ONNX": model },
   { "model.onnx": model, "Assets/a": model, "assets/b": model },
+  { "model.onnx": model, "Ünicode/a": model, "ünicode/b": model },
 ]) {
   test(`rejects file/directory and portable case conflicts: ${Object.keys(entries).join(", ")}`, async () => {
     await assert.rejects(
@@ -244,10 +214,7 @@ for (const entries of [
   });
 }
 
-test("rejects Unix symlinks and special files without writing anything", async (t) => {
-  const makeDirectory = t.mock.method(fs, "mkdtemp", () => {
-    throw new Error("Should not create a directory");
-  });
+test("rejects Unix symlinks and special files", async () => {
   for (const mode of [0o120777, 0o020600, 0o010600]) {
     const zipped = archive({
       "model.onnx": model,
@@ -258,7 +225,6 @@ test("rejects Unix symlinks and special files without writing anything", async (
       /Unsupported ZIP entry type/,
     );
   }
-  assert.equal(makeDirectory.mock.callCount(), 0);
 });
 
 test("rejects empty archives and packages without models", async () => {
@@ -302,19 +268,18 @@ test("rejects unsupported compression, encrypted entries and inconsistent stored
   }
 });
 
-test("checks total declared uncompressed sizes before decompressing any entry", async (t) => {
-  const makeDirectory = t.mock.method(fs, "mkdtemp", () => {
-    throw new Error("Should not create a directory");
-  });
+test("checks total declared uncompressed sizes before decompressing any entry", async () => {
   const zipped = Buffer.from(
     archive({ "model.onnx": model, "one.bin": model, "two.bin": model }),
   );
   for (const offset of centralOffsets(zipped)) {
     zipped.writeUInt16LE(8, offset + 10);
     zipped.writeUInt32LE(3 * 1024 ** 3, offset + 24);
+    const local = zipped.readUInt32LE(offset + 42);
+    zipped.writeUInt16LE(8, local + 8);
+    zipped.writeUInt32LE(3 * 1024 ** 3, local + 22);
   }
   await assert.rejects(extractModelPackage(zipped), /package limit/);
-  assert.equal(makeDirectory.mock.callCount(), 0);
 });
 
 test("bounds entry count before decompression", async () => {
@@ -327,24 +292,6 @@ test("bounds entry count before decompression", async () => {
   );
 });
 
-test("cleans up the entire private directory when a write fails", async (t) => {
-  const originalMkdtemp = fs.mkdtemp;
-  let created;
-  t.mock.method(fs, "mkdtemp", async (...args) => {
-    created = await originalMkdtemp(...args);
-    return created;
-  });
-  t.mock.method(fs, "writeFile", async () => {
-    throw new Error("simulated write failure");
-  });
-  await assert.rejects(
-    extractModelPackage(archive({ "nested/model.onnx": model })),
-    /simulated write failure/,
-  );
-  assert.ok(created);
-  await assert.rejects(fs.stat(created), { code: "ENOENT" });
-});
-
 test("snapshots caller-owned archive bytes across asynchronous extraction", async (t) => {
   const input = archive({ "model.onnx": model });
   const pending = extractModelPackage(input);
@@ -352,4 +299,308 @@ test("snapshots caller-owned archive bytes across asynchronous extraction", asyn
   const result = await pending;
   t.after(() => result.dispose());
   assert.deepEqual(await fs.readFile(result.models[0]), Buffer.from(model));
+});
+
+function manifest(variants, extra = {}) {
+  return bytes(
+    JSON.stringify({
+      schema_version: "1.0",
+      components: { decoder: { variants } },
+      ...extra,
+    }),
+  );
+}
+
+test("uses declared component variants, external component/executor JSON, and a wrapper root", async (t) => {
+  const input = archive({
+    "bundle/": new Uint8Array(),
+    "bundle/manifest.json": bytes(
+      JSON.stringify({
+        schema_version: "1.0",
+        components: {
+          decoder: {
+            variants: {
+              cpu: {
+                variant_directory: "models/cpu",
+                executor_info: { ort: { model_file: "main.onnx" } },
+              },
+              gpu: {
+                variant_directory: "models/gpu",
+                executor_info: { ort: "ort.json" },
+              },
+              other: {
+                executor_info: { other: { model_file: "ignored.onnx" } },
+              },
+            },
+          },
+          encoder: "encoder/component.json",
+        },
+      }),
+    ),
+    "bundle/models/cpu/main.onnx": model,
+    "bundle/models/gpu/main.onnx": model,
+    "bundle/models/gpu/ort.json": bytes('{"model_file":"main.onnx"}'),
+    "bundle/encoder/component.json": bytes(
+      '{"variants":{"cpu":{"variant_directory":".","executor_info":{"ort":{"model_file":"encoder.onnx"}}}}}',
+    ),
+    "bundle/encoder/encoder.onnx": model,
+    "bundle/undeclared.onnx": model,
+  });
+  const result = await extractModelPackage(input);
+  t.after(() => result.dispose());
+  assert.deepEqual(
+    result.models.map((path) => relative(result.directory, path)),
+    [
+      join("bundle", "encoder", "encoder.onnx"),
+      join("bundle", "models", "cpu", "main.onnx"),
+      join("bundle", "models", "gpu", "main.onnx"),
+    ],
+  );
+});
+
+test("resolves shared asset model references through the model_package public API", async (t) => {
+  const uri = `sha256:${"a".repeat(64)}`;
+  const input = archive({
+    "manifest.json": manifest({
+      cpu: { executor_info: { ort: { model_file: `${uri}/模型.onnx` } } },
+    }),
+    [`shared_assets/sha256-${"a".repeat(64)}/模型.onnx`]: model,
+    [`shared_assets/sha256-${"a".repeat(64)}/weights.data`]: bytes("shared"),
+    "undeclared.onnx": model,
+  });
+  const result = await extractModelPackage(input);
+  t.after(() => result.dispose());
+  assert.deepEqual(result.models, [
+    join(
+      result.directory,
+      "shared_assets",
+      `sha256-${"a".repeat(64)}`,
+      "模型.onnx",
+    ),
+  ]);
+  assert.equal(
+    await fs.readFile(join(result.models[0], "..", "weights.data"), "utf8"),
+    "shared",
+  );
+});
+
+test("round-trips Unicode ZIP filenames and resolves Unicode variant directories", async (t) => {
+  const input = await createModelPackage("模型/主模型.onnx", model, [
+    {
+      name: "manifest.json",
+      bytes: manifest({
+        cpu: {
+          variant_directory: "模型",
+          executor_info: { ort: { model_file: "主模型.onnx" } },
+        },
+      }),
+    },
+    { name: "模型/权重.data", bytes: bytes("weights") },
+  ]);
+  const result = await extractModelPackage(input);
+  t.after(() => result.dispose());
+  assert.deepEqual(result.models, [
+    join(result.directory, "模型", "主模型.onnx"),
+  ]);
+});
+
+for (const [description, contents] of [
+  ["invalid JSON", bytes("{")],
+  ["invalid schema", bytes('{"schema_version":99,"components":{}}')],
+  ["missing components", bytes('{"schema_version":"1.0"}')],
+  ["invalid components", bytes('{"schema_version":"1.0","components":[]}')],
+  ["unknown field", manifest({}, { unexpected: true })],
+  ["missing ORT executor", manifest({ cpu: {} })],
+  ["missing model_file", manifest({ cpu: { executor_info: { ort: {} } } })],
+  [
+    "non-string model_file",
+    manifest({ cpu: { executor_info: { ort: { model_file: 7 } } } }),
+  ],
+  [
+    "incorrect model_path field",
+    manifest({
+      cpu: { executor_info: { ort: { model_path: "model.onnx" } } },
+    }),
+  ],
+  [
+    "malformed session_options",
+    manifest({
+      cpu: {
+        executor_info: {
+          ort: { model_file: "model.onnx", session_options: [] },
+        },
+      },
+    }),
+  ],
+  [
+    "missing declared file",
+    manifest({
+      cpu: { executor_info: { ort: { model_file: "missing.onnx" } } },
+    }),
+  ],
+  [
+    "missing external executor",
+    manifest({ cpu: { executor_info: { ort: "missing.json" } } }),
+  ],
+  ["installed layout", manifest({}, { layout: "installed" })],
+  [
+    "parent path",
+    manifest({
+      cpu: { executor_info: { ort: { model_file: "../model.onnx" } } },
+    }),
+  ],
+  [
+    "absolute path",
+    manifest({
+      cpu: { executor_info: { ort: { model_file: "/model.onnx" } } },
+    }),
+  ],
+  [
+    "NUL path",
+    manifest({
+      cpu: { executor_info: { ort: { model_file: "model.onnx\0other" } } },
+    }),
+  ],
+]) {
+  test(`manifest rejects ${description} instead of falling back to ZIP discovery`, async () => {
+    await assert.rejects(
+      extractModelPackage(
+        archive({ "manifest.json": contents, "model.onnx": model }),
+      ),
+      /model package|executor_info|model_file|portable layout/i,
+    );
+  });
+}
+
+test("rejects malformed external executor JSON and traversal within a shared asset", async () => {
+  await assert.rejects(
+    extractModelPackage(
+      archive({
+        "manifest.json": manifest({
+          cpu: { variant_directory: ".", executor_info: { ort: "ort.json" } },
+        }),
+        "ort.json": bytes("{bad"),
+        "model.onnx": model,
+      }),
+    ),
+    /Invalid model package/,
+  );
+  const uri = `sha256:${"a".repeat(64)}`;
+  await assert.rejects(
+    extractModelPackage(
+      archive({
+        "manifest.json": manifest({
+          cpu: {
+            executor_info: { ort: { model_file: `${uri}/../model.onnx` } },
+          },
+        }),
+        [`shared_assets/sha256-${"a".repeat(64)}/model.onnx`]: model,
+      }),
+    ),
+    /Invalid model package/,
+  );
+});
+
+test("cleans up real private directories after extraction and manifest failures", async () => {
+  const directory = await fs.mkdtemp(join(tmpdir(), "zip-cleanup-test-"));
+  const variables = ["TMPDIR", "TMP", "TEMP"];
+  const previous = variables.map((name) => process.env[name]);
+  try {
+    for (const name of variables) process.env[name] = directory;
+    const corrupt = Buffer.from(
+      archive({ "nested/model.onnx": model }, { level: 0 }),
+    );
+    corrupt[30 + Buffer.byteLength("nested/model.onnx")] ^= 0xff;
+    await assert.rejects(extractModelPackage(corrupt), /Corrupt ZIP entry/);
+    assert.deepEqual(await fs.readdir(directory), []);
+    await assert.rejects(
+      extractModelPackage(
+        archive({ "manifest.json": bytes("{"), "model.onnx": model }),
+      ),
+      /Invalid model package/,
+    );
+    assert.deepEqual(await fs.readdir(directory), []);
+  } finally {
+    variables.forEach((name, index) => {
+      if (previous[index] === undefined) delete process.env[name];
+      else process.env[name] = previous[index];
+    });
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("explicitly rejects external initializer folder overrides rather than misloading weights", async () => {
+  const key = "session.model_external_initializers_file_folder_path";
+  for (const reference of ["weights", `sha256:${"a".repeat(64)}`, ""]) {
+    for (const external of [false, true]) {
+      const executor = {
+        model_file: "model.onnx",
+        session_options: { [key]: reference },
+      };
+      await assert.rejects(
+        extractModelPackage(
+          archive({
+            "manifest.json": manifest({
+              cpu: {
+                variant_directory: ".",
+                executor_info: { ort: external ? "ort.json" : executor },
+              },
+            }),
+            "ort.json": bytes(JSON.stringify(executor)),
+            "model.onnx": model,
+            "weights/data.bin": bytes("weights"),
+          }),
+        ),
+        /Unsupported model package session option: session\.model_external_initializers_file_folder_path/,
+      );
+    }
+  }
+});
+
+test("validates empty-entry local headers and CRCs that miniz skips", async () => {
+  for (const directory of [false, true]) {
+    const name = directory ? "empty/" : "empty";
+    const data = Buffer.from(
+      archive({ "model.onnx": model, [name]: new Uint8Array() }),
+    );
+    const offset = centralOffsets(data)[1];
+    const local = data.readUInt32LE(offset + 42);
+    const invalidHeader = Buffer.from(data);
+    invalidHeader[local] ^= 0xff;
+    await assert.rejects(extractModelPackage(invalidHeader), /Invalid ZIP/);
+    const invalidSize = Buffer.from(data);
+    invalidSize.writeUInt32LE(1, local + 22);
+    await assert.rejects(extractModelPackage(invalidSize), /Invalid ZIP/);
+    data.writeUInt32LE(1, offset + 16);
+    data.writeUInt32LE(1, local + 14);
+    await assert.rejects(extractModelPackage(data), /Corrupt ZIP/);
+  }
+});
+
+test("native writer snapshots caller-owned model and weights before queuing work", async () => {
+  const input = model.slice();
+  const weights = bytes("weights");
+  const pending = createModelPackage("model.onnx", input, [
+    { name: "weights.data", bytes: weights },
+  ]);
+  input.fill(0);
+  weights.fill(0);
+  const contents = unzipSync(await pending);
+  assert.deepEqual(contents["model.onnx"], model);
+  assert.deepEqual(contents["weights.data"], bytes("weights"));
+});
+
+test("rejects wrapper-root ambiguity rather than discovering undeclared files", async () => {
+  await assert.rejects(
+    extractModelPackage(
+      archive({
+        "bundle/manifest.json": manifest({
+          cpu: { executor_info: { ort: { model_file: "model.onnx" } } },
+        }),
+        "bundle/model.onnx": model,
+        "outside.onnx": model,
+      }),
+    ),
+    /Ambiguous model package root/,
+  );
 });
