@@ -54,6 +54,20 @@ These checks do not certify runtime operator support.
 
    Identify a usable export before loading it; this screenshot uses a tiny test model.
 
+**ZIP packages** are unpacked by the viewer, not onnx-light. Open a local ONNX
+Runtime ``.zip`` package and choose a model if it contains several. Relative
+weight paths and accompanying assets are preserved in a private temporary folder
+until the panel closes. **Save → ZIP package** writes the current model or
+``PipelineProto`` and its weights together. It does not reconstruct generation
+stages or copy tokenizer/configuration assets into the saved ZIP.
+See :doc:`features/opening_models`.
+
+.. figure:: _static/feature-zip-package.png
+   :alt: Save panel with ZIP package selected and a model-copy.onnx.zip destination.
+   :width: 100%
+
+   Save a model or pipeline and its weights as one ZIP file.
+
 Backend catalog
 ^^^^^^^^^^^^^^^
 

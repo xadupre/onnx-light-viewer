@@ -59,6 +59,7 @@ import { OliveRecipes } from "./oliveRecipes";
 import { optimizeWithOnnxScript } from "./optimization";
 import { promptInfo, runPrompt, type PromptResult } from "./prompt";
 import { PromptSession } from "./promptSession";
+import { createModelPackage, extractModelPackage } from "./zipPackage";
 import {
   loadPromptPipeline,
   promptPipelineInfo,
@@ -72,7 +73,12 @@ function pickLocalModel() {
   return vscode.window.showOpenDialog({
     canSelectMany: false,
     filters: {
-      "ONNX models and pipelines": ["onnx", "enc", "pipe-onnx"],
+      "ONNX models, pipelines and ZIP packages": [
+        "onnx",
+        "enc",
+        "pipe-onnx",
+        "zip",
+      ],
     },
     openLabel: "Open ONNX graph",
   });
@@ -135,6 +141,7 @@ interface LoadedModel {
   dimensionsRenamed?: boolean;
   functionsEdited?: boolean;
   source?: { uri: vscode.Uri };
+  sourceArchive?: vscode.Uri;
   /** Original source ownership survives materializing or removing external data. */
   sourceWeightLocations?: readonly string[];
   fileName?: string;
@@ -324,7 +331,7 @@ export function activate(context: vscode.ExtensionContext): void {
  * @param fileName Original basename when the URI points to a temporary/cache file.
  * @returns Root snapshot, retained handle and its recovery factory.
  */
-async function readGraph(
+async function readModelGraph(
   uri: vscode.Uri,
   log: ActionLog,
   fileName = posix.basename(uri.path),
@@ -507,6 +514,43 @@ async function configurePanel(
 ): Promise<void> {
   panelSessions.get(panel)?.();
   let active = true;
+  const packages = new Set<() => Promise<void>>();
+  const readGraph = async (
+    source: vscode.Uri,
+    log: ActionLog,
+    fileName = posix.basename(source.path),
+    password?: string,
+  ): Promise<LoadedModel | undefined> => {
+    if (!/\.zip$/i.test(fileName))
+      return readModelGraph(source, log, fileName, password);
+    const extracted = await log.run(
+      "Extract ONNX Runtime ZIP package",
+      async () =>
+        extractModelPackage(await vscode.workspace.fs.readFile(source)),
+    );
+    try {
+      if (!active) return;
+      const selected =
+        extracted.models.length === 1
+          ? extracted.models[0]
+          : (
+              await vscode.window.showQuickPick(
+                extracted.models.map((path) => ({
+                  label: relative(extracted.directory, path),
+                  path,
+                })),
+                { title: "Choose a model from the ZIP package" },
+              )
+            )?.path;
+      if (!selected || !active) return;
+      const loaded = await readModelGraph(vscode.Uri.file(selected), log);
+      if (!loaded || !active) return;
+      packages.add(extracted.dispose);
+      return { ...loaded, sourceArchive: source };
+    } finally {
+      if (!packages.has(extracted.dispose)) await extracted.dispose();
+    }
+  };
   const postMessage = (message: unknown) =>
     active ? panel.webview.postMessage(message) : Promise.resolve(false);
   const mediaRoot = vscode.Uri.joinPath(context.extensionUri, "media");
@@ -2470,7 +2514,7 @@ async function configurePanel(
               .filter(
                 ([name, type]) =>
                   type & vscode.FileType.Directory ||
-                  /\.(?:onnx|enc|pipe-onnx)$/i.test(name),
+                  /\.(?:onnx|enc|pipe-onnx|zip)$/i.test(name),
               )
               .map(([name, type]) => ({
                 name,
@@ -3694,6 +3738,7 @@ async function configurePanel(
                 (message.storage !== undefined &&
                   message.storage !== "embedded" &&
                   message.storage !== "external" &&
+                  message.storage !== "zip" &&
                   message.storage !== "reuse") ||
                 (message.encrypted !== undefined &&
                   typeof message.encrypted !== "boolean")
@@ -3704,7 +3749,10 @@ async function configurePanel(
                   message.storage === "external" || message.storage === "reuse",
                 reuse: message.storage === "reuse",
                 encrypted: message.encrypted === true,
+                zip: message.storage === "zip",
               };
+              if (format.zip && format.encrypted)
+                throw new Error("ZIP package encryption is not supported.");
               if (current.graph.pipeline && format.encrypted)
                 throw new Error(
                   "PipelineProto encryption is not supported by onnx-light.",
@@ -3769,7 +3817,8 @@ async function configurePanel(
                 if (confirmation !== password)
                   throw new Error("Passwords do not match.");
               }
-              const fileName = copyFileName(current, format.encrypted);
+              const modelName = copyFileName(current, format.encrypted);
+              const fileName = format.zip ? `${modelName}.zip` : modelName;
               if (inline && typeof message.overwrite !== "boolean")
                 throw new Error("Invalid overwrite choice.");
               if (!inline) {
@@ -3789,11 +3838,13 @@ async function configurePanel(
                 : await vscode.window.showSaveDialog({
                     title: "Save ONNX model copy",
                     saveLabel: "Save model copy",
-                    filters: format.encrypted
-                      ? { "Encrypted ONNX models": ["enc"] }
-                      : current.graph.pipeline
-                        ? { "ONNX pipelines": ["pipe-onnx"] }
-                        : { "ONNX models": ["onnx"] },
+                    filters: format.zip
+                      ? { "ONNX ZIP packages": ["zip"] }
+                      : format.encrypted
+                        ? { "Encrypted ONNX models": ["enc"] }
+                        : current.graph.pipeline
+                          ? { "ONNX pipelines": ["pipe-onnx"] }
+                          : { "ONNX models": ["onnx"] },
                     defaultUri: vscode.Uri.joinPath(
                       saveDirectoryUri(),
                       fileName,
@@ -3805,6 +3856,7 @@ async function configurePanel(
               const originalSources = source
                 ? [
                     source,
+                    ...(current.sourceArchive ? [current.sourceArchive] : []),
                     ...(current.sourceWeightLocations ?? []).map((location) =>
                       vscode.Uri.joinPath(source, "..", location),
                     ),
@@ -3849,22 +3901,34 @@ async function configurePanel(
                 actionId: message.actionId,
                 stage: "Serializing model and weights",
               });
-              const serialized = format.external
-                ? await native.serializeFiles(
-                    maxExternalFileSize,
-                    `${posix.basename(destination.path)}.${randomBytes(12).toString("hex")}.data`,
-                    sourcePath,
-                    format.reuse,
-                    message.includeRewritings ?? false,
-                  )
-                : {
-                    model: await native.serialize(
-                      password,
+              let serialized =
+                format.external || format.zip
+                  ? await native.serializeFiles(
+                      format.zip ? 1024 * 1024 * 1024 : maxExternalFileSize,
+                      format.zip
+                        ? `${modelName}.data`
+                        : `${posix.basename(destination.path)}.${randomBytes(12).toString("hex")}.data`,
                       sourcePath,
+                      format.reuse,
                       message.includeRewritings ?? false,
-                    ),
-                    weights: [],
-                  };
+                    )
+                  : {
+                      model: await native.serialize(
+                        password,
+                        sourcePath,
+                        message.includeRewritings ?? false,
+                      ),
+                      weights: [],
+                    };
+              if (format.zip)
+                serialized = {
+                  model: await createModelPackage(
+                    modelName,
+                    serialized.model,
+                    serialized.weights,
+                  ),
+                  weights: [],
+                };
               if (!active || model !== current) return cancelled();
               const sources = source
                 ? [
@@ -4308,6 +4372,16 @@ async function configurePanel(
     },
   );
   const dispose = () => {
+    for (const cleanup of packages)
+      void cleanup().catch((error: unknown) =>
+        log.record(
+          "FAILED",
+          "Clean up extracted ZIP package",
+          undefined,
+          String(error),
+        ),
+      );
+    packages.clear();
     active = false;
     releaseController?.abort();
     promptController?.abort();

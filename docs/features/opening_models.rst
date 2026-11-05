@@ -42,6 +42,29 @@ in the sidebar.
 
    Choose a path outside the workspace without changing VS Code's file picker.
 
+ONNX Runtime ZIP packages
+-------------------------
+
+Choose a local ``.zip`` through **Open**, the file picker, or **Open with ONNX
+Light Viewer** in Explorer. The viewer extracts the package itself; no Python,
+ONNX Runtime installation or onnx-light archive API is needed. A single
+``.onnx``, ``.onnx.enc`` or ``.pipe-onnx`` opens directly; for multiple models,
+choose one by its path inside the archive.
+
+External weights and other assets keep their relative paths. Extraction uses a
+private temporary directory retained for reload, inspection and saving, then
+removed when the panel closes. The original archive is never overwritten.
+Invalid archives, unsafe paths, links, duplicate names and corrupt entries are
+rejected. Extraction accepts stored/DEFLATE ZIPs, including ZIP64, with at most
+10,000 entries and 8 GiB of uncompressed data; archives are processed in memory.
+
+**Save → ZIP package** packages the current model or complete ``PipelineProto``
+with newly serialized external weights. Reopen that ZIP through **Open**.
+ZIP saving does not infer pipeline stages from unrelated models or reproduce
+an ONNX Runtime GenAI distribution: tokenizer/configuration assets and unselected
+models are not included. ZIP encryption and ZIP64 output are unavailable;
+oversized output is rejected rather than written.
+
 PipelineProto containers
 ------------------------
 

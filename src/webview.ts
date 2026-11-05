@@ -577,6 +577,7 @@ export function webviewHtml(
                 <label><input type="radio" name="save-format" value="embedded-plain" checked>Single model or pipeline file</label>
                 <label><input type="radio" name="save-format" value="embedded-encrypted">Encrypted .onnx.enc file, including all weights</label>
                 <label><input type="radio" name="save-format" value="external-plain">Model or pipeline and separate weight files</label>
+                <label><input type="radio" name="save-format" value="zip">ZIP package containing the model or pipeline and weights</label>
                 <label class="unavailable"><input type="radio" name="save-format" value="external-encrypted" disabled aria-describedby="external-encryption-note">Separate encrypted weight files (unavailable)</label>
                 <p id="external-encryption-note">Unavailable in onnx-light. <a href="https://github.com/xadupre/onnx-light/issues/5533">Track native support</a>.</p>
                 <label><input type="radio" name="save-format" value="reuse-plain">Reuse unchanged external files</label>
