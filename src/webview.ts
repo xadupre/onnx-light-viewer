@@ -577,11 +577,14 @@ export function webviewHtml(
               <div id="save-package-layout-options" hidden><label for="save-package-layout">Package container</label><select id="save-package-layout"><option value="archive">ZIP archive (.ortpackage)</option><option value="directory">Directory</option></select></div>
               <label id="save-file-label" for="save-file">File name or path</label>
               <div class="save-path-field">
-                <input id="save-file" type="text" value="model-copy.onnx" required autocomplete="off" aria-describedby="save-path-help">
+                <div class="save-path-combobox">
+                  <input id="save-file" type="text" value="model-copy.onnx" required autocomplete="off" aria-describedby="save-path-help">
+                  <select id="save-file-history" aria-label="Recent destination paths" title="Choose a recent destination" disabled hidden><option value="">Choose a recent path...</option></select>
+                  <svg class="save-history-arrow" viewBox="0 0 12 12" width="12" height="12" aria-hidden="true"><path d="M2 4 6 8 10 4" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
+                </div>
                 <button id="save-path-browse" type="button" aria-label="Choose output file">Browse...</button>
               </div>
               <p id="save-path-help">Choose the output file, including its name. Browse selects a path; Save copy writes it.</p>
-              <select id="save-file-history" aria-label="Recent destination paths" disabled hidden><option value="">Choose a recent path...</option></select>
               <p id="save-package-note" hidden>Choose a new .ortpackage archive or directory. Save preserves all package assets and replaces only the selected model with its current edits. GenAI and compiled packages require an existing package; Save does not generate a tokenizer, GenAI configuration or provider compilation.</p>
               <fieldset class="save-grid">
                 <legend>Model serialization, weight storage and encryption</legend>

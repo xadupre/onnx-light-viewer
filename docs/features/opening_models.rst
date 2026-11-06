@@ -158,6 +158,9 @@ directory or embedded file listing. Type the output path or use **Browse...**
 to choose its name and location through VS Code. Choosing a path does not write
 anything; **Save copy** performs the save. Storage, encryption and password
 confirmation remain in the sidebar.
+The output field's dropdown arrow lists all remembered destination files,
+even when the current name does not match them; selecting one fills that same
+field. There is no second history selector below it.
 
 .. list-table::
    :header-rows: 1

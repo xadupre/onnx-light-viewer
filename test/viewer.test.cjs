@@ -5325,6 +5325,18 @@ test("keeps the complete history selector after selecting and loading a remember
   document.getElementById("save-model").click();
   const destinations = document.getElementById("save-file-history");
   assert.equal(destinations.hidden, false);
+  assert.equal(
+    destinations.parentElement,
+    document.getElementById("save-file").parentElement,
+  );
+  assert.equal(window.getComputedStyle(destinations).color, "rgba(0, 0, 0, 0)");
+  document.getElementById("save-file").value = "/new/unrelated-name.onnx";
+  assert.deepEqual(
+    Array.from(destinations.options)
+      .filter((option) => option.value)
+      .map((option) => option.value),
+    saved,
+  );
   destinations.value = saved[1];
   destinations.dispatchEvent(new window.Event("change", { bubbles: true }));
   assert.equal(document.getElementById("save-file").value, saved[1]);

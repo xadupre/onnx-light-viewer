@@ -1668,9 +1668,45 @@ button:disabled {
   align-items: center;
   gap: 6px;
 }
-.save-path-field input {
+.save-path-combobox {
+  position: relative;
+  display: flex;
   flex: 1 1 14rem;
   min-width: 0;
+}
+.save-path-combobox #save-file {
+  flex: 1;
+  min-width: 0;
+}
+.save-path-combobox:has(select:not([hidden])) #save-file {
+  border-right: 0;
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.save-path-combobox #save-file-history {
+  appearance: none;
+  flex: 0 0 2rem;
+  width: 2rem;
+  min-width: 0;
+  padding: 0;
+  border-left: 0;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  color: transparent;
+}
+.save-history-arrow {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+.save-path-combobox:has(select[hidden]) .save-history-arrow {
+  display: none;
+}
+.save-path-combobox option {
+  color: var(--text);
+  background: var(--panel);
 }
 .save-path-field button {
   flex-shrink: 0;
