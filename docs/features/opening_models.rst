@@ -34,8 +34,11 @@ See :doc:`../features` for package containers versus model serialization.
 Choosing a local path
 ---------------------
 
-Buttons directly below the path field offer both the **VS Code file / package picker**
-and **Browse folders**, an in-app dialog. The latter accepts any accessible directory,
+Buttons directly below the path field offer separate **VS Code file picker**
+and **VS Code folder picker** actions. The file picker accepts models and ZIP
+packages; the folder picker selects package directories. They never combine
+file/folder selection, which VS Code treats as folder-only on Windows and Linux.
+**Browse folders** opens an in-app dialog. It accepts any accessible directory,
 including outside the VS Code workspace; enter a directory, click **Browse**,
 or use **Parent folder**. Filter the list, select a model and click **Choose path**
 (or double-click it) to fill **Model path** without loading the model.

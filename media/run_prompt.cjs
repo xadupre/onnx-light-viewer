@@ -3,6 +3,7 @@ const {
   readdirSync,
   writeFileSync,
   writeSync,
+  realpathSync,
 } = require("node:fs");
 const { execFileSync } = require("node:child_process");
 const { isAbsolute, join, resolve } = require("node:path");
@@ -17,11 +18,15 @@ function run(input, output, sessionKey) {
   const request = JSON.parse(readFileSync(input, "utf8"));
   if (request.engine === "onnxruntime-genai") {
     const directory = request.source;
-    const config = JSON.parse(
-      readFileSync(join(directory, "genai_config.json"), "utf8"),
-    );
+    const config =
+      request.genaiConfiguration ??
+      JSON.parse(readFileSync(join(directory, "genai_config.json"), "utf8"));
     const decoder = config.model.decoder.filename;
-    if (decoder && resolve(directory, decoder) !== resolve(request.modelPath))
+    if (
+      decoder &&
+      realpathSync(resolve(directory, decoder)) !==
+        realpathSync(request.modelPath)
+    )
       throw new Error(
         "The selected model is not the GenAI configuration's decoder.",
       );
@@ -56,7 +61,17 @@ function run(input, output, sessionKey) {
     sessionSettings: settings,
     sessionKey: sessionKey ?? input,
     genaiOverlay: JSON.stringify({
-      model: { decoder: { session_options: options } },
+      ...request.genaiConfiguration,
+      model: {
+        ...request.genaiConfiguration?.model,
+        decoder: {
+          ...request.genaiConfiguration?.model?.decoder,
+          session_options: {
+            ...request.genaiConfiguration?.model?.decoder?.session_options,
+            ...options,
+          },
+        },
+      },
     }),
     ...(providers === undefined ? {} : { genaiProviders: providers }),
     libraryPath,

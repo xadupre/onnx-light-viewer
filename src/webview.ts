@@ -531,7 +531,8 @@ export function webviewHtml(
               <select id="open-file-history" aria-label="Recent model paths" disabled><option value="">Choose a recent path...</option></select>
               <div id="open-path-options" class="path-picker-actions" role="group" aria-label="Model path selection">
                 <button id="open-path-browse" type="button" aria-haspopup="dialog" aria-controls="open-path-dialog">Browse folders...</button>
-                <button id="open-native-picker" type="button">VS Code file / package picker...</button>
+                <button id="open-native-picker" type="button">VS Code file picker...</button>
+                <button id="open-native-folder-picker" type="button">VS Code folder picker...</button>
               </div>
               <div id="open-package-options" hidden>
                 <button id="inspect-open-package" type="button">Inspect package</button>

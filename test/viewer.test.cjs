@@ -8651,6 +8651,21 @@ test("VS Code path picking fills the field without opening and discards late res
     assert.equal(byId("open-file").value, "/native/model.onnx");
   }
   assert.equal(byId("open-error").textContent, "Picker failed");
+  byId("open-native-folder-picker").click();
+  const folder = messages.at(-1);
+  assert.equal(folder.type, "select-model-directory");
+  assert.equal(byId("open-native-picker").disabled, true);
+  assert.equal(byId("open-native-folder-picker").disabled, true);
+  reply({
+    type: "model-path-selected",
+    requestId: folder.requestId,
+    location: "/native/package",
+    directory: true,
+  });
+  assert.equal(byId("open-native-picker").disabled, false);
+  assert.equal(byId("open-native-folder-picker").disabled, false);
+  assert.equal(byId("open-file").value, "/native/package");
+  assert.match(byId("open-format").textContent, /package directory/);
   byId("open-native-picker").click();
   const old = messages.at(-1);
   byId("open-source-backend").click();

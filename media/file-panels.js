@@ -264,7 +264,11 @@ function createFilePanels({
   function invalidateNativePicker() {
     nativePathRequest++;
     clipboardSelection = undefined;
-    byId("open-native-picker").disabled = isReplacing();
+    setNativePickersBusy(isReplacing());
+  }
+  function setNativePickersBusy(pending) {
+    byId("open-native-picker").disabled = pending;
+    byId("open-native-folder-picker").disabled = pending;
   }
   function choosePath() {
     if (!pathDialog.open || !selectedPath) return;
@@ -292,16 +296,20 @@ function createFilePanels({
     closePathBrowser();
   });
   byId("choose-open-path").addEventListener("click", choosePath);
-  byId("open-native-picker").addEventListener("click", () => {
+  function pickNativePath(directory = false) {
     if (isReplacing()) return;
     clipboardSelection = undefined;
     byId("open-error").textContent = "";
-    byId("open-native-picker").disabled = true;
+    setNativePickersBusy(true);
     postMessage({
-      type: "select-model-path",
+      type: directory ? "select-model-directory" : "select-model-path",
       requestId: ++nativePathRequest,
     });
-  });
+  }
+  byId("open-native-picker").addEventListener("click", () => pickNativePath());
+  byId("open-native-folder-picker").addEventListener("click", () =>
+    pickNativePath(true),
+  );
   byId("open-file").addEventListener("keydown", (event) => {
     if (
       openSource !== "local" ||
@@ -320,7 +328,7 @@ function createFilePanels({
       end: field.selectionEnd,
     };
     byId("open-error").textContent = "";
-    byId("open-native-picker").disabled = true;
+    setNativePickersBusy(true);
     postMessage({ type: "paste-model-path", requestId: ++nativePathRequest });
   });
   function browseFiles(target) {
@@ -669,7 +677,7 @@ function createFilePanels({
         isReplacing()
       )
         return true;
-      byId("open-native-picker").disabled = false;
+      setNativePickersBusy(false);
       const selection = clipboardSelection;
       clipboardSelection = undefined;
       if (data.error) byId("open-error").textContent = data.error;
@@ -952,7 +960,7 @@ function createFilePanels({
     byId("open-model").disabled = pending;
     byId("open-submit").disabled = pending;
     byId("open-path-browse").disabled = pending;
-    byId("open-native-picker").disabled = pending;
+    setNativePickersBusy(pending);
     for (const button of byId("open-history-entries").querySelectorAll(
       "[data-load-pipeline]",
     ))

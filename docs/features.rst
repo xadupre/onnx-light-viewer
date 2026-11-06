@@ -68,6 +68,8 @@ Folders are identified as packages without a format selector.
 require choosing one. The viewer does not
 select hardware-compatible variants or apply manifest session/provider options.
 Native runtimes consume the extracted directory, not the ZIP itself.
+Package manifests, variants and shared-asset resolution belong to the viewer;
+onnx-light reads and writes the contained models.
 
 .. figure:: _static/feature-package-open.png
    :alt: Open package ZIP controls showing an example .ortpackage and its inspected default/model.ort member.
@@ -94,6 +96,8 @@ paths, file types and checksums; links, escaping weight paths and encrypted ZIPs
 fail explicitly. Extracted assets remain available for recovery and running
 actions until the panel closes. Save requires a new destination and leaves
 the original archive unchanged.
+GenAI generation resolves shared model references through an in-memory
+configuration overlay, without modifying the original configuration or assets.
 
 Backend catalog
 ^^^^^^^^^^^^^^^

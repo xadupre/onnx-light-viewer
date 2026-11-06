@@ -69,6 +69,7 @@ import {
   assertPackageWeightLocations,
   runtimePackageModel,
   runtimePackagePromptDirectory,
+  runtimePackagePromptConfiguration,
   saveRuntimePackage,
   type RuntimePackage,
   type RuntimePackageKind,
@@ -78,22 +79,28 @@ import { PackageArchiveStore } from "./packageArchive";
 const viewType = "onnxLightViewer.graph";
 const panelSessions = new WeakMap<vscode.WebviewPanel, () => void>();
 
-function pickLocalModel() {
+function pickLocalModel(directory = false) {
   return vscode.window.showOpenDialog({
     canSelectMany: false,
-    canSelectFolders: true,
-    canSelectFiles: true,
-    filters: {
-      "ONNX/ORT models, packages and pipelines": [
-        "onnx",
-        "ort",
-        "ortpackage",
-        "zip",
-        "enc",
-        "pipe-onnx",
-      ],
-    },
-    openLabel: "Open model or runtime package",
+    canSelectFolders: directory,
+    canSelectFiles: !directory,
+    ...(directory
+      ? {}
+      : {
+          filters: {
+            "ONNX/ORT models, packages and pipelines": [
+              "onnx",
+              "ort",
+              "ortpackage",
+              "zip",
+              "enc",
+              "pipe-onnx",
+            ],
+          },
+        }),
+    openLabel: directory
+      ? "Choose runtime package directory"
+      : "Open model or package archive",
   });
 }
 
@@ -1820,6 +1827,12 @@ async function configurePanel(
                 info,
               });
           } else {
+            const genaiConfiguration = owner.sourcePackage
+              ? await runtimePackagePromptConfiguration(
+                  owner.sourcePackage,
+                  uri.fsPath,
+                )
+              : undefined;
             const result = await log.run("Run prompt", () =>
               runPrompt(
                 uri.fsPath,
@@ -1861,6 +1874,7 @@ async function configurePanel(
                     });
                 },
                 packageDirectory,
+                genaiConfiguration,
               ),
             );
             if (isCurrent()) {
@@ -2555,6 +2569,7 @@ async function configurePanel(
         }
       } else if (
         message?.type === "select-model-path" ||
+        message?.type === "select-model-directory" ||
         message?.type === "paste-model-path"
       ) {
         try {
@@ -2564,7 +2579,9 @@ async function configurePanel(
             location = await vscode.env.clipboard.readText();
             if (!location) throw new Error("The clipboard is empty.");
           } else {
-            const selection = await pickLocalModel();
+            const selection = await pickLocalModel(
+              message.type === "select-model-directory",
+            );
             location = selection?.[0] ? locationText(selection[0]) : null;
             if (selection?.[0])
               directory = !!(

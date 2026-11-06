@@ -496,6 +496,7 @@ export async function runPrompt(
   session?: PromptSession,
   lifecycle?: (value: PromptLifecycle) => void,
   packageDirectory?: string,
+  genaiConfiguration?: Record<string, unknown>,
 ): Promise<PromptResult> {
   signal.throwIfAborted();
   const options = optionsFrom(value);
@@ -598,6 +599,7 @@ export async function runPrompt(
     eosTokenIds,
     engine: options.engine,
     sessionSettings: options.sessionSettings,
+    ...(genaiConfiguration ? { genaiConfiguration } : {}),
   };
   const context = JSON.stringify({
     ...sessionContext,
@@ -675,6 +677,7 @@ export async function runPrompt(
         ...options,
         provenance,
         source,
+        ...(genaiConfiguration ? { genaiConfiguration } : {}),
         eosTokenIds,
         capturePath: capture,
         captureBudget: retentionBudget,

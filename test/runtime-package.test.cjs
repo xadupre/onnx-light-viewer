@@ -7,6 +7,8 @@ const {
   rm,
   writeFile,
   link,
+  rename,
+  symlink,
 } = require("node:fs/promises");
 const { tmpdir } = require("node:os");
 const path = require("node:path");
@@ -235,6 +237,110 @@ test("saving edited shared models retains hashed assets and updates every referr
   );
 });
 
+test("root GenAI configurations preserve runtime manifests during directory and ZIP conversion", async (t) => {
+  const { directory, store } = await fixture(t);
+  const source = path.join(directory, "genai-manifest.ortpackage");
+  const manifest = {
+    schema_version: "1.0",
+    additional_metadata: { preserve: true },
+    components: {
+      decoder: {
+        variants: {
+          cpu: {
+            variant_directory: ".",
+            executor_info: { ort: { model_file: "model.onnx" } },
+          },
+        },
+      },
+    },
+  };
+  const config = { model: { decoder: { filename: "model.onnx" } } };
+  await writeFile(
+    source,
+    await zipBytes([
+      ["manifest.json", JSON.stringify(manifest)],
+      ["genai_config.json", JSON.stringify(config)],
+      ["tokenizer.json", "{}"],
+      ["model.onnx", await readFile(require.resolve("./models/relu.onnx"))],
+    ]),
+  );
+  const location = await store.resolve(source);
+  const info = await inspectRuntimePackage(location.directory);
+  assert.deepEqual(info.manifest, manifest);
+  const modelPath = runtimePackageModel(info);
+  for (const archive of [false, true]) {
+    const destination = path.join(
+      directory,
+      archive ? "saved.ortpackage" : "saved",
+    );
+    await saveRuntimePackage({
+      destination,
+      archive,
+      kind: "genai",
+      sourcePackage: info,
+      sourcePath: modelPath,
+      model: await loadModelFile(modelPath, "model.onnx"),
+      format: "ort",
+      includeRewritings: false,
+      canPublish: () => true,
+      publish: rename,
+    });
+    const saved = await store.resolve(destination);
+    const savedInfo = await inspectRuntimePackage(saved.directory);
+    assert.equal(savedInfo.manifest.additional_metadata.preserve, true);
+    assert.equal(
+      savedInfo.manifest.components.decoder.variants.cpu.executor_info.ort
+        .model_file,
+      "model.ort",
+    );
+    assert.equal(savedInfo.defaultModel, "model.ort");
+    assert.equal(
+      JSON.parse(
+        await readFile(path.join(saved.directory, "genai_config.json")),
+      ).model.decoder.filename,
+      "model.ort",
+    );
+    assert.deepEqual(savedInfo.models, ["model.ort"]);
+  }
+  assert.deepEqual(
+    JSON.parse(await readFile(path.join(location.directory, "manifest.json"))),
+    manifest,
+  );
+});
+
+test("package conversion resolves source paths reached through filesystem aliases", async (t) => {
+  const { directory, store } = await fixture(t);
+  const source = path.join(directory, "source.ortpackage");
+  await writeFile(
+    source,
+    await zipBytes([
+      ["model.onnx", await readFile(require.resolve("./models/relu.onnx"))],
+    ]),
+  );
+  const location = await store.resolve(source);
+  const info = await inspectRuntimePackage(location.directory);
+  const alias = path.join(directory, "source-alias");
+  await symlink(info.directory, alias, "junction");
+  const sourcePath = path.join(alias, "model.onnx");
+  const destination = path.join(directory, "converted.ortpackage");
+  await saveRuntimePackage({
+    destination,
+    kind: "generic",
+    sourcePackage: info,
+    sourcePath,
+    model: await loadModelFile(sourcePath, "model.onnx"),
+    format: "ort",
+    includeRewritings: false,
+    canPublish: () => true,
+    publish,
+  });
+  const saved = await store.resolve(destination);
+  assert.match(
+    runtimePackageModel(await inspectRuntimePackage(saved.directory)),
+    /model\.ort$/,
+  );
+});
+
 test("generic package ZIPs restore external initializer payloads after extraction", async (t) => {
   const { directory, store } = await fixture(t);
   const sourcePath = require.resolve("../media/tiny-llm.onnx");
@@ -298,6 +404,34 @@ test("shared GenAI models do not silently pick one of several variant configurat
   assert.throws(
     () => runtimePackagePromptDirectory(info, modelPath),
     /several GenAI configurations/,
+  );
+  await rm(path.join(location.directory, "manifest.json"));
+  const manifestless = await inspectRuntimePackage(location.directory);
+  const save = (sourcePackage, sourcePath, destination) =>
+    saveRuntimePackage({
+      destination,
+      kind: "genai",
+      sourcePackage,
+      sourcePath,
+      model: require("../dist/graph").loadModel(bytes, "model.onnx"),
+      format: "ort",
+      includeRewritings: false,
+      canPublish: () => true,
+      publish,
+    });
+  await assert.rejects(
+    save(manifestless, modelPath, path.join(directory, "ambiguous.ortpackage")),
+    /several GenAI configurations/,
+  );
+  const unused = path.join(location.directory, "unused.onnx");
+  await writeFile(unused, bytes);
+  await assert.rejects(
+    save(
+      await inspectRuntimePackage(location.directory),
+      unused,
+      path.join(directory, "unconfigured.ortpackage"),
+    ),
+    /no GenAI configuration directory/,
   );
 });
 

@@ -1,4 +1,5 @@
 const assert = require("node:assert/strict");
+const { createHash } = require("node:crypto");
 const { execFile } = require("node:child_process");
 const { readdirSync, existsSync } = require("node:fs");
 const {
@@ -163,6 +164,117 @@ test("GenAI .ortpackage ZIPs reload and generate with both engines from their se
       [1, 1, 1],
     );
   }
+});
+
+test("nested GenAI configurations supply archive provider metadata and remain executable", async (t) => {
+  const { root, model } = await fixture(t);
+  const nested = path.join(root, "cpu");
+  await mkdir(nested);
+  for (const name of await readdir(root))
+    if (name !== "cpu")
+      await rename(path.join(root, name), path.join(nested, name));
+  const {
+    inspectRuntimePackage,
+    runtimePackageModel,
+    runtimePackagePromptDirectory,
+    saveRuntimePackage,
+  } = require("../dist/runtimePackage");
+  const { PackageArchiveStore } = require("../dist/packageArchive");
+  const { loadModelFile } = require("../dist/graph");
+  const sourcePath = path.join(nested, path.basename(model));
+  const destination = `${root}-nested.ortpackage`;
+  const store = new PackageArchiveStore();
+  t.after(async () => {
+    await store.close();
+    await rm(destination, { force: true });
+  });
+  await saveRuntimePackage({
+    destination,
+    kind: "genai",
+    sourcePackage: await inspectRuntimePackage(root),
+    sourcePath,
+    model: await loadModelFile(sourcePath, path.basename(sourcePath)),
+    format: "ort",
+    includeRewritings: false,
+    canPublish: () => true,
+    publish: rename,
+  });
+  const location = await store.resolve(destination);
+  const info = await inspectRuntimePackage(location.directory);
+  assert.equal(
+    info.manifest.components.model.variants.default.ep,
+    "CPUExecutionProvider",
+  );
+  const saved = runtimePackageModel(info);
+  const runtimeDirectory = runtimePackagePromptDirectory(info, saved);
+  assert.match(runtimeDirectory, /default[/\\]cpu$/);
+  const result = await runPrompt(
+    saved,
+    options,
+    python,
+    signal(),
+    () => {},
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    runtimeDirectory,
+  );
+  assert.deepEqual(
+    result.tokens.map((token) => token.id),
+    [1, 1, 1],
+  );
+});
+
+test("a single shared GenAI decoder runs through a resolved overlay without modifying its package", async (t) => {
+  const { root, model } = await fixture(t);
+  const bytes = await readFile(model);
+  const digest = createHash("sha256")
+    .update(`${createHash("sha256").update(bytes).digest("hex")}  model.onnx\n`)
+    .digest("hex");
+  const asset = path.join(root, "shared_assets", `sha256-${digest}`);
+  await mkdir(asset, { recursive: true });
+  await rename(model, path.join(asset, "model.onnx"));
+  const configPath = path.join(root, "genai_config.json");
+  const config = JSON.parse(await readFile(configPath));
+  config.model.decoder.filename = `sha256:${digest}/model.onnx`;
+  await writeFile(configPath, JSON.stringify(config));
+  const original = await readFile(configPath);
+  const {
+    inspectRuntimePackage,
+    runtimePackageModel,
+    runtimePackagePromptDirectory,
+    runtimePackagePromptConfiguration,
+  } = require("../dist/runtimePackage");
+  const info = await inspectRuntimePackage(root);
+  const selected = runtimePackageModel(info);
+  const directory = runtimePackagePromptDirectory(info, selected);
+  const overlay = await runtimePackagePromptConfiguration(info, selected);
+  assert.equal(
+    overlay.model.decoder.filename,
+    `shared_assets/sha256-${digest}/model.onnx`,
+  );
+  for (const engine of ["onnx-light", "onnxruntime-genai"]) {
+    const result = await runPrompt(
+      selected,
+      { ...options, engine },
+      python,
+      signal(),
+      () => {},
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      directory,
+      overlay,
+    );
+    assert.deepEqual(
+      result.tokens.map((token) => token.id),
+      [1, 1, 1],
+    );
+  }
+  assert.deepEqual(await readFile(configPath), original);
+  assert.deepEqual(await readFile(selected), bytes);
 });
 
 test("native onnx-light Generate owns autoregression, EOS and error propagation", async (t) => {

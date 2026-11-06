@@ -98,8 +98,7 @@ async function packageManifest(
   manifest?: Record<string, unknown>;
   references?: ManifestModelReference[];
 }> {
-  if (!files.includes("manifest.json") || files.includes("genai_config.json"))
-    return {};
+  if (!files.includes("manifest.json")) return {};
   const manifest: unknown = JSON.parse(
     await readFile(join(directory, "manifest.json"), "utf8"),
   );
@@ -462,6 +461,32 @@ function updateGenaiFilename(
   }
 }
 
+export async function runtimePackagePromptConfiguration(
+  packageInfo: RuntimePackage,
+  modelPath: string,
+): Promise<Record<string, unknown> | undefined> {
+  const directory = runtimePackagePromptDirectory(packageInfo, modelPath);
+  if (!directory) return;
+  const base = relative(packageInfo.directory, directory).split(sep).join("/");
+  const shared = packageInfo.genaiModels?.filter(
+    (reference) => reference.directory === base && reference.shared,
+  );
+  if (!shared?.length) return;
+  const config = await genaiConfiguration(directory);
+  if (!object(config) || !object(config.model) || !object(config.model.decoder))
+    throw new Error("The GenAI configuration must declare a model decoder.");
+  for (const model of new Set(shared.map((reference) => reference.model)))
+    updateGenaiFilename(
+      config,
+      packageInfo.directory,
+      base,
+      model,
+      model,
+      packageInfo.manifest,
+    );
+  return config;
+}
+
 export async function saveRuntimePackage(options: {
   destination: string;
   archive?: boolean;
@@ -475,7 +500,11 @@ export async function saveRuntimePackage(options: {
   canPublish: () => boolean;
   publish: (temporary: string, destination: string) => Promise<void>;
 }): Promise<string | undefined> {
-  const { model, sourcePackage, sourcePath, kind, format } = options;
+  const { model, sourcePackage, kind, format } = options;
+  const sourcePath =
+    sourcePackage && options.sourcePath
+      ? await realpath(options.sourcePath)
+      : options.sourcePath;
   if (kind === "genai" && !sourcePackage?.genai)
     throw new Error(
       "Open an existing GenAI package directory first. Save preserves its configuration and tokenizer; it does not generate them.",
@@ -733,15 +762,32 @@ export async function saveRuntimePackage(options: {
     if (!options.canPublish()) return;
     if (archive) {
       if (!sourcePackage?.manifestReferences) {
+        let provider: string | undefined;
+        if (kind === "genai") {
+          const configDirectory =
+            sourcePackage && sourcePath
+              ? runtimePackagePromptDirectory(sourcePackage, sourcePath)
+              : undefined;
+          if (!sourcePackage || !configDirectory)
+            throw new Error(
+              "The selected model has no GenAI configuration directory.",
+            );
+          provider = genaiProvider(
+            await genaiConfiguration(
+              join(
+                temporary,
+                relative(sourcePackage.directory, configDirectory),
+              ),
+            ),
+          );
+        }
         const variant = join(staging, "variant");
         await rename(temporary, variant);
         await mkdir(temporary);
         await rename(variant, join(temporary, "default"));
         const ep =
           kind === "genai"
-            ? genaiProvider(
-                await genaiConfiguration(join(temporary, "default")),
-              )
+            ? provider
             : kind === "generic" &&
                 !model.graph().pipeline &&
                 !model.graph().nodes.some((node) => node.opType === "EPContext")

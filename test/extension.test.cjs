@@ -12,6 +12,7 @@ const {
   stat,
   symlink,
   link,
+  realpath,
 } = require("node:fs/promises");
 const { createCipheriv, createHash, pbkdf2Sync } = require("node:crypto");
 const { execFileSync, spawnSync } = require("node:child_process");
@@ -2894,7 +2895,7 @@ test("native path selection detects files and package folders without loading or
   });
   assert.deepEqual(extension.openDialogs.at(-1), {
     canSelectMany: false,
-    canSelectFolders: true,
+    canSelectFolders: false,
     canSelectFiles: true,
     filters: {
       "ONNX/ORT models, packages and pipelines": [
@@ -2906,17 +2907,18 @@ test("native path selection detects files and package folders without loading or
         "pipe-onnx",
       ],
     },
-    openLabel: "Open model or runtime package",
+    openLabel: "Open model or package archive",
   });
   extension.setOpenSelection(directory);
   await extension.receive({
-    type: "select-model-path",
+    type: "select-model-directory",
     requestId: 4,
   });
   assert.equal(extension.messages.at(-1).location, directory);
   assert.equal(extension.messages.at(-1).directory, true);
   assert.equal(extension.openDialogs.at(-1).canSelectFolders, true);
-  assert.equal(extension.openDialogs.at(-1).canSelectFiles, true);
+  assert.equal(extension.openDialogs.at(-1).canSelectFiles, false);
+  assert.equal(extension.openDialogs.at(-1).filters, undefined);
   extension.setOpenSelection(undefined);
   await extension.receive({ type: "select-model-path", requestId: 2 });
   assert.equal(extension.messages.at(-1).location, null);
@@ -5820,7 +5822,7 @@ test("runtime packages save self-contained external weights and open selected mo
     expected,
   );
   assert.equal(opened.file.package.kind, "generic");
-  assert.equal(opened.file.package.directory, destination);
+  assert.equal(opened.file.package.directory, await realpath(destination));
   assert.equal(opened.file.package.genai, false);
   assert.equal(opened.file.package.compiled, false);
   await copyFile(
@@ -6008,13 +6010,14 @@ test(".ortpackage ZIPs open through the editor, retain archive history and execu
   const opened = extension.messages.findLast(
     (message) => message.type === "graph",
   );
-  assert.equal(opened.file.package.directory, destination);
+  assert.equal(opened.file.package.directory, await realpath(destination));
   assert.equal(opened.file.package.archive, true);
   assert.equal(opened.file.format, "ort");
+  const canonicalDestination = await realpath(destination);
   assert.ok(
     extension.events
       .findLast((message) => message.type === "path-history")
-      .history.open.some((entry) => entry.path === destination),
+      .history.open.some((entry) => entry.path === canonicalDestination),
   );
   await extension.receive({
     type: "run-model",
