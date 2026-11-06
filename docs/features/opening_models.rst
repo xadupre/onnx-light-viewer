@@ -124,11 +124,11 @@ with the most recent entries first (up to 50 entries each). They persist in
 VS Code's user storage across viewer reloads and application restarts.
 Failed or cancelled operations and browsing alone do not add entries.
 
-Type in a model-path or location field to filter its native suggestions; use
-the arrow keys and Enter to select one, or keep typing any new path. Open
-suggestions follow the selected source. **Recent paths** also offers buttons
-to fill either field, **Remove** for individual entries and **Clear Open/Save
-history**. Selecting history never opens, browses or saves automatically.
+Use the recent-path selector to fill a saved model path, or type any new path.
+Open suggestions follow the selected source. **Settings → History** offers
+per-entry removal and clearing. In Save,
+selecting a remembered folder keeps the output name and places it in that folder.
+Selecting history never opens or saves automatically.
 Paths are still validated when used, even if remembered. Passwords and URL
 credentials, query strings and fragments are not stored in history.
 
@@ -152,10 +152,15 @@ Sidebar password fields are cleared after submission or closing the selector;
 passwords are never written to settings or logs. They remain in the
 extension host's memory while the model is open so native recovery can reload it.
 
-**Open** and **Save** sit side by side with the same design. **Save** toggles an
-embedded panel with a destination-folder browser, destination path, storage and
-encryption options. File selection and password confirmation stay inside the
-sidebar; no popup save dialog is used.
+**Save** has one output field: a filename for models and package archives, or a
+new directory name for directory packages. There is no separate destination
+directory or embedded file listing. Type the output path or use **Browse...**
+to choose its name and location through VS Code. Choosing a path does not write
+anything; **Save copy** performs the save. Storage, encryption and password
+confirmation remain in the sidebar.
+The output field's dropdown arrow lists all remembered destination files,
+even when the current name does not match them; selecting one fills that same
+field. There is no second history selector below it.
 
 .. list-table::
    :header-rows: 1

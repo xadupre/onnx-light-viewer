@@ -50,8 +50,9 @@ dialog for paths outside the workspace.
 
    Choose how to fill Model path without loading a model.
 
-**Recent paths** checks local files for generation assets without loading weights
-or running inference. Mobius exports show whether a pipeline can be assembled,
+Select a remembered local path in **Open** to see its generation-asset checks,
+without loading weights or running inference. Mobius exports show whether a
+pipeline can be assembled,
 or explain missing assets and unsupported input contracts. **Load as pipeline**
 creates a native ``PipelineProto`` beside the export, reusing external weights
 and leaving the original models unchanged, then opens **Run → Prompt**. Separate
@@ -61,7 +62,7 @@ directly. Inspection does not reorder history; only a successful open does.
 These checks do not certify runtime operator support.
 
 .. figure:: _static/feature-history-pipeline.png
-   :alt: Recent local paths with a checked Mobius export and its Load as pipeline button.
+   :alt: Open panel with a selected Mobius export and a contextual Load as pipeline button, without a Recent paths footer.
    :width: 100%
 
    Identify a usable export before loading it; this screenshot uses a tiny test model.
@@ -92,6 +93,10 @@ onnx-light reads and writes the contained models.
 **Save → What to save** chooses a generic, GenAI or compiled EPContext package.
 Choose **ZIP archive (.ortpackage)** or **Directory** independently of the
 model serialization: ONNX protobuf, ORT FlatBuffer, or a pipeline.
+One output field adapts to a file or a new directory. **Browse...** chooses its
+name and location; **Save copy** writes it. There is no separate destination
+directory or unlabeled file listing. The arrow inside the output field chooses
+a recent destination without restricting what you can type.
 New archives contain a version-1 manifest; existing manifests and other assets
 are preserved, with references updated when the selected model changes format.
 GenAI and compiled packages require existing configuration/provider assets;

@@ -1085,10 +1085,7 @@ test("save defaults use the workspace cache directory while Open stays beside th
     }),
   );
   assert.equal(document.getElementById("open-location").value, "/source");
-  assert.equal(
-    document.getElementById("save-location").value,
-    "/workspace/.cache/.onnx-light-viewer",
-  );
+  assert.equal(document.getElementById("save-location"), null);
   assert.equal(
     document.getElementById("save-file").value,
     "/workspace/.cache/.onnx-light-viewer/model-copy.onnx",
@@ -5327,6 +5324,19 @@ test("keeps the complete history selector after selecting and loading a remember
   });
   document.getElementById("save-model").click();
   const destinations = document.getElementById("save-file-history");
+  assert.equal(destinations.hidden, false);
+  assert.equal(
+    destinations.parentElement,
+    document.getElementById("save-file").parentElement,
+  );
+  assert.equal(window.getComputedStyle(destinations).color, "rgba(0, 0, 0, 0)");
+  document.getElementById("save-file").value = "/new/unrelated-name.onnx";
+  assert.deepEqual(
+    Array.from(destinations.options)
+      .filter((option) => option.value)
+      .map((option) => option.value),
+    saved,
+  );
   destinations.value = saved[1];
   destinations.dispatchEvent(new window.Event("change", { bubbles: true }));
   assert.equal(document.getElementById("save-file").value, saved[1]);
@@ -5346,7 +5356,7 @@ test("keeps the complete history selector after selecting and loading a remember
   );
 });
 
-test("refreshes path histories when their panel or recent-path list is shown and displays cleanup errors", async (t) => {
+test("refreshes path selectors when their panel opens and displays cleanup errors without footer histories", (t) => {
   const { document, window, messages, load } = openViewer(t);
   load(demoGraph);
   const existing = { source: "local", kind: "file", path: "/existing.onnx" };
@@ -5363,17 +5373,7 @@ test("refreshes path histories when their panel or recent-path list is shown and
       messages.findLast(({ type }) => type === "get-path-history").target,
       target,
     );
-    const history = document.getElementById(`${target}-history`);
-    const before = messages.filter(
-      ({ type }) => type === "get-path-history",
-    ).length;
-    const toggled = once(history, "toggle");
-    history.open = true;
-    await toggled;
-    assert.equal(
-      messages.filter(({ type }) => type === "get-path-history").length,
-      before + 1,
-    );
+    assert.equal(document.getElementById(`${target}-history`), null);
     send({
       type: "path-history",
       history: { open: [existing], save: [existing] },
@@ -5383,12 +5383,6 @@ test("refreshes path histories when their panel or recent-path list is shown and
         .filter(({ value }) => value)
         .map(({ value }) => value),
       [existing.path],
-    );
-    assert.equal(
-      document
-        .getElementById(`${target}-history-entries`)
-        .textContent.includes(missing.path),
-      false,
     );
     send({ type: "path-history-error", target, error: "Permission denied" });
     assert.equal(
@@ -5400,7 +5394,7 @@ test("refreshes path histories when their panel or recent-path list is shown and
   }
 });
 
-test("suggests remembered paths without submitting forms and supports per-entry removal and clearing", (t) => {
+test("keeps source-specific path selectors and folder choices without footer history controls", (t) => {
   const { document, window, messages, load } = openViewer(t);
   load(demoGraph);
   const local = {
@@ -5429,11 +5423,12 @@ test("suggests remembered paths without submitting forms and supports per-entry 
   send();
   for (const target of ["open", "save"]) {
     assert.equal(document.getElementById(`${target}-file`).list, null);
-    assert.equal(
-      document.getElementById(`${target}-location`).list.id,
-      `${target}-location-history`,
-    );
   }
+  assert.equal(
+    document.getElementById("open-location").list.id,
+    "open-location-history",
+  );
+  assert.equal(document.getElementById("save-location"), null);
   assert.deepEqual(
     [...document.querySelectorAll("#open-file-history option")].map(
       (option) => option.value,
@@ -5444,24 +5439,26 @@ test("suggests remembered paths without submitting forms and supports per-entry 
     [...document.querySelectorAll("#save-file-history option")].map(
       (option) => option.value,
     ),
-    ["", saved.path],
+    ["", saved.path, "/copies"],
   );
-  assert.equal(document.querySelector("#open-history b"), null);
+  assert.equal(document.querySelector("#open-file-history b"), null);
+  assert.equal(document.getElementById("open-history"), null);
+  assert.equal(document.getElementById("save-history"), null);
+  const choose = (target, path) => {
+    const selector = document.getElementById(`${target}-file-history`);
+    selector.value = path;
+    selector.dispatchEvent(new window.Event("change", { bubbles: true }));
+  };
   document.getElementById("open-model").click();
-  document.getElementById("open-history").open = true;
   const count = messages.length;
-  document.querySelector("#open-history-entries li button").click();
+  choose("open", local.path);
   assert.equal(document.getElementById("open-file").value, local.path);
   assert.equal(document.activeElement.id, "open-file");
-  document
-    .querySelectorAll("#open-history-entries li")[1]
-    .querySelector("button")
-    .click();
-  assert.equal(document.getElementById("open-location").value, "/models");
-  assert.equal(document.getElementById("open-path-dialog").open, true);
-  assert.equal(document.activeElement.id, "open-location");
-  document.getElementById("cancel-open-path").click();
-  document.querySelector("#save-history-entries li button").click();
+  assert.equal(
+    document.getElementById("open-location-history").options[0].value,
+    "/models",
+  );
+  choose("save", saved.path);
   assert.equal(document.getElementById("save-file").value, saved.path);
   assert.equal(messages.length, count);
   const input = document.getElementById("open-file");
@@ -5482,10 +5479,6 @@ test("suggests remembered paths without submitting forms and supports per-entry 
     assert.equal(event.defaultPrevented, false);
     assert.equal(input.value, "/new/model.onnx");
   }
-  document.querySelector("#open-history-entries li button:last-child").click();
-  assert.equal(messages.at(-1).type, "path-history-edit");
-  assert.equal(messages.at(-1).historyAction, "remove");
-  assert.equal(messages.at(-1).historyEntry.path, local.path);
   history.open.shift();
   send();
   assert.equal(document.getElementById("open-file-history").disabled, true);
@@ -5501,22 +5494,20 @@ test("suggests remembered paths without submitting forms and supports per-entry 
   }
   history.open = [remote];
   send();
-  assert.equal(document.getElementById("open-history").hidden, true);
+  assert.equal(document.getElementById("open-file-history").disabled, true);
   document.getElementById("open-source-huggingface").click();
-  assert.equal(document.getElementById("open-history").hidden, false);
+  assert.equal(document.getElementById("open-file-history").disabled, false);
   document.getElementById("open-source-local").click();
-  assert.equal(document.getElementById("open-history").hidden, true);
-  assert.equal(document.getElementById("save-history").hidden, false);
-  document.getElementById("save-clear-history").click();
-  assert.deepEqual(JSON.parse(JSON.stringify(messages.at(-1))), {
-    type: "path-history-edit",
-    target: "save",
-    historyAction: "clear",
-  });
+  assert.equal(document.getElementById("open-file-history").disabled, true);
+  assert.equal(document.getElementById("save-file-history").hidden, false);
   history.save = [];
   send();
-  assert.equal(document.getElementById("save-history").hidden, true);
+  assert.equal(document.getElementById("save-file-history").hidden, true);
   assert.equal(document.getElementById("save-file-history").disabled, true);
+  assert.equal(
+    messages.some(({ type }) => type === "path-history-edit"),
+    false,
+  );
 });
 
 test("history checks generation assets without reopening or reordering and offers a distinct pipeline action", (t) => {
@@ -5540,13 +5531,16 @@ test("history checks generation assets without reopening or reordering and offer
     messages.some(({ type }) => type === "prompt-pipeline-history"),
     false,
   );
+  const selector = document.getElementById("open-file-history");
+  selector.value = entry.path;
+  selector.dispatchEvent(new window.Event("change", { bubbles: true }));
   send({ type: "path-history", history });
   const first = messages.findLast(
     ({ type }) => type === "prompt-pipeline-history",
   );
   assert.deepEqual(Array.from(first.paths), [entry.path]);
   assert.match(
-    document.getElementById("open-history-entries").textContent,
+    document.getElementById("open-pipeline-status").textContent,
     /Checking pipeline assets/,
   );
   send({ type: "path-history", history });
@@ -5558,7 +5552,7 @@ test("history checks generation assets without reopening or reordering and offer
     requestId: first.requestId,
     entries: [{ path: entry.path, available: true, label: "Stale result" }],
   });
-  assert.equal(document.querySelector("[data-load-pipeline]"), null);
+  assert.equal(document.getElementById("open-load-pipeline").hidden, true);
   send({
     type: "prompt-pipeline-history",
     requestId: current.requestId,
@@ -5570,7 +5564,14 @@ test("history checks generation assets without reopening or reordering and offer
       },
     ],
   });
-  document.querySelector("#open-history-entries button").click();
+  document.getElementById("open-file").value = "/another/model.onnx";
+  document
+    .getElementById("open-file")
+    .dispatchEvent(new window.Event("input", { bubbles: true }));
+  assert.equal(document.getElementById("open-load-pipeline").hidden, true);
+  selector.value = entry.path;
+  selector.dispatchEvent(new window.Event("change", { bubbles: true }));
+  assert.equal(document.getElementById("open-load-pipeline").hidden, false);
   assert.equal(document.getElementById("open-file").value, entry.path);
   assert.equal(
     messages.some(
@@ -5618,6 +5619,9 @@ test("history displays why a pipeline is unavailable and ignores inspection afte
   const history = { open: [entry], save: [] };
   send({ type: "path-history", history });
   document.getElementById("open-model").click();
+  const selector = document.getElementById("open-file-history");
+  selector.value = entry.path;
+  selector.dispatchEvent(new window.Event("change", { bubbles: true }));
   send({ type: "path-history", history });
   const request = messages.findLast(
     ({ type }) => type === "prompt-pipeline-history",
@@ -5634,17 +5638,17 @@ test("history displays why a pipeline is unavailable and ignores inspection afte
     ],
   });
   assert.match(
-    document.getElementById("open-history-entries").textContent,
+    document.getElementById("open-pipeline-status").textContent,
     /embedding model is missing/,
   );
-  assert.equal(document.querySelector("[data-load-pipeline]"), null);
+  assert.equal(document.getElementById("open-load-pipeline").hidden, true);
   document.getElementById("cancel-open").click();
   send({
     type: "prompt-pipeline-history",
     requestId: request.requestId,
     entries: [{ path: entry.path, available: true, label: "Stale" }],
   });
-  assert.equal(document.querySelector("[data-load-pipeline]"), null);
+  assert.equal(document.getElementById("open-load-pipeline").hidden, true);
 });
 
 test("shows real download progress, handles unknown totals and ignores stale operation updates", (t) => {
@@ -8754,11 +8758,10 @@ test("VS Code path picking fills the field without opening and discards late res
   );
 });
 
-test("preserves save destination separators while browsing directories inline", (t) => {
+test("preserves save destination separators when choosing a remembered folder", (t) => {
   const { document, window, messages, load } = openViewer(t);
   load(demoGraph);
   document.getElementById("save-model").click();
-  const requestId = messages.at(-1).requestId;
   for (const [location, expected] of [
     ["/models", "/models/copy.onnx"],
     ["/", "/copy.onnx"],
@@ -8775,16 +8778,98 @@ test("preserves save destination separators while browsing directories inline", 
     window.dispatchEvent(
       new window.MessageEvent("message", {
         data: {
-          type: "file-list",
-          target: "save",
-          requestId,
-          location,
-          entries: [],
+          type: "path-history",
+          history: {
+            open: [],
+            save: [{ source: "local", kind: "directory", path: location }],
+          },
         },
       }),
     );
+    const selector = document.getElementById("save-file-history");
+    selector.value = location;
+    selector.dispatchEvent(new window.Event("change", { bubbles: true }));
     assert.equal(document.getElementById("save-file").value, expected);
   }
+  assert.equal(
+    messages.some(({ type }) => type === "save" || type === "browse-files"),
+    false,
+  );
+});
+
+test("Save has one format-aware path and Browse never saves or overwrites later edits", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const byId = (id) => document.getElementById(id);
+  const reply = (request, result) =>
+    window.dispatchEvent(
+      new window.MessageEvent("message", {
+        data: {
+          type: "save-path-selected",
+          requestId: request.requestId,
+          ...result,
+        },
+      }),
+    );
+  const pick = () => {
+    byId("save-path-browse").click();
+    assert.equal(byId("save-path-browse").disabled, true);
+    assert.equal(messages.at(-1).type, "select-save-path");
+    return messages.at(-1);
+  };
+  const change = (id, value) => {
+    byId(id).value = value;
+    byId(id).dispatchEvent(new window.Event("change", { bubbles: true }));
+  };
+  load(demoGraph);
+  byId("save-model").click();
+  assert.equal(byId("save-location"), null);
+  assert.equal(byId("save-files"), null);
+  assert.equal(byId("save-browse"), null);
+  assert.equal(byId("save-rewritings-note"), null);
+  assert.equal(byId("save-rewritings").hasAttribute("aria-describedby"), false);
+  assert.equal(byId("save-file-history").hidden, true);
+  assert.equal(byId("save-file-label").textContent, "File name or path");
+  const file = pick();
+  assert.equal(file.format, "onnx");
+  assert.equal(file.location, "model-copy.onnx");
+  reply(file, { location: "/chosen/model.onnx" });
+  assert.equal(byId("save-file").value, "/chosen/model.onnx");
+  assert.equal(byId("save-path-browse").disabled, false);
+  reply(pick(), { location: null });
+  assert.equal(byId("save-file").value, "/chosen/model.onnx");
+  reply(pick(), { error: "Dialog unavailable" });
+  assert.equal(byId("save-options-error").textContent, "Dialog unavailable");
+  const typed = pick();
+  byId("save-file").value = "/typed/model.onnx";
+  byId("save-file").dispatchEvent(new window.Event("input", { bubbles: true }));
+  reply(typed, { location: "/stale/model.onnx" });
+  assert.equal(byId("save-file").value, "/typed/model.onnx");
+  const oldFormat = pick();
+  change("save-container", "generic");
+  reply(oldFormat, { location: "/stale/model.onnx" });
+  const archive = pick();
+  assert.equal(archive.format, "ortpackage");
+  reply(archive, { location: "/chosen/package.ortpackage" });
+  change("save-package-layout", "directory");
+  assert.equal(byId("save-file-label").textContent, "New package directory");
+  assert.match(byId("save-path-help").textContent, /directory name/);
+  const directory = pick();
+  assert.equal(directory.format, "directory");
+  reply(directory, { location: "/chosen/new-package" });
+  assert.equal(byId("save-file").value, "/chosen/new-package");
+  const closed = pick();
+  byId("cancel-save").click();
+  reply(closed, { location: "/stale/closed" });
+  assert.equal(byId("save-file").value, "/chosen/new-package");
+  byId("save-model").click();
+  const replaced = pick();
+  load(demoGraph);
+  reply(replaced, { location: "/stale/replaced" });
+  assert.equal(byId("save-file").value, "/chosen/new-package");
+  assert.equal(
+    messages.some(({ type }) => type === "save" || type === "browse-files"),
+    false,
+  );
 });
 
 test("tab keyboard order is preserved without group headings", (t) => {

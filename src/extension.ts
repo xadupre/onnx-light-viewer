@@ -2608,6 +2608,54 @@ async function configurePanel(
             error: error instanceof Error ? error.message : String(error),
           });
         }
+      } else if (message?.type === "select-save-path") {
+        try {
+          requireModel();
+          if (
+            !Number.isSafeInteger(message.requestId) ||
+            typeof message.location !== "string" ||
+            typeof message.format !== "string" ||
+            ![
+              "onnx",
+              "ort",
+              "enc",
+              "pipe-onnx",
+              "ortpackage",
+              "directory",
+            ].includes(message.format)
+          )
+            throw new Error("Invalid save destination request.");
+          const directory = message.format === "directory";
+          const defaultUri = message.location.trim()
+            ? locationUri(message.location)
+            : saveDirectoryUri();
+          await prepareSaveDirectory(
+            message.location.trim()
+              ? vscode.Uri.joinPath(defaultUri, "..")
+              : defaultUri,
+          );
+          const destination = await vscode.window.showSaveDialog({
+            title: directory
+              ? "Choose a new package directory name"
+              : "Choose the output file",
+            saveLabel: directory ? "Use directory name" : "Use file name",
+            defaultUri,
+            ...(directory
+              ? {}
+              : { filters: { "Output file": [message.format] } }),
+          });
+          await postMessage({
+            type: "save-path-selected",
+            requestId: message.requestId,
+            location: destination ? locationText(destination) : null,
+          });
+        } catch (error) {
+          await postMessage({
+            type: "save-path-selected",
+            requestId: message.requestId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
       } else if (message?.type === "browse-files") {
         const target = message.target;
         try {
