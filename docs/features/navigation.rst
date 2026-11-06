@@ -31,7 +31,8 @@ The top row provides Model, Statistics, Memory, Tensors and Run, followed by
 Logs, Status, Controls, ONNX, Patterns and Settings. There are no
 Navigation/Application headings. Model actions, conversion and optimization
 controls remain in the sidebar.
-The model title and pending-rewriting counter share one header row; hover over
+The graph name, node/initializer counts and pending-rewriting counter share
+one header row; hover over
 a shortened title for its full name. Package versions are available in **Status**.
 
 The **Controls** tab groups keyboard shortcuts, mouse

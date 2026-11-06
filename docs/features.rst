@@ -13,13 +13,14 @@ underlying onnx-light libraries. Start with the worked example in
 :doc:`getting_started`; the linked guides explain each control in detail.
 
 Tabs share one compact row, without Navigation/Application headings.
-The model title and pending-rewriting counter share a header row; versions are
-shown in **Status**, not above the graph. Model actions remain in the sidebar;
+The graph name, node/initializer counts and pending-rewriting counter share a
+single header row. Versions are shown in **Status**, not above the graph.
+Model actions remain in the sidebar;
 application tabs are available without loading a model.
 See :doc:`features/navigation`.
 
 .. figure:: _static/feature-themes.png
-   :alt: Compact viewer tabs and a model title beside its pending-rewriting counter, without duplicate version labels.
+   :alt: Graph name, node and initializer counts, and pending rewritings on one line, without duplicate version labels.
    :width: 100%
 
    Keep the graph header compact without removing controls or Status details.

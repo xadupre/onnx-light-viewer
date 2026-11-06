@@ -14767,6 +14767,25 @@ test("background selection inspects the current model, subgraph, function or pip
   }
 });
 
+test("graph names, node/initializer counts and pending rewritings share one header row", (t) => {
+  const { document, load } = openViewer(t);
+  load(
+    decodeGraph(
+      readFileSync(require.resolve("./models/subgraphs.onnx")),
+      "subgraphs.onnx",
+    ),
+  );
+  const heading = document.querySelector(".graph-heading");
+  assert.deepEqual(
+    [...heading.children].map((element) => element.id || element.className),
+    ["graph-navigation", "graph-stats", "rewriting-count"],
+  );
+  assert.equal(
+    document.querySelector(".graph-stats").textContent,
+    "2 nodes / 1 initializer",
+  );
+});
+
 test("pipeline model boxes show the stage identity and imports rather than operator placeholders", (t) => {
   const { document, load, pointer, messages } = openViewer(t);
   const pipeline = loadModel(
@@ -14777,7 +14796,7 @@ test("pipeline model boxes show the stage identity and imports rather than opera
   load(overview);
   assert.match(
     document.getElementById("graph-summary").textContent,
-    /^3 models /,
+    /^3 models$/,
   );
   const boxes = [...document.querySelectorAll(".graph-node")];
   const positions = nodePositions(document);
@@ -14832,7 +14851,7 @@ test("pipeline model boxes show the stage identity and imports rather than opera
   load(stage);
   assert.match(
     document.getElementById("graph-summary").textContent,
-    /^\d+ nodes? /,
+    /^\d+ nodes?$/,
   );
   assert.equal(
     document.getElementById("node-name-label").textContent,

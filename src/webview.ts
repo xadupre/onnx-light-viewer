@@ -176,9 +176,11 @@ export function webviewHtml(
       <header class="graph-toolbar">
         <div class="graph-heading">
           <nav id="graph-navigation" aria-label="Graph breadcrumbs" hidden></nav>
+          <div class="graph-stats" aria-live="polite"><span id="graph-summary">No model loaded</span><span aria-hidden="true"> / </span><span id="initializer-count">0 initializers</span></div>
           <span id="rewriting-count" role="status" title="Rewritings waiting to be reapplied before the next native matching or optimization">0 pending rewritings</span>
         </div>
-        <div class="graph-stats" aria-live="polite"><span id="graph-summary">No model loaded</span><span id="initializer-count">0 initializers</span><span id="navigation-status" role="status"></span><span id="load-status" role="status"></span></div>
+        <span id="navigation-status" role="status"></span>
+        <span id="load-status" role="status"></span>
         <span id="save-status" role="status"></span>
         <span id="fusion-status" role="status"></span>
         <progress id="load-progress" aria-label="Loading ONNX model" hidden></progress>

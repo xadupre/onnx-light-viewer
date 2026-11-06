@@ -2448,15 +2448,10 @@ function render(graph, metadata) {
   unusedLabels = [];
   metadataPanel.reset();
   metadataStatus(false);
-  const tensors = new Set([
-    ...graph.inputs,
-    ...graph.outputs,
-    ...graph.nodes.flatMap((node) => [...node.inputs, ...node.outputs]),
-  ]);
   const unit =
     graph.pipeline && graph.breadcrumbs.length === 1 ? "model" : "node";
   byId("graph-summary").textContent =
-    `${graph.nodes.length} ${unit}${graph.nodes.length === 1 ? "" : "s"} / ${tensors.size} tensors`;
+    `${graph.nodes.length} ${unit}${graph.nodes.length === 1 ? "" : "s"}`;
   byId("initializer-count").textContent =
     `${graph.initializerCount} initializer${graph.initializerCount === 1 ? "" : "s"}`;
 

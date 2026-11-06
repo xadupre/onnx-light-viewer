@@ -25,6 +25,11 @@ for (const initialTab of ["model", "logs"]) {
       document.getElementById("graph-navigation").parentElement,
       document.getElementById("rewriting-count").parentElement,
     );
+    assert.equal(
+      document.getElementById("graph-summary").closest(".graph-stats")
+        .parentElement,
+      document.getElementById("rewriting-count").parentElement,
+    );
     assert.ok(document.getElementById("settings-app-version"));
     assert.ok(document.getElementById("settings-native-version"));
     const groups = (selector) =>

@@ -531,6 +531,9 @@ body.resizing-tensor-column * {
   flex: 0 0 100%;
   flex-wrap: nowrap;
 }
+.graph-toolbar > [role="status"]:empty {
+  display: none;
+}
 #rewriting-count {
   flex-shrink: 0;
   white-space: nowrap;
@@ -647,9 +650,13 @@ a:focus-visible {
   display: none;
 }
 .graph-stats {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
   color: var(--muted);
   font-size: 11px;
-  flex-wrap: wrap;
+  white-space: nowrap;
 }
 .graph-body {
   --sidebar-min-width: 200px;
@@ -691,7 +698,7 @@ body.resizing-sidebar {
   display: flex;
   flex: 1;
   min-width: 0;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 6px;
 }
 #model-error {
