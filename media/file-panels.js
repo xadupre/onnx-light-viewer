@@ -627,7 +627,7 @@ function createFilePanels({
       return;
     }
     byId("save-options-error").textContent = "";
-    requestAction("save", "Save ONNX model", {
+    requestAction("save", "Save model or package", {
       location: byId("save-file").value,
       password: byId("save-password").value,
       confirmation: byId("save-confirmation").value,

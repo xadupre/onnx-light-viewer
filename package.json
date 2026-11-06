@@ -52,7 +52,7 @@
       "explorer/context": [
         {
           "command": "onnxLightViewer.openFile",
-          "when": "!explorerResourceIsFolder && resourceFilename =~ /\\.(onnx|onnx\\.enc|ort|ortpackage|pipe-onnx)$/i",
+          "when": "!explorerResourceIsFolder && resourceFilename =~ /\\.(onnx|onnx\\.enc|ort|ortpackage|zip|pipe-onnx)$/i",
           "group": "navigation"
         },
         {

@@ -3870,7 +3870,7 @@ async function configurePanel(
         const requestedModel = model;
         try {
           await log.run(
-            "Save ONNX model",
+            "Save model or package",
             async (id) => {
               const current = requireModel();
               if (
@@ -3942,7 +3942,7 @@ async function configurePanel(
                   "Choose a positive, safe integer maximum external weight file size.",
                 );
               const cancelled = () => {
-                log.record("CANCELLED", "Save ONNX model", id);
+                log.record("CANCELLED", "Save model or package", id);
               };
               let password: string | undefined;
               const inline = message.location !== undefined;
@@ -4008,8 +4008,8 @@ async function configurePanel(
               const destination = inline
                 ? locationUri(message.location)
                 : await vscode.window.showSaveDialog({
-                    title: "Save ONNX model copy",
-                    saveLabel: "Save model copy",
+                    title: "Save model or package copy",
+                    saveLabel: "Save copy",
                     filters: packageKind
                       ? { "Runtime package ZIP": ["ortpackage"] }
                       : format.ort
@@ -4222,7 +4222,7 @@ async function configurePanel(
           const detail = error instanceof Error ? error.message : String(error);
           await postMessage({ type: "save-error", error: detail });
           await vscode.window.showErrorMessage(
-            `Could not save ONNX model: ${detail}`,
+            `Could not save model or package: ${detail}`,
           );
         }
       } else if (

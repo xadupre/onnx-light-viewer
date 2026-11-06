@@ -5768,7 +5768,7 @@ test("saves without replacing the graph and reports success, cancellation and er
       type: "log-entry",
       entry: {
         id: request.actionId,
-        action: "Save ONNX model",
+        action: "Save model or package",
         timestamp: new Date().toISOString(),
         status: result,
       },

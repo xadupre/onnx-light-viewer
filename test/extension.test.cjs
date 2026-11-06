@@ -1230,10 +1230,14 @@ test("the Explorer context menu offers ONNX Light Viewer only for supported mode
     "model.onnx.enc",
     "model.pipe-onnx",
     "model.ort",
+    "model.ortpackage",
+    "model.zip",
     "MODEL.ONNX",
     "MODEL.ONNX.ENC",
     "MODEL.PIPE-ONNX",
     "MODEL.ORT",
+    "MODEL.ORTPACKAGE",
+    "MODEL.ZIP",
   ])
     assert.ok(filename.test(name), name);
   for (const name of [
@@ -1241,6 +1245,7 @@ test("the Explorer context menu offers ONNX Light Viewer only for supported mode
     "model.onnx.data",
     "model.onnx.backup",
     "model.onnx.enc.data",
+    "model.zip.backup",
     "not-onnx",
     "model.enc",
   ])
@@ -5719,6 +5724,19 @@ test("preserves dense and sparse external sources when selected as save destinat
       for (const [file, bytes] of files)
         assert.deepEqual(await readFile(file), bytes);
     }
+  }
+});
+
+test("native save dialogs describe ONNX, ORT and package copies without ONNX-only labels", async (t) => {
+  const extension = await openExtension("relu.onnx");
+  t.after(() => extension.dispose());
+  for (const format of [{}, { format: "ort" }, { packageKind: "generic" }]) {
+    await extension.receive({ type: "save", ...format });
+    assert.equal(
+      extension.saveDialogs.at(-1).title,
+      "Save model or package copy",
+    );
+    assert.equal(extension.saveDialogs.at(-1).saveLabel, "Save copy");
   }
 });
 

@@ -141,10 +141,19 @@ async function packageManifest(
         variantPath,
         manifest,
       );
-      if (!(await lstat(join(directory, variantDirectory))).isDirectory())
-        throw new Error(
-          `Missing runtime package variant directory: ${variantName}`,
-        );
+      const missingDirectory = `Missing runtime package variant directory: ${variantName}`;
+      try {
+        if (!(await lstat(join(directory, variantDirectory))).isDirectory())
+          throw new Error(missingDirectory);
+      } catch (error) {
+        if (
+          error instanceof Error &&
+          "code" in error &&
+          error.code === "ENOENT"
+        )
+          throw new Error(missingDirectory, { cause: error });
+        throw error;
+      }
       const executor = object(variant.executor_info)
         ? variant.executor_info.ort
         : undefined;

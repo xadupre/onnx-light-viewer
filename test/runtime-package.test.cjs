@@ -57,6 +57,34 @@ async function publish(source, target) {
   await rm(source);
 }
 
+test("runtime package inspection reports missing and non-directory variants explicitly", async (t) => {
+  const { directory, store } = await fixture(t);
+  for (const variantDirectory of ["missing", "model.onnx"]) {
+    const source = path.join(directory, `${variantDirectory}.ortpackage`);
+    await writeFile(
+      source,
+      await zipBytes([
+        [
+          "manifest.json",
+          JSON.stringify({
+            schema_version: "1.0",
+            components: {
+              decoder: {
+                variants: { cpu: { variant_directory: variantDirectory } },
+              },
+            },
+          }),
+        ],
+        ["model.onnx", await readFile(require.resolve("./models/relu.onnx"))],
+      ]),
+    );
+    const location = await store.resolve(source);
+    await assert.rejects(inspectRuntimePackage(location.directory), {
+      message: "Missing runtime package variant directory: cpu",
+    });
+  }
+});
+
 test("ORT package ZIPs preserve external component manifests, variants and assets on format conversion", async (t) => {
   const { directory, store } = await fixture(t);
   const bytes = await readFile(require.resolve("./models/relu.onnx"));

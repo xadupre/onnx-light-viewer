@@ -543,7 +543,7 @@ export function webviewHtml(
               <p id="loaded-format" role="status"></p>
               <label for="open-password">Password (encrypted models only)</label>
               <input id="open-password" type="password" autocomplete="off">
-              <progress id="open-progress" aria-label="Opening ONNX model" aria-describedby="open-progress-status" hidden></progress><p id="open-progress-status" role="status" hidden></p>
+              <progress id="open-progress" aria-label="Opening model or package" aria-describedby="open-progress-status" hidden></progress><p id="open-progress-status" role="status" hidden></p>
               <p id="open-error" role="alert"></p>
               <footer><button id="cancel-open" type="button">Close</button><button id="open-submit" class="primary" type="submit">Open model</button></footer>
             </form>
@@ -609,7 +609,7 @@ export function webviewHtml(
               <label><input id="save-rewritings" type="checkbox" aria-describedby="save-rewritings-note">Include fusion rewritings</label>
               <p id="save-rewritings-note">Unchecked: save the current graph without rewriting plans. Checked: save the original graph and one concatenated RewritingProto plan per modified model, including pending rewritings. Undo history is session-local.</p>
               <label><input id="save-overwrite" type="checkbox">Replace an existing destination copy</label>
-              <progress id="save-progress" aria-label="Saving ONNX model" aria-describedby="save-progress-status" hidden></progress><p id="save-progress-status" role="status" hidden></p>
+              <progress id="save-progress" aria-label="Saving model or package" aria-describedby="save-progress-status" hidden></progress><p id="save-progress-status" role="status" hidden></p>
               <p id="save-options-error" role="alert"></p>
               <footer><button id="cancel-save" type="button">Close</button><button id="save-submit" class="primary" type="submit">Save copy</button></footer>
             </form>
