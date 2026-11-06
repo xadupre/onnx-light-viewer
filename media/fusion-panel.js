@@ -5,6 +5,7 @@ function createFusionPanel({
   revealPanel,
   fit,
   canFuse,
+  canSelectRewriting,
   clearSelection,
   selectedNode,
   selectedNodes,
@@ -15,6 +16,7 @@ function createFusionPanel({
   let fusionCompletion;
   let fusionPreview;
   let fusionBusy = false;
+  let undoBusy = false;
   let optimizationSelection;
   let optimizationReport;
   let optimizationBackend = "onnx-light";
@@ -25,6 +27,7 @@ function createFusionPanel({
   let restoreRequest;
   let restoreNotice = "";
   let scenarios = [];
+  let rewritingState = { names: [] };
   let selectedStep;
   let diagnosticRequest = 0;
   let diagnosticBusy = false;
@@ -375,9 +378,13 @@ function createFusionPanel({
   }
   function updateScenario() {
     const scenario = currentScenario();
-    byId("rewriting-scenario").disabled = fusionBusy || !scenarios.length;
+    byId("rewriting-scenario").disabled =
+      fusionBusy ||
+      !canSelectRewriting() ||
+      !(rewritingState.names.length || undoCount);
     for (const id of ["rewriting-next", "rewriting-all"])
       byId(id).disabled = fusionBusy || !scenario?.available || !canFuse();
+    byId("rewriting-restart").disabled = fusionBusy || !scenario || !canFuse();
     byId("rewriting-steps").replaceChildren();
     for (const [index, step] of (scenario?.steps ?? []).entries()) {
       const item = document.createElement("li");
@@ -403,7 +410,17 @@ function createFusionPanel({
     }
     byId("rewriting-progress").textContent = scenario
       ? `${scenario.applied} / ${scenario.steps.length} steps applied.${!scenario.available && scenario.applied < scenario.steps.length ? " Unfuse current edits before applying this scenario." : ""}`
-      : "No saved rewriting scenarios in this model.";
+      : "None selected: the model is shown without a saved rewriting.";
+  }
+  function showRewritingState(state) {
+    rewritingState = state;
+    byId("rewriting-scenario").replaceChildren(
+      new Option("None", ""),
+      ...[...state.names]
+        .sort((a, b) => a.localeCompare(b))
+        .map((name) => new Option(name, name)),
+    );
+    byId("rewriting-scenario").value = state.selected ?? "";
   }
   function showScenarios(values, name) {
     const previous = name ?? byId("rewriting-scenario").value;
@@ -411,22 +428,22 @@ function createFusionPanel({
     scenarios = values ?? [];
     if (!scenarios.length || !hadScenarios)
       byId("rewriting-scenarios").open = scenarios.length > 0;
-    byId("rewriting-scenario").replaceChildren();
-    for (const scenario of [...scenarios].sort((a, b) =>
-      a.name.localeCompare(b.name),
-    )) {
-      const option = document.createElement("option");
-      option.value = option.textContent = scenario.name;
-      byId("rewriting-scenario").append(option);
+    if (values) {
+      showRewritingState({
+        names: scenarios.map((scenario) => scenario.name),
+        selected: previous,
+      });
     }
-    const active = scenarios.find((scenario) => scenario.applied)?.name;
-    if (scenarios.some((scenario) => scenario.name === (active ?? previous)))
-      byId("rewriting-scenario").value = active ?? previous;
     updateScenario();
   }
   function fusionControls(busy, message = "") {
+    busy ||= undoBusy;
     if (busy && diagnosticBusy) clearDiagnostic();
     fusionBusy = busy;
+    for (const id of ["unfuse-last", "unfuse-all"])
+      byId(id).disabled = busy || !undoCount;
+    for (const button of byId("unfuse-history").querySelectorAll("button"))
+      button.disabled = busy || button.dataset.nodeCount === "0";
     selectionPatternControls();
     diagnosticControls();
     byId("show-optimization-report").disabled = busy || !optimizationReport;
@@ -476,7 +493,8 @@ function createFusionPanel({
     byId("select-fusions").disabled = busy || !fusionPreview?.matches.length;
     byId("clear-fusions").disabled = busy || !fusionSelection().length;
     byId("apply-fusion").disabled = busy || !fusionSelection().length;
-    byId("fuse-pattern").disabled = creatingPattern || !canFuse();
+    byId("fuse-pattern").disabled =
+      undoBusy || creatingPattern || !(canFuse() || undoCount);
     byId("optimize-model").disabled = creatingPattern || !canFuse();
     const optimization = byId("optimization-patterns");
     optimization.disabled =
@@ -877,6 +895,11 @@ function createFusionPanel({
     byId("fusion-panel").hidden = false;
     revealPanel(byId("fusion-panel"));
     byId("fuse-pattern").setAttribute("aria-expanded", "true");
+    if (!canFuse()) {
+      fusionControls(false);
+      fit();
+      return;
+    }
     clearFusionPreview();
     byId("fusion-pattern").replaceChildren();
     updateDiagnosticPatterns();
@@ -1126,11 +1149,24 @@ function createFusionPanel({
   byId("apply-fusion").addEventListener("click", () => {
     applyFusion(fusionSelection());
   });
-  byId("rewriting-scenario").addEventListener("change", () => {
+  function selectRewriting(all = true) {
+    if (fusionBusy || !canSelectRewriting()) return;
     selectedStep = undefined;
     clearSelection();
-    updateScenario();
-  });
+    clearFusionPreview();
+    fusionControls(true, "Selecting rewriting…");
+    requestAction("select-rewriting", "Select rewriting", {
+      requestId: ++fusionRequest,
+      scenario: byId("rewriting-scenario").value || null,
+      all,
+    });
+  }
+  byId("rewriting-scenario").addEventListener("change", () =>
+    selectRewriting(),
+  );
+  byId("rewriting-restart").addEventListener("click", () =>
+    selectRewriting(false),
+  );
   for (const [id, all] of [
     ["rewriting-next", false],
     ["rewriting-all", true],
@@ -1389,7 +1425,9 @@ function createFusionPanel({
                 ? `${data.operation}: applied ${data.matches.length} rewriting steps. Use Unfuse to undo, or Save with or without rewritings.`
                 : `${data.operation}: no changes.`
             : data.type === "rewriting-info"
-              ? `Applied rewriting scenario ${data.name}. Use Unfuse to undo.`
+              ? data.name === null
+                ? "Original model selected; no rewriting applied."
+                : `Applied rewriting scenario ${data.name}. Use Unfuse to undo.`
               : `Applied ${data.count} fusion matches. Save a copy to keep changes.`;
         if (data.notice) byId("fusion-status").textContent += ` ${data.notice}`;
         updateScenario();
@@ -1429,6 +1467,7 @@ function createFusionPanel({
       } else if (data.requestId === fusionRequest) showFusionMatches(data);
     } else if (data?.type === "fusion-error") {
       if (data.requestId !== fusionRequest) return true;
+      byId("rewriting-scenario").value = rewritingState.selected ?? "";
       if (
         optimizationBackend === "onnxscript" &&
         !byId("optimization-panel").hidden
@@ -1448,6 +1487,8 @@ function createFusionPanel({
     return true;
   }
   function reset(graph, operationRequestId, file) {
+    const keepFusion = undoBusy && !byId("fusion-panel").hidden;
+    undoBusy = false;
     if (operationRequestId !== fusionRequest) restoreFunctionEditor = false;
     functionBodyRequest++;
     if (byId("selection-pattern-dialog").open)
@@ -1486,7 +1527,8 @@ function createFusionPanel({
     byId("onnxscript-optimization-output").textContent = "";
     byId("onnxscript-optimization-output").hidden = true;
     byId("fusion-status").textContent = "";
-    showScenarios([]);
+    showRewritingState(file?.rewriting ?? { names: [] });
+    showScenarios();
     byId("optimization-patterns").replaceChildren();
     showOptimizationResults();
     byId("optimization-feedback").textContent = "";
@@ -1503,10 +1545,20 @@ function createFusionPanel({
       requestAction("fusion-patterns", "List optimization patterns", {
         requestId: ++fusionRequest,
       });
+    } else if (keepFusion) {
+      byId("fusion-panel").hidden = false;
+      byId("fuse-pattern").setAttribute("aria-expanded", "true");
+      if (canFuse()) {
+        fusionControls(true, "Updating fusion patterns…");
+        requestAction("fusion-patterns", "List fusion patterns", {
+          requestId: ++fusionRequest,
+        });
+      }
     }
   }
   function setEnabled(enabled) {
-    byId("fuse-pattern").disabled = creatingPattern || !enabled;
+    byId("fuse-pattern").disabled =
+      undoBusy || creatingPattern || !(enabled || undoCount);
     byId("optimize-model").disabled = creatingPattern || !enabled;
     for (const id of [
       "optimization-unfuse-last",
@@ -1517,9 +1569,14 @@ function createFusionPanel({
       !enabled || fusionBusy || !pendingRewritings.length;
     diagnosticControls();
     selectionPatternControls();
+    updateScenario();
   }
 
   return {
+    setUndoBusy: (busy) => {
+      undoBusy = busy;
+      fusionControls(busy);
+    },
     handleMessage,
     reset,
     updateGraph: (graph) => {

@@ -154,6 +154,7 @@ interface LoadedModel {
   metadata?: GraphMetadata;
   fusionCount?: number;
   fusionHistory?: FusionOperation[];
+  rewritingState?: ReturnType<NativeModel["rewritingState"]>;
   /** Retains the optimized snapshot for replay without recomputing its rewritings. */
   rewritingQueue?: { model: NativeModel; operations: FusionOperation[] };
   /** Materialized Python edits remain modified after undoing later native edits. */
@@ -962,6 +963,10 @@ async function configurePanel(
     fusionRequest++;
     diagnosticRequest++;
     const current = requireModel();
+    if (current.native)
+      current.rewritingState = current.native.rewritingState(
+        current.graph.breadcrumbs.at(-1)?.path ?? [],
+      );
     void sendStatus();
     return postMessage({
       type: "graph",
@@ -988,6 +993,7 @@ async function configurePanel(
         fusionCount: current.fusionCount ?? 0,
         fusionHistory: current.fusionHistory ?? [],
         pendingRewritings: current.rewritingQueue?.operations ?? [],
+        rewriting: current.rewritingState ?? { names: [] },
         ...(current.graph.pipeline ? { pipeline: true } : {}),
         directory: locationText(directoryUri()),
         saveDirectory: locationText(saveDirectoryUri()),
@@ -3051,6 +3057,7 @@ async function configurePanel(
         message?.type === "undo-fusion" ||
         message?.type === "replay-rewritings" ||
         message?.type === "apply-rewriting" ||
+        message?.type === "select-rewriting" ||
         message?.type === "create-function-pattern" ||
         message?.type === "update-function-pattern" ||
         message?.type === "update-model-function" ||
@@ -3076,7 +3083,11 @@ async function configurePanel(
           active &&
           model === owner &&
           graphRevision === revision &&
-          (!(editsFunctionPattern || loadsModelFunction) ||
+          (!(
+            editsFunctionPattern ||
+            loadsModelFunction ||
+            message.type === "select-rewriting"
+          ) ||
             navigationRequest === navigation) &&
           (message.type === "undo-fusion"
             ? undoRequest === undoGeneration
@@ -3089,7 +3100,8 @@ async function configurePanel(
                 ? "Replay pending rewritings"
                 : message.type === "apply-optimization"
                   ? "Optimize ONNX model"
-                  : message.type === "apply-rewriting"
+                  : message.type === "apply-rewriting" ||
+                      message.type === "select-rewriting"
                     ? "Apply rewriting scenario"
                     : message.type === "apply-fusion"
                       ? "Apply fusion pattern"
@@ -3182,6 +3194,87 @@ async function configurePanel(
                 navigationRequest++;
                 panel.title = `ONNX: ${current.fileName ?? graph.name}${model.pythonOptimized || model.dimensionsRenamed || model.functionsEdited || model.fusionCount ? " (modified)" : ""}`;
                 await sendGraph(undefined, message.requestId);
+                return;
+              }
+              if (message.type === "select-rewriting") {
+                if (
+                  message.scenario !== null &&
+                  typeof message.scenario !== "string"
+                )
+                  throw new Error("Choose a saved rewriting or None.");
+                if (
+                  message.all !== undefined &&
+                  typeof message.all !== "boolean"
+                )
+                  throw new Error(
+                    "Expected a boolean rewriting replay choice.",
+                  );
+                const native = await nativeModel(
+                  current,
+                  log,
+                  () => void sendStatus(),
+                );
+                if (!isCurrent()) return;
+                const currentPath =
+                  current.graph.breadcrumbs.at(-1)?.path ?? [];
+                const path =
+                  currentPath[0] && "pipeline" in currentPath[0]
+                    ? [currentPath[0]]
+                    : [];
+                if (
+                  message.scenario !== null &&
+                  !native.rewritingState(path).names.includes(message.scenario)
+                )
+                  throw new Error("Unknown rewriting scenario.");
+                let edited = native.withoutFusions();
+                if (message.scenario !== null)
+                  edited = await edited.applyRewritingScenario(
+                    message.scenario,
+                    message.all ?? true,
+                    current.source?.uri.scheme === "file"
+                      ? current.source.uri.fsPath
+                      : undefined,
+                    path,
+                  );
+                if (!isCurrent()) return;
+                const graph = edited.graph(false, path);
+                const retained = edited.clone();
+                const replacement: LoadedModel = {
+                  ...current,
+                  native: edited,
+                  nativeReload: undefined,
+                  graph,
+                  metadata: undefined,
+                  fusionCount: edited.fusionCount(),
+                  fusionHistory: edited.fusionHistory(),
+                  rewritingQueue: undefined,
+                  reload: () => retained.clone(),
+                };
+                model = replacement;
+                graphRevision++;
+                navigationRequest++;
+                panel.title = `ONNX: ${current.fileName ?? graph.name}${replacement.pythonOptimized || replacement.dimensionsRenamed || replacement.functionsEdited || replacement.fusionCount ? " (modified)" : ""}`;
+                await sendGraph(undefined, message.requestId);
+                if (
+                  !active ||
+                  model !== replacement ||
+                  fusionRequest !== generation + 1
+                )
+                  return;
+                const canFuse = graph.canFuse ?? graph.breadcrumbs.length === 1;
+                await postMessage({
+                  type: "rewriting-info",
+                  requestId: message.requestId,
+                  name: message.scenario,
+                  patterns: canFuse ? edited.fusionPatterns(path) : [],
+                  optimizationPatterns: canFuse
+                    ? edited.optimizationPatterns(path)
+                    : [],
+                  functions: canFuse
+                    ? edited.modelFunctionDescriptors(path)
+                    : [],
+                  scenarios: canFuse ? edited.rewritingScenarios(path) : [],
+                });
                 return;
               }
               if (!(

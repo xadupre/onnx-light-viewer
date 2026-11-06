@@ -475,6 +475,10 @@ export interface NativeModel {
   fusionHistory(): FusionOperation[];
   /** Returns an independent snapshot before the last Fuse operation. */
   undoFusion(): NativeModel;
+  /** Original graph before session fusions; retains saved rewriting alternatives. */
+  withoutFusions(): NativeModel;
+  /** Header metadata only: no step projection or graph traversal. */
+  rewritingState(path?: GraphPath): { names: string[]; selected?: string };
   rewritingScenarios(path?: GraphPath): RewritingScenario[];
   applyRewritingScenario(
     name: string,

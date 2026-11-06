@@ -7731,7 +7731,7 @@ test("selects optimization groups and previews global passes through the real we
     /Pattern does not match: no equivalent sibling nodes found/,
   );
   assert.equal(document.getElementById("diagnostic-source").hidden, false);
-  document.getElementById("undo-fusion").click();
+  document.getElementById("fuse-pattern").click();
   document.getElementById("unfuse-last").click();
   await flush();
   assert.equal(count(), original);
@@ -7820,8 +7820,9 @@ test("selects optimization groups and previews global passes through the real we
     .find((button) => button.textContent.startsWith("MatMulAdd "))
     .click();
   assert.ok(document.querySelectorAll(".graph-node.selected").length);
-  document.getElementById("undo-fusion").click();
+  document.getElementById("fuse-pattern").click();
   assert.equal(document.querySelectorAll("#unfuse-history > li").length, 2);
+  await flush();
   unfuseOptimization.click();
   assert.equal(restoreOriginal.disabled, true);
   await flush();
@@ -8007,6 +8008,120 @@ test("keeps an unfused rewriting queue visible, replays it before matching and a
   assert.deepEqual(extension.errors, []);
 });
 
+test("the header selects saved rewriting alternatives atomically and None restores the original model", async (t) => {
+  const { loadModel } = require("../dist/graph");
+  const bytes = await readFile(
+    require.resolve("../examples/rewriting-scenarios.onnx"),
+  );
+  const original = loadModel(bytes, "rewritings");
+  const firstName = original.rewritingState().names[0];
+  const partial = await original.applyRewritingScenario(firstName, false);
+  const directory = await mkdtemp(
+    path.join(tmpdir(), "viewer-rewriting-selector-"),
+  );
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const source = path.join(directory, "alternatives.onnx");
+  await writeFile(source, await partial.serialize(undefined, undefined, true));
+  const sourceBytes = await readFile(source);
+  const saved = loadModel(sourceBytes, "alternatives.onnx");
+  const names = saved.rewritingState().names;
+  assert.equal(names.length, 2);
+  const extension = await openExtension(undefined, undefined, true);
+  t.after(() => extension.dispose());
+  await extension.openFile(source);
+  const dom = new JSDOM(extension.webview.html, {
+    runScripts: "outside-only",
+    pretendToBeVisual: true,
+  });
+  t.after(() => dom.window.close());
+  const { window } = dom;
+  const { document } = window;
+  window.structuredClone = structuredClone;
+  window.HTMLCanvasElement.prototype.getContext = () => ({
+    font: "",
+    measureText: (text) => ({ width: text.length * 8 }),
+  });
+  document.getElementById("canvas").getBoundingClientRect = () =>
+    new window.DOMRect(0, 0, 1060, 350);
+  const requests = [];
+  window.acquireVsCodeApi = () => ({
+    postMessage: (message) => requests.push(extension.receive(message)),
+  });
+  extension.connect((data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data })),
+  );
+  for (const script of document.querySelectorAll("script[src]"))
+    window.eval(readFileSync(new URL(script.src), "utf8"));
+  const flush = async () => {
+    while (requests.length) await Promise.all(requests.splice(0));
+  };
+  await flush();
+  const selector = document.getElementById("rewriting-scenario");
+  const nodeCount = () => document.querySelectorAll(".graph-node").length;
+  assert.equal(selector.value, "");
+  assert.equal(nodeCount(), saved.graph().nodes.length);
+  assert.deepEqual(
+    [...selector.options].map((option) => option.value),
+    ["", ...names.sort()],
+  );
+  assert.equal(document.getElementById("undo-fusion"), null);
+  for (const name of [...names, ""]) {
+    selector.value = name;
+    selector.dispatchEvent(new window.Event("change"));
+    assert.equal(selector.disabled, true);
+    await flush();
+    const expected = name
+      ? await saved.applyRewritingScenario(name, true)
+      : saved;
+    assert.equal(nodeCount(), expected.graph().nodes.length);
+    assert.equal(
+      extension.messages.findLast((message) => message.type === "graph").file
+        .rewriting.selected,
+      name || undefined,
+    );
+    assert.equal(selector.value, name);
+    assert.equal(document.getElementById("fusion-panel").hidden, false);
+    assert.equal(
+      document.querySelectorAll("#rewriting-steps > li").length,
+      name
+        ? expected.rewritingScenarios().find((item) => item.name === name).steps
+            .length
+        : 0,
+    );
+    assert.deepEqual(
+      extension.messages.findLast((message) => message.type === "graph").file
+        .pendingRewritings,
+      [],
+    );
+    if (name === names[0]) {
+      document.getElementById("rewriting-restart").click();
+      await flush();
+      assert.equal(nodeCount(), partial.graph().nodes.length);
+      document.getElementById("rewriting-next").click();
+      await flush();
+      document.getElementById("unfuse-last").click();
+      await flush();
+      assert.equal(nodeCount(), partial.graph().nodes.length);
+      assert.equal(selector.value, name);
+      assert.equal(document.getElementById("fusion-panel").hidden, false);
+      assert.equal(
+        document.querySelectorAll("#rewriting-steps > li").length,
+        2,
+      );
+      assert.equal(document.getElementById("rewriting-next").disabled, false);
+    }
+  }
+  await extension.receive({
+    type: "select-rewriting",
+    scenario: "unknown",
+    requestId: 99,
+  });
+  assert.equal(extension.messages.at(-1).type, "fusion-error");
+  assert.match(extension.messages.at(-1).error, /Unknown rewriting/);
+  assert.equal(nodeCount(), saved.graph().nodes.length);
+  assert.deepEqual(await readFile(source), sourceBytes);
+});
+
 test("matches multiple patterns and fuses checked candidates through the real webview bridge", async (t) => {
   const extension = await openExtension("fusion-scaled.onnx");
   const dom = new JSDOM(extension.webview.html, { runScripts: "outside-only" });
@@ -8034,7 +8149,7 @@ test("matches multiple patterns and fuses checked candidates through the real we
   };
   await flush();
   const originalNodeCount = document.querySelectorAll(".graph-node").length;
-  assert.equal(document.getElementById("undo-fusion").disabled, true);
+  assert.equal(document.getElementById("unfuse-last").disabled, true);
   document.getElementById("fuse-pattern").click();
   await flush();
   const list = document.getElementById("fusion-pattern");
@@ -8106,7 +8221,7 @@ test("matches multiple patterns and fuses checked candidates through the real we
   document.getElementById("preview-fusion").click();
   await flush();
   assert.equal(document.querySelectorAll("#fusion-matches li").length, 1);
-  const undo = document.getElementById("undo-fusion");
+  const undo = document.getElementById("fuse-pattern");
   assert.equal(undo.disabled, false);
   undo.click();
   const history = document.getElementById("unfuse-history");
@@ -8128,14 +8243,14 @@ test("matches multiple patterns and fuses checked candidates through the real we
     operation.matches[0].nodes.map((node) => `node-${node}`).sort(),
   );
   document.getElementById("unfuse-last").click();
-  assert.equal(undo.disabled, true);
+  assert.equal(document.getElementById("unfuse-last").disabled, true);
   await flush();
   assert.equal(history.children.length, 0);
   assert.equal(
     document.querySelectorAll(".graph-node").length,
     originalNodeCount,
   );
-  assert.equal(undo.disabled, true);
+  assert.equal(document.getElementById("unfuse-last").disabled, true);
   assert.ok(
     extension.logs.some((line) => line.includes("[SUCCEEDED] Undo fusion")),
   );

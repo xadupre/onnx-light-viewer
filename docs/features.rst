@@ -714,7 +714,19 @@ to persist the change. See :doc:`features/fusion_patterns`.
 Unfuse (undo native edits)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Open **Unfuse**, beside **Fuse** in the **Optimization** sidebar group, to undo
+Choose a saved rewriting in the dropdown between the graph name and node counts.
+**None** is the default and displays the original graph. Selecting a name applies
+that alternative and opens its ordered steps in **Fuse / Unfuse**; selecting
+**None** again restores the original graph without a pending replay.
+Switching alternatives replaces current native fusion edits, not the source file.
+
+.. figure:: _static/feature-rewriting-selector.png
+   :alt: Header rewriting selector showing a saved scenario, with its ordered steps and Unfuse actions together in the Fuse / Unfuse panel.
+   :width: 100%
+
+   Select a named rewriting from the header; inspect and undo it in one panel.
+
+Open **Fuse / Unfuse** to undo
 native edits without changing the source file. **Unfuse last** reverses one
 complete operation: a batch of selected matches, a global optimization, a
 global pass or an applied rewriting-scenario step/batch. Repeat to go back

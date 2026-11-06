@@ -1566,6 +1566,27 @@ void AddFusionMethods(Napi::Env env, Napi::Object result, std::shared_ptr<Stored
   result.Set("fusionCount", Napi::Function::New(env, [model](const Napi::CallbackInfo &call) {
                return Napi::Number::New(call.Env(), model->fusion_history.size());
              }));
+  result.Set("withoutFusions",
+             Napi::Function::New(env, [model](const Napi::CallbackInfo &call) -> Napi::Value {
+               const auto base = model->fusion_base      ? model->fusion_base
+                                 : model->rewriting_base ? model->rewriting_base
+                                                         : model;
+               return ModelHandle(call.Env(), CloneStoredModel(base));
+             }));
+  result.Set("rewritingState",
+             Napi::Function::New(env, [model](const Napi::CallbackInfo &call) -> Napi::Value {
+               const auto base = model->rewriting_base ? model->rewriting_base
+                                 : model->fusion_base  ? model->fusion_base
+                                                       : model;
+               auto state = Napi::Object::New(call.Env());
+               auto names = Napi::Array::New(call.Env());
+               for (const auto &[name, plan] : base->model->rewritings())
+                 names.Set(names.Length(), name);
+               state.Set("names", names);
+               if (!model->rewriting_name.empty())
+                 state.Set("selected", model->rewriting_name);
+               return state;
+             }));
   result.Set("rewritingScenarios",
              Napi::Function::New(env, [model](const Napi::CallbackInfo &call) -> Napi::Value {
                try {

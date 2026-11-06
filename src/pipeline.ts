@@ -563,6 +563,18 @@ export class PipelineModel implements NativeModel {
     );
   };
 
+  withoutFusions = (): PipelineModel =>
+    new PipelineModel(
+      this.data,
+      this.fileName,
+      Object.fromEntries(
+        this.stages().map(([role, model]) => [role, model.withoutFusions()]),
+      ),
+    );
+
+  rewritingState = (path: GraphPath = []) =>
+    path.length ? this.select(path).model.rewritingState() : { names: [] };
+
   rewritingScenarios = (path: GraphPath = []): RewritingScenario[] => {
     const stage = this.select(path);
     if (stage.path.length)

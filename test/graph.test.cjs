@@ -5662,6 +5662,16 @@ test("optimizes one pipeline stage without adding no-op undo entries or changing
     replayed.graph(false, stagePath),
     optimized.graph(false, stagePath),
   );
+  assert.deepEqual(saved.rewritingState(), { names: [] });
+  assert.equal(
+    replayed.rewritingState(stagePath).selected,
+    saved.rewritingScenarios(stagePath)[0].name,
+  );
+  assert.deepEqual(
+    replayed.withoutFusions().graph(false, stagePath),
+    saved.graph(false, stagePath),
+  );
+  assert.equal(replayed.withoutFusions().fusionCount(), 0);
 });
 
 test("opens the saved rewriting example and replays both patterns with undo", async () => {
