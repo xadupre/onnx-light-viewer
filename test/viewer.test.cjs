@@ -8431,7 +8431,7 @@ test("preserves save destination separators while browsing directories inline", 
   }
 });
 
-test("tab keyboard order follows the Navigation and Application themes", (t) => {
+test("tab keyboard order is preserved without group headings", (t) => {
   const { document, window } = openViewer(t);
   const tabs = [...document.querySelectorAll(".viewer-tabs [role=tab]")];
   assert.deepEqual(
@@ -11328,14 +11328,15 @@ for (const initialTab of ["model", "logs"]) {
   });
 }
 
-test("shows the compiled onnx-light release before loading a graph and after model replacement", (t) => {
+test("keeps native source-link version metadata without displaying versions in the model header", (t) => {
   const { document, load } = openViewer(t);
   const version = readFileSync(
     require.resolve("../CMakeLists.txt"),
     "utf8",
   ).match(/set\(ONNX_LIGHT_VERSION\s+"([^"]+)"\)/)[1];
-  const release = document.getElementById("onnx-light-version");
-  assert.equal(release.textContent, `onnx-light ${version}`);
+  assert.equal(document.getElementById("onnx-light-version"), null);
+  assert.equal(document.getElementById("app-version"), null);
+  assert.equal(document.body.dataset.onnxLightVersion, version);
   load(demoGraph);
   load(
     decodeGraph(
@@ -11343,7 +11344,7 @@ test("shows the compiled onnx-light release before loading a graph and after mod
       "passthrough.onnx",
     ),
   );
-  assert.equal(release.textContent, `onnx-light ${version}`);
+  assert.equal(document.body.dataset.onnxLightVersion, version);
 });
 
 test("requests model opening without a separate Hugging Face button and clears busy state after cancellation or failure", (t) => {
@@ -11494,6 +11495,10 @@ test("opens graph attributes and nested breadcrumbs, including empty graphs and 
   assert.equal(document.querySelectorAll("#graph-navigation button").length, 1);
   assert.equal(
     document.querySelector("#graph-navigation [aria-current]").textContent,
+    root.name,
+  );
+  assert.equal(
+    document.querySelector("#graph-navigation [aria-current]").title,
     root.name,
   );
   const buttons = document.querySelectorAll("#node-attributes button");

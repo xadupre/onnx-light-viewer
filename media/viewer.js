@@ -2404,6 +2404,7 @@ function render(graph, metadata) {
       const button = document.createElement("button");
       button.className = "icon-button";
       button.textContent = crumb.name;
+      button.title = crumb.name;
       if (JSON.stringify(crumb.path) === currentPath) {
         button.disabled = true;
         button.setAttribute("aria-current", "page");

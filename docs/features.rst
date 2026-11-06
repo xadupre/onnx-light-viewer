@@ -12,16 +12,17 @@ This overview describes the default branch, not every capability of the
 underlying onnx-light libraries. Start with the worked example in
 :doc:`getting_started`; the linked guides explain each control in detail.
 
-Controls are grouped by theme: **Navigation** (including statistics),
-**Convert**, **Optimization** and **Application** (logs, status, help and settings).
-Model actions remain in the sidebar; application tabs are available without
-loading a model. See :doc:`features/navigation`.
+Tabs share one compact row, without Navigation/Application headings.
+The model title and pending-rewriting counter share a header row; versions are
+shown in **Status**, not above the graph. Model actions remain in the sidebar;
+application tabs are available without loading a model.
+See :doc:`features/navigation`.
 
 .. figure:: _static/feature-themes.png
-   :alt: Viewer with Navigation and Application tab groups and Navigation, Convert and Optimization sidebar groups.
+   :alt: Compact viewer tabs and a model title beside its pending-rewriting counter, without duplicate version labels.
    :width: 100%
 
-   Find related controls together without changing the model.
+   Keep the graph header compact without removing controls or Status details.
 
 Opening models
 ^^^^^^^^^^^^^^

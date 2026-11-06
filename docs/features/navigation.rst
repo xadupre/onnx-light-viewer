@@ -27,15 +27,14 @@ connections, or placed on the other side, when space permits.
 
    Read carried results without placing every label on the same horizontal line.
 
-Features are grouped by theme:
+The top row provides Model, Statistics, Memory, Tensors and Run, followed by
+Logs, Status, Controls, ONNX, Patterns and Settings. There are no
+Navigation/Application headings. Model actions, conversion and optimization
+controls remain in the sidebar.
+The model title and pending-rewriting counter share one header row; hover over
+a shortened title for its full name. Package versions are available in **Status**.
 
-* **Navigation** includes Model, Statistics, Memory and Tensors, with Open,
-  Save, Find, Op and Data controls in the model sidebar.
-* **Convert** groups model conversion controls in the sidebar.
-* **Optimization** groups Optimize, Fuse and Unfuse in the sidebar.
-* **Application** includes Logs, Status, Controls, ONNX links and Settings.
-
-The **Controls** tab under **Application** groups keyboard shortcuts, mouse
+The **Controls** tab groups keyboard shortcuts, mouse
 gestures and navigation buttons into two-column tables: **Control** and
 **Action**. It is available even before a model is loaded.
 
