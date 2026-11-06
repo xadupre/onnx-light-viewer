@@ -1332,7 +1332,7 @@ button:disabled {
 #optimization-patterns {
   display: block;
   min-width: 0;
-  max-height: 12rem;
+  max-height: 18rem;
   margin: 8px 0 0;
   padding: 0;
   font: inherit;
@@ -1341,7 +1341,7 @@ button:disabled {
   border: 1px solid var(--border);
 }
 #fusion-matches {
-  max-height: 18rem;
+  max-height: 27rem;
   margin: 8px 0 0;
   padding: 0;
   list-style: none;
@@ -1451,7 +1451,7 @@ button:disabled {
 }
 #rewriting-steps,
 #optimization-results {
-  max-height: 12rem;
+  max-height: 18rem;
   overflow: auto;
   padding-left: 24px;
   overflow-wrap: anywhere;
@@ -1551,7 +1551,7 @@ button:disabled {
   margin-top: 8px;
 }
 #unfuse-history {
-  max-height: 18rem;
+  max-height: 27rem;
   overflow-y: auto;
   padding-left: 24px;
 }
