@@ -106,7 +106,7 @@ const inspector = createInspector({
   byId,
   tensorDescription,
   subgraphLabel,
-  navigate,
+  navigate: navigateGraph,
   openTensorStatistics: (name) =>
     openTensorStatistics(tensorListPanel.storedTensorNames(), name),
   hasStoredTensor: (name) => tensorListPanel.hasStoredTensor(name),
@@ -165,7 +165,7 @@ const memoryPanel = createMemoryPanel({
     const currentPath = displayedGraph.breadcrumbs?.at(-1)?.path ?? [];
     if (JSON.stringify(currentPath) === JSON.stringify(path ?? []))
       focusNodes([index]);
-    else navigate(path ?? [], index);
+    else navigateGraph(path ?? [], index);
   },
 });
 const filePanels = createFilePanels({
@@ -316,7 +316,7 @@ function showGraphSwitcher(anchor, last = false) {
         )
           return;
         closeGraphSwitcher(true);
-        navigate(link.path);
+        navigateGraph(link.path);
       });
       section.append(button);
     }
@@ -2538,7 +2538,7 @@ function findNode(event) {
   selectSearchMatch(matches[index], index, matches.length);
 }
 
-function navigate(path, nodeIndex) {
+function navigateGraph(path, nodeIndex) {
   if (byId("shorten-dimensions").getAttribute("aria-busy") === "true") return;
   graphSwitcherScope();
   graphSwitcherTarget = JSON.stringify(path);
@@ -2556,8 +2556,9 @@ function navigate(path, nodeIndex) {
 }
 
 function render(graph, metadata) {
-  const currentPath = JSON.stringify(graph.breadcrumbs.at(-1).path);
-  if (graphSwitcherTarget !== currentPath) graphSwitcherScopes.clear();
+  const currentPath = JSON.stringify(graph.breadcrumbs?.at(-1)?.path);
+  if (graphSwitcherTarget === undefined || graphSwitcherTarget !== currentPath)
+    graphSwitcherScopes.clear();
   graphSwitcherTarget = undefined;
   graphConstants = [];
   constantsByOutput = new Map();
@@ -2617,7 +2618,7 @@ function render(graph, metadata) {
           }
         });
       } else {
-        button.addEventListener("click", () => navigate(crumb.path));
+        button.addEventListener("click", () => navigateGraph(crumb.path));
       }
       return button;
     }),
@@ -2979,7 +2980,7 @@ function render(graph, metadata) {
           "subgraph-label",
           "end",
         );
-        bindGraphLink(link, () => navigate(graph.path));
+        bindGraphLink(link, () => navigateGraph(graph.path));
         group.append(link);
       });
       return group;
