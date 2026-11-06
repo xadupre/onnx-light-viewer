@@ -66,7 +66,6 @@ for (const initialTab of ["model", "logs"]) {
         "export-model",
         "optimize-model",
         "fuse-pattern",
-        "undo-fusion",
       ],
     );
     assert.equal(controls.querySelector(".feature-group-title"), null);

@@ -187,6 +187,7 @@ const fusionPanel = createFusionPanel({
   requestAction,
   revealPanel: sidebar.revealPanel,
   fit,
+  canSelectRewriting: canSwitchGraphs,
   canFuse: () =>
     !replacementPending &&
     hasModel &&
@@ -622,16 +623,16 @@ function setLoading(pending, message = "") {
     byId(id).disabled =
       pending || !hasModel || byId(id).getAttribute("aria-busy") === "true";
   updateDimensionEnabled();
-  for (const id of ["undo-fusion", "unfuse-last", "unfuse-all"])
+  for (const id of ["unfuse-last", "unfuse-all"])
     byId(id).disabled =
       pending ||
       !hasModel ||
       !fusionUndoCount ||
-      byId("undo-fusion").getAttribute("aria-busy") === "true";
+      byId("fuse-pattern").getAttribute("aria-busy") === "true";
   for (const button of byId("unfuse-history").querySelectorAll("button"))
     button.disabled =
       pending ||
-      byId("undo-fusion").getAttribute("aria-busy") === "true" ||
+      byId("fuse-pattern").getAttribute("aria-busy") === "true" ||
       button.dataset.nodeCount === "0";
   byId("load-status").textContent =
     message || (pending ? "Loading model…" : "");
@@ -3219,27 +3220,17 @@ byId("canvas").addEventListener("keydown", (event) => {
 });
 window.addEventListener("blur", () => endGesture(true));
 byId("refresh-metadata").addEventListener("click", requestMetadata);
-byId("undo-fusion").addEventListener("click", () => {
-  const panel = byId("unfuse-panel");
-  panel.hidden = !panel.hidden;
-  byId("undo-fusion").setAttribute("aria-expanded", String(!panel.hidden));
-  if (!panel.hidden) sidebar.revealPanel(panel);
-});
-byId("close-unfuse").addEventListener("click", () => {
-  byId("unfuse-panel").hidden = true;
-  byId("undo-fusion").setAttribute("aria-expanded", "false");
-});
 for (const [id, all] of [
   ["unfuse-last", false],
   ["unfuse-all", true],
 ])
   byId(id).addEventListener("click", () => {
-    byId("undo-fusion").setAttribute("aria-busy", "true");
+    requestAction("undo-fusion", "Undo fusion", { all });
+    fusionPanel.setUndoBusy(true);
     setLoading(replacementPending);
     byId("fusion-status").textContent = all
       ? "Unfusing all operations…"
       : "Unfusing the last operation…";
-    requestAction("undo-fusion", "Undo fusion", { all });
   });
 byId("verify-model").addEventListener("click", () => {
   verificationStatus(true, "Verifying model…");
@@ -3416,9 +3407,7 @@ window.addEventListener("message", (event) => {
     }
   } else if (event.data?.type === "graph") {
     fusionUndoCount = event.data.file?.fusionCount ?? 0;
-    byId("undo-fusion").setAttribute("aria-busy", "false");
-    byId("undo-fusion").title =
-      `Choose last or all (${fusionUndoCount} fusion operation${fusionUndoCount === 1 ? "" : "s"} available)`;
+    byId("fuse-pattern").setAttribute("aria-busy", "false");
     byId("unfuse-count").textContent =
       `${fusionUndoCount} fusion operation${fusionUndoCount === 1 ? "" : "s"} available to unfuse.`;
     const history = event.data.file?.fusionHistory ?? [];
@@ -3459,15 +3448,18 @@ window.addEventListener("message", (event) => {
           );
         });
         entry.append(button);
+        if (match.impact) {
+          const impact = document.createElement("p");
+          impact.textContent = fusionPanel.impactSummary(match);
+          entry.append(impact);
+          fusionPanel.appendImpactDetails(entry, match);
+        }
         list.append(entry);
       }
       item.append(heading, list);
       historyList.append(item);
     }
-    if (!fusionUndoCount) {
-      byId("unfuse-panel").hidden = true;
-      byId("undo-fusion").setAttribute("aria-expanded", "false");
-    }
+    byId("unfuse-panel").hidden = !fusionUndoCount;
     filePanels.reset();
     displayedGraph = event.data.graph;
     tensorListPanel.setGraph(displayedGraph);
@@ -3493,7 +3485,8 @@ window.addEventListener("message", (event) => {
     if (event.data.selectedNodes) focusNodes(event.data.selectedNodes);
   } else if (event.data?.type === "undo-fusion-error") {
     fusionPanel.undoFailed(event.data);
-    byId("undo-fusion").setAttribute("aria-busy", "false");
+    fusionPanel.setUndoBusy(false);
+    byId("fuse-pattern").setAttribute("aria-busy", "false");
     setLoading(replacementPending);
     byId("fusion-status").textContent =
       `Could not undo fusion: ${event.data.error}`;
@@ -3551,6 +3544,7 @@ window.addEventListener("message", (event) => {
       tensorStatisticsPanel.reset();
       memoryPanel.setGraph(displayedGraph);
       const selection = new Set(selected);
+      fusionPanel.setUndoBusy(false);
       fusionPanel.invalidate();
       selected = selection;
       updateSelection([...selected].at(-1));
@@ -3559,7 +3553,7 @@ window.addEventListener("message", (event) => {
       refreshStatus(false);
       verificationStatus(false);
       metadataStatus(false);
-      byId("undo-fusion").setAttribute("aria-busy", "false");
+      byId("fuse-pattern").setAttribute("aria-busy", "false");
       setLoading(replacementPending);
       if (!byId("statistics-view").hidden) requestStatistics();
       else {

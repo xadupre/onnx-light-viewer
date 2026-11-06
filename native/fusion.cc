@@ -367,6 +367,38 @@ Napi::Object FusionNode(Napi::Env env, const ol::NodeProto &node) {
 
 using TransformationScopes = std::map<std::vector<std::string>, ol::GraphProto>;
 
+Napi::Object FusionImpactValue(Napi::Env env, const StoredModel::FusionMatch::Impact &impact) {
+  auto result = Napi::Object::New(env);
+  const auto strings = [&](const std::vector<std::string> &values) {
+    auto array = Napi::Array::New(env, values.size());
+    for (size_t i = 0; i < values.size(); ++i)
+      array.Set(i, values[i]);
+    return array;
+  };
+  const auto nodes = [&](const std::vector<StoredModel::FusionMatch::Node> &values) {
+    auto array = Napi::Array::New(env, values.size());
+    for (size_t i = 0; i < values.size(); ++i) {
+      const auto &node = values[i];
+      auto item = Napi::Object::New(env);
+      if (node.index)
+        item.Set("index", Napi::Number::New(env, *node.index));
+      item.Set("name", node.name);
+      item.Set("opType", node.op_type);
+      item.Set("domain", node.domain);
+      item.Set("inputs", strings(node.inputs));
+      item.Set("outputs", strings(node.outputs));
+      array.Set(i, item);
+    }
+    return array;
+  };
+  result.Set("before", nodes(impact.before));
+  result.Set("after", nodes(impact.after));
+  result.Set("scope", strings(impact.graph_path));
+  result.Set("removedInitializers", Napi::Number::New(env, impact.removed_initializers));
+  result.Set("addedInitializers", Napi::Number::New(env, impact.added_initializers));
+  return result;
+}
+
 TransformationScopes CaptureScopes(const ol::core::builder::GraphBuilder &builder) {
   // Keep native *_ref attributes so parent replacements reuse existing subgraphs.
   TransformationScopes scopes;
@@ -782,7 +814,11 @@ public:
       std::vector<StoredModel::FusionMatch> operation;
       for (const auto &[pattern, match] : accepted) {
         const auto match_id = operation.size();
-        operation.push_back({pattern->Name(), {}});
+        auto impact = std::make_shared<StoredModel::FusionMatch::Impact>();
+        for (const auto *node : match.nodes)
+          if (node)
+            impact->before.push_back(ImpactNode(NodeOrderKey(*node), index.Position(*node)));
+        operation.push_back({pattern->Name(), {}, impact});
         size_t position = graph.Nodes().size();
         if (match.insert_at)
           position = index.Position(*match.insert_at);
@@ -790,7 +826,11 @@ public:
           for (const auto *node : match.nodes)
             if (node)
               position = std::min(position, index.Position(*node));
+        const auto initializers_before = graph.Initializers().size();
         auto replacement = pattern->Apply(index, match.nodes);
+        impact->added_initializers = graph.Initializers().size() - initializers_before;
+        for (const auto &node : replacement)
+          impact->after.push_back(ImpactNode(NodeOrderKey(node)));
         for (const auto &node : replacement)
           insertions[position].emplace_back(node.SharedCopy(), match_id);
       }
@@ -1096,8 +1136,9 @@ private:
     RewritingTrace trace(original.graph());
     history_.emplace_back();
     for (const auto &edit : plan_.rewrites()) {
+      auto impact = trace.Impact(edit);
       auto nodes = trace.Apply(edit);
-      history_.back().push_back({edit.pattern_name().value(), std::move(nodes)});
+      history_.back().push_back({edit.pattern_name().value(), std::move(nodes), std::move(impact)});
     }
     const auto order = trace.Finish(history_);
     auto replayed = source.ApplyRewritings(plan_);
@@ -1150,10 +1191,12 @@ private:
       history_.emplace_back();
       for (; step < std::min(end, scenario.rewrites().size()); ++step) {
         const auto &edit = scenario.rewrites(step);
+        auto impact = CaptureFusionImpact(
+            edit, [&](size_t index) -> const FusionNodeKey & { return order.at(index); });
         auto nodes = TraceRewriting(edit, order, history_);
         history_.back().push_back(
             {edit.pattern_name().empty() ? "Stored rewriting" : edit.pattern_name().value(),
-             std::move(nodes)});
+             std::move(nodes), std::move(impact)});
       }
       if (scenario.rewrites().empty())
         history_.back().push_back({"Stored declarations and node moves", {}});
@@ -1566,6 +1609,27 @@ void AddFusionMethods(Napi::Env env, Napi::Object result, std::shared_ptr<Stored
   result.Set("fusionCount", Napi::Function::New(env, [model](const Napi::CallbackInfo &call) {
                return Napi::Number::New(call.Env(), model->fusion_history.size());
              }));
+  result.Set("withoutFusions",
+             Napi::Function::New(env, [model](const Napi::CallbackInfo &call) -> Napi::Value {
+               const auto base = model->fusion_base      ? model->fusion_base
+                                 : model->rewriting_base ? model->rewriting_base
+                                                         : model;
+               return ModelHandle(call.Env(), CloneStoredModel(base));
+             }));
+  result.Set("rewritingState",
+             Napi::Function::New(env, [model](const Napi::CallbackInfo &call) -> Napi::Value {
+               const auto base = model->rewriting_base ? model->rewriting_base
+                                 : model->fusion_base  ? model->fusion_base
+                                                       : model;
+               auto state = Napi::Object::New(call.Env());
+               auto names = Napi::Array::New(call.Env());
+               for (const auto &[name, plan] : base->model->rewritings())
+                 names.Set(names.Length(), name);
+               state.Set("names", names);
+               if (!model->rewriting_name.empty())
+                 state.Set("selected", model->rewriting_name);
+               return state;
+             }));
   result.Set("rewritingScenarios",
              Napi::Function::New(env, [model](const Napi::CallbackInfo &call) -> Napi::Value {
                try {
@@ -1663,7 +1727,15 @@ void AddFusionMethods(Napi::Env env, Napi::Object result, std::shared_ptr<Stored
           return call.Env().Undefined();
         }
       }));
-  result.Set("fusionHistory", Napi::Function::New(env, [model](const Napi::CallbackInfo &call) {
+  result.Set("fusionHistory",
+             Napi::Function::New(env, [model](const Napi::CallbackInfo &call) -> Napi::Value {
+               if (call.Length() && !call[0].IsUndefined() && !call[0].IsBoolean()) {
+                 Napi::TypeError::New(call.Env(), "Expected an impact-details boolean.")
+                     .ThrowAsJavaScriptException();
+                 return call.Env().Undefined();
+               }
+               const bool details =
+                   call.Length() && call[0].IsBoolean() && call[0].As<Napi::Boolean>().Value();
                auto operations = Napi::Array::New(call.Env(), model->fusion_history.size());
                for (uint32_t i = 0; i < model->fusion_history.size(); ++i) {
                  auto operation = Napi::Object::New(call.Env());
@@ -1676,6 +1748,8 @@ void AddFusionMethods(Napi::Env env, Napi::Object result, std::shared_ptr<Stored
                    for (uint32_t k = 0; k < history[j].nodes.size(); ++k)
                      nodes.Set(k, Napi::Number::New(call.Env(), history[j].nodes[k]));
                    match.Set("nodes", nodes);
+                   if (details && history[j].impact)
+                     match.Set("impact", FusionImpactValue(call.Env(), *history[j].impact));
                    matches.Set(j, match);
                  }
                  operation.Set("matches", matches);

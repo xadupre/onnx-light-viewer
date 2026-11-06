@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <string_view>
@@ -53,8 +54,19 @@ struct StoredModel {
     ol::TensorProto value;
   };
   struct FusionMatch {
+    struct Node {
+      std::optional<size_t> index;
+      std::string name, op_type, domain;
+      std::vector<std::string> inputs, outputs;
+    };
+    struct Impact {
+      std::vector<Node> before, after;
+      std::vector<std::string> graph_path;
+      size_t removed_initializers = 0, added_initializers = 0;
+    };
     std::string pattern;
     std::vector<size_t> nodes;
+    std::shared_ptr<const Impact> impact = nullptr;
   };
   Napi::Reference<Napi::Uint8Array> source;
   std::shared_ptr<StoredModel> backing;

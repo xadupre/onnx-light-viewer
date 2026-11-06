@@ -240,9 +240,12 @@ export class PipelineModel implements NativeModel {
   fusionCount = (): number =>
     this.stages().reduce((count, [, model]) => count + model.fusionCount(), 0);
 
-  fusionHistory = (): FusionOperation[] => {
+  fusionHistory = (includeImpact = false): FusionOperation[] => {
     const stages = new Map(
-      this.stages().map(([role, model]) => [role, model.fusionHistory()]),
+      this.stages().map(([role, model]) => [
+        role,
+        model.fusionHistory(includeImpact),
+      ]),
     );
     const counts = new Map<PipelineRole, number>();
     return this.fusionOrder.map((stage) => {
@@ -562,6 +565,18 @@ export class PipelineModel implements NativeModel {
       [...this.fusionOrder, stage.role],
     );
   };
+
+  withoutFusions = (): PipelineModel =>
+    new PipelineModel(
+      this.data,
+      this.fileName,
+      Object.fromEntries(
+        this.stages().map(([role, model]) => [role, model.withoutFusions()]),
+      ),
+    );
+
+  rewritingState = (path: GraphPath = []) =>
+    path.length ? this.select(path).model.rewritingState() : { names: [] };
 
   rewritingScenarios = (path: GraphPath = []): RewritingScenario[] => {
     const stage = this.select(path);

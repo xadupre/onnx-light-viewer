@@ -176,6 +176,7 @@ export function webviewHtml(
       <header class="graph-toolbar">
         <div class="graph-heading">
           <nav id="graph-navigation" aria-label="Graph breadcrumbs" hidden></nav>
+          <select id="rewriting-scenario" aria-label="Rewriting" title="Choose a saved rewriting or None for the original model" disabled><option value="">None</option></select>
           <div class="graph-stats" aria-live="polite"><span id="graph-summary">No model loaded</span><span aria-hidden="true"> / </span><span id="initializer-count">0 initializers</span></div>
           <span id="rewriting-count" role="status" title="Rewritings waiting to be reapplied before the next native matching or optimization">0 pending rewritings</span>
         </div>
@@ -202,8 +203,7 @@ export function webviewHtml(
             <button id="show-symbolic" class="icon-button" aria-expanded="false" aria-controls="symbolic-panel" title="Show or hide symbolic dimension and model checks">Symbolic</button>
             <button id="export-model" class="icon-button" title="Convert a model to ONNX with Python" aria-expanded="false" aria-controls="export-panel">Convert</button>
             <button id="optimize-model" class="icon-button" disabled title="Show or hide full native model optimization" aria-expanded="false" aria-controls="optimization-panel">Optimize${fusionHourglass}</button>
-            <button id="fuse-pattern" class="icon-button" disabled title="Show or hide fusion patterns and select candidates to fuse on the main graph" aria-expanded="false" aria-controls="fusion-panel">Fuse${fusionHourglass}</button>
-            <button id="undo-fusion" class="icon-button" disabled title="Choose whether to unfuse the last operation or all operations" aria-expanded="false" aria-controls="unfuse-panel" aria-describedby="fusion-status">Unfuse${fusionHourglass}</button>
+            <button id="fuse-pattern" class="icon-button" disabled title="Show fusion patterns, saved rewritings and applied operations to unfuse" aria-expanded="false" aria-controls="fusion-panel">Fuse / Unfuse${fusionHourglass}</button>
           </nav>
           <section id="symbolic-panel" class="inspector-panel" aria-labelledby="symbolic-title" hidden>
             <h2 id="symbolic-title" class="eyebrow panel-title">Symbolic</h2>
@@ -388,13 +388,6 @@ export function webviewHtml(
               <footer><button id="cancel-export" type="button" disabled>Cancel conversion</button><button id="export-submit" class="primary" type="submit">Convert and open</button></footer>
             </form>
           </section>
-          <section id="unfuse-panel" class="inspector-panel" aria-labelledby="unfuse-title" hidden>
-            <h2 id="unfuse-title" class="eyebrow panel-title">Unfuse</h2>
-            <p id="unfuse-count" role="status"></p>
-            <p>Unfuse last reverses one Fuse selected operation. Repeat to go back further, or unfuse all operations in this session.</p>
-            <div class="fusion-selection-controls"><button id="unfuse-last" disabled>Unfuse last</button><button id="unfuse-all" disabled>Unfuse all</button><button id="close-unfuse">Close</button></div>
-            <ol id="unfuse-history" reversed aria-label="Applied fusion operations, most recent first"></ol>
-          </section>
           <section id="find-panel" class="inspector-panel" aria-labelledby="find-title">
             <h2 id="find-title" class="eyebrow panel-title">Find</h2>
             <form id="find-node" role="search"><label for="node-search">Find node or operator</label><div class="node-search-controls"><input id="node-search" type="search" placeholder="Name or operator" aria-controls="node-search-suggestions" autocomplete="off"><button type="submit" title="Go to the next matching node" aria-label="Go to the next matching node">Go</button></div><span id="node-search-result" role="status"></span><ul id="node-search-suggestions" aria-label="Matching nodes" hidden></ul></form>
@@ -470,16 +463,22 @@ export function webviewHtml(
             </div>
           </section>
           <section id="fusion-panel" class="inspector-panel" aria-labelledby="fusion-title" hidden>
-            <h2 id="fusion-title" class="eyebrow panel-title">Fusion patterns${fusionHourglass}</h2>
+            <h2 id="fusion-title" class="eyebrow panel-title">Fuse / Unfuse${fusionHourglass}</h2>
             <p>Select patterns, run matching, then fuse selected candidates. Run global passes one at a time.</p>
             <details id="rewriting-scenarios" class="fusion-picker">
               <summary>Saved rewriting scenarios</summary>
-              <label for="rewriting-scenario">Scenario</label><select id="rewriting-scenario" disabled></select>
               <p id="rewriting-progress" role="status">No saved rewriting scenarios in this model.</p>
               <ol id="rewriting-steps" aria-label="Stored rewriting steps"></ol>
-              <div class="fusion-selection-controls"><button id="rewriting-next" disabled>Apply next pattern</button><button id="rewriting-all" disabled>Apply remaining scenario</button></div>
-              <p>Scenarios are alternatives against the original graph. Unfuse current edits before switching scenarios. Each click can be undone with Unfuse.</p>
+              <div class="fusion-selection-controls"><button id="rewriting-restart" disabled>Restart step by step</button><button id="rewriting-next" disabled>Apply next pattern</button><button id="rewriting-all" disabled>Apply remaining scenario</button></div>
+              <p>Choose a saved rewriting in the graph header to display its result, or None for the original graph. Switching replaces current native fusion edits; it never changes the source file.</p>
             </details>
+            <section id="unfuse-panel" class="fusion-picker" aria-labelledby="unfuse-title" hidden>
+              <h3 id="unfuse-title">Applied fusions</h3>
+              <p id="unfuse-count" role="status"></p>
+              <p>Unfuse last reverses one operation; Unfuse all restores the original graph and keeps the operations pending.</p>
+              <div class="fusion-selection-controls"><button id="unfuse-last" disabled>Unfuse last</button><button id="unfuse-all" disabled>Unfuse all</button></div>
+              <ol id="unfuse-history" reversed aria-label="Applied fusion operations, most recent first"></ol>
+            </section>
             <details class="fusion-picker" open>
               <summary>Native patterns</summary>
               <fieldset id="fusion-pattern-group" disabled aria-label="Native pattern groups"><legend>Select pattern groups</legend></fieldset>

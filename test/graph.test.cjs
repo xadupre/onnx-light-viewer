@@ -4085,6 +4085,21 @@ test("undoes successive fusions and saves concatenated replayable rewritings wit
     { matches: [{ pattern: "TransposeTranspose", nodes: [0] }] },
     { matches: [{ pattern: "TransposeTranspose", nodes: [1] }] },
   ]);
+  const impact = first.fusionHistory(true)[0].matches[0].impact;
+  assert.deepEqual(
+    impact.before.map((node) => node.index),
+    firstPreview.matches[0].nodes,
+  );
+  assert.deepEqual(
+    impact.before.map((node) => node.opType),
+    ["Transpose", "Transpose"],
+  );
+  assert.deepEqual(
+    impact.after.map((node) => node.opType),
+    ["Identity"],
+  );
+  assert.equal(first.fusionHistory(true)[0].matches[0].nodes.length, 1);
+  assert.deepEqual(second.fusionHistory(true)[0].matches[0].impact, impact);
   const fused = second.graph();
   const plain = Buffer.from(await second.serialize());
   assert.deepEqual(rewritingPlans(plain), []);
@@ -5383,6 +5398,14 @@ test("previews global cleanup passes independently, folds real values and preser
     "x",
   );
   const graph = folded.graph();
+  const foldedMatch = folded
+    .fusionHistory(true)
+    .at(-1)
+    .matches.find((match) => match.pattern === "ConstantFolding");
+  assert.ok(
+    foldedMatch.impact.before.some((node) => node.name === "constant_sum"),
+  );
+  assert.ok(foldedMatch.impact.addedInitializers > 0);
   assert.equal(
     graph.nodes.some((node) => node.name === "constant_sum"),
     false,
@@ -5438,6 +5461,11 @@ test("matches and applies unused-code removal including initializer-only changes
   assert.equal(unused.matches.length, 1);
   assert.deepEqual(unused.matches[0].nodes, []);
   const result = await unused.model.applyFusion("RemoveUnusedNodes", [0]);
+  const cleanup = result.fusionHistory(true).at(-1).matches[0];
+  assert.deepEqual(cleanup.nodes, []);
+  assert.deepEqual(cleanup.impact.before, []);
+  assert.deepEqual(cleanup.impact.after, []);
+  assert.ok(cleanup.impact.removedInitializers > 0);
   assert.ok(result.graph().initializerCount < folded.graph().initializerCount);
   assert.deepEqual(result.graph().nodes, folded.graph().nodes);
   assert.equal(result.fusionCount(), 3);
@@ -5662,6 +5690,16 @@ test("optimizes one pipeline stage without adding no-op undo entries or changing
     replayed.graph(false, stagePath),
     optimized.graph(false, stagePath),
   );
+  assert.deepEqual(saved.rewritingState(), { names: [] });
+  assert.equal(
+    replayed.rewritingState(stagePath).selected,
+    saved.rewritingScenarios(stagePath)[0].name,
+  );
+  assert.deepEqual(
+    replayed.withoutFusions().graph(false, stagePath),
+    saved.graph(false, stagePath),
+  );
+  assert.equal(replayed.withoutFusions().fusionCount(), 0);
 });
 
 test("opens the saved rewriting example and replays both patterns with undo", async () => {

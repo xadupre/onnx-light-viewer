@@ -25,6 +25,34 @@ inline FusionNodeKey NodeOrderKey(const ol::NodeProto &node) {
           node.name().value(),   std::move(inputs),      std::move(outputs)};
 }
 
+inline StoredModel::FusionMatch::Node ImpactNode(const FusionNodeKey &key,
+                                                 std::optional<size_t> index = std::nullopt) {
+  return {index,           std::get<3>(key), std::get<1>(key), std::get<0>(key), std::get<4>(key),
+          std::get<5>(key)};
+}
+
+template <typename Lookup>
+inline std::shared_ptr<const StoredModel::FusionMatch::Impact>
+CaptureFusionImpact(const ol::LocalRewritingProto &edit, const Lookup &lookup) {
+  auto impact = std::make_shared<StoredModel::FusionMatch::Impact>();
+  impact->graph_path.assign(edit.graph_path().begin(), edit.graph_path().end());
+  impact->removed_initializers =
+      edit.removed_initializers().size() + edit.removed_extended_initializers().size();
+  impact->added_initializers = edit.added_initializers().size();
+  for (const auto index : edit.matched_nodes()) {
+    if (edit.graph_path().empty())
+      impact->before.push_back(ImpactNode(lookup(index), index));
+    else {
+      StoredModel::FusionMatch::Node node;
+      node.index = index;
+      impact->before.push_back(std::move(node));
+    }
+  }
+  for (const auto &node : edit.added_nodes())
+    impact->after.push_back(ImpactNode(NodeOrderKey(node)));
+  return impact;
+}
+
 inline std::vector<size_t>
 TraceRewriting(const ol::LocalRewritingProto &edit, std::vector<FusionNodeKey> &nodes,
                std::vector<std::vector<StoredModel::FusionMatch>> &history) {
@@ -84,6 +112,25 @@ public:
     entries_.reserve(graph.node().size());
     for (const auto &node : graph.node())
       root_ = Merge(root_, Add(node));
+  }
+
+  std::shared_ptr<const StoredModel::FusionMatch::Impact>
+  Impact(const ol::LocalRewritingProto &edit) const {
+    return CaptureFusionImpact(edit, [&](size_t position) -> const FusionNodeKey & {
+      auto id = root_;
+      while (id != none) {
+        const auto left = Size(entries_[id].left);
+        if (position == left)
+          return entries_[id].key;
+        if (position < left)
+          id = entries_[id].left;
+        else {
+          position -= left + 1;
+          id = entries_[id].right;
+        }
+      }
+      throw std::runtime_error("Invalid impacted node index.");
+    });
   }
 
   std::vector<size_t> Apply(const ol::LocalRewritingProto &edit) {

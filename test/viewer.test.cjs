@@ -694,7 +694,7 @@ for (const all of [false, true]) {
       },
     });
     const rename = byId("shorten-dimensions");
-    const undo = byId("undo-fusion");
+    const undo = byId("fuse-pattern");
     const last = byId("unfuse-last");
     const everything = byId("unfuse-all");
     const history = byId("unfuse-history").querySelector("button");
@@ -6175,8 +6175,17 @@ test("chooses saved rewriting scenarios, applies next or remaining steps and rec
   assert.equal(section.open, true);
   assert.deepEqual(
     [...select.options].map((option) => option.value),
-    ["a-first", "z-last"],
+    ["", "a-first", "z-last"],
   );
+  assert.equal(next.disabled, true);
+  select.value = "a-first";
+  send({
+    type: "fusion-patterns",
+    requestId: messages.at(-1).requestId,
+    patterns: [],
+    scenarios,
+    name: "a-first",
+  });
   assert.equal(next.disabled, false);
   next.click();
   next.click();
@@ -6220,11 +6229,6 @@ test("chooses saved rewriting scenarios, applies next or remaining steps and rec
     document.getElementById("rewriting-steps").children[0].textContent,
     /^Applied:/,
   );
-  select.value = "z-last";
-  select.dispatchEvent(new window.Event("change"));
-  assert.equal(all.disabled, true);
-  select.value = "a-first";
-  select.dispatchEvent(new window.Event("change"));
   all.click();
   assert.equal(messages.at(-1).all, true);
   const allRequest = messages.at(-1).requestId;
@@ -6241,7 +6245,7 @@ test("chooses saved rewriting scenarios, applies next or remaining steps and rec
   assert.equal(next.disabled, true);
   assert.equal(all.disabled, true);
   load(demoGraph);
-  assert.equal(select.options.length, 0);
+  assert.equal(select.options.length, 1);
   assert.equal(section.open, false);
 });
 
@@ -7208,6 +7212,7 @@ test("selects saved pattern nodes and automatically reveals the next pattern aft
     requestId: messages.at(-1).requestId,
     patterns: [],
     scenarios: saved.rewritingScenarios(),
+    name: saved.rewritingScenarios()[0].name,
   });
   assert.equal(buttons()[1].disabled, true);
   buttons()[0].click();
@@ -7288,6 +7293,7 @@ test("rejects queued fusion and scenario completions after local close or naviga
           patterns: ["TransposeTranspose"],
           optimizationPatterns: saved.optimizationPatterns(),
           scenarios: saved.rewritingScenarios(),
+          name: saved.rewritingScenarios()[0].name,
         });
         if (type === "optimization-info") {
           document.getElementById("run-optimization").click();
@@ -7354,7 +7360,7 @@ test("rejects queued fusion and scenario completions after local close or naviga
         assert.equal(fuse.getAttribute("aria-expanded"), "false");
         assert.equal(
           document.getElementById("rewriting-scenario").options.length,
-          0,
+          1,
         );
         assert.equal(document.getElementById("fusion-status").textContent, "");
         assert.equal(
@@ -7368,6 +7374,65 @@ test("rejects queued fusion and scenario completions after local close or naviga
       });
     }
   }
+});
+
+test("keeps deleted impacted nodes inspectable when no result nodes survive", async (t) => {
+  const { document, window, messages } = openViewer(t);
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  send({
+    type: "graph",
+    graph: demoGraph,
+    file: {
+      fusionCount: 1,
+      fusionHistory: [
+        {
+          matches: [
+            {
+              pattern: "ConstantFolding",
+              nodes: [],
+              impact: {
+                before: [
+                  {
+                    index: 2,
+                    name: "constant_sum",
+                    opType: "Add",
+                    domain: "",
+                    inputs: ["a", "b"],
+                    outputs: ["sum"],
+                  },
+                ],
+                after: [],
+                scope: [],
+                removedInitializers: 0,
+                addedInitializers: 1,
+              },
+            },
+          ],
+        },
+      ],
+    },
+  });
+  document.getElementById("optimize-model").click();
+  send({
+    type: "fusion-patterns",
+    requestId: messages.at(-1).requestId,
+    patterns: [],
+  });
+  const result = document.querySelector("#optimization-results > li");
+  assert.equal(result.querySelector("button").disabled, true);
+  assert.match(result.textContent, /1 impacted node; 1 initializer added/);
+  const details = result.querySelector("details");
+  assert.equal(details.querySelector("pre"), null);
+  const toggled = once(details, "toggle");
+  details.open = true;
+  await toggled;
+  assert.match(
+    details.querySelector("pre").textContent,
+    /#2 constant_sum: Add/,
+  );
+  assert.match(details.querySelector("pre").textContent, /a, b/);
+  assert.match(details.querySelectorAll("pre")[1].textContent, /No nodes/);
 });
 
 test("opens tabular optimization reports only on request, including no-op runs and reopened Optimize", async (t) => {
@@ -7631,7 +7696,7 @@ test("chooses the optimizer backend without losing native pattern selection", (t
       fusionHistory: [{ matches: [{ pattern: "MatMulAdd", nodes: [0] }] }],
     },
   });
-  assert.equal(document.getElementById("undo-fusion").disabled, false);
+  assert.equal(document.getElementById("fuse-pattern").disabled, false);
   document.getElementById("optimize-model").click();
   send({
     type: "fusion-patterns",
@@ -7733,7 +7798,6 @@ test("chooses the optimizer backend without losing native pattern selection", (t
   assert.equal(run.disabled, true);
   assert.deepEqual(selected(), []);
   for (const id of [
-    "undo-fusion",
     "unfuse-last",
     "unfuse-all",
     "optimization-unfuse-last",
@@ -8099,7 +8163,7 @@ test("invalidates pending diagnostics after selection, pattern, close, navigatio
   }
 });
 
-test("offers last and all Unfuse actions beside Fuse and preserves repeated undo", (t) => {
+test("offers last and all Unfuse actions inside Fuse and preserves repeated undo", (t) => {
   const { document, window, messages } = openViewer(t);
   const selectionGraph = loadModel(
     readFileSync(require.resolve("./models/fusion.onnx")),
@@ -8122,7 +8186,7 @@ test("offers last and all Unfuse actions beside Fuse and preserves repeated undo
   ];
   const send = (data) =>
     window.dispatchEvent(new window.MessageEvent("message", { data }));
-  const graph = (fusionCount) =>
+  const graph = (fusionCount) => {
     send({
       type: "graph",
       graph: selectionGraph,
@@ -8133,22 +8197,30 @@ test("offers last and all Unfuse actions beside Fuse and preserves repeated undo
         savePath: "/models/copy.onnx",
       },
     });
-  const undo = document.getElementById("undo-fusion");
+    if (messages.at(-1)?.type === "fusion-patterns")
+      send({
+        type: "fusion-patterns",
+        requestId: messages.at(-1).requestId,
+        patterns: [],
+      });
+  };
+  const undo = document.getElementById("fuse-pattern");
   const hourglass = undo.querySelector(".fusion-hourglass");
   assert.equal(window.getComputedStyle(hourglass).display, "none");
   const last = document.getElementById("unfuse-last");
   const all = document.getElementById("unfuse-all");
   const options = document.getElementById("unfuse-panel");
   const historyList = document.getElementById("unfuse-history");
-  assert.equal(undo.textContent, "Unfuse");
-  assert.equal(
-    document.getElementById("fuse-pattern").nextElementSibling,
-    undo,
-  );
+  assert.equal(undo.textContent, "Fuse / Unfuse");
   assert.equal(undo.closest("nav").id, "sidebar-controls");
   graph(2);
   assert.equal(undo.disabled, false);
   undo.click();
+  send({
+    type: "fusion-patterns",
+    requestId: messages.at(-1).requestId,
+    patterns: [],
+  });
   assert.equal(options.hidden, false);
   assert.ok(
     document
@@ -8263,8 +8335,8 @@ test("offers last and all Unfuse actions beside Fuse and preserves repeated undo
     document.getElementById("fusion-status").textContent,
     /Reload failed/,
   );
-  document.getElementById("close-unfuse").click();
-  assert.equal(options.hidden, true);
+  undo.click();
+  assert.equal(document.getElementById("fusion-panel").hidden, false);
   undo.click();
   assert.equal(options.hidden, false);
   graph(2);
@@ -8285,7 +8357,8 @@ test("offers last and all Unfuse actions beside Fuse and preserves repeated undo
     .dispatchEvent(new window.Event("submit", { cancelable: true }));
   assert.equal(messages.at(-1).includeRewritings, true);
   graph(0);
-  assert.equal(undo.disabled, true);
+  assert.equal(last.disabled, true);
+  assert.equal(undo.disabled, false);
 });
 
 test("makes Open and Save mutually exclusive while preserving other sidebar panels", (t) => {
@@ -8807,8 +8880,7 @@ test("toggles separated, stacked sidebar panels independently from Op Data Find 
       "Symbolic",
       "Convert",
       "Optimize",
-      "Fuse",
-      "Unfuse",
+      "Fuse / Unfuse",
     ],
   );
   assert.match(
@@ -8943,7 +9015,7 @@ test("runs matching explicitly, highlights candidates and fuses only checked mat
     button.closest("nav"),
     document.getElementById("sidebar-controls"),
   );
-  assert.equal(button.textContent, "Fuse");
+  assert.equal(button.textContent, "Fuse / Unfuse");
   assert.equal(
     button.className,
     document.getElementById("show-operator").className,
@@ -15061,7 +15133,12 @@ test("graph names, node/initializer counts and pending rewritings share one head
   const heading = document.querySelector(".graph-heading");
   assert.deepEqual(
     [...heading.children].map((element) => element.id || element.className),
-    ["graph-navigation", "graph-stats", "rewriting-count"],
+    [
+      "graph-navigation",
+      "rewriting-scenario",
+      "graph-stats",
+      "rewriting-count",
+    ],
   );
   assert.equal(
     document.querySelector(".graph-stats").textContent,

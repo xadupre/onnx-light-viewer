@@ -714,7 +714,19 @@ to persist the change. See :doc:`features/fusion_patterns`.
 Unfuse (undo native edits)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Open **Unfuse**, beside **Fuse** in the **Optimization** sidebar group, to undo
+Choose a saved rewriting in the dropdown between the graph name and node counts.
+**None** is the default and displays the original graph. Selecting a name applies
+that alternative and opens its ordered steps in **Fuse / Unfuse**; selecting
+**None** again restores the original graph without a pending replay.
+Switching alternatives replaces current native fusion edits, not the source file.
+
+.. figure:: _static/feature-rewriting-selector.png
+   :alt: Header rewriting selector showing a saved scenario, with its ordered steps and Unfuse actions together in the Fuse / Unfuse panel.
+   :width: 100%
+
+   Select a named rewriting from the header; inspect and undo it in one panel.
+
+Open **Fuse / Unfuse** to undo
 native edits without changing the source file. **Unfuse last** reverses one
 complete operation: a batch of selected matches, a global optimization, a
 global pass or an applied rewriting-scenario step/batch. Repeat to go back
@@ -723,6 +735,17 @@ those on other pipeline stages.
 The history lists operations newest first; click a match to highlight its
 surviving result nodes. These controls are disabled when no undo history remains.
 See :ref:`unfuse` for history and saved rewriting-plan details.
+
+Optimization results count original impacted nodes, not surviving result nodes.
+Expand **Before / after this operation** to inspect the edit, including deleted
+operators and initializer-only changes. Pattern buttons highlight current
+surviving results separately.
+
+.. figure:: _static/feature-fusion-impact.png
+   :alt: An applied TransposeTranspose rewriting with two impacted nodes, one replacement and expanded before/after operator details.
+   :width: 100%
+
+   Inspect original impact without confusing it with surviving graph nodes.
 
 The native **Optimize** panel also offers **Unfuse last** and
 **Back to original model** (undo all). Changed ONNX Script results cannot be

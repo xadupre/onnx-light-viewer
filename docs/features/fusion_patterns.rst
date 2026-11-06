@@ -1,7 +1,7 @@
 Fusion patterns
 ===============
 
-**Fuse**, at the top of the right sidebar, opens the native onnx-light pattern
+**Fuse / Unfuse**, at the top of the right sidebar, opens the native onnx-light pattern
 matcher on the main graph.
 The list keeps patterns whose anchor operator occurs in that graph, plus patterns
 without an anchor restriction. Manual matching does not run model inference.
@@ -296,8 +296,14 @@ pipeline stages. After ONNX Script changes the model, this baseline is the Pytho
 result, not the model before Python optimization.
 Optimize stays open so you can select patterns and optimize again.
 Applied patterns are listed in the optimization results and in **Unfuse**;
-click an entry to highlight its surviving result nodes. Folding a node entirely
-into an initializer leaves no operator to select.
+the count describes the nodes impacted **before that operation**, not its current
+surviving descendants. Initializer removals and additions are reported separately.
+Expand **Before / after this operation** to inspect the recorded operators,
+inputs and outputs, even if those operators have since disappeared. Scoped edits
+retain their original scope and node positions.
+Click the pattern button to highlight only surviving result nodes. Folding a node
+entirely into an initializer leaves no operator to select, but its impact remains
+inspectable. Later fusions do not change the recorded before/after details.
 Optimize's **Matched patterns** list follows the active history for the current
 model or pipeline stage, including after reopening Optimize or a no-change run.
 
@@ -306,6 +312,17 @@ model or pipeline stage, including after reopening Optimize or a no-change run.
    :width: 100%
 
    Inspect matches and unfuse without leaving Optimize.
+
+.. figure:: ../_static/feature-fusion-impact.png
+   :alt: Optimization history showing two impacted Transpose nodes and one Identity replacement, with lazy before and after details expanded.
+   :width: 100%
+
+   Impact counts describe the original edit; highlighting follows surviving nodes.
+
+Precise cleanup counts require minimal cleanup edits from onnx-light.
+`The SDK cleanup fix <https://github.com/xadupre/onnx-light/issues/5813>`_
+and its viewer integration must both be available; the viewer does not reconstruct
+or filter oversized SDK edits.
 
 **Save → Include fusion rewritings** works for these operations too:
 unchecked saves the optimized graph; checked saves the original and its
@@ -323,13 +340,19 @@ in the original graph. Regenerate the example with
 Saved rewriting scenarios
 -------------------------
 
-**Fuse → Saved rewriting scenarios** lists named ``RewritingProto`` variants
-stored in the model. This section starts collapsed when the model has none.
-Select a scenario to inspect its ordered patterns and
-progress, then choose **Apply next pattern** or **Apply remaining scenario**.
-The latter applies every remaining step as one operation. Each click can be
-reversed with **Unfuse last**; **Unfuse all** restores the original model.
-In a pipeline, open a stage's main graph to choose that stage's scenarios.
+The **Rewriting** dropdown between the graph name and node counts starts at
+**None**: opening a model never applies its saved ``RewritingProto`` variants.
+Choose a name to display that complete rewriting and open its ordered patterns
+in **Fuse / Unfuse → Saved rewriting scenarios**. Choose **None** to restore the
+original graph without queued rewritings. Switching alternatives replaces
+current native fusion edits; it never changes the source file.
+
+**Restart step by step** restores the original graph and applies the first step.
+Then use **Apply next pattern** or **Apply remaining scenario**.
+Each operation can be reversed with **Unfuse last** in the same panel.
+**Unfuse all** retains operations as pending, unlike selecting **None**.
+In a pipeline, choose a stage to access its scenarios; selecting an alternative
+restores the original container before applying that stage's saved rewriting.
 Click the next pattern to highlight its matched nodes. **Apply next pattern**
 automatically highlights the following step's nodes in the updated graph.
 Applied steps select their surviving result nodes; later steps become
@@ -345,11 +368,11 @@ the extension, run ``node examples/generate_rewritings.cjs`` with Node.js 22.
    :alt: Apply next advances one stored step; apply remaining completes the scenario in one operation. Unfuse last returns to the state before that click.
    :width: 800px
 
-   Next applies one stored edit; remaining applies a batch with one undo boundary.
+   The header selects a complete alternative; restart and remaining provide stepwise replay.
 
 Scenarios are alternatives against the original graph, not successive variants.
-Unfuse existing edits before switching scenarios. Manual fusion after a scenario
-also pauses scenario playback until that manual operation is undone.
+The header restores the original graph before switching scenarios. Manual fusion
+after a scenario also pauses scenario playback until that operation is undone.
 Each step is replayed from the original graph with its complete preceding prefix,
 so intermediate node reordering cannot change the meaning of stored indices.
 Structural edits, such as ``Finalize fusion node order``, appear as steps too.
@@ -361,7 +384,7 @@ select nodes in the main graph.
 Unfuse and rewriting plans
 ----------------------------
 
-**Unfuse**, beside **Fuse**, offers **Unfuse last** and **Unfuse all**.
+**Fuse / Unfuse → Applied fusions** offers **Unfuse last** and **Unfuse all**.
 Unfuse last restores the model before the last fusion or scenario operation:
 one step reverses all candidates, optimization iterations or global-pass edits
 applied together. The choices remain open so
@@ -401,7 +424,7 @@ In **Save**, **Include fusion rewritings** selects the saved representation:
        Existing named variants are retained without overwriting their names.
 
 The checked form follows onnx-light's canonical-model/variant contract:
-reopening it displays the original graph; choose the saved scenario in **Fuse**
+reopening it displays the original graph; choose the saved scenario in the header
 to replay it. It does not persist the viewer's Undo stack.
 For pipelines, each modified stage stores its own original graph and ordered
 plan. The choice also applies to encrypted saves and external-weight storage.

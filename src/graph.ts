@@ -201,8 +201,28 @@ export interface FusionMatch {
   }[];
 }
 
+export interface FusionImpactNode {
+  index?: number;
+  name: string;
+  opType: string;
+  domain: string;
+  inputs: string[];
+  outputs: string[];
+}
+
 export interface FusionOperation {
-  matches: { pattern: string; nodes: number[] }[];
+  matches: {
+    pattern: string;
+    /** Surviving descendants in the currently displayed graph, for selection only. */
+    nodes: number[];
+    impact?: {
+      before: FusionImpactNode[];
+      after: FusionImpactNode[];
+      scope: string[];
+      removedInitializers: number;
+      addedInitializers: number;
+    };
+  }[];
   stage?: PipelineRole;
 }
 
@@ -471,10 +491,14 @@ export interface NativeModel {
   clone(): NativeModel;
   /** Number of applied Fuse operations available for session-local undo. */
   fusionCount(): number;
-  /** Applied matches and their surviving descendants in the current root graph. */
-  fusionHistory(): FusionOperation[];
+  /** Applied matches and current surviving descendants; true includes original impact. */
+  fusionHistory(includeImpact?: boolean): FusionOperation[];
   /** Returns an independent snapshot before the last Fuse operation. */
   undoFusion(): NativeModel;
+  /** Original graph before session fusions; retains saved rewriting alternatives. */
+  withoutFusions(): NativeModel;
+  /** Header metadata only: no step projection or graph traversal. */
+  rewritingState(path?: GraphPath): { names: string[]; selected?: string };
   rewritingScenarios(path?: GraphPath): RewritingScenario[];
   applyRewritingScenario(
     name: string,
