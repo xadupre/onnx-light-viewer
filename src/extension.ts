@@ -3492,7 +3492,7 @@ async function configurePanel(
                   matches: current.rewritingQueue.operations.flatMap(
                     (operation) => operation.matches,
                   ),
-                  optimizationReport: null,
+                  optimizationReport: edited.optimizationReport(path),
                   patterns: edited.fusionPatterns(path),
                   optimizationPatterns: edited.optimizationPatterns(path),
                   functions: edited.modelFunctionDescriptors(path),
@@ -3844,7 +3844,9 @@ async function configurePanel(
                   patterns,
                   optimizationPatterns: native.optimizationPatterns(path),
                   functions: native.modelFunctionDescriptors(path),
-                  optimizationReport: native.optimizationReport(path),
+                  optimizationReport: (
+                    current.rewritingQueue?.model ?? native
+                  ).optimizationReport(path),
                   scenarios: native.rewritingScenarios(path),
                 });
                 return;

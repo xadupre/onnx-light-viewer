@@ -3891,6 +3891,9 @@ test("previews global passes without editing, rejects stale previews and optimiz
   await extension.receive({ type: "undo-fusion", all: true });
   assert.deepEqual(latest().graph, original);
   await extension.receive({ type: "fusion-patterns", requestId: 9 });
+  assert.deepEqual(extension.messages.at(-1).optimizationReport, report);
+  await extension.openFile(source);
+  await extension.receive({ type: "fusion-patterns", requestId: 10 });
   assert.equal(extension.messages.at(-1).optimizationReport, null);
 });
 
@@ -7816,6 +7819,16 @@ test("selects optimization groups and previews global passes through the real we
   );
   document.getElementById("close-optimization-report").click();
   assert.equal(reportDialog.open, false);
+  const reportContents = () => {
+    document.getElementById("show-optimization-report").click();
+    assert.equal(reportDialog.open, true);
+    const text = document.getElementById(
+      "optimization-report-body",
+    ).textContent;
+    document.getElementById("close-optimization-report").click();
+    return text;
+  };
+  const lastReport = reportContents();
   [...results.querySelectorAll("button")]
     .find((button) => button.textContent.startsWith("MatMulAdd "))
     .click();
@@ -7831,6 +7844,7 @@ test("selects optimization groups and previews global passes through the real we
   assert.equal(restoreOriginal.disabled, false);
   assert.equal(unfuseOptimization.disabled, false);
   assert.equal(results.querySelectorAll("button").length, 1);
+  assert.equal(reportContents(), lastReport);
   assert.ok(pendingCount() > 0);
   assert.equal(
     document.querySelectorAll("#pending-rewriting-steps li").length,
@@ -7839,12 +7853,14 @@ test("selects optimization groups and previews global passes through the real we
   document.getElementById("run-optimization").click();
   await flush();
   assert.ok(count() < original);
+  const replayedReport = reportContents();
   restoreOriginal.click();
   await flush();
   assert.equal(count(), original);
   assert.equal(document.getElementById("optimization-panel").hidden, false);
   assert.equal(restoreOriginal.disabled, true);
   assert.equal(results.querySelectorAll("button").length, 0);
+  assert.equal(reportContents(), replayedReport);
   assert.ok(pendingCount() > 0);
   assert.equal(document.getElementById("pending-rewritings").hidden, false);
   assert.match(
@@ -7870,6 +7886,7 @@ test("selects optimization groups and previews global passes through the real we
     "0 pending rewritings",
   );
   assert.equal(document.getElementById("pending-rewritings").hidden, true);
+  assert.equal(reportContents(), replayedReport);
   assert.deepEqual(extension.errors, []);
 });
 
