@@ -5819,7 +5819,7 @@ test("shows matching adjacent Open/Save sidebar buttons and an explicit storage/
   assert.equal(dialog.hidden, false);
   assert.equal(dialog.tagName, "SECTION");
   assert.equal(dialog.closest("aside"), open.closest("aside"));
-  assert.equal(form.querySelectorAll('input[type="radio"]').length, 5);
+  assert.equal(form.querySelectorAll('input[type="radio"]').length, 6);
   assert.equal(
     form.querySelector('input[value="external-encrypted"]').disabled,
     true,
@@ -5868,6 +5868,274 @@ test("shows matching adjacent Open/Save sidebar buttons and an explicit storage/
   open.click();
   submitOpen(document, window);
   assert.equal(messages.at(-1).type, "open");
+});
+
+test("Save selects ORT, updates paths and resets incompatible pipeline choices", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  load(demoGraph);
+  const byId = (id) => document.getElementById(id);
+  const ort = document.querySelector('input[name="save-format"][value="ort"]');
+  const encrypted = document.querySelector(
+    'input[name="save-format"][value="embedded-encrypted"]',
+  );
+  const choose = (input) => {
+    input.checked = true;
+    input.dispatchEvent(new window.Event("change", { bubbles: true }));
+  };
+  byId("save-model").click();
+  choose(encrypted);
+  byId("save-password").value = "unused password";
+  choose(ort);
+  assert.equal(byId("save-file").value, "model-copy.ort");
+  assert.equal(byId("save-encryption").hidden, true);
+  assert.equal(byId("save-password").required, false);
+  assert.equal(byId("weight-file-size").disabled, true);
+  byId("save-form").dispatchEvent(
+    new window.Event("submit", { cancelable: true }),
+  );
+  assert.equal(messages.at(-1).format, "ort");
+  assert.equal(messages.at(-1).storage, "embedded");
+  assert.equal(messages.at(-1).encrypted, false);
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: {
+        type: "graph",
+        graph: demoGraph,
+        file: { directory: "/tmp", savePath: "/tmp/new-copy.onnx" },
+      },
+    }),
+  );
+  assert.equal(byId("save-file").value, "/tmp/new-copy.ort");
+  choose(encrypted);
+  assert.equal(byId("save-file").value, "/tmp/new-copy.onnx.enc");
+  choose(ort);
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: {
+        type: "graph",
+        graph: demoGraph,
+        file: {
+          pipeline: true,
+          directory: "/tmp",
+          savePath: "/tmp/pipeline-copy.pipe-onnx",
+        },
+      },
+    }),
+  );
+  assert.equal(ort.disabled, true);
+  assert.equal(ort.checked, false);
+  assert.equal(byId("save-file").value, "/tmp/pipeline-copy.pipe-onnx");
+});
+
+test("Open and Save distinguish package ZIPs and directories from ORT FlatBuffer serialization", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  load(demoGraph);
+  const byId = (id) => document.getElementById(id);
+  const change = (id, value) => {
+    byId(id).value = value;
+    byId(id).dispatchEvent(new window.Event("change", { bubbles: true }));
+  };
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  byId("open-model").click();
+  assert.equal(byId("open-layout"), null);
+  assert.equal(byId("open-package-options").hidden, true);
+  assert.equal(
+    byId("open-file-label").textContent,
+    "Model file or package path",
+  );
+  byId("open-native-picker").click();
+  assert.equal(messages.at(-1).packageDirectory, undefined);
+  send({
+    type: "model-path-selected",
+    requestId: messages.at(-1).requestId,
+    location: "/models/package.ortpackage",
+  });
+  assert.equal(byId("open-package-options").hidden, false);
+  assert.match(byId("open-format").textContent, /ZIP archive/);
+  const inspection = messages.at(-1);
+  assert.equal(inspection.type, "inspect-runtime-package");
+  send({
+    type: "runtime-package-info",
+    requestId: inspection.requestId,
+    package: {
+      genai: true,
+      models: ["model.onnx", "decoder.ort"],
+      defaultModel: "decoder.ort",
+    },
+  });
+  assert.equal(byId("open-package-model").value, "decoder.ort");
+  byId("open-form").dispatchEvent(
+    new window.Event("submit", { cancelable: true }),
+  );
+  assert.equal(messages.at(-1).type, "open");
+  assert.equal(messages.at(-1).location, "/models/package.ortpackage");
+  assert.equal(messages.at(-1).packageModel, "decoder.ort");
+  byId("open-file").value = "/models/another";
+  byId("open-file").dispatchEvent(new window.Event("input", { bubbles: true }));
+  send({
+    type: "runtime-package-info",
+    requestId: inspection.requestId,
+    package: { models: ["stale.onnx"], defaultModel: "stale.onnx" },
+  });
+  assert.equal(byId("open-package-model").disabled, true);
+  byId("save-model").click();
+  const ort = document.querySelector('input[name="save-format"][value="ort"]');
+  assert.match(ort.closest("label").textContent, /ORT FlatBuffer/);
+  assert.doesNotMatch(ort.closest("label").textContent, /package/);
+  ort.checked = true;
+  ort.dispatchEvent(new window.Event("change", { bubbles: true }));
+  change("save-container", "generic");
+  assert.equal(byId("save-file").value, "model-copy-package.ortpackage");
+  assert.equal(
+    byId("save-file-label").textContent,
+    "New package archive (.ortpackage)",
+  );
+  assert.equal(byId("save-overwrite").disabled, true);
+  assert.equal(
+    document.querySelector('input[value="embedded-encrypted"]').disabled,
+    true,
+  );
+  assert.equal(
+    document.querySelector('input[value="reuse-plain"]').disabled,
+    true,
+  );
+  byId("save-form").dispatchEvent(
+    new window.Event("submit", { cancelable: true }),
+  );
+  assert.equal(messages.at(-1).packageKind, "generic");
+  assert.equal(messages.at(-1).packageArchive, true);
+  assert.equal(messages.at(-1).format, "ort");
+  assert.equal(messages.at(-1).location, "model-copy-package.ortpackage");
+  change("save-package-layout", "directory");
+  assert.equal(byId("save-file").value, "model-copy-package");
+  assert.equal(byId("save-file-label").textContent, "New package directory");
+  change("save-package-layout", "archive");
+  assert.equal(byId("save-file").value, "model-copy-package.ortpackage");
+  change("save-container", "model");
+  assert.equal(byId("save-file").value, "model-copy.ort");
+  assert.equal(byId("save-overwrite").disabled, false);
+  send({
+    type: "graph",
+    graph: demoGraph,
+    file: {
+      format: "ort",
+      directory: "/models",
+      savePath: "/models/copy.onnx",
+      package: {
+        kind: "genai",
+        directory: "/models/package.ortpackage",
+        archive: true,
+      },
+    },
+  });
+  assert.match(
+    byId("loaded-format").textContent,
+    /ORT FlatBuffer.*GenAI package ZIP.*package\.ortpackage/,
+  );
+});
+
+test("Open infers model formats and package folders without a format selector", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  load(demoGraph);
+  const byId = (id) => document.getElementById(id);
+  byId("open-model").click();
+  assert.equal(byId("open-layout"), null);
+  for (const [path, format, packageInput] of [
+    ["/models/model.onnx", /ONNX protobuf/, false],
+    ["/models/model.ORT", /ORT FlatBuffer/, false],
+    ["/models/model.pipe-onnx", /PipelineProto/, false],
+    ["/models/model.onnx.enc", /encrypted ONNX/, false],
+    ["/models/model.enc", /encrypted model/, false],
+    ["/models/model.ORTPACKAGE", /ZIP archive/, true],
+    ["/models/model.zip", /ZIP archive/, true],
+  ]) {
+    byId("open-file").value = path;
+    byId("open-file").dispatchEvent(
+      new window.Event("input", { bubbles: true }),
+    );
+    assert.match(byId("open-format").textContent, format);
+    assert.equal(byId("open-package-options").hidden, !packageInput);
+    assert.equal(byId("open-password").disabled, packageInput);
+  }
+  byId("open-native-picker").click();
+  const requestId = messages.at(-1).requestId;
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: {
+        type: "model-path-selected",
+        requestId,
+        location: "/models/package",
+        directory: true,
+      },
+    }),
+  );
+  assert.match(byId("open-format").textContent, /package directory/);
+  assert.equal(messages.at(-1).type, "inspect-runtime-package");
+  byId("open-file").value = "/models/next.onnx";
+  byId("open-file").dispatchEvent(new window.Event("input", { bubbles: true }));
+  assert.equal(byId("open-package-options").hidden, true);
+  assert.match(byId("open-format").textContent, /ONNX protobuf/);
+});
+
+test("Save enables only applicable package types and resets a stale selection on model replacement", (t) => {
+  const { document, window, load } = openViewer(t);
+  load(demoGraph);
+  const byId = (id) => document.getElementById(id);
+  const option = (value) =>
+    byId("save-container").querySelector(`option[value="${value}"]`);
+  const sendFile = (packageInfo) =>
+    window.dispatchEvent(
+      new window.MessageEvent("message", {
+        data: {
+          type: "graph",
+          graph: demoGraph,
+          file: {
+            directory: "/models",
+            savePath: "/models/simple-copy.onnx",
+            ...(packageInfo ? { package: packageInfo } : {}),
+          },
+        },
+      }),
+    );
+  const choose = (value) => {
+    byId("save-container").value = value;
+    byId("save-container").dispatchEvent(
+      new window.Event("change", { bubbles: true }),
+    );
+  };
+  for (const packageInfo of [
+    undefined,
+    { genai: true, compiled: false },
+    { genai: false, compiled: true },
+    { genai: true, compiled: true },
+  ]) {
+    sendFile(packageInfo);
+    assert.equal(option("model").disabled, false);
+    assert.equal(option("generic").disabled, false);
+    assert.equal(option("genai").disabled, packageInfo?.genai !== true);
+    assert.equal(option("compiled").disabled, packageInfo?.compiled !== true);
+  }
+  for (const selected of ["genai", "compiled"]) {
+    sendFile({ genai: true, compiled: true });
+    choose(selected);
+    assert.equal(
+      byId("save-file").value,
+      "/models/simple-copy-package.ortpackage",
+    );
+    sendFile(undefined);
+    assert.equal(byId("save-container").value, "model");
+    assert.equal(byId("save-file").value, "/models/simple-copy.onnx");
+    assert.equal(byId("save-package-layout-options").hidden, true);
+    assert.equal(byId("save-overwrite").disabled, false);
+    assert.match(option("genai").title, /configuration and tokenizer/);
+    assert.match(option("compiled").title, /compiled provider assets/);
+    choose("generic");
+    assert.equal(
+      byId("save-file").value,
+      "/models/simple-copy-package.ortpackage",
+    );
+  }
 });
 
 test("chooses saved rewriting scenarios, applies next or remaining steps and recovers from errors", (t) => {

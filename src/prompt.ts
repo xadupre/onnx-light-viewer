@@ -421,10 +421,11 @@ export async function promptInfo(
       reason: "Save a local model first.",
     };
   const engines: string[] = [];
+  const runtimeDirectory = packageDirectory ?? dirname(modelPath);
   const genai =
     !/\.pipe-onnx$/i.test(modelPath) &&
-    (await exists(join(dirname(modelPath), "genai_config.json")));
-  if (genai && (await hasTokenizerPackage(dirname(modelPath))))
+    (await exists(join(runtimeDirectory, "genai_config.json")));
+  if (genai && (await hasTokenizerPackage(runtimeDirectory)))
     engines.push("onnxruntime-genai");
   const provenance = await readProvenance(modelPath);
   const directories = [
@@ -494,6 +495,7 @@ export async function runPrompt(
   token?: (token: PromptToken, index: number) => void,
   session?: PromptSession,
   lifecycle?: (value: PromptLifecycle) => void,
+  packageDirectory?: string,
 ): Promise<PromptResult> {
   signal.throwIfAborted();
   const options = optionsFrom(value);
@@ -502,7 +504,7 @@ export async function runPrompt(
   if (options.keepLoaded && !session)
     throw new Error("Keeping a model loaded requires a panel session owner.");
   if (!options.validate) previous = undefined;
-  const info = await promptInfo(modelPath);
+  const info = await promptInfo(modelPath, packageDirectory);
   if (!info.engines.includes(options.engine))
     throw new Error(
       info.reason ??
@@ -512,14 +514,17 @@ export async function runPrompt(
   const directories = [
     ...(provenance?.source ? [provenance.source] : []),
     dirname(modelPath),
+    ...(packageDirectory ? [packageDirectory] : []),
   ];
   const source =
     options.engine === "onnxruntime-genai"
-      ? dirname(modelPath)
+      ? (packageDirectory ?? dirname(modelPath))
       : await lightSource(
           directories,
           !info.pipeline &&
-            (await exists(join(dirname(modelPath), "genai_config.json"))),
+            (await exists(
+              join(packageDirectory ?? dirname(modelPath), "genai_config.json"),
+            )),
         );
   if (!source)
     throw new Error(

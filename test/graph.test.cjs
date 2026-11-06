@@ -1508,6 +1508,10 @@ test("transforms only the chosen PipelineProto stage and saves the whole cloned 
   assert.deepEqual(graph(false, path), restored.graph(false, path));
   assert.equal(model.graph(false, path).nodes[0].opType, "Transpose");
   await assert.rejects(model.serialize("password"), /PipelineProto encryption/);
+  await assert.rejects(
+    model.serialize(undefined, undefined, false, "ort"),
+    /single model.*PipelineProto/,
+  );
   assert.throws(
     () => model.graph(false, [{ pipeline: "embedding" }]),
     /Invalid pipeline stage/,
@@ -2837,6 +2841,83 @@ test("saves complete streamed weights, inferred shapes and authenticated encrypt
   await assert.rejects(
     external.serialize(),
     /External weights require a local source model path/,
+  );
+});
+
+test("ORT serialization restores streamed and external weights without mutating the retained model", async (t) => {
+  const directory = mkdtempSync(path.join(tmpdir(), "viewer-ort-weights-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const payload = Buffer.alloc(256);
+  for (let offset = 0; offset < payload.length; offset += 4)
+    payload.writeFloatLE(1, offset);
+  for (const field of [4, 9]) {
+    const bytes = matmulWithWeight(field, payload);
+    const complete = loadModel(bytes, "weights.onnx");
+    const source = path.join(directory, `source-${field}.onnx`);
+    writeFileSync(source, bytes);
+    const streamed = await loadModelFile(source, "weights.onnx");
+    const before = streamed.graph();
+    const expected = Buffer.from(
+      await complete.serialize(undefined, undefined, false, "ort"),
+    );
+    assert.equal(expected.subarray(4, 8).toString(), "ORTM");
+    assert.deepEqual(
+      Buffer.from(await streamed.serialize(undefined, undefined, false, "ort")),
+      expected,
+    );
+    assert.deepEqual(streamed.graph(), before);
+    assert.deepEqual(readFileSync(source), bytes);
+    const split = await complete.serializeFiles(1024, `weights-${field}`);
+    const externalFile = path.join(directory, `external-${field}.onnx`);
+    writeFileSync(externalFile, split.model);
+    for (const weight of split.weights)
+      writeFileSync(path.join(directory, weight.name), weight.bytes);
+    assert.ok(split.weights.length > 0);
+    const external = await loadModelFile(externalFile, "external.onnx");
+    const ortFile = path.join(directory, `model-${field}.ort`);
+    const ortBytes = Buffer.from(
+      await external.serialize(undefined, undefined, false, "ort"),
+    );
+    assert.deepEqual(ortBytes, expected);
+    writeFileSync(ortFile, ortBytes);
+    for (const restored of [
+      loadModel(ortBytes, "renamed.onnx"),
+      await loadModelFile(ortFile, "model.ort"),
+    ]) {
+      assert.equal(restored.graph().nodes[0].opType, "MatMul");
+      assert.equal((await restored.tensorStatistics("weight")).mean, 1);
+      const plain = loadModel(await restored.serialize(), "restored.onnx");
+      assert.equal((await plain.tensorStatistics("weight")).mean, 1);
+      writeFileSync(
+        ortFile,
+        await restored.serialize(undefined, undefined, false, "ort"),
+      );
+    }
+    const output = execFileSync(
+      python,
+      [
+        "-c",
+        `import json, sys
+import numpy as np
+import onnxruntime as ort
+options = ort.SessionOptions()
+options.intra_op_num_threads = 1
+session = ort.InferenceSession(sys.argv[1], sess_options=options, providers=["CPUExecutionProvider"])
+print(json.dumps(session.run(None, {"x": np.ones((1, 8), dtype=np.float32)})[0].tolist()))`,
+        ortFile,
+      ],
+      { encoding: "utf8" },
+    );
+    assert.deepEqual(JSON.parse(output), [Array(8).fill(8)]);
+  }
+  const relu = loadModel(modelBytes("relu.onnx"), "relu");
+  assert.throws(
+    () => relu.serialize(undefined, undefined, false, "invalid"),
+    /serialization format/,
+  );
+  assert.throws(
+    () => relu.serialize("secret", undefined, false, "ort"),
+    /encryption/,
   );
 });
 

@@ -50,6 +50,121 @@ async function fixture(
   return { root, model };
 }
 
+test("runtime package roots keep nested GenAI models executable after ORT package saving", async (t) => {
+  const { root, model } = await fixture(t);
+  const nested = path.join(root, "models", "decoder.onnx");
+  await mkdir(path.dirname(nested));
+  await rename(model, nested);
+  const config = JSON.parse(
+    await readFile(path.join(root, "genai_config.json")),
+  );
+  config.model.decoder.filename = "models/decoder.onnx";
+  await writeFile(path.join(root, "genai_config.json"), JSON.stringify(config));
+  assert.deepEqual((await promptInfo(nested, root)).engines, [
+    "onnx-light",
+    "onnxruntime-genai",
+  ]);
+  const destination = `${root}-saved`;
+  t.after(() => rm(destination, { recursive: true, force: true }));
+  const {
+    inspectRuntimePackage,
+    runtimePackageModel,
+    saveRuntimePackage,
+  } = require("../dist/runtimePackage");
+  const { loadModelFile } = require("../dist/graph");
+  await saveRuntimePackage({
+    destination,
+    kind: "genai",
+    sourcePackage: await inspectRuntimePackage(root),
+    sourcePath: nested,
+    model: await loadModelFile(nested, "decoder.onnx"),
+    format: "ort",
+    includeRewritings: false,
+    canPublish: () => true,
+    publish: rename,
+  });
+  const saved = runtimePackageModel(await inspectRuntimePackage(destination));
+  assert.match(saved, /decoder\.ort$/);
+  for (const engine of ["onnx-light", "onnxruntime-genai"]) {
+    const result = await runPrompt(
+      saved,
+      { ...options, engine },
+      python,
+      signal(),
+      () => {},
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      destination,
+    );
+    assert.deepEqual(
+      result.tokens.map((token) => token.id),
+      [1, 1, 1],
+    );
+  }
+});
+
+test("GenAI .ortpackage ZIPs reload and generate with both engines from their selected variant", async (t) => {
+  const { root, model } = await fixture(t);
+  const {
+    inspectRuntimePackage,
+    runtimePackageModel,
+    runtimePackagePromptDirectory,
+    saveRuntimePackage,
+  } = require("../dist/runtimePackage");
+  const { PackageArchiveStore } = require("../dist/packageArchive");
+  const { loadModelFile } = require("../dist/graph");
+  const destination = `${root}-saved.ortpackage`;
+  const store = new PackageArchiveStore();
+  t.after(async () => {
+    await store.close();
+    await rm(destination, { force: true });
+  });
+  await saveRuntimePackage({
+    destination,
+    kind: "genai",
+    sourcePackage: await inspectRuntimePackage(root),
+    sourcePath: model,
+    model: await loadModelFile(model, path.basename(model)),
+    format: "ort",
+    includeRewritings: false,
+    canPublish: () => true,
+    publish: rename,
+  });
+  const location = await store.resolve(destination);
+  const info = await inspectRuntimePackage(location.directory);
+  const saved = runtimePackageModel(info);
+  const runtimeDirectory = runtimePackagePromptDirectory(info, saved);
+  assert.match(saved, /default[/\\]model\.ort$/);
+  assert.equal(
+    info.manifest.components.model.variants.default.ep,
+    "CPUExecutionProvider",
+  );
+  assert.deepEqual((await promptInfo(saved, runtimeDirectory)).engines, [
+    "onnx-light",
+    "onnxruntime-genai",
+  ]);
+  for (const engine of ["onnx-light", "onnxruntime-genai"]) {
+    const result = await runPrompt(
+      saved,
+      { ...options, engine },
+      python,
+      signal(),
+      () => {},
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      runtimeDirectory,
+    );
+    assert.deepEqual(
+      result.tokens.map((token) => token.id),
+      [1, 1, 1],
+    );
+  }
+});
+
 test("native onnx-light Generate owns autoregression, EOS and error propagation", async (t) => {
   const { root, model } = await fixture(t, true, true);
   const run = () =>

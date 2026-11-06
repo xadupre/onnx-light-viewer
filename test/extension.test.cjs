@@ -805,8 +805,18 @@ async function openExtension(
             throw new Error("Test filesystem refused the rename.");
           }
           if (!options.overwrite) {
-            await link(source.path, destination.path);
-            await rm(source.path);
+            if ((await stat(source.path)).isDirectory()) {
+              try {
+                await stat(destination.path);
+                throw new FileSystemError("FileExists");
+              } catch (error) {
+                if (error.code !== "ENOENT") throw error;
+              }
+              await rename(source.path, destination.path);
+            } else {
+              await link(source.path, destination.path);
+              await rm(source.path);
+            }
           } else await rename(source.path, destination.path);
         },
         delete: async (uri) => {
@@ -1218,9 +1228,11 @@ test("the Explorer context menu offers ONNX Light Viewer only for supported mode
     "model.onnx",
     "model.onnx.enc",
     "model.pipe-onnx",
+    "model.ort",
     "MODEL.ONNX",
     "MODEL.ONNX.ENC",
     "MODEL.PIPE-ONNX",
+    "MODEL.ORT",
   ])
     assert.ok(filename.test(name), name);
   for (const name of [
@@ -2859,25 +2871,52 @@ test("path paste reads the VS Code clipboard without loading a model and reports
   assert.equal(extension.openDialogs.length, 0);
 });
 
-test("native path selection preserves the picker and returns a path without loading or replacing the model", async () => {
+test("native path selection detects files and package folders without loading or replacing the model", async (t) => {
   const extension = await openExtension("relu.onnx");
+  t.after(() => extension.dispose());
+  const directory = await mkdtemp(
+    path.join(tmpdir(), "viewer-auto-open-picker-"),
+  );
+  t.after(() => rm(directory, { recursive: true, force: true }));
   const reads = extension.reads.length;
   const graphs = extension.messages.filter(
     ({ type }) => type === "graph",
   ).length;
-  const selected = path.join(tmpdir(), "outside-workspace.onnx");
+  const selected = path.join(directory, "outside-workspace.onnx");
+  await copyFile(require.resolve("./models/relu.onnx"), selected);
   extension.setOpenSelection(selected);
   await extension.receive({ type: "select-model-path", requestId: 1 });
   assert.deepEqual(extension.messages.at(-1), {
     type: "model-path-selected",
     requestId: 1,
     location: selected,
+    directory: false,
   });
   assert.deepEqual(extension.openDialogs.at(-1), {
     canSelectMany: false,
-    filters: { "ONNX models and pipelines": ["onnx", "enc", "pipe-onnx"] },
-    openLabel: "Open ONNX graph",
+    canSelectFolders: true,
+    canSelectFiles: true,
+    filters: {
+      "ONNX/ORT models, packages and pipelines": [
+        "onnx",
+        "ort",
+        "ortpackage",
+        "zip",
+        "enc",
+        "pipe-onnx",
+      ],
+    },
+    openLabel: "Open model or runtime package",
   });
+  extension.setOpenSelection(directory);
+  await extension.receive({
+    type: "select-model-path",
+    requestId: 4,
+  });
+  assert.equal(extension.messages.at(-1).location, directory);
+  assert.equal(extension.messages.at(-1).directory, true);
+  assert.equal(extension.openDialogs.at(-1).canSelectFolders, true);
+  assert.equal(extension.openDialogs.at(-1).canSelectFiles, true);
   extension.setOpenSelection(undefined);
   await extension.receive({ type: "select-model-path", requestId: 2 });
   assert.equal(extension.messages.at(-1).location, null);
@@ -5681,6 +5720,604 @@ test("preserves dense and sparse external sources when selected as save destinat
   }
 });
 
+test("saves the current model as an executable ORT FlatBuffer without changing its ONNX source", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "viewer-save-ort-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const source = path.join(directory, "source.onnx");
+  await copyFile(require.resolve("./models/relu.onnx"), source);
+  const original = await readFile(source);
+  const extension = await openExtension("relu.onnx", undefined, true);
+  t.after(() => extension.dispose());
+  await extension.openFile(source);
+  const destination = path.join(directory, "copy.ort");
+  await extension.receive({
+    type: "save",
+    format: "ort",
+    storage: "embedded",
+    encrypted: false,
+    location: destination,
+    overwrite: false,
+  });
+  assert.equal(extension.messages.at(-1).type, "save-info");
+  assert.equal((await readFile(destination)).subarray(4, 8).toString(), "ORTM");
+  assert.deepEqual(await readFile(source), original);
+  const result = execFileSync(
+    process.platform === "win32" ? "python" : "python3",
+    [
+      "-c",
+      `import json, sys
+import numpy as np
+import onnxruntime as ort
+options = ort.SessionOptions()
+options.intra_op_num_threads = 1
+session = ort.InferenceSession(sys.argv[1], sess_options=options, providers=["CPUExecutionProvider"])
+print(json.dumps(session.run(None, {session.get_inputs()[0].name: np.array([[-1, 0, 2]], dtype=np.float32)})[0].tolist()))`,
+      destination,
+    ],
+    { encoding: "utf8" },
+  );
+  assert.deepEqual(JSON.parse(result), [[0, 0, 2]]);
+  await extension.openFile(destination);
+  assert.equal(extension.messages.at(-1).type, "graph");
+  assert.equal(extension.messages.at(-1).file.format, "ort");
+  assert.equal(extension.messages.at(-1).graph.nodes[0].opType, "Relu");
+  const back = path.join(directory, "back.onnx");
+  await extension.save(back);
+  assert.equal(extension.messages.at(-1).type, "save-info");
+  assert.equal(
+    require("../dist/graph")
+      .loadModel(await readFile(back), "back.onnx")
+      .graph().nodes[0].opType,
+    "Relu",
+  );
+  await extension.receive({
+    type: "save",
+    format: "ort",
+    location: destination,
+    overwrite: false,
+  });
+  assert.equal(extension.messages.at(-1).type, "save-error");
+  assert.equal((await readFile(destination)).subarray(4, 8).toString(), "ORTM");
+});
+
+test("runtime packages save self-contained external weights and open selected models", async (t) => {
+  const directory = await mkdtemp(
+    path.join(tmpdir(), "viewer-runtime-package-"),
+  );
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const extension = await openExtension(undefined, undefined, true);
+  t.after(() => extension.dispose());
+  await extension.openFile(require.resolve("../media/tiny-llm.onnx"));
+  const expected = require("../dist/graph")
+    .loadModel(await extension.nativeModels.at(-1).serialize(), "package")
+    .graph();
+  const destination = path.join(directory, "generic");
+  await extension.receive({
+    type: "save",
+    packageKind: "generic",
+    storage: "external",
+    maxExternalFileSize: 1024 * 1024,
+    location: destination,
+    overwrite: false,
+  });
+  assert.equal(extension.messages.at(-1).type, "save-info");
+  assert.ok(
+    (await readdir(destination)).some((name) => name.includes(".data")),
+  );
+  await extension.receive({
+    type: "open",
+    source: "local",
+    location: destination,
+    password: "",
+  });
+  const opened = extension.messages.findLast(
+    (message) => message.type === "graph",
+  );
+  assert.deepEqual(
+    require("../dist/graph")
+      .loadModel(await extension.nativeModels.at(-1).serialize(), "package")
+      .graph(),
+    expected,
+  );
+  assert.equal(opened.file.package.kind, "generic");
+  assert.equal(opened.file.package.directory, destination);
+  assert.equal(opened.file.package.genai, false);
+  assert.equal(opened.file.package.compiled, false);
+  await copyFile(
+    require.resolve("./models/relu.onnx"),
+    path.join(destination, "second.onnx"),
+  );
+  await extension.receive({
+    type: "inspect-runtime-package",
+    requestId: 4,
+    location: destination,
+  });
+  assert.equal(extension.messages.at(-1).type, "runtime-package-info");
+  assert.deepEqual(extension.messages.at(-1).package.models, [
+    "model.onnx",
+    "second.onnx",
+  ]);
+  const existingOrt = await require("../dist/graph")
+    .loadModel(readFileSync(require.resolve("./models/relu.onnx")), "existing")
+    .serialize(undefined, undefined, false, "ort");
+  await writeFile(path.join(destination, "second.ort"), existingOrt);
+  await extension.receive({
+    type: "open",
+    source: "local",
+    location: destination,
+    packageModel: "second.onnx",
+    password: "",
+  });
+  assert.equal(
+    extension.messages.findLast((message) => message.type === "graph").graph
+      .nodes[0].opType,
+    "Relu",
+  );
+  const ortPackage = path.join(directory, "flatbuffer-package");
+  await extension.receive({
+    type: "save",
+    packageKind: "generic",
+    format: "ort",
+    location: ortPackage,
+    overwrite: false,
+  });
+  assert.equal(extension.messages.at(-1).type, "save-info");
+  await extension.receive({
+    type: "open",
+    source: "local",
+    location: ortPackage,
+    packageModel: "second-copy.ort",
+    password: "",
+  });
+  const ortOpened = extension.messages.findLast(
+    (message) => message.type === "graph",
+  );
+  assert.equal(ortOpened.file.format, "ort");
+  assert.equal(ortOpened.file.package.kind, "generic");
+  assert.deepEqual(
+    await readFile(path.join(ortPackage, "second.ort")),
+    Buffer.from(existingOrt),
+  );
+});
+
+test("Open rejects package member selection for an ordinary model path", async (t) => {
+  const extension = await openExtension("relu.onnx");
+  t.after(() => extension.dispose());
+  await extension.receive({
+    type: "open",
+    source: "local",
+    location: require.resolve("./models/relu.onnx"),
+    packageModel: "other.onnx",
+    password: "",
+  });
+  assert.equal(extension.messages.at(-1).type, "load-error");
+  assert.match(
+    extension.messages.at(-1).error,
+    /member model can only be selected for a runtime package/,
+  );
+});
+
+test("GenAI runtime packages preserve configuration, tokenizer and other models when saving a selected model", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "viewer-genai-package-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const source = path.join(directory, "source");
+  await mkdir(path.join(source, "models"), { recursive: true });
+  await copyFile(
+    require.resolve("./models/relu.onnx"),
+    path.join(source, "models", "decoder.onnx"),
+  );
+  await copyFile(
+    require.resolve("./models/relu.onnx"),
+    path.join(source, "embedding.onnx"),
+  );
+  const config = {
+    model: {
+      embedding: { filename: "embedding.onnx" },
+      decoder: { filename: "./models/decoder.onnx" },
+    },
+  };
+  const tokenizer = Buffer.from('{"fixture":"preserve these bytes"}');
+  await writeFile(
+    path.join(source, "genai_config.json"),
+    JSON.stringify(config),
+  );
+  await writeFile(path.join(source, "tokenizer.json"), tokenizer);
+  const extension = await openExtension(undefined, undefined, true);
+  t.after(() => extension.dispose());
+  await extension.receive({
+    type: "open",
+    source: "local",
+    location: source,
+    password: "",
+  });
+  const graph = extension.messages.findLast(
+    (message) => message.type === "graph",
+  );
+  assert.equal(graph.file.package.kind, "genai");
+  assert.equal(graph.file.package.genai, true);
+  assert.equal(graph.file.package.compiled, false);
+  assert.equal(extension.nativeModels.at(-1).graph().nodes[0].opType, "Relu");
+  const destination = path.join(directory, "saved");
+  await extension.receive({
+    type: "save",
+    packageKind: "genai",
+    format: "ort",
+    location: destination,
+    overwrite: false,
+  });
+  assert.equal(extension.messages.at(-1).type, "save-info");
+  assert.deepEqual(
+    await readFile(path.join(destination, "tokenizer.json")),
+    tokenizer,
+  );
+  const savedConfig = JSON.parse(
+    await readFile(path.join(destination, "genai_config.json")),
+  );
+  assert.equal(savedConfig.model.decoder.filename, "models/decoder.ort");
+  assert.equal(savedConfig.model.embedding.filename, "embedding.onnx");
+  assert.deepEqual(
+    await readFile(path.join(destination, "embedding.onnx")),
+    await readFile(path.join(source, "embedding.onnx")),
+  );
+  await extension.receive({
+    type: "open",
+    source: "local",
+    location: destination,
+    password: "",
+  });
+  assert.equal(
+    extension.messages.findLast((message) => message.type === "graph").file
+      .format,
+    "ort",
+  );
+  assert.equal(
+    JSON.parse(await readFile(path.join(source, "genai_config.json"))).model
+      .decoder.filename,
+    "./models/decoder.onnx",
+  );
+});
+
+test(".ortpackage ZIPs open through the editor, retain archive history and execute their selected ORT model", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "viewer-zip-host-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const extension = await openExtension("relu.onnx", undefined, true);
+  t.after(() => extension.dispose());
+  const destination = path.join(directory, "relu.ortpackage");
+  await extension.receive({
+    type: "save",
+    packageKind: "generic",
+    packageArchive: true,
+    format: "ort",
+    location: destination,
+    overwrite: false,
+  });
+  assert.equal(extension.messages.at(-1).type, "save-info");
+  assert.equal(
+    (await readFile(destination)).subarray(0, 4).toString("hex"),
+    "504b0304",
+  );
+  await extension.receive({
+    type: "inspect-runtime-package",
+    requestId: 1,
+    location: destination,
+  });
+  assert.deepEqual(extension.messages.at(-1).package.models, [
+    "default/model.ort",
+  ]);
+  await extension.openFile(destination);
+  const opened = extension.messages.findLast(
+    (message) => message.type === "graph",
+  );
+  assert.equal(opened.file.package.directory, destination);
+  assert.equal(opened.file.package.archive, true);
+  assert.equal(opened.file.format, "ort");
+  assert.ok(
+    extension.events
+      .findLast((message) => message.type === "path-history")
+      .history.open.some((entry) => entry.path === destination),
+  );
+  await extension.receive({
+    type: "run-model",
+    requestId: 2,
+    inputs: ["float[1,3] input = {-1, 0, 2}"],
+  });
+  assert.equal(extension.messages.at(-1).type, "run-result");
+  assert.match(
+    extension.messages.at(-1).result.outputs[0].text,
+    /Values: \[0, 0, 2\]/,
+  );
+  const original = await readFile(destination);
+  await extension.receive({
+    type: "save",
+    packageKind: "generic",
+    packageArchive: true,
+    location: destination,
+    overwrite: false,
+  });
+  assert.equal(extension.messages.at(-1).type, "save-error");
+  assert.deepEqual(await readFile(destination), original);
+});
+
+test("archive models cannot recover external weights outside the extracted package", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "viewer-zip-weights-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const { loadModelFile } = require("../dist/graph");
+  const native = await loadModelFile(
+    require.resolve("../media/tiny-llm.onnx"),
+    "tiny-llm.onnx",
+  );
+  const serialized = await native.serializeFiles(1024 * 1024, "escaped.data");
+  const bytes = Buffer.from(serialized.model);
+  const offset = bytes.indexOf("escaped.data");
+  assert.ok(offset >= 0);
+  bytes.write("../evil.data", offset);
+  const { ZipFile } = require("yazl");
+  const { pipeline } = require("node:stream/promises");
+  const { createWriteStream } = require("node:fs");
+  const archive = path.join(directory, "escape.ortpackage");
+  const zip = new ZipFile();
+  const writing = pipeline(zip.outputStream, createWriteStream(archive));
+  zip.addBuffer(bytes, "model.onnx");
+  zip.end();
+  await writing;
+  const extension = await openExtension(undefined, undefined, true);
+  t.after(() => extension.dispose());
+  await extension.openFile(archive);
+  assert.match(
+    extension.errors.at(-1),
+    /weights must remain inside the extracted package/,
+  );
+});
+
+test("native package saving chooses a ZIP container and refuses model-only bytes with an archive extension", async (t) => {
+  const directory = await mkdtemp(
+    path.join(tmpdir(), "viewer-zip-save-dialog-"),
+  );
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const extension = await openExtension("relu.onnx", undefined, true);
+  t.after(() => extension.dispose());
+  const destination = path.join(directory, "native.ortpackage");
+  extension.setSaveDestination(destination);
+  await extension.receive({
+    type: "save",
+    packageKind: "generic",
+    packageArchive: true,
+  });
+  assert.equal(extension.messages.at(-1).type, "save-info");
+  assert.deepEqual(extension.saveDialogs.at(-1).filters, {
+    "Runtime package ZIP": ["ortpackage"],
+  });
+  assert.equal(
+    (await readFile(destination)).subarray(0, 4).toString("hex"),
+    "504b0304",
+  );
+  const invalid = path.join(directory, "model-only.ortpackage");
+  await extension.receive({
+    type: "save",
+    location: invalid,
+    overwrite: false,
+  });
+  assert.match(extension.messages.at(-1).error, /Choose a package container/);
+  await assert.rejects(readFile(invalid), { code: "ENOENT" });
+});
+
+test("compiled runtime packages preserve EPContext models and provider assets", async (t) => {
+  const directory = await mkdtemp(
+    path.join(tmpdir(), "viewer-compiled-package-"),
+  );
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const source = path.join(directory, "source");
+  await mkdir(path.join(source, "provider"), { recursive: true });
+  execFileSync(process.platform === "win32" ? "python" : "python3", [
+    "-c",
+    `import sys
+import onnx_light.onnx as onnx
+import onnx_light.onnx.helper as oh
+node = oh.make_node("EPContext", ["x"], ["y"], domain="com.microsoft",
+                    ep_cache_context="provider/context.bin", embed_mode=0)
+model = oh.make_model(oh.make_graph([node], "compiled",
+    [oh.make_tensor_value_info("x", onnx.TensorProto.FLOAT, [1])],
+    [oh.make_tensor_value_info("y", onnx.TensorProto.FLOAT, [1])]),
+    opset_imports=[oh.make_opsetid("", 18), oh.make_opsetid("com.microsoft", 1)],
+    ir_version=9)
+onnx.save(model, sys.argv[1])`,
+    path.join(source, "model.onnx"),
+  ]);
+  const provider = Buffer.from("provider-owned compiled context fixture");
+  await writeFile(path.join(source, "provider", "context.bin"), provider);
+  const extension = await openExtension(undefined, undefined, true);
+  t.after(() => extension.dispose());
+  await extension.receive({
+    type: "open",
+    source: "local",
+    location: source,
+    password: "",
+  });
+  assert.equal(
+    extension.messages.findLast((message) => message.type === "graph").file
+      .package.kind,
+    "compiled",
+  );
+  const compiledFile = extension.messages.findLast(
+    (message) => message.type === "graph",
+  ).file;
+  assert.equal(compiledFile.package.genai, false);
+  assert.equal(compiledFile.package.compiled, true);
+  const destination = path.join(directory, "saved");
+  await extension.receive({
+    type: "save",
+    packageKind: "compiled",
+    location: destination,
+    overwrite: false,
+  });
+  assert.equal(extension.messages.at(-1).type, "save-info");
+  assert.deepEqual(
+    await readFile(path.join(destination, "provider", "context.bin")),
+    provider,
+  );
+  await extension.receive({
+    type: "open",
+    source: "local",
+    location: destination,
+    password: "",
+  });
+  assert.equal(
+    extension.messages.findLast((message) => message.type === "graph").graph
+      .nodes[0].opType,
+    "EPContext",
+  );
+  const archive = path.join(directory, "compiled.ortpackage");
+  await extension.receive({
+    type: "save",
+    packageKind: "compiled",
+    packageArchive: true,
+    location: archive,
+    overwrite: false,
+  });
+  assert.equal(extension.messages.at(-1).type, "save-info");
+  await extension.openFile(archive);
+  assert.equal(
+    extension.messages.findLast((message) => message.type === "graph").file
+      .package.kind,
+    "compiled",
+  );
+  const { PackageArchiveStore } = require("../dist/packageArchive");
+  const store = new PackageArchiveStore();
+  try {
+    const extracted = await store.resolve(archive);
+    assert.deepEqual(
+      await readFile(
+        path.join(extracted.directory, "default/provider/context.bin"),
+      ),
+      provider,
+    );
+  } finally {
+    await store.close();
+  }
+  await writeFile(
+    path.join(source, "genai_config.json"),
+    JSON.stringify({
+      model: { decoder: { filename: "model.onnx" } },
+    }),
+  );
+  await writeFile(path.join(source, "tokenizer.json"), "{}");
+  await extension.openFile(source);
+  const mixedFile = extension.messages.findLast(
+    (message) => message.type === "graph",
+  ).file;
+  assert.equal(mixedFile.package.genai, true);
+  assert.equal(mixedFile.package.compiled, true);
+});
+
+test("runtime package errors preserve source assets and never publish an incomplete package", async (t) => {
+  const directory = await mkdtemp(
+    path.join(tmpdir(), "viewer-package-errors-"),
+  );
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const source = path.join(directory, "source");
+  await mkdir(source);
+  await copyFile(
+    require.resolve("./models/relu.onnx"),
+    path.join(source, "model.onnx"),
+  );
+  const extension = await openExtension(undefined, undefined, true);
+  t.after(() => extension.dispose());
+  await extension.receive({
+    type: "open",
+    source: "local",
+    location: source,
+    password: "",
+  });
+  const existing = path.join(directory, "existing");
+  const alias = path.join(directory, "source-alias");
+  await symlink(source, alias, "junction");
+  await mkdir(existing);
+  await writeFile(path.join(existing, "keep.txt"), "preserve");
+  for (const options of [
+    { location: source },
+    { location: path.join(source, "child", "package") },
+    { location: path.join(alias, "child", "package") },
+    { location: existing },
+    { location: path.join(directory, "genai"), packageKind: "genai" },
+    { location: path.join(directory, "compiled"), packageKind: "compiled" },
+    { location: path.join(directory, "encrypted"), encrypted: true },
+  ]) {
+    await extension.receive({
+      type: "save",
+      packageKind: "generic",
+      overwrite: false,
+      ...options,
+    });
+    assert.equal(extension.messages.at(-1).type, "save-error");
+  }
+  assert.equal(
+    await readFile(path.join(existing, "keep.txt"), "utf8"),
+    "preserve",
+  );
+  assert.deepEqual(await readdir(source), ["model.onnx"]);
+  extension.failNextSaveRename();
+  await extension.receive({
+    type: "save",
+    packageKind: "generic",
+    location: path.join(directory, "failed"),
+    overwrite: false,
+  });
+  assert.equal(extension.messages.at(-1).type, "save-error");
+  assert.equal(
+    (await readdir(directory)).some(
+      (name) => name.startsWith(".onnx-runtime-package-") || name === "failed",
+    ),
+    false,
+  );
+  await symlink(
+    path.join(source, "model.onnx"),
+    path.join(source, "linked.onnx"),
+  );
+  await extension.receive({
+    type: "inspect-runtime-package",
+    requestId: 1,
+    location: source,
+  });
+  assert.equal(extension.messages.at(-1).type, "runtime-package-error");
+  assert.match(extension.messages.at(-1).error, /symbolic links/);
+  await rm(path.join(source, "linked.onnx"));
+  await writeFile(
+    path.join(source, "genai_config.json"),
+    JSON.stringify({ model: { decoder: { filename: "../outside.onnx" } } }),
+  );
+  await extension.receive({
+    type: "inspect-runtime-package",
+    requestId: 2,
+    location: source,
+  });
+  assert.match(extension.messages.at(-1).error, /inside the package directory/);
+});
+
+test("ORT save reports SDK errors and rejects pipeline containers without publishing a file", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "viewer-ort-errors-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  for (const [name, error] of [
+    [
+      "functions.onnx",
+      /ORT serialization: model-local functions are unsupported/,
+    ],
+    ["tiny.pipe-onnx", /single model.*PipelineProto/],
+  ]) {
+    const extension = await openExtension(name, undefined, true);
+    t.after(() => extension.dispose());
+    await extension.receive({
+      type: "save",
+      format: "ort",
+      location: path.join(directory, "copy.ort"),
+      overwrite: false,
+    });
+    assert.equal(extension.messages.at(-1).type, "save-error");
+    assert.match(extension.errors.at(-1), error);
+    assert.deepEqual(extension.writes, []);
+  }
+  assert.deepEqual(await readdir(directory), []);
+});
+
 test("rejects invalid external file sizes and the unavailable encrypted external mode before writing", async () => {
   const extension = await openExtension();
   for (const size of [
@@ -5707,6 +6344,16 @@ test("rejects invalid external file sizes and the unavailable encrypted external
     maxExternalFileSize: 1024,
   });
   assert.match(extension.errors.at(-1), /onnx-light\/issues\/5533/);
+  for (const options of [
+    { format: "invalid" },
+    { format: "ort", encrypted: true },
+    { format: "ort", storage: "external", maxExternalFileSize: 1024 },
+    { format: "ort", storage: "reuse", maxExternalFileSize: 1024 },
+  ]) {
+    await extension.receive({ type: "save", ...options });
+    assert.equal(extension.messages.at(-1).type, "save-error");
+    assert.match(extension.errors.at(-1), /save format|embedded, unencrypted/);
+  }
   assert.deepEqual(extension.writes, []);
   assert.deepEqual(extension.passwordPrompts, []);
 });

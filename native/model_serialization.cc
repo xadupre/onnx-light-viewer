@@ -38,12 +38,14 @@ public:
   SerializeModelWorker(Napi::Env env, std::shared_ptr<StoredModel> source,
                        std::optional<std::string> password, std::string file_path,
                        size_t max_external_file_size = 0, std::string external_file_prefix = "",
-                       bool reuse_weights = false, bool include_rewritings = false)
+                       bool reuse_weights = false, bool include_rewritings = false,
+                       ol::SerializeFormat format = ol::SerializeFormat::kOnnx)
       : Napi::AsyncWorker(env), deferred_(Napi::Promise::Deferred::New(env)),
         source_(include_rewritings && source->fusion_base ? source->fusion_base : source),
         snapshot_(source_->model->SharedCopy()), password_(std::move(password)),
         file_path_(std::move(file_path)), max_external_file_size_(max_external_file_size),
-        external_file_prefix_(std::move(external_file_prefix)), reuse_weights_(reuse_weights) {
+        external_file_prefix_(std::move(external_file_prefix)), reuse_weights_(reuse_weights),
+        format_(format) {
     if (!include_rewritings) {
       snapshot_.clear_rewritings();
     } else if (!source->fusion_plans.empty()) {
@@ -209,8 +211,11 @@ public:
 #else
         throw std::runtime_error("This native build does not support encrypted ONNX models.");
 #endif
-      } else if (!snapshot_.SerializeToString(bytes_)) {
-        throw std::runtime_error("Could not serialize the ONNX model.");
+      } else {
+        ol::SerializeOptions options;
+        options.format = format_;
+        if (!snapshot_.SerializeToString(bytes_, options))
+          throw std::runtime_error("Could not serialize the model.");
       }
     } catch (const std::exception &error) {
       SetError(error.what());
@@ -252,6 +257,7 @@ private:
   std::string external_file_prefix_;
   std::unordered_map<std::string, std::string> external_files_;
   bool reuse_weights_;
+  ol::SerializeFormat format_;
 };
 
 } // namespace
@@ -328,28 +334,37 @@ void AddSerializationMethods(Napi::Env env, Napi::Object result,
           return call.Env().Undefined();
         }
       }));
-  result.Set("serialize",
-             Napi::Function::New(env, [model](const Napi::CallbackInfo &call) -> Napi::Value {
-               try {
-                 if (call.Length() > 3 || (!call[1].IsUndefined() && !call[1].IsString()) ||
-                     (!call[2].IsUndefined() && !call[2].IsBoolean()))
-                   throw std::runtime_error("Expected an optional password and source file path.");
-                 const auto file_path =
-                     call[1].IsString() ? call[1].As<Napi::String>().Utf8Value() : model->file_path;
-                 if (file_path.find('\0') != std::string::npos)
-                   throw std::runtime_error("Invalid source model file path.");
-                 auto worker = std::make_unique<SerializeModelWorker>(
-                     call.Env(), model, ReadPassword(call[0]), file_path, 0, "", false,
-                     call[2].IsBoolean() && call[2].As<Napi::Boolean>().Value());
-                 const auto promise = worker->Promise();
-                 worker->Queue();
-                 worker.release();
-                 return promise;
-               } catch (const std::exception &error) {
-                 Napi::Error::New(call.Env(), error.what()).ThrowAsJavaScriptException();
-                 return call.Env().Undefined();
-               }
-             }));
+  result.Set(
+      "serialize", Napi::Function::New(env, [model](const Napi::CallbackInfo &call) -> Napi::Value {
+        try {
+          if (call.Length() > 4 || (!call[1].IsUndefined() && !call[1].IsString()) ||
+              (!call[2].IsUndefined() && !call[2].IsBoolean()) ||
+              (!call[3].IsUndefined() && !call[3].IsString()))
+            throw std::runtime_error(
+                "Expected an optional password, source file path, rewriting choice and format.");
+          const auto format = call[3].IsString() ? call[3].As<Napi::String>().Utf8Value() : "onnx";
+          if (format != "onnx" && format != "ort")
+            throw std::runtime_error("Expected ONNX or ORT serialization format.");
+          const auto password = ReadPassword(call[0]);
+          if (format == "ort" && password)
+            throw std::runtime_error("ORT format does not support native model encryption.");
+          const auto file_path =
+              call[1].IsString() ? call[1].As<Napi::String>().Utf8Value() : model->file_path;
+          if (file_path.find('\0') != std::string::npos)
+            throw std::runtime_error("Invalid source model file path.");
+          auto worker = std::make_unique<SerializeModelWorker>(
+              call.Env(), model, password, file_path, 0, "", false,
+              call[2].IsBoolean() && call[2].As<Napi::Boolean>().Value(),
+              format == "ort" ? ol::SerializeFormat::kOrtFlatbuffers : ol::SerializeFormat::kOnnx);
+          const auto promise = worker->Promise();
+          worker->Queue();
+          worker.release();
+          return promise;
+        } catch (const std::exception &error) {
+          Napi::Error::New(call.Env(), error.what()).ThrowAsJavaScriptException();
+          return call.Env().Undefined();
+        }
+      }));
 }
 
 } // namespace onnx_light_viewer

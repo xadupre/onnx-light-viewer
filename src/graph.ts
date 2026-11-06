@@ -548,11 +548,13 @@ export interface NativeModel {
    * sourceFilePath supplies the new location after a source file is moved into a cache.
    * includeRewritings saves the canonical pre-fusion model and a concatenated plan.
    * Otherwise the materialized current graph is saved without rewriting variants.
+   * format selects ONNX (default) or an unencrypted, embedded-weight ORT FlatBuffer.
    */
   serialize(
     password?: string,
     sourceFilePath?: string,
     includeRewritings?: boolean,
+    format?: "onnx" | "ort",
   ): Promise<Uint8Array>;
   /** Partitions a plain copy; optionally retains unchanged source external references. */
   serializeFiles(
@@ -734,7 +736,7 @@ export function updateModelFunctionHistory(
 /**
  * One-shot projection, skipping raw tensor bytes unless inference is requested.
  * Use loadModel instead when inferred value_info must survive subsequent calls.
- * @param bytes Serialized ONNX ModelProto or PipelineProto bytes.
+ * @param bytes Serialized ONNX protobuf, ORT FlatBuffer or PipelineProto bytes.
  * @param fileName Display label; a .pipe-onnx suffix selects PipelineProto.
  * @param inferShapes Whether to infer shapes before projecting the root graph.
  * @returns Root graph snapshot without a retained native handle.
@@ -752,7 +754,7 @@ export function decodeGraph(
 /**
  * ModelProto borrows tensor payloads; PipelineProto currently owns parsed copies.
  * Do not mutate borrowed buffers while the handle is in use.
- * @param bytes Serialized ONNX ModelProto or PipelineProto bytes.
+ * @param bytes Serialized ONNX protobuf, ORT FlatBuffer or PipelineProto bytes.
  * @param fileName Display label; a .pipe-onnx suffix selects PipelineProto, not a file to open.
  * @returns A handle for repeated graph projection and analysis.
  */

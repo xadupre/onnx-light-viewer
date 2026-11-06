@@ -32,6 +32,20 @@ namespace {
 
 constexpr int64_t previewPayloadThreshold = 256; // Retain up to 15 complex128 elements.
 
+bool IsOrtModel(const uint8_t *bytes, size_t size) {
+  return size >= 8 && std::equal(bytes + 4, bytes + 8, "ORTM");
+}
+
+ol::SerializeFormat FileModelFormat(ol::utils::FdReadStream &stream) {
+  const void *header = nullptr;
+  int size = 0;
+  if (!stream.Next(&header, &size))
+    return ol::SerializeFormat::kOnnx;
+  const bool ort = IsOrtModel(static_cast<const uint8_t *>(header), size);
+  stream.BackUp(size);
+  return ort ? ol::SerializeFormat::kOrtFlatbuffers : ol::SerializeFormat::kOnnx;
+}
+
 enum class ProtoKind {
   Pipeline,
   Model,
@@ -483,11 +497,16 @@ public:
       model_->source_time = std::filesystem::last_write_time(path);
       ol::ParseOptions options;
       options.raw_data_threshold = previewPayloadThreshold;
-      PayloadSkippingStream stream(source, static_cast<uint64_t>(options.raw_data_threshold));
-      ReadModel(*model_->model, stream, options);
-      ApplySkippedPayloads(*model_->model, stream.skipped());
-      model_->skipped = stream.skipped();
-      model_->has_training_info = stream.has_training_info();
+      options.format = FileModelFormat(source);
+      if (options.format == ol::SerializeFormat::kOrtFlatbuffers) {
+        ReadModel(*model_->model, source, options);
+      } else {
+        PayloadSkippingStream stream(source, static_cast<uint64_t>(options.raw_data_threshold));
+        ReadModel(*model_->model, stream, options);
+        ApplySkippedPayloads(*model_->model, stream.skipped());
+        model_->skipped = stream.skipped();
+        model_->has_training_info = stream.has_training_info();
+      }
       if (std::filesystem::file_size(path) != model_->source_size ||
           std::filesystem::last_write_time(path) != model_->source_time)
         throw std::runtime_error("The source model changed while loading. Reopen it.");
@@ -606,6 +625,12 @@ void ReadModel(ol::ModelProto &model, ol::utils::BinaryStream &stream, ol::Parse
   }
 }
 
+void ReadModel(ol::ModelProto &model, ol::utils::FdReadStream &stream, ol::ParseOptions options) {
+  if (options.format == ol::SerializeFormat::kOnnx)
+    options.format = FileModelFormat(stream);
+  ReadModel(model, static_cast<ol::utils::BinaryStream &>(stream), options);
+}
+
 /** With raw data retained, the caller must keep bytes alive for borrowed fields. */
 void ReadModel(ol::ModelProto &model, const Napi::Uint8Array &bytes, bool skip_raw_data) {
   ol::utils::StringStream stream(bytes.Data(), bytes.ByteLength());
@@ -613,6 +638,8 @@ void ReadModel(ol::ModelProto &model, const Napi::Uint8Array &bytes, bool skip_r
   options.skip_raw_data = skip_raw_data;
   options.raw_data_threshold = previewPayloadThreshold;
   options.no_copy = !skip_raw_data;
+  if (IsOrtModel(bytes.Data(), bytes.ByteLength()))
+    options.format = ol::SerializeFormat::kOrtFlatbuffers;
   ReadModel(model, stream, options);
 }
 
@@ -890,7 +917,8 @@ Napi::Value LoadModel(const Napi::CallbackInfo &info) {
           model->has_training_info);
     } else {
       const auto bytes = model->source.Value();
-      model->has_training_info = HasTrainingInfo(bytes.Data(), bytes.ByteLength());
+      model->has_training_info = !IsOrtModel(bytes.Data(), bytes.ByteLength()) &&
+                                 HasTrainingInfo(bytes.Data(), bytes.ByteLength());
       ReadModel(*model->model, model->source.Value(), false);
     }
     return ModelHandle(env, model);

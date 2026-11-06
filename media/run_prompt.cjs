@@ -5,7 +5,7 @@ const {
   writeSync,
 } = require("node:fs");
 const { execFileSync } = require("node:child_process");
-const { dirname, isAbsolute, join, resolve } = require("node:path");
+const { isAbsolute, join, resolve } = require("node:path");
 const { createInterface } = require("node:readline");
 const native = require("../dist/native/onnx_light_viewer.node");
 const { genaiSessionOptions } = require("./prompt-settings.cjs");
@@ -16,7 +16,7 @@ const emit = (event) => writeSync(1, `\x1e${JSON.stringify(event)}\n`);
 function run(input, output, sessionKey) {
   const request = JSON.parse(readFileSync(input, "utf8"));
   if (request.engine === "onnxruntime-genai") {
-    const directory = dirname(request.modelPath);
+    const directory = request.source;
     const config = JSON.parse(
       readFileSync(join(directory, "genai_config.json"), "utf8"),
     );
