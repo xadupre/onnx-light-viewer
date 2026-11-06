@@ -634,7 +634,12 @@ export class PipelineModel implements NativeModel {
     password?: string,
     sourceFilePath?: string,
     includeRewritings = false,
+    format: "onnx" | "ort" = "onnx",
   ): Promise<Uint8Array> => {
+    if (format !== "onnx")
+      throw new Error(
+        "ORT format saves a single model, not a PipelineProto container.",
+      );
     if (password !== undefined)
       throw new Error(
         "PipelineProto encryption is not supported by onnx-light.",

@@ -230,8 +230,8 @@ public:
     const auto settings = request.Get("sessionSettings").As<Napi::Object>();
     if (engine == "onnxruntime-genai") {
       OgaConfig *raw_config = nullptr;
-      api.Check(
-          api.OgaCreateConfig(ModelFilePath(path).parent_path().string().c_str(), &raw_config));
+      api.Check(api.OgaCreateConfig(request.Get("source").As<Napi::String>().Utf8Value().c_str(),
+                                    &raw_config));
       auto config = Own(raw_config, api.OgaDestroyConfig);
       api.Check(api.OgaConfigOverlay(
           config.get(), request.Get("genaiOverlay").As<Napi::String>().Utf8Value().c_str()));

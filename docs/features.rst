@@ -38,7 +38,7 @@ subgraphs, without adding another header row.
 Opening models
 ^^^^^^^^^^^^^^
 
-Open local ``.onnx`` and ``.pipe-onnx`` files, bundled demos or public Hugging Face
+Open local ``.onnx``, ``.ort`` and ``.pipe-onnx`` files, bundled demos or public Hugging Face
 models with persistent caching. See :doc:`features/opening_models`.
 No authentication or automatic external weight downloads.
 Buttons below **Model path** offer the VS Code file picker and an in-app folder
@@ -65,6 +65,51 @@ These checks do not certify runtime operator support.
    :width: 100%
 
    Identify a usable export before loading it; this screenshot uses a tiny test model.
+
+ORT models and runtime packages
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+**A model format is not a package container.** ``.ort`` contains one ORT
+FlatBuffer model. **Open** automatically identifies the expected format from
+the filename: ONNX protobuf, ORT FlatBuffer, pipeline, encrypted model or package.
+ZIP archives (``.ortpackage`` or ``.zip``) and directories are supported,
+including packages with ``manifest.json``, external components, variants and
+shared assets.
+Folders are identified as packages without a format selector.
+**Inspect package** lists member models; a package with several models may
+require choosing one. The viewer does not
+select hardware-compatible variants or apply manifest session/provider options.
+Native runtimes consume the extracted directory, not the ZIP itself.
+Package manifests, variants and shared-asset resolution belong to the viewer;
+onnx-light reads and writes the contained models.
+
+.. figure:: _static/feature-package-open.png
+   :alt: Open package ZIP controls showing an example .ortpackage and its inspected default/model.ort member.
+   :width: 280px
+
+   Inspect an archive and choose its model without replacing the current graph.
+
+**Save → What to save** chooses a generic, GenAI or compiled EPContext package.
+Choose **ZIP archive (.ortpackage)** or **Directory** independently of the
+model serialization: ONNX protobuf, ORT FlatBuffer, or a pipeline.
+New archives contain a version-1 manifest; existing manifests and other assets
+are preserved, with references updated when the selected model changes format.
+GenAI and compiled packages require existing configuration/provider assets;
+Save does not generate tokenizers or compile providers.
+
+.. figure:: _static/feature-package-save.png
+   :alt: Save controls selecting a generic .ortpackage ZIP containing an ORT FlatBuffer model, with encryption and weight reuse unavailable.
+   :width: 280px
+
+   Select the archive container and model serialization separately.
+
+ZIP reading/writing is streamed and supports ZIP64. Extraction checks member
+paths, file types and checksums; links, escaping weight paths and encrypted ZIPs
+fail explicitly. Extracted assets remain available for recovery and running
+actions until the panel closes. Save requires a new destination and leaves
+the original archive unchanged.
+GenAI generation resolves shared model references through an in-memory
+configuration overlay, without modifying the original configuration or assets.
 
 Backend catalog
 ^^^^^^^^^^^^^^^

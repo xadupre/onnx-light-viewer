@@ -20,6 +20,7 @@ private:
 };
 
 void ReadModel(ol::ModelProto &model, ol::utils::BinaryStream &stream, ol::ParseOptions options);
+void ReadModel(ol::ModelProto &model, ol::utils::FdReadStream &stream, ol::ParseOptions options);
 void ReadModel(ol::ModelProto &model, const Napi::Uint8Array &bytes, bool skip_raw_data);
 std::optional<std::string> ReadPassword(const Napi::Value &value);
 ol::TensorProto *FindTensor(ol::ModelProto &model, const SkippedTensorPayload &payload);

@@ -64,17 +64,43 @@ import {
   promptPipelineInfo,
   type PromptPipelineChecks,
 } from "./promptPipeline";
+import {
+  inspectRuntimePackage,
+  assertPackageWeightLocations,
+  runtimePackageModel,
+  runtimePackagePromptDirectory,
+  runtimePackagePromptConfiguration,
+  saveRuntimePackage,
+  type RuntimePackage,
+  type RuntimePackageKind,
+} from "./runtimePackage";
+import { PackageArchiveStore } from "./packageArchive";
 
 const viewType = "onnxLightViewer.graph";
 const panelSessions = new WeakMap<vscode.WebviewPanel, () => void>();
 
-function pickLocalModel() {
+function pickLocalModel(directory = false) {
   return vscode.window.showOpenDialog({
     canSelectMany: false,
-    filters: {
-      "ONNX models and pipelines": ["onnx", "enc", "pipe-onnx"],
-    },
-    openLabel: "Open ONNX graph",
+    canSelectFolders: directory,
+    canSelectFiles: !directory,
+    ...(directory
+      ? {}
+      : {
+          filters: {
+            "ONNX/ORT models, packages and pipelines": [
+              "onnx",
+              "ort",
+              "ortpackage",
+              "zip",
+              "enc",
+              "pipe-onnx",
+            ],
+          },
+        }),
+    openLabel: directory
+      ? "Choose runtime package directory"
+      : "Open model or package archive",
   });
 }
 
@@ -138,6 +164,10 @@ interface LoadedModel {
   /** Original source ownership survives materializing or removing external data. */
   sourceWeightLocations?: readonly string[];
   fileName?: string;
+  sourcePackage?: RuntimePackage;
+  packageKind?: RuntimePackageKind;
+  packageCompiled?: boolean;
+  fileFormat?: "onnx" | "ort" | "pipeline";
 }
 
 async function modelFiles(model: LoadedModel, native: NativeModel) {
@@ -183,7 +213,7 @@ async function modelFiles(model: LoadedModel, native: NativeModel) {
 
 function copyFileName(model: LoadedModel, encrypted = false): string {
   const extension = model.graph.pipeline ? "pipe-onnx" : "onnx";
-  return `${(model.fileName ?? `model.${extension}`).replace(/\.(?:onnx(?:\.enc)?|pipe-onnx)$/i, "")}-copy.${extension}${encrypted ? ".enc" : ""}`;
+  return `${(model.fileName ?? `model.${extension}`).replace(/\.(?:onnx(?:\.enc)?|ort|pipe-onnx)$/i, "")}-copy.${extension}${encrypted ? ".enc" : ""}`;
 }
 
 /**
@@ -269,6 +299,10 @@ export function activate(context: vscode.ExtensionContext): void {
       (uri: vscode.Uri) =>
         vscode.commands.executeCommand("vscode.openWith", uri, viewType),
     ),
+    vscode.commands.registerCommand(
+      "onnxLightViewer.openPackage",
+      (uri: vscode.Uri) => openViewer(uri),
+    ),
     vscode.commands.registerCommand("onnxLightViewer.showLogs", () => {
       if (current) {
         current.panel.reveal();
@@ -329,8 +363,44 @@ async function readGraph(
   log: ActionLog,
   fileName = posix.basename(uri.path),
   suppliedPassword?: string,
+  selectedPackageModel?: unknown,
+  archives?: PackageArchiveStore,
 ): Promise<LoadedModel | undefined> {
   return log.run(`Load model: ${uri.path}`, async (id) => {
+    let sourcePackage: RuntimePackage | undefined;
+    if (
+      uri.scheme === "file" &&
+      ((await stat(uri.fsPath)).isDirectory() ||
+        /\.(?:ortpackage|zip)$/i.test(uri.path))
+    ) {
+      const location = archives
+        ? await archives.resolve(uri.fsPath)
+        : { directory: uri.fsPath };
+      sourcePackage = {
+        ...(await inspectRuntimePackage(location.directory)),
+        ...("archivePath" in location
+          ? { archivePath: location.archivePath }
+          : {}),
+      };
+      if (!selectedPackageModel && !sourcePackage.defaultModel) {
+        const selection = await vscode.window.showQuickPick(
+          sourcePackage.models.map((name) => ({ label: name })),
+          { title: "Choose a model inside the runtime package" },
+        );
+        if (!selection) {
+          log.record("CANCELLED", `Load model: ${uri.path}`, id);
+          return;
+        }
+        selectedPackageModel = selection.label;
+      }
+      uri = vscode.Uri.file(
+        runtimePackageModel(sourcePackage, selectedPackageModel),
+      );
+      fileName = posix.basename(uri.path);
+    } else if (selectedPackageModel !== undefined)
+      throw new Error(
+        "A member model can only be selected for a runtime package archive or directory.",
+      );
     const source = { uri };
     let bytes: Uint8Array | undefined;
     let header: Uint8Array;
@@ -369,13 +439,39 @@ async function readGraph(
       ? () => loadModel(retainedBytes, fileName, password)
       : () => loadModelFile(source.uri.fsPath, fileName, password);
     const native = await reload();
+    if (sourcePackage?.archivePath)
+      assertPackageWeightLocations(
+        sourcePackage,
+        uri.fsPath,
+        native.externalDataLocations(),
+      );
+    const graph = native.graph();
+    const packageCompiled =
+      !!sourcePackage &&
+      graph.nodes.some((node) => node.opType === "EPContext");
     return {
-      graph: native.graph(),
+      graph,
       native,
       reload,
       source,
       sourceWeightLocations: native.externalDataLocations(),
       fileName,
+      sourcePackage,
+      packageCompiled,
+      packageKind: sourcePackage
+        ? sourcePackage.genai
+          ? "genai"
+          : packageCompiled
+            ? "compiled"
+            : "generic"
+        : undefined,
+      fileFormat:
+        header.length >= 8 &&
+        Buffer.from(header.subarray(4, 8)).toString() === "ORTM"
+          ? "ort"
+          : /\.pipe-onnx$/i.test(fileName)
+            ? "pipeline"
+            : "onnx",
     };
   });
 }
@@ -507,6 +603,7 @@ async function configurePanel(
 ): Promise<void> {
   panelSessions.get(panel)?.();
   let active = true;
+  const archives = new PackageArchiveStore();
   const postMessage = (message: unknown) =>
     active ? panel.webview.postMessage(message) : Promise.resolve(false);
   const mediaRoot = vscode.Uri.joinPath(context.extensionUri, "media");
@@ -611,7 +708,7 @@ async function configurePanel(
   });
   const releaseRunSession = () => {
     runController?.abort();
-    void runSession
+    return runSession
       .close()
       .catch((error: unknown) =>
         log.record(
@@ -681,10 +778,12 @@ async function configurePanel(
     return model;
   };
   const directoryUri = () =>
-    model?.source
-      ? vscode.Uri.joinPath(model.source.uri, "..")
-      : (vscode.workspace.workspaceFolders?.[0]?.uri ??
-        vscode.Uri.file(homedir()));
+    model?.sourcePackage?.archivePath
+      ? vscode.Uri.file(dirname(model.sourcePackage.archivePath))
+      : model?.source
+        ? vscode.Uri.joinPath(model.source.uri, "..")
+        : (vscode.workspace.workspaceFolders?.[0]?.uri ??
+          vscode.Uri.file(homedir()));
   const saveDirectoryUri = () => {
     const root = vscode.workspace.workspaceFolders?.[0]?.uri;
     return root
@@ -871,6 +970,21 @@ async function configurePanel(
       ...(fusionRequestId === undefined ? {} : { fusionRequestId }),
       ...(selectedNodes ? { selectedNodes } : {}),
       file: {
+        format: current.fileFormat,
+        ...(current.sourcePackage
+          ? {
+              package: {
+                directory:
+                  current.sourcePackage.archivePath ??
+                  current.sourcePackage.directory,
+                archive: !!current.sourcePackage.archivePath,
+                kind: current.packageKind,
+                genai: current.sourcePackage.genai,
+                compiled: current.packageCompiled === true,
+                models: current.sourcePackage.models,
+              },
+            }
+          : {}),
         fusionCount: current.fusionCount ?? 0,
         fusionHistory: current.fusionHistory ?? [],
         pendingRewritings: current.rewritingQueue?.operations ?? [],
@@ -919,7 +1033,11 @@ async function configurePanel(
       history: historyEntries("backend", String(selection.id)),
     };
   };
-  const messages = panel.webview.onDidReceiveMessage(
+  const receiveMessages = <T>(handler: (message: T) => Promise<void>) =>
+    panel.webview.onDidReceiveMessage((message: T) =>
+      active ? archives.use(() => handler(message)) : Promise.resolve(),
+    );
+  const messages = receiveMessages(
     async (
       message: {
         type?: string;
@@ -930,6 +1048,9 @@ async function configurePanel(
         index?: unknown;
         engine?: unknown;
         asPipeline?: unknown;
+        packageModel?: unknown;
+        packageKind?: unknown;
+        packageArchive?: unknown;
         nodeIndex?: unknown;
         nodes?: unknown;
         actionId?: string;
@@ -1692,9 +1813,13 @@ async function configurePanel(
             throw new Error(
               "Open a locally saved converted language model first.",
             );
+          const packageDirectory = owner.sourcePackage
+            ? (runtimePackagePromptDirectory(owner.sourcePackage, uri.fsPath) ??
+              owner.sourcePackage.directory)
+            : undefined;
           if (message.type === "prompt-info") {
             promptResult = undefined;
-            const info = await promptInfo(uri.fsPath);
+            const info = await promptInfo(uri.fsPath, packageDirectory);
             if (isCurrent())
               await postMessage({
                 type: "prompt-info",
@@ -1702,6 +1827,12 @@ async function configurePanel(
                 info,
               });
           } else {
+            const genaiConfiguration = owner.sourcePackage
+              ? await runtimePackagePromptConfiguration(
+                  owner.sourcePackage,
+                  uri.fsPath,
+                )
+              : undefined;
             const result = await log.run("Run prompt", () =>
               runPrompt(
                 uri.fsPath,
@@ -1742,6 +1873,8 @@ async function configurePanel(
                       lifecycle,
                     });
                 },
+                packageDirectory,
+                genaiConfiguration,
               ),
             );
             if (isCurrent()) {
@@ -2082,7 +2215,14 @@ async function configurePanel(
                   actionId: message.actionId,
                   stage: "Opening exported model",
                 });
-                const loaded = await readGraph(vscode.Uri.file(selected), log);
+                const loaded = await readGraph(
+                  vscode.Uri.file(selected),
+                  log,
+                  undefined,
+                  undefined,
+                  undefined,
+                  archives,
+                );
                 controller.signal.throwIfAborted();
                 if (!active) return;
                 if (model !== originalModel || graphRevision !== revision)
@@ -2398,23 +2538,62 @@ async function configurePanel(
         } finally {
           if (hubSearch === controller) hubSearch = undefined;
         }
+      } else if (message?.type === "inspect-runtime-package") {
+        try {
+          if (
+            typeof message.requestId !== "number" ||
+            !Number.isSafeInteger(message.requestId)
+          )
+            throw new Error("Invalid package inspection request.");
+          const uri = locationUri(message.location);
+          if (uri.scheme !== "file")
+            throw new Error("Choose a local package archive or directory.");
+          const location = await archives.resolve(uri.fsPath);
+          const packageInfo = {
+            ...(await inspectRuntimePackage(location.directory)),
+            ...(location.archivePath
+              ? { archivePath: location.archivePath }
+              : {}),
+          };
+          await postMessage({
+            type: "runtime-package-info",
+            requestId: message.requestId,
+            package: packageInfo,
+          });
+        } catch (error) {
+          await postMessage({
+            type: "runtime-package-error",
+            requestId: message.requestId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
       } else if (
         message?.type === "select-model-path" ||
+        message?.type === "select-model-directory" ||
         message?.type === "paste-model-path"
       ) {
         try {
           let location: string | null;
+          let directory: boolean | undefined;
           if (message.type === "paste-model-path") {
             location = await vscode.env.clipboard.readText();
             if (!location) throw new Error("The clipboard is empty.");
           } else {
-            const selection = await pickLocalModel();
+            const selection = await pickLocalModel(
+              message.type === "select-model-directory",
+            );
             location = selection?.[0] ? locationText(selection[0]) : null;
+            if (selection?.[0])
+              directory = !!(
+                (await vscode.workspace.fs.stat(selection[0])).type &
+                vscode.FileType.Directory
+              );
           }
           await postMessage({
             type: "model-path-selected",
             requestId: message.requestId,
             location,
+            ...(directory === undefined ? {} : { directory }),
           });
         } catch (error) {
           await postMessage({
@@ -2470,7 +2649,7 @@ async function configurePanel(
               .filter(
                 ([name, type]) =>
                   type & vscode.FileType.Directory ||
-                  /\.(?:onnx|enc|pipe-onnx)$/i.test(name),
+                  /\.(?:onnx|ort|ortpackage|zip|enc|pipe-onnx)$/i.test(name),
               )
               .map(([name, type]) => ({
                 name,
@@ -2568,6 +2747,8 @@ async function configurePanel(
                   log,
                   undefined,
                   inline ? String(message.password) : undefined,
+                  message.packageModel,
+                  archives,
                 );
                 if (!loadedModel) {
                   log.record("CANCELLED", "Open ONNX model", id);
@@ -2578,7 +2759,9 @@ async function configurePanel(
                   name: posix.basename(selected.path),
                   history: historyEntries(
                     "local",
-                    locationText(selected),
+                    loadedModel.sourcePackage?.archivePath ??
+                      loadedModel.sourcePackage?.directory ??
+                      locationText(selected),
                     locationText(vscode.Uri.joinPath(selected, "..")),
                   ),
                 };
@@ -3687,7 +3870,7 @@ async function configurePanel(
         const requestedModel = model;
         try {
           await log.run(
-            "Save ONNX model",
+            "Save model or package",
             async (id) => {
               const current = requireModel();
               if (
@@ -3696,15 +3879,46 @@ async function configurePanel(
                   message.storage !== "external" &&
                   message.storage !== "reuse") ||
                 (message.encrypted !== undefined &&
-                  typeof message.encrypted !== "boolean")
+                  typeof message.encrypted !== "boolean") ||
+                (message.format !== undefined &&
+                  message.format !== "onnx" &&
+                  message.format !== "ort")
               )
                 throw new Error("Invalid model save format.");
+              if (
+                message.packageKind !== undefined &&
+                message.packageKind !== "generic" &&
+                message.packageKind !== "genai" &&
+                message.packageKind !== "compiled"
+              )
+                throw new Error("Invalid runtime package type.");
+              if (
+                message.packageArchive !== undefined &&
+                (typeof message.packageArchive !== "boolean" ||
+                  message.packageKind === undefined)
+              )
+                throw new Error("Invalid runtime package archive choice.");
+              const packageKind: RuntimePackageKind | undefined =
+                message.packageKind;
               const format = {
                 external:
                   message.storage === "external" || message.storage === "reuse",
                 reuse: message.storage === "reuse",
                 encrypted: message.encrypted === true,
+                ort: message.format === "ort",
               };
+              if (packageKind && (format.encrypted || format.reuse))
+                throw new Error(
+                  "Runtime packages require unencrypted, self-contained model and weight files.",
+                );
+              if (format.ort && current.graph.pipeline)
+                throw new Error(
+                  "ORT format saves a single model, not a PipelineProto container.",
+                );
+              if (format.ort && (format.external || format.encrypted))
+                throw new Error(
+                  "ORT saving requires embedded, unencrypted weights.",
+                );
               if (current.graph.pipeline && format.encrypted)
                 throw new Error(
                   "PipelineProto encryption is not supported by onnx-light.",
@@ -3728,7 +3942,7 @@ async function configurePanel(
                   "Choose a positive, safe integer maximum external weight file size.",
                 );
               const cancelled = () => {
-                log.record("CANCELLED", "Save ONNX model", id);
+                log.record("CANCELLED", "Save model or package", id);
               };
               let password: string | undefined;
               const inline = message.location !== undefined;
@@ -3769,7 +3983,14 @@ async function configurePanel(
                 if (confirmation !== password)
                   throw new Error("Passwords do not match.");
               }
-              const fileName = copyFileName(current, format.encrypted);
+              const fileName = packageKind
+                ? copyFileName(current).replace(
+                    /\.(?:onnx|pipe-onnx)$/i,
+                    "-package",
+                  ) + (message.packageArchive === false ? "" : ".ortpackage")
+                : format.ort
+                  ? copyFileName(current).replace(/\.onnx$/i, ".ort")
+                  : copyFileName(current, format.encrypted);
               if (inline && typeof message.overwrite !== "boolean")
                 throw new Error("Invalid overwrite choice.");
               if (!inline) {
@@ -3787,13 +4008,17 @@ async function configurePanel(
               const destination = inline
                 ? locationUri(message.location)
                 : await vscode.window.showSaveDialog({
-                    title: "Save ONNX model copy",
-                    saveLabel: "Save model copy",
-                    filters: format.encrypted
-                      ? { "Encrypted ONNX models": ["enc"] }
-                      : current.graph.pipeline
-                        ? { "ONNX pipelines": ["pipe-onnx"] }
-                        : { "ONNX models": ["onnx"] },
+                    title: "Save model or package copy",
+                    saveLabel: "Save copy",
+                    filters: packageKind
+                      ? { "Runtime package ZIP": ["ortpackage"] }
+                      : format.ort
+                        ? { "ONNX Runtime models": ["ort"] }
+                        : format.encrypted
+                          ? { "Encrypted ONNX models": ["enc"] }
+                          : current.graph.pipeline
+                            ? { "ONNX pipelines": ["pipe-onnx"] }
+                            : { "ONNX models": ["onnx"] },
                     defaultUri: vscode.Uri.joinPath(
                       saveDirectoryUri(),
                       fileName,
@@ -3801,10 +4026,28 @@ async function configurePanel(
                   });
               if (!destination || !active || model !== current)
                 return cancelled();
+              if (
+                packageKind &&
+                (destination.scheme !== "file" ||
+                  (inline && message.overwrite !== false))
+              )
+                throw new Error(
+                  "Save packages to a new local archive or directory; existing packages are never replaced.",
+                );
+              if (
+                !packageKind &&
+                /\.(?:ortpackage|zip)$/i.test(destination.path)
+              )
+                throw new Error(
+                  "Choose a package container to save a ZIP archive.",
+                );
               const source = current.source?.uri;
               const originalSources = source
                 ? [
                     source,
+                    ...(current.sourcePackage?.archivePath
+                      ? [vscode.Uri.file(current.sourcePackage.archivePath)]
+                      : []),
                     ...(current.sourceWeightLocations ?? []).map((location) =>
                       vscode.Uri.joinPath(source, "..", location),
                     ),
@@ -3849,6 +4092,45 @@ async function configurePanel(
                 actionId: message.actionId,
                 stage: "Serializing model and weights",
               });
+              if (packageKind) {
+                const saved = await saveRuntimePackage({
+                  destination: destination.fsPath,
+                  archive: message.packageArchive,
+                  kind: packageKind,
+                  sourcePackage: current.sourcePackage,
+                  sourcePath,
+                  model: native,
+                  format: format.ort ? "ort" : "onnx",
+                  ...(format.external ? { maxExternalFileSize } : {}),
+                  includeRewritings: message.includeRewritings === true,
+                  canPublish: isCurrent,
+                  publish: async (temporary, target) => {
+                    if (!isCurrent())
+                      throw new Error(
+                        "The model changed before package publication.",
+                      );
+                    await vscode.workspace.fs.rename(
+                      vscode.Uri.file(temporary),
+                      vscode.Uri.file(target),
+                      { overwrite: false },
+                    );
+                  },
+                });
+                if (!saved) return cancelled();
+                await updateHistory("save", {
+                  action: "remember",
+                  entries: historyEntries(
+                    "local",
+                    locationText(destination),
+                    locationText(vscode.Uri.joinPath(destination, "..")),
+                  ),
+                });
+                await postMessage({
+                  type: "save-info",
+                  name: `${posix.basename(destination.path)} (${saved})`,
+                });
+                return;
+              }
               const serialized = format.external
                 ? await native.serializeFiles(
                     maxExternalFileSize,
@@ -3862,6 +4144,7 @@ async function configurePanel(
                       password,
                       sourcePath,
                       message.includeRewritings ?? false,
+                      format.ort ? "ort" : "onnx",
                     ),
                     weights: [],
                   };
@@ -3939,7 +4222,7 @@ async function configurePanel(
           const detail = error instanceof Error ? error.message : String(error);
           await postMessage({ type: "save-error", error: detail });
           await vscode.window.showErrorMessage(
-            `Could not save ONNX model: ${detail}`,
+            `Could not save model or package: ${detail}`,
           );
         }
       } else if (
@@ -4311,14 +4594,24 @@ async function configurePanel(
     active = false;
     releaseController?.abort();
     promptController?.abort();
-    releaseRunSession();
+    const closedRun = releaseRunSession();
     runResult = undefined;
-    void promptSession
+    const closedPrompt = promptSession
       .close()
       .catch((error: unknown) =>
         log.record(
           "FAILED",
           "Release prompt session",
+          undefined,
+          error instanceof Error ? error.message : String(error),
+        ),
+      );
+    void archives
+      .close(Promise.all([closedRun, closedPrompt]))
+      .catch((error: unknown) =>
+        log.record(
+          "FAILED",
+          "Release package assets",
           undefined,
           error instanceof Error ? error.message : String(error),
         ),
@@ -4351,7 +4644,9 @@ async function configurePanel(
   );
   if (uri) {
     try {
-      const loaded = await readGraph(uri, log);
+      const loaded = await archives.use(() =>
+        readGraph(uri, log, undefined, undefined, undefined, archives),
+      );
       if (!active) return;
       model = loaded;
       initialLoading = false;

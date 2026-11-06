@@ -13,6 +13,69 @@ function createFilePanels({
   let clipboardSelection;
   let openSource = "local";
   let pipelineFile = false;
+  let packageRequest = 0;
+  let savePackage = false;
+  let saveArchive = true;
+  let savePackages = { genai: false, compiled: false };
+  let packageDirectory = false;
+  const openPath = () =>
+    byId("open-file")
+      .value.trim()
+      .replace(/[\\/]+$/, "");
+  const openingPackage = () =>
+    openSource === "local" &&
+    (packageDirectory || /\.(?:ortpackage|zip)$/i.test(openPath()));
+  function updateOpenFormat() {
+    const path = openPath();
+    const packageInput = openingPackage();
+    byId("open-format").hidden = openSource !== "local";
+    byId("open-format").textContent = packageInput
+      ? packageDirectory
+        ? "Detected: runtime package directory."
+        : "Detected: runtime package ZIP archive (.ortpackage / .zip)."
+      : /\.onnx\.enc$/i.test(path)
+        ? "Expected: encrypted ONNX model (.onnx.enc)."
+        : /\.enc$/i.test(path)
+          ? "Expected: encrypted model (.enc)."
+          : /\.pipe-onnx$/i.test(path)
+            ? "Expected: PipelineProto container (.pipe-onnx)."
+            : /\.ort$/i.test(path)
+              ? "Expected: ORT FlatBuffer model (.ort)."
+              : /\.onnx$/i.test(path)
+                ? "Expected: ONNX protobuf model (.onnx)."
+                : "Format is detected automatically when opening; directories are runtime packages.";
+    byId("open-package-options").hidden = !packageInput;
+    byId("open-file-label").textContent =
+      openSource === "local"
+        ? "Model file or package path"
+        : "Model path, URL or backend test ID";
+    byId("open-password").disabled = packageInput;
+  }
+  function changedOpenPath(directory = false) {
+    packageDirectory = directory;
+    invalidatePackage();
+    updateOpenFormat();
+  }
+  function invalidatePackage() {
+    packageRequest++;
+    byId("open-package-model").replaceChildren(
+      new Option("Use the package default model", ""),
+    );
+    byId("open-package-model").disabled = true;
+    byId("open-package-status").textContent = "";
+  }
+  function inspectPackage() {
+    if (!openingPackage() || isReplacing()) return;
+    byId("open-error").textContent = "";
+    byId("open-package-status").textContent = "Inspecting package assets...";
+    postMessage({
+      type: "inspect-runtime-package",
+      requestId: ++packageRequest,
+      location: byId("open-file").value,
+    });
+  }
+  byId("inspect-open-package").addEventListener("click", inspectPackage);
+  byId("open-file").addEventListener("input", () => changedOpenPath());
   function fileSize(bytes) {
     const units = ["B", "KiB", "MiB", "GiB", "TiB"];
     const unit =
@@ -115,6 +178,7 @@ function createFilePanels({
           choose.addEventListener("click", () => {
             const field = entry.kind === "directory" ? "location" : "file";
             byId(`${target}-${field}`).value = entry.path;
+            if (target === "open" && field === "file") changedOpenPath();
             if (
               target === "open" &&
               field === "location" &&
@@ -200,11 +264,16 @@ function createFilePanels({
   function invalidateNativePicker() {
     nativePathRequest++;
     clipboardSelection = undefined;
-    byId("open-native-picker").disabled = isReplacing();
+    setNativePickersBusy(isReplacing());
+  }
+  function setNativePickersBusy(pending) {
+    byId("open-native-picker").disabled = pending;
+    byId("open-native-folder-picker").disabled = pending;
   }
   function choosePath() {
     if (!pathDialog.open || !selectedPath) return;
     byId("open-file").value = selectedPath;
+    changedOpenPath();
     closePathBrowser();
   }
   function openPathBrowser(browse = true) {
@@ -227,13 +296,20 @@ function createFilePanels({
     closePathBrowser();
   });
   byId("choose-open-path").addEventListener("click", choosePath);
-  byId("open-native-picker").addEventListener("click", () => {
+  function pickNativePath(directory = false) {
     if (isReplacing()) return;
     clipboardSelection = undefined;
     byId("open-error").textContent = "";
-    byId("open-native-picker").disabled = true;
-    postMessage({ type: "select-model-path", requestId: ++nativePathRequest });
-  });
+    setNativePickersBusy(true);
+    postMessage({
+      type: directory ? "select-model-directory" : "select-model-path",
+      requestId: ++nativePathRequest,
+    });
+  }
+  byId("open-native-picker").addEventListener("click", () => pickNativePath());
+  byId("open-native-folder-picker").addEventListener("click", () =>
+    pickNativePath(true),
+  );
   byId("open-file").addEventListener("keydown", (event) => {
     if (
       openSource !== "local" ||
@@ -252,7 +328,7 @@ function createFilePanels({
       end: field.selectionEnd,
     };
     byId("open-error").textContent = "";
-    byId("open-native-picker").disabled = true;
+    setNativePickersBusy(true);
     postMessage({ type: "paste-model-path", requestId: ++nativePathRequest });
   });
   function browseFiles(target) {
@@ -304,6 +380,7 @@ function createFilePanels({
     byId(`${target}-file-history`).addEventListener("change", (event) => {
       if (!event.target.value) return;
       byId(`${target}-file`).value = event.target.value;
+      if (target === "open") changedOpenPath();
       event.target.value = "";
       byId(`${target}-file`).focus();
     });
@@ -368,6 +445,7 @@ function createFilePanels({
     byId("open-error").textContent = "";
     byId("open-location").value = "";
     byId("open-file").value = "";
+    changedOpenPath();
     byId("open-filter").value = "";
     byId("open-password").value = "";
     byId("open-files").replaceChildren();
@@ -399,10 +477,102 @@ function createFilePanels({
       source: openSource,
       location: byId("open-file").value,
       password: byId("open-password").value,
+      ...(openingPackage()
+        ? { packageModel: byId("open-package-model").value }
+        : {}),
     });
     byId("open-password").value = "";
   });
+  function updateSaveExtension() {
+    if (pipelineFile || byId("save-container").value !== "model") return;
+    const format = document.querySelector(
+      'input[name="save-format"]:checked',
+    ).value;
+    byId("save-file").value = byId("save-file").value.replace(
+      /\.(?:onnx(?:\.enc)?|ort)$/i,
+      format === "ort"
+        ? ".ort"
+        : `.onnx${format === "embedded-encrypted" ? ".enc" : ""}`,
+    );
+  }
+  function updateSaveChoices() {
+    const container = byId("save-container");
+    for (const [value, reason] of [
+      [
+        "genai",
+        savePackages.genai
+          ? ""
+          : "Open a GenAI package with its configuration and tokenizer first.",
+      ],
+      [
+        "compiled",
+        savePackages.compiled
+          ? ""
+          : "Open an EPContext package with its compiled provider assets first.",
+      ],
+    ]) {
+      const option = container.querySelector(`option[value="${value}"]`);
+      option.disabled = !!reason;
+      option.title = reason;
+      if (reason && container.value === value) container.value = "model";
+    }
+    const packageKind = byId("save-container").value !== "model";
+    for (const [value, disabled] of [
+      ["embedded-encrypted", pipelineFile || packageKind],
+      ["reuse-plain", packageKind],
+      ["ort", pipelineFile],
+    ]) {
+      const input = document.querySelector(
+        `input[name="save-format"][value="${value}"]`,
+      );
+      input.disabled = disabled;
+      input.title = disabled
+        ? value === "ort"
+          ? "ORT FlatBuffer is a single-model format, not PipelineProto."
+          : packageKind
+            ? "Runtime packages must be unencrypted and self-contained."
+            : "PipelineProto encryption is not supported by onnx-light."
+        : "";
+      if (disabled && input.checked)
+        document.querySelector(
+          'input[name="save-format"][value="embedded-plain"]',
+        ).checked = true;
+    }
+    byId("save-package-note").hidden = !packageKind;
+    byId("save-package-layout-options").hidden = !packageKind;
+    byId("save-file-label").textContent = packageKind
+      ? byId("save-package-layout").value === "archive"
+        ? "New package archive (.ortpackage)"
+        : "New package directory"
+      : "Destination path";
+    byId("save-overwrite").disabled = packageKind;
+    if (packageKind) byId("save-overwrite").checked = false;
+  }
   byId("save-form").addEventListener("change", (event) => {
+    updateSaveChoices();
+    const packageKind = byId("save-container").value !== "model";
+    if (event.target.id === "save-container" && packageKind !== savePackage) {
+      byId("save-file").value = packageKind
+        ? byId("save-file").value.replace(
+            /\.(?:onnx(?:\.enc)?|ort|pipe-onnx)$/i,
+            "",
+          ) +
+          "-package" +
+          (saveArchive ? ".ortpackage" : "")
+        : byId("save-file").value.replace(
+            /(?:-package)?(?:\.ortpackage|\.zip)?$/i,
+            "",
+          ) + (pipelineFile ? ".pipe-onnx" : ".onnx");
+      savePackage = packageKind;
+      updateSaveExtension();
+    }
+    if (event.target.id === "save-package-layout") {
+      saveArchive = byId("save-package-layout").value === "archive";
+      if (packageKind)
+        byId("save-file").value =
+          byId("save-file").value.replace(/\.(?:ortpackage|zip)$/i, "") +
+          (saveArchive ? ".ortpackage" : "");
+    }
     const external = ["external-plain", "reuse-plain"].includes(
       document.querySelector('input[name="save-format"]:checked').value,
     );
@@ -414,11 +584,7 @@ function createFilePanels({
     byId("save-encryption").hidden = !encrypted;
     byId("save-password").required = encrypted;
     byId("save-confirmation").required = encrypted;
-    if (event.target.name === "save-format" && !pipelineFile)
-      byId("save-file").value = byId("save-file").value.replace(
-        /\.onnx(?:\.enc)?$/i,
-        `.onnx${encrypted ? ".enc" : ""}`,
-      );
+    if (event.target.name === "save-format") updateSaveExtension();
     byId("save-options-error").textContent = "";
   });
   byId("save-form").addEventListener("submit", (event) => {
@@ -436,6 +602,7 @@ function createFilePanels({
         "embedded-encrypted",
         "external-plain",
         "reuse-plain",
+        "ort",
       ].includes(format) ||
       (external &&
         (!Number.isSafeInteger(maxExternalFileSize) ||
@@ -460,7 +627,7 @@ function createFilePanels({
       return;
     }
     byId("save-options-error").textContent = "";
-    requestAction("save", "Save ONNX model", {
+    requestAction("save", "Save model or package", {
       location: byId("save-file").value,
       password: byId("save-password").value,
       confirmation: byId("save-confirmation").value,
@@ -469,6 +636,13 @@ function createFilePanels({
       storage:
         format === "reuse-plain" ? "reuse" : external ? "external" : "embedded",
       encrypted: format === "embedded-encrypted",
+      ...(format === "ort" ? { format: "ort" } : {}),
+      ...(byId("save-container").value === "model"
+        ? {}
+        : {
+            packageKind: byId("save-container").value,
+            packageArchive: byId("save-package-layout").value === "archive",
+          }),
       ...(external ? { maxExternalFileSize } : {}),
     });
     byId("save-password").value = "";
@@ -476,7 +650,26 @@ function createFilePanels({
   });
 
   function handleMessage(data) {
-    if (data?.type === "model-path-selected") {
+    if (
+      data?.type === "runtime-package-info" ||
+      data?.type === "runtime-package-error"
+    ) {
+      if (data.requestId !== packageRequest || !openingPackage()) return true;
+      if (data.type === "runtime-package-error") {
+        byId("open-package-status").textContent = "";
+        byId("open-error").textContent = data.error;
+      } else {
+        byId("open-package-model").replaceChildren(
+          ...data.package.models.map((name) => new Option(name, name)),
+        );
+        byId("open-package-model").disabled = false;
+        byId("open-package-model").value =
+          data.package.defaultModel ?? data.package.models[0];
+        byId("open-package-status").textContent =
+          `${data.package.genai ? "GenAI" : "Runtime"} package: ${data.package.models.length} model(s).`;
+      }
+      return true;
+    } else if (data?.type === "model-path-selected") {
       if (
         data.requestId !== nativePathRequest ||
         openSource !== "local" ||
@@ -484,7 +677,7 @@ function createFilePanels({
         isReplacing()
       )
         return true;
-      byId("open-native-picker").disabled = false;
+      setNativePickersBusy(false);
       const selection = clipboardSelection;
       clipboardSelection = undefined;
       if (data.error) byId("open-error").textContent = data.error;
@@ -499,7 +692,11 @@ function createFilePanels({
             "end",
           );
           field.dispatchEvent(new Event("input", { bubbles: true }));
-        } else field.value = data.location;
+        } else {
+          field.value = data.location;
+          changedOpenPath(data.directory === true);
+          if (openingPackage()) inspectPackage();
+        }
       }
       byId("open-file").focus();
     } else if (data?.type === "huggingface-model-files") {
@@ -641,7 +838,10 @@ function createFilePanels({
                 selectedPath = entry.path;
                 byId("choose-open-path").disabled = false;
                 byId("open-path-selection").textContent = entry.path;
-              } else byId(`${target}-file`).value = entry.path;
+              } else {
+                byId(`${target}-file`).value = entry.path;
+                if (target === "open") changedOpenPath();
+              }
               for (const row of list.children)
                 row.removeAttribute("aria-current");
               item.setAttribute("aria-current", "true");
@@ -656,6 +856,7 @@ function createFilePanels({
               if (openSource !== "backend" && openSource !== "huggingface")
                 return;
               byId("open-file").value = entry.path;
+              changedOpenPath();
               byId("open-form").requestSubmit();
             });
           item.append(button);
@@ -693,19 +894,13 @@ function createFilePanels({
   function setFile(file) {
     if (file) {
       pipelineFile = file.pipeline === true;
-      const encrypted = document.querySelector(
-        'input[name="save-format"][value="embedded-encrypted"]',
-      );
-      encrypted.disabled = pipelineFile;
-      encrypted.title = pipelineFile
-        ? "PipelineProto encryption is not supported by onnx-light."
-        : "";
-      if (pipelineFile && encrypted.checked) {
-        const plain = document.querySelector(
-          'input[name="save-format"][value="embedded-plain"]',
-        );
-        plain.checked = true;
-        plain.dispatchEvent(new Event("change", { bubbles: true }));
+      savePackages = {
+        genai: file.package?.genai === true,
+        compiled: file.package?.compiled === true,
+      };
+      updateSaveChoices();
+      savePackage = byId("save-container").value !== "model";
+      if (pipelineFile) {
         byId("save-password").value = "";
         byId("save-confirmation").value = "";
       }
@@ -717,6 +912,21 @@ function createFilePanels({
         "embedded-encrypted"
           ? ".enc"
           : "");
+      updateSaveExtension();
+      if (byId("save-container").value !== "model")
+        byId("save-file").value =
+          file.savePath.replace(/\.(?:onnx|ort|pipe-onnx)$/i, "") +
+          "-package" +
+          (saveArchive ? ".ortpackage" : "");
+      byId("save-form").dispatchEvent(new Event("change", { bubbles: true }));
+      const format =
+        file.format === "ort"
+          ? "ORT FlatBuffer (.ort)"
+          : file.pipeline
+            ? "PipelineProto (.pipe-onnx)"
+            : "ONNX protobuf (.onnx)";
+      byId("loaded-format").textContent =
+        `Loaded: ${format}${file.package ? ` inside a ${file.package.kind === "genai" ? "GenAI" : file.package.kind === "compiled" ? "compiled EPContext" : "generic runtime"} package${file.package.archive ? " ZIP" : ""} (${file.package.directory})` : " model file"}.`;
     }
   }
   function startSaving() {
@@ -750,7 +960,7 @@ function createFilePanels({
     byId("open-model").disabled = pending;
     byId("open-submit").disabled = pending;
     byId("open-path-browse").disabled = pending;
-    byId("open-native-picker").disabled = pending;
+    setNativePickersBusy(pending);
     for (const button of byId("open-history-entries").querySelectorAll(
       "[data-load-pipeline]",
     ))

@@ -3,9 +3,10 @@ const {
   readdirSync,
   writeFileSync,
   writeSync,
+  statSync,
 } = require("node:fs");
 const { execFileSync } = require("node:child_process");
-const { dirname, isAbsolute, join, resolve } = require("node:path");
+const { isAbsolute, join, resolve } = require("node:path");
 const { createInterface } = require("node:readline");
 const native = require("../dist/native/onnx_light_viewer.node");
 const { genaiSessionOptions } = require("./prompt-settings.cjs");
@@ -16,15 +17,21 @@ const emit = (event) => writeSync(1, `\x1e${JSON.stringify(event)}\n`);
 function run(input, output, sessionKey) {
   const request = JSON.parse(readFileSync(input, "utf8"));
   if (request.engine === "onnxruntime-genai") {
-    const directory = dirname(request.modelPath);
-    const config = JSON.parse(
-      readFileSync(join(directory, "genai_config.json"), "utf8"),
-    );
+    const directory = request.source;
+    const config =
+      request.genaiConfiguration ??
+      JSON.parse(readFileSync(join(directory, "genai_config.json"), "utf8"));
     const decoder = config.model.decoder.filename;
-    if (decoder && resolve(directory, decoder) !== resolve(request.modelPath))
-      throw new Error(
-        "The selected model is not the GenAI configuration's decoder.",
-      );
+    if (decoder) {
+      const configured = statSync(resolve(directory, decoder), {
+        bigint: true,
+      });
+      const selected = statSync(request.modelPath, { bigint: true });
+      if (configured.dev !== selected.dev || configured.ino !== selected.ino)
+        throw new Error(
+          "The selected model is not the GenAI configuration's decoder.",
+        );
+    }
   }
   const libraryPath =
     process.env.ONNX_LIGHT_VIEWER_GENAI_LIBRARY ||
@@ -56,7 +63,17 @@ function run(input, output, sessionKey) {
     sessionSettings: settings,
     sessionKey: sessionKey ?? input,
     genaiOverlay: JSON.stringify({
-      model: { decoder: { session_options: options } },
+      ...request.genaiConfiguration,
+      model: {
+        ...request.genaiConfiguration?.model,
+        decoder: {
+          ...request.genaiConfiguration?.model?.decoder,
+          session_options: {
+            ...request.genaiConfiguration?.model?.decoder?.session_options,
+            ...options,
+          },
+        },
+      },
     }),
     ...(providers === undefined ? {} : { genaiProviders: providers }),
     libraryPath,

@@ -10,7 +10,7 @@ Opening models
   the buttons below it to choose a local file, then click **Open model**.
   The panel closes after a successful opening;
   **Open** can show it again. Errors and cancellations keep the panel open.
-  Opening an ``.onnx`` or ``.pipe-onnx`` file in VS Code
+  Opening an ``.onnx``, ``.ort``, ``.ortpackage`` or ``.pipe-onnx`` file in VS Code
   also uses the viewer; use **Reopen Editor With...** if another editor handles it.
 * **ONNX Light Viewer: Open Graph** opens the bundled Relu demo.
   **ONNX Light Viewer: Open Symbolic Transformer Example** opens a bundled,
@@ -22,11 +22,24 @@ Opening models
   including when the first model cannot be opened. The previous graph, if any,
   is preserved; use **Open** to try another file.
 
+The filename determines the expected format automatically: ``.onnx`` for ONNX
+protobuf, ``.ort`` for ORT FlatBuffer, ``.pipe-onnx`` for a pipeline,
+``.enc`` for an encrypted model, and ``.ortpackage`` or ``.zip`` for a package
+archive. Directories are recognized as packages when opening; selecting a folder
+in the native picker also reveals the package controls immediately.
+There is no model/package format selector. **Inspect package** lists member
+models; choosing among several models is distinct from choosing a file format.
+The viewer extracts archives locally and keeps the assets until the panel closes.
+See :doc:`../features` for package containers versus model serialization.
+
 Choosing a local path
 ---------------------
 
-Buttons directly below **Model path** offer both the existing **VS Code file picker**
-and **Browse folders**, an in-app dialog. The latter accepts any accessible directory,
+Buttons directly below the path field offer separate **VS Code file picker**
+and **VS Code folder picker** actions. The file picker accepts models and ZIP
+packages; the folder picker selects package directories. They never combine
+file/folder selection, which VS Code treats as folder-only on Windows and Linux.
+**Browse folders** opens an in-app dialog. It accepts any accessible directory,
 including outside the VS Code workspace; enter a directory, click **Browse**,
 or use **Parent folder**. Filter the list, select a model and click **Choose path**
 (or double-click it) to fill **Model path** without loading the model.
@@ -41,7 +54,7 @@ in the sidebar.
    :alt: In-app path dialog browsing a directory outside the VS Code workspace, with a selected ONNX file and Choose path button.
    :width: 100%
 
-   Choose a path outside the workspace without changing VS Code's file picker.
+   Choose a path outside the workspace without loading the model.
 
 PipelineProto containers
 ------------------------
