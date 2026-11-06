@@ -721,6 +721,62 @@ function createFusionPanel({
     fusionControls(fusionBusy);
   }
 
+  function impactSummary(match) {
+    const impact = match.impact;
+    if (!impact)
+      return `${match.nodes.length} remaining node${match.nodes.length === 1 ? "" : "s"}`;
+    const count = impact.before.length;
+    const parts = [`${count} impacted node${count === 1 ? "" : "s"}`];
+    if (impact.after.length)
+      parts.push(
+        `${impact.after.length} replacement node${impact.after.length === 1 ? "" : "s"}`,
+      );
+    for (const [count, action] of [
+      [impact.removedInitializers, "removed"],
+      [impact.addedInitializers, "added"],
+    ])
+      if (count)
+        parts.push(`${count} initializer${count === 1 ? "" : "s"} ${action}`);
+    return parts.join("; ");
+  }
+  function appendImpactDetails(container, match) {
+    if (!match.impact) return;
+    const details = document.createElement("details");
+    details.className = "fusion-impact";
+    const summary = document.createElement("summary");
+    summary.textContent = "Before / after this operation";
+    details.append(summary);
+    details.addEventListener("toggle", () => {
+      if (!details.open || details.childElementCount > 1) return;
+      if (match.impact.scope.length) {
+        const scope = document.createElement("p");
+        scope.textContent = `Scope: ${match.impact.scope.join(" / ")}`;
+        details.append(scope);
+      }
+      for (const [title, nodes] of [
+        ["Before", match.impact.before],
+        ["After", match.impact.after],
+      ]) {
+        const heading = document.createElement("h4");
+        heading.textContent = title;
+        const text = document.createElement("pre");
+        text.textContent = nodes.length
+          ? nodes
+              .map((node) => {
+                const index = node.index === undefined ? "" : `#${node.index} `;
+                const name = node.name ? `${node.name}: ` : "";
+                const domain = node.domain ? `${node.domain}::` : "";
+                return node.opType
+                  ? `${index}${name}${domain}${node.opType}(${node.inputs.join(", ")}) -> ${node.outputs.join(", ")}`
+                  : `${index}Node`;
+              })
+              .join("\n")
+          : "No nodes.";
+        details.append(heading, text);
+      }
+    });
+    container.append(details);
+  }
   function showOptimizationResults() {
     const queued = pendingRewritings.flatMap((operation) =>
       operation.matches.map((match) => ({
@@ -747,7 +803,7 @@ function createFusionPanel({
     for (const match of matches) {
       const item = document.createElement("li");
       const button = document.createElement("button");
-      button.textContent = `${match.pattern} (${match.nodes.length} nodes)`;
+      button.textContent = `${match.pattern} (${impactSummary(match)})`;
       button.dataset.empty = String(!match.nodes.length);
       button.disabled = !match.nodes.length;
       button.title = match.nodes.length
@@ -758,6 +814,7 @@ function createFusionPanel({
         focusNodes(match.nodes);
       });
       item.append(button);
+      appendImpactDetails(item, match);
       byId("optimization-results").append(item);
     }
     if (!matches.length) {
@@ -1573,6 +1630,8 @@ function createFusionPanel({
   }
 
   return {
+    impactSummary,
+    appendImpactDetails,
     setUndoBusy: (busy) => {
       undoBusy = busy;
       fusionControls(busy);

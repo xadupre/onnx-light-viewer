@@ -296,8 +296,14 @@ pipeline stages. After ONNX Script changes the model, this baseline is the Pytho
 result, not the model before Python optimization.
 Optimize stays open so you can select patterns and optimize again.
 Applied patterns are listed in the optimization results and in **Unfuse**;
-click an entry to highlight its surviving result nodes. Folding a node entirely
-into an initializer leaves no operator to select.
+the count describes the nodes impacted **before that operation**, not its current
+surviving descendants. Initializer removals and additions are reported separately.
+Expand **Before / after this operation** to inspect the recorded operators,
+inputs and outputs, even if those operators have since disappeared. Scoped edits
+retain their original scope and node positions.
+Click the pattern button to highlight only surviving result nodes. Folding a node
+entirely into an initializer leaves no operator to select, but its impact remains
+inspectable. Later fusions do not change the recorded before/after details.
 Optimize's **Matched patterns** list follows the active history for the current
 model or pipeline stage, including after reopening Optimize or a no-change run.
 
@@ -306,6 +312,17 @@ model or pipeline stage, including after reopening Optimize or a no-change run.
    :width: 100%
 
    Inspect matches and unfuse without leaving Optimize.
+
+.. figure:: ../_static/feature-fusion-impact.png
+   :alt: Optimization history showing two impacted Transpose nodes and one Identity replacement, with lazy before and after details expanded.
+   :width: 100%
+
+   Impact counts describe the original edit; highlighting follows surviving nodes.
+
+Precise cleanup counts require minimal cleanup edits from onnx-light.
+`The SDK cleanup fix <https://github.com/xadupre/onnx-light/issues/5813>`_
+and its viewer integration must both be available; the viewer does not reconstruct
+or filter oversized SDK edits.
 
 **Save → Include fusion rewritings** works for these operations too:
 unchecked saves the optimized graph; checked saves the original and its

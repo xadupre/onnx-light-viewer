@@ -240,9 +240,12 @@ export class PipelineModel implements NativeModel {
   fusionCount = (): number =>
     this.stages().reduce((count, [, model]) => count + model.fusionCount(), 0);
 
-  fusionHistory = (): FusionOperation[] => {
+  fusionHistory = (includeImpact = false): FusionOperation[] => {
     const stages = new Map(
-      this.stages().map(([role, model]) => [role, model.fusionHistory()]),
+      this.stages().map(([role, model]) => [
+        role,
+        model.fusionHistory(includeImpact),
+      ]),
     );
     const counts = new Map<PipelineRole, number>();
     return this.fusionOrder.map((stage) => {

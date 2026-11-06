@@ -16,6 +16,7 @@ const {
 } = require("node:fs/promises");
 const { createCipheriv, createHash, pbkdf2Sync } = require("node:crypto");
 const { execFileSync, spawnSync } = require("node:child_process");
+const { once } = require("node:events");
 const { createServer } = require("node:http");
 const { homedir, tmpdir } = require("node:os");
 const { createRequire } = require("node:module");
@@ -26,6 +27,16 @@ const { JSDOM } = require("jsdom");
 const { exportHub } = require("./helpers/export-hub.cjs");
 const { skipSdkReplay } = require("./helpers/sdk-replay.cjs");
 const sdkReplaySkip = skipSdkReplay(require("../dist/graph").onnxLightVersion);
+
+function selectionHistory(history) {
+  return history.map((operation) => ({
+    ...operation,
+    matches: operation.matches.map(({ pattern, nodes }) => ({
+      pattern,
+      nodes,
+    })),
+  }));
+}
 
 test("device inspection is trust-gated, correlated and uses the requested Python executable", async (t) => {
   const extension = await openExtension();
@@ -3212,7 +3223,7 @@ test("opens pipeline files, navigates stages, applies stage fusions and saves th
     requestId: 4,
   });
   const stage = latestGraph().graph;
-  assert.deepEqual(latestGraph().file.fusionHistory, [
+  assert.deepEqual(selectionHistory(latestGraph().file.fusionHistory), [
     {
       matches: [
         { pattern: "TransposeTranspose", nodes: [0] },
@@ -5131,7 +5142,7 @@ test("unfuses the last operation or all successive native fusions atomically", a
   await fuseNext();
   await fuseNext();
   assert.equal(latestGraph().file.fusionCount, 2);
-  assert.deepEqual(latestGraph().file.fusionHistory, [
+  assert.deepEqual(selectionHistory(latestGraph().file.fusionHistory), [
     { matches: [{ pattern: "TransposeTranspose", nodes: [0] }] },
     { matches: [{ pattern: "TransposeTranspose", nodes: [1] }] },
   ]);
@@ -5141,7 +5152,7 @@ test("unfuses the last operation or all successive native fusions atomically", a
   assert.equal(latestGraph().file.fusionCount, 2);
   await extension.receive({ type: "undo-fusion", all: false });
   assert.equal(latestGraph().file.fusionCount, 1);
-  assert.deepEqual(latestGraph().file.fusionHistory, [
+  assert.deepEqual(selectionHistory(latestGraph().file.fusionHistory), [
     { matches: [{ pattern: "TransposeTranspose", nodes: [0] }] },
   ]);
   assert.equal(latestGraph().graph.nodes.length, original.length - 1);
@@ -7829,6 +7840,20 @@ test("selects optimization groups and previews global passes through the real we
     return text;
   };
   const lastReport = reportContents();
+  const matmulResult = [...results.querySelectorAll("button")].find((button) =>
+    button.textContent.startsWith("MatMulAdd "),
+  );
+  assert.match(
+    matmulResult.textContent,
+    /2 impacted nodes; 1 replacement node/,
+  );
+  const impactDetails = matmulResult.parentElement.querySelector("details");
+  assert.equal(impactDetails.querySelector("pre"), null);
+  const impactToggled = once(impactDetails, "toggle");
+  impactDetails.open = true;
+  await impactToggled;
+  assert.match(impactDetails.querySelector("pre").textContent, /MatMul/);
+  assert.match(impactDetails.querySelector("pre").textContent, /Add/);
   [...results.querySelectorAll("button")]
     .find((button) => button.textContent.startsWith("MatMulAdd "))
     .click();

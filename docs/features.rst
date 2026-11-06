@@ -736,6 +736,17 @@ The history lists operations newest first; click a match to highlight its
 surviving result nodes. These controls are disabled when no undo history remains.
 See :ref:`unfuse` for history and saved rewriting-plan details.
 
+Optimization results count original impacted nodes, not surviving result nodes.
+Expand **Before / after this operation** to inspect the edit, including deleted
+operators and initializer-only changes. Pattern buttons highlight current
+surviving results separately.
+
+.. figure:: _static/feature-fusion-impact.png
+   :alt: An applied TransposeTranspose rewriting with two impacted nodes, one replacement and expanded before/after operator details.
+   :width: 100%
+
+   Inspect original impact without confusing it with surviving graph nodes.
+
 The native **Optimize** panel also offers **Unfuse last** and
 **Back to original model** (undo all). Changed ONNX Script results cannot be
 undone and clear earlier native history; later native edits undo back to that

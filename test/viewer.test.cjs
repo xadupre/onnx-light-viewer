@@ -7376,6 +7376,65 @@ test("rejects queued fusion and scenario completions after local close or naviga
   }
 });
 
+test("keeps deleted impacted nodes inspectable when no result nodes survive", async (t) => {
+  const { document, window, messages } = openViewer(t);
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  send({
+    type: "graph",
+    graph: demoGraph,
+    file: {
+      fusionCount: 1,
+      fusionHistory: [
+        {
+          matches: [
+            {
+              pattern: "ConstantFolding",
+              nodes: [],
+              impact: {
+                before: [
+                  {
+                    index: 2,
+                    name: "constant_sum",
+                    opType: "Add",
+                    domain: "",
+                    inputs: ["a", "b"],
+                    outputs: ["sum"],
+                  },
+                ],
+                after: [],
+                scope: [],
+                removedInitializers: 0,
+                addedInitializers: 1,
+              },
+            },
+          ],
+        },
+      ],
+    },
+  });
+  document.getElementById("optimize-model").click();
+  send({
+    type: "fusion-patterns",
+    requestId: messages.at(-1).requestId,
+    patterns: [],
+  });
+  const result = document.querySelector("#optimization-results > li");
+  assert.equal(result.querySelector("button").disabled, true);
+  assert.match(result.textContent, /1 impacted node; 1 initializer added/);
+  const details = result.querySelector("details");
+  assert.equal(details.querySelector("pre"), null);
+  const toggled = once(details, "toggle");
+  details.open = true;
+  await toggled;
+  assert.match(
+    details.querySelector("pre").textContent,
+    /#2 constant_sum: Add/,
+  );
+  assert.match(details.querySelector("pre").textContent, /a, b/);
+  assert.match(details.querySelectorAll("pre")[1].textContent, /No nodes/);
+});
+
 test("opens tabular optimization reports only on request, including no-op runs and reopened Optimize", async (t) => {
   if (sdkReplaySkip) return t.skip(sdkReplaySkip);
   const { document, window, messages, load } = openViewer(t);

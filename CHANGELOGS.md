@@ -9,6 +9,8 @@ Notable changes to ONNX Light Viewer, newest first.
 - Select saved rewriting alternatives beside the graph name, with **None** as
   the default original graph. Show their steps and fusion undo controls together
   in **Fuse / Unfuse**.
+- Separate original fusion impact from surviving result nodes; show initializer
+  changes and expandable before/after operator details.
 - Put the graph name, node/initializer counts and pending rewritings on one
   line. Add a graph-name menu for switching between functions and subgraphs,
   remove Navigation/Application headings, and keep version details in Status

@@ -1547,6 +1547,12 @@ button:disabled {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+.fusion-impact pre {
+  max-height: 18rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 .fusion-stage {
   margin-top: 8px;
 }

@@ -3172,7 +3172,7 @@ async function configurePanel(
                 const graph = edited.graph(false, path);
                 const retained = edited.clone();
                 const pending =
-                  replay?.fusionHistory().slice(edited.fusionCount()) ?? [];
+                  replay?.fusionHistory(true).slice(edited.fusionCount()) ?? [];
                 model = {
                   ...current,
                   native: edited,
@@ -3180,7 +3180,7 @@ async function configurePanel(
                   graph,
                   metadata: undefined,
                   fusionCount: edited.fusionCount(),
-                  fusionHistory: edited.fusionHistory(),
+                  fusionHistory: edited.fusionHistory(true),
                   rewritingQueue:
                     replay && pending.length
                       ? {
@@ -3246,7 +3246,7 @@ async function configurePanel(
                   graph,
                   metadata: undefined,
                   fusionCount: edited.fusionCount(),
-                  fusionHistory: edited.fusionHistory(),
+                  fusionHistory: edited.fusionHistory(true),
                   rewritingQueue: undefined,
                   reload: () => retained.clone(),
                 };
@@ -3469,7 +3469,7 @@ async function configurePanel(
                   graph: edited.graph(false, path),
                   metadata: undefined,
                   fusionCount: edited.fusionCount(),
-                  fusionHistory: edited.fusionHistory(),
+                  fusionHistory: edited.fusionHistory(true),
                   rewritingQueue: undefined,
                   reload: () => retained.clone(),
                 };
@@ -3556,7 +3556,7 @@ async function configurePanel(
                       graph: edited.graph(false),
                       metadata: undefined,
                       fusionCount: edited.fusionCount(),
-                      fusionHistory: edited.fusionHistory(),
+                      fusionHistory: edited.fusionHistory(true),
                       rewritingQueue: undefined,
                       pythonOptimized:
                         current.pythonOptimized || result.changed,
@@ -3649,7 +3649,7 @@ async function configurePanel(
                   graph,
                   metadata: undefined,
                   fusionCount: edited.fusionCount(),
-                  fusionHistory: edited.fusionHistory(),
+                  fusionHistory: edited.fusionHistory(true),
                   rewritingQueue: undefined,
                   reload: () => retained.clone(),
                 };
@@ -3710,7 +3710,7 @@ async function configurePanel(
                   graph,
                   metadata: undefined,
                   fusionCount: edited.fusionCount(),
-                  fusionHistory: edited.fusionHistory(),
+                  fusionHistory: edited.fusionHistory(true),
                   rewritingQueue: undefined,
                   reload: () => retained.clone(),
                 };
@@ -3797,7 +3797,7 @@ async function configurePanel(
                   graph,
                   metadata: undefined,
                   fusionCount: edited.fusionCount(),
-                  fusionHistory: edited.fusionHistory(),
+                  fusionHistory: edited.fusionHistory(true),
                   reload: () => retained.clone(),
                 };
                 model = replacement;
@@ -3903,7 +3903,7 @@ async function configurePanel(
                   graph: native.graph(false, path),
                   metadata: undefined,
                   fusionCount: native.fusionCount(),
-                  fusionHistory: native.fusionHistory(),
+                  fusionHistory: native.fusionHistory(true),
                   rewritingQueue: undefined,
                   reload: () => retained.clone(),
                 };

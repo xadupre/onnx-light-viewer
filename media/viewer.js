@@ -3448,6 +3448,12 @@ window.addEventListener("message", (event) => {
           );
         });
         entry.append(button);
+        if (match.impact) {
+          const impact = document.createElement("p");
+          impact.textContent = fusionPanel.impactSummary(match);
+          entry.append(impact);
+          fusionPanel.appendImpactDetails(entry, match);
+        }
         list.append(entry);
       }
       item.append(heading, list);
