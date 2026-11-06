@@ -731,6 +731,20 @@ body.resizing-sidebar {
   text-align: left;
   background: var(--panel);
 }
+#graph-navigation button[aria-haspopup="menu"] {
+  position: relative;
+  padding-right: 24px;
+}
+#graph-navigation button[aria-haspopup="menu"]::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  transform: translateY(-50%);
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid currentColor;
+}
 #graph {
   display: block;
   width: 100%;
@@ -1378,7 +1392,8 @@ button:disabled {
   stroke: currentColor;
   stroke-width: 1.8;
 }
-#graph-context-menu {
+#graph-context-menu,
+#graph-switcher {
   position: fixed;
   z-index: 1000;
   padding: 4px;
@@ -1388,11 +1403,26 @@ button:disabled {
   border-radius: 6px;
   box-shadow: 0 4px 16px #0005;
 }
-#graph-context-menu button {
+#graph-context-menu button,
+#graph-switcher button {
   display: block;
   width: 100%;
   margin: 0;
   text-align: left;
+}
+#graph-switcher {
+  max-width: min(520px, calc(100vw - 16px));
+  max-height: min(500px, calc(100vh - 16px));
+  overflow-y: auto;
+}
+#graph-switcher button {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.graph-switcher-heading {
+  padding: 6px 8px;
+  color: var(--muted);
+  font-size: 11px;
 }
 #selection-pattern-text,
 #selection-pattern-replacement,

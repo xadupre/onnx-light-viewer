@@ -25,6 +25,16 @@ See :doc:`features/navigation`.
 
    Keep the graph header compact without removing controls or Status details.
 
+Click the current graph-name button to choose functions, child subgraphs or
+pipeline models. The menu also links to parents and remembered sibling
+subgraphs, without adding another header row.
+
+.. figure:: _static/feature-graph-switcher.png
+   :alt: Current graph-name button with a menu of subgraphs from a real ONNX model.
+   :width: 100%
+
+   Jump directly between graph scopes.
+
 Opening models
 ^^^^^^^^^^^^^^
 

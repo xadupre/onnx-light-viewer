@@ -1209,6 +1209,7 @@ export function webviewHtml(
       </section>
     </section>
   </main>
+  <div id="graph-switcher" role="menu" aria-label="Functions and subgraphs" tabindex="-1" hidden></div>
   <div id="graph-context-menu" role="menu" aria-label="Selected operators" hidden>
     <button id="open-selection-pattern" role="menuitem" aria-haspopup="dialog" aria-controls="selection-pattern-dialog">Create / edit FunctionPattern...</button>
   </div>

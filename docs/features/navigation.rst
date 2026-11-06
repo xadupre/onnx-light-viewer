@@ -32,8 +32,17 @@ Logs, Status, Controls, ONNX, Patterns and Settings. There are no
 Navigation/Application headings. Model actions, conversion and optimization
 controls remain in the sidebar.
 The graph name, node/initializer counts and pending-rewriting counter share
-one header row; hover over
-a shortened title for its full name. Package versions are available in **Status**.
+one header row. Click the current graph-name button to switch to functions,
+direct subgraphs or pipeline models. Parent graphs and subgraphs of visited
+parent scopes are also available. Arrow keys select an entry; Enter opens it;
+Escape closes the menu. Hover over a shortened title for its full name.
+Package versions are available in **Status**.
+
+.. figure:: ../_static/feature-graph-switcher.png
+   :alt: Graph-name dropdown listing actual child subgraphs with their operator and attribute names.
+   :width: 100%
+
+   Switch scopes without opening each operator's inspector.
 
 The **Controls** tab groups keyboard shortcuts, mouse
 gestures and navigation buttons into two-column tables: **Control** and
