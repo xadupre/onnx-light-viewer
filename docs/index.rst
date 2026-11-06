@@ -42,4 +42,5 @@ capabilities, including model saving and encrypted I/O. Start with
    features
    design
    development
+   changelogs
    links
