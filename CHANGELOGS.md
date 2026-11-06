@@ -3,7 +3,7 @@ Changelogs
 
 Notable changes to ONNX Light Viewer, newest first.
 
-0.2.4 (unreleased)
+0.2.5 (unreleased)
 ------------------
 
 - Put the graph name, node/initializer counts and pending rewritings on one
