@@ -8141,24 +8141,14 @@ test("keeps an unfused rewriting queue visible, replays it before matching and a
   assert.deepEqual(extension.errors, []);
 });
 
-test("the header selects saved rewriting alternatives atomically and None restores the original model", async (t) => {
+test("the header keeps EP1 and EP2 selected through Unfuse, Fuse and Optimize until another rewriting is chosen", async (t) => {
   const { loadModel } = require("../dist/graph");
-  const bytes = await readFile(
-    require.resolve("../examples/rewriting-scenarios.onnx"),
-  );
-  const original = loadModel(bytes, "rewritings");
-  const firstName = original.rewritingState().names[0];
-  const partial = await original.applyRewritingScenario(firstName, false);
-  const directory = await mkdtemp(
-    path.join(tmpdir(), "viewer-rewriting-selector-"),
-  );
-  t.after(() => rm(directory, { recursive: true, force: true }));
-  const source = path.join(directory, "alternatives.onnx");
-  await writeFile(source, await partial.serialize(undefined, undefined, true));
+  const source = require.resolve("./models/rewritings-ep1-ep2.onnx");
   const sourceBytes = await readFile(source);
   const saved = loadModel(sourceBytes, "alternatives.onnx");
+  const partial = await saved.applyRewritingScenario("EP2", false);
   const names = saved.rewritingState().names;
-  assert.equal(names.length, 2);
+  assert.deepEqual(names, ["EP1", "EP2"]);
   const extension = await openExtension(undefined, undefined, true);
   t.after(() => extension.dispose());
   await extension.openFile(source);
@@ -8226,7 +8216,7 @@ test("the header selects saved rewriting alternatives atomically and None restor
         .pendingRewritings,
       [],
     );
-    if (name === names[0]) {
+    if (name === "EP2") {
       document.getElementById("rewriting-restart").click();
       await flush();
       assert.equal(nodeCount(), partial.graph().nodes.length);
@@ -8243,7 +8233,54 @@ test("the header selects saved rewriting alternatives atomically and None restor
       );
       assert.equal(document.getElementById("rewriting-next").disabled, false);
     }
+    if (name === "EP1") {
+      document.getElementById("unfuse-all").click();
+      await flush();
+      assert.equal(nodeCount(), saved.graph().nodes.length);
+      assert.equal(selector.value, name);
+      const pattern = document.querySelector(
+        '#fusion-pattern input[value="TransposeTranspose"]',
+      );
+      pattern.parentElement.click();
+      document.getElementById("preview-fusion").click();
+      await flush();
+      assert.equal(selector.value, name);
+      assert.equal(
+        document.querySelectorAll("#fusion-matches input").length,
+        1,
+      );
+      document.querySelector("#fusion-matches input").click();
+      document.getElementById("apply-fusion").click();
+      await flush();
+      assert.equal(nodeCount(), 2);
+      assert.equal(selector.value, name);
+      document.getElementById("unfuse-last").click();
+      await flush();
+      assert.equal(nodeCount(), 3);
+      assert.equal(selector.value, name);
+      document.getElementById("unfuse-all").click();
+      await flush();
+      assert.equal(selector.value, name);
+      document.getElementById("optimize-model").click();
+      await flush();
+      document.getElementById("clear-optimization-patterns").click();
+      document
+        .querySelector(
+          '#optimization-patterns input[value="TransposeTranspose"]',
+        )
+        .click();
+      document.getElementById("run-optimization").click();
+      await flush();
+      assert.equal(nodeCount(), 2);
+      assert.equal(selector.value, name);
+      assert.equal(
+        extension.messages.findLast((message) => message.type === "graph").file
+          .rewriting.selected,
+        name,
+      );
+    }
   }
+  assert.deepEqual(extension.errors, []);
   await extension.receive({
     type: "select-rewriting",
     scenario: "unknown",
@@ -8253,6 +8290,17 @@ test("the header selects saved rewriting alternatives atomically and None restor
   assert.match(extension.messages.at(-1).error, /Unknown rewriting/);
   assert.equal(nodeCount(), saved.graph().nodes.length);
   assert.deepEqual(await readFile(source), sourceBytes);
+  selector.value = "EP2";
+  selector.dispatchEvent(new window.Event("change"));
+  await flush();
+  assert.equal(selector.value, "EP2");
+  await extension.open("relu.onnx");
+  await flush();
+  assert.equal(selector.value, "");
+  assert.deepEqual(
+    [...selector.options].map((option) => option.value),
+    [""],
+  );
 });
 
 test("matches multiple patterns and fuses checked candidates through the real webview bridge", async (t) => {
