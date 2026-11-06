@@ -1085,10 +1085,7 @@ test("save defaults use the workspace cache directory while Open stays beside th
     }),
   );
   assert.equal(document.getElementById("open-location").value, "/source");
-  assert.equal(
-    document.getElementById("save-location").value,
-    "/workspace/.cache/.onnx-light-viewer",
-  );
+  assert.equal(document.getElementById("save-location"), null);
   assert.equal(
     document.getElementById("save-file").value,
     "/workspace/.cache/.onnx-light-viewer/model-copy.onnx",
@@ -5327,6 +5324,7 @@ test("keeps the complete history selector after selecting and loading a remember
   });
   document.getElementById("save-model").click();
   const destinations = document.getElementById("save-file-history");
+  assert.equal(destinations.hidden, false);
   destinations.value = saved[1];
   destinations.dispatchEvent(new window.Event("change", { bubbles: true }));
   assert.equal(document.getElementById("save-file").value, saved[1]);
@@ -5429,11 +5427,12 @@ test("suggests remembered paths without submitting forms and supports per-entry 
   send();
   for (const target of ["open", "save"]) {
     assert.equal(document.getElementById(`${target}-file`).list, null);
-    assert.equal(
-      document.getElementById(`${target}-location`).list.id,
-      `${target}-location-history`,
-    );
   }
+  assert.equal(
+    document.getElementById("open-location").list.id,
+    "open-location-history",
+  );
+  assert.equal(document.getElementById("save-location"), null);
   assert.deepEqual(
     [...document.querySelectorAll("#open-file-history option")].map(
       (option) => option.value,
@@ -8754,11 +8753,10 @@ test("VS Code path picking fills the field without opening and discards late res
   );
 });
 
-test("preserves save destination separators while browsing directories inline", (t) => {
+test("preserves save destination separators when choosing a remembered folder", (t) => {
   const { document, window, messages, load } = openViewer(t);
   load(demoGraph);
   document.getElementById("save-model").click();
-  const requestId = messages.at(-1).requestId;
   for (const [location, expected] of [
     ["/models", "/models/copy.onnx"],
     ["/", "/copy.onnx"],
@@ -8775,16 +8773,94 @@ test("preserves save destination separators while browsing directories inline", 
     window.dispatchEvent(
       new window.MessageEvent("message", {
         data: {
-          type: "file-list",
-          target: "save",
-          requestId,
-          location,
-          entries: [],
+          type: "path-history",
+          history: {
+            open: [],
+            save: [{ source: "local", kind: "directory", path: location }],
+          },
         },
       }),
     );
+    document.querySelector("#save-history-entries button").click();
     assert.equal(document.getElementById("save-file").value, expected);
   }
+  assert.equal(
+    messages.some(({ type }) => type === "save" || type === "browse-files"),
+    false,
+  );
+});
+
+test("Save has one format-aware path and Browse never saves or overwrites later edits", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const byId = (id) => document.getElementById(id);
+  const reply = (request, result) =>
+    window.dispatchEvent(
+      new window.MessageEvent("message", {
+        data: {
+          type: "save-path-selected",
+          requestId: request.requestId,
+          ...result,
+        },
+      }),
+    );
+  const pick = () => {
+    byId("save-path-browse").click();
+    assert.equal(byId("save-path-browse").disabled, true);
+    assert.equal(messages.at(-1).type, "select-save-path");
+    return messages.at(-1);
+  };
+  const change = (id, value) => {
+    byId(id).value = value;
+    byId(id).dispatchEvent(new window.Event("change", { bubbles: true }));
+  };
+  load(demoGraph);
+  byId("save-model").click();
+  assert.equal(byId("save-location"), null);
+  assert.equal(byId("save-files"), null);
+  assert.equal(byId("save-browse"), null);
+  assert.equal(byId("save-file-history").hidden, true);
+  assert.equal(byId("save-file-label").textContent, "File name or path");
+  const file = pick();
+  assert.equal(file.format, "onnx");
+  assert.equal(file.location, "model-copy.onnx");
+  reply(file, { location: "/chosen/model.onnx" });
+  assert.equal(byId("save-file").value, "/chosen/model.onnx");
+  assert.equal(byId("save-path-browse").disabled, false);
+  reply(pick(), { location: null });
+  assert.equal(byId("save-file").value, "/chosen/model.onnx");
+  reply(pick(), { error: "Dialog unavailable" });
+  assert.equal(byId("save-options-error").textContent, "Dialog unavailable");
+  const typed = pick();
+  byId("save-file").value = "/typed/model.onnx";
+  byId("save-file").dispatchEvent(new window.Event("input", { bubbles: true }));
+  reply(typed, { location: "/stale/model.onnx" });
+  assert.equal(byId("save-file").value, "/typed/model.onnx");
+  const oldFormat = pick();
+  change("save-container", "generic");
+  reply(oldFormat, { location: "/stale/model.onnx" });
+  const archive = pick();
+  assert.equal(archive.format, "ortpackage");
+  reply(archive, { location: "/chosen/package.ortpackage" });
+  change("save-package-layout", "directory");
+  assert.equal(byId("save-file-label").textContent, "New package directory");
+  assert.match(byId("save-path-help").textContent, /directory name/);
+  const directory = pick();
+  assert.equal(directory.format, "directory");
+  reply(directory, { location: "/chosen/new-package" });
+  assert.equal(byId("save-file").value, "/chosen/new-package");
+  const closed = pick();
+  byId("cancel-save").click();
+  reply(closed, { location: "/stale/closed" });
+  assert.equal(byId("save-file").value, "/chosen/new-package");
+  byId("save-model").click();
+  const replaced = pick();
+  load(demoGraph);
+  reply(replaced, { location: "/stale/replaced" });
+  assert.equal(byId("save-file").value, "/chosen/new-package");
+  assert.equal(
+    messages.some(({ type }) => type === "save" || type === "browse-files"),
+    false,
+  );
 });
 
 test("tab keyboard order is preserved without group headings", (t) => {

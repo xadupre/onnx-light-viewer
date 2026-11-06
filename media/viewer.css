@@ -1662,6 +1662,19 @@ button:disabled {
 .file-panel p {
   line-height: 1.5;
 }
+.save-path-field {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.save-path-field input {
+  flex: 1 1 14rem;
+  min-width: 0;
+}
+.save-path-field button {
+  flex-shrink: 0;
+}
 .path-picker-actions {
   display: flex;
   flex-wrap: wrap;

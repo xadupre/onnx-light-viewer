@@ -10,6 +10,8 @@ function createFilePanels({
   const pathDialog = byId("open-path-dialog");
   let selectedPath;
   let nativePathRequest = 0;
+  let savePathRequest = 0;
+  let savePathSelection;
   let clipboardSelection;
   let openSource = "local";
   let pipelineFile = false;
@@ -144,10 +146,12 @@ function createFilePanels({
       const entries = pathHistory[target].filter(
         (entry) => entry.source === source,
       );
-      for (const [field, kind] of [
-        ["file", "file"],
-        ["location", "directory"],
-      ]) {
+      for (const [field, kind] of target === "save"
+        ? [["file", "file"]]
+        : [
+            ["file", "file"],
+            ["location", "directory"],
+          ]) {
         const suggestions = byId(`${target}-${field}-history`);
         suggestions.replaceChildren(
           ...entries
@@ -161,6 +165,7 @@ function createFilePanels({
         );
         if (field === "file") {
           suggestions.disabled = suggestions.options.length === 0;
+          if (target === "save") suggestions.hidden = suggestions.disabled;
           const placeholder = document.createElement("option");
           placeholder.value = "";
           placeholder.textContent = "Choose a recent path...";
@@ -176,6 +181,15 @@ function createFilePanels({
           choose.type = "button";
           choose.textContent = `${entry.kind === "directory" ? "[Folder] " : ""}${entry.path}`;
           choose.addEventListener("click", () => {
+            if (target === "save") {
+              invalidateSavePicker();
+              byId("save-file").value =
+                entry.kind === "directory"
+                  ? savePathInDirectory(entry.path)
+                  : entry.path;
+              byId("save-file").focus();
+              return;
+            }
             const field = entry.kind === "directory" ? "location" : "file";
             byId(`${target}-${field}`).value = entry.path;
             if (target === "open" && field === "file") changedOpenPath();
@@ -266,6 +280,46 @@ function createFilePanels({
     clipboardSelection = undefined;
     setNativePickersBusy(isReplacing());
   }
+  function invalidateSavePicker() {
+    savePathRequest++;
+    savePathSelection = undefined;
+    byId("save-path-browse").disabled =
+      isReplacing() || byId("save-submit").disabled;
+  }
+  function savePathInDirectory(directory) {
+    const name =
+      byId("save-file").value.split(/[\\/]/).pop() || "model-copy.onnx";
+    const separator = /^(?:[a-z]:\\|\\\\)/i.test(directory) ? "\\" : "/";
+    return `${directory.replace(/[\\/]$/, "")}${separator}${name}`;
+  }
+  function savePathFormat() {
+    if (byId("save-container").value !== "model")
+      return byId("save-package-layout").value === "directory"
+        ? "directory"
+        : "ortpackage";
+    if (pipelineFile) return "pipe-onnx";
+    const format = document.querySelector(
+      'input[name="save-format"]:checked',
+    ).value;
+    return format === "ort"
+      ? "ort"
+      : format === "embedded-encrypted"
+        ? "enc"
+        : "onnx";
+  }
+  byId("save-path-browse").addEventListener("click", () => {
+    if (isReplacing() || byId("save-submit").disabled) return;
+    byId("save-options-error").textContent = "";
+    savePathSelection = byId("save-file").value;
+    byId("save-path-browse").disabled = true;
+    postMessage({
+      type: "select-save-path",
+      requestId: ++savePathRequest,
+      location: savePathSelection,
+      format: savePathFormat(),
+    });
+  });
+  byId("save-file").addEventListener("input", invalidateSavePicker);
   function setNativePickersBusy(pending) {
     byId("open-native-picker").disabled = pending;
     byId("open-native-folder-picker").disabled = pending;
@@ -358,8 +412,8 @@ function createFilePanels({
       revealPanel(panel);
       fileError(target).textContent = "";
       postMessage({ type: "get-path-history", target });
-      if (target === "save" || openSource === "backend") browseFiles(target);
-      else if (openSource === "huggingface") searchHub();
+      if (target === "open" && openSource === "backend") browseFiles(target);
+      else if (target === "open" && openSource === "huggingface") searchHub();
     } else {
       if (target === "open") {
         closePathBrowser();
@@ -368,7 +422,9 @@ function createFilePanels({
         pipelineRequest++;
       }
       fileRequests[target]++;
-      byId(`${target}-files`).setAttribute("aria-busy", "false");
+      if (target === "open")
+        byId("open-files").setAttribute("aria-busy", "false");
+      else invalidateSavePicker();
       for (const input of panel.querySelectorAll('input[type="password"]'))
         input.value = "";
     }
@@ -381,6 +437,7 @@ function createFilePanels({
       if (!event.target.value) return;
       byId(`${target}-file`).value = event.target.value;
       if (target === "open") changedOpenPath();
+      else invalidateSavePicker();
       event.target.value = "";
       byId(`${target}-file`).focus();
     });
@@ -400,15 +457,15 @@ function createFilePanels({
     byId(`cancel-${target}`).addEventListener("click", () =>
       toggleFilePanel(target, false),
     );
-    byId(`${target}-browse`).addEventListener("submit", (event) => {
-      event.preventDefault();
-      browseFiles(target);
-    });
-    byId(`${target}-parent`).addEventListener("click", () => {
-      byId(`${target}-location`).value = fileParents[target];
-      browseFiles(target);
-    });
   }
+  byId("open-browse").addEventListener("submit", (event) => {
+    event.preventDefault();
+    browseFiles("open");
+  });
+  byId("open-parent").addEventListener("click", () => {
+    byId("open-location").value = fileParents.open;
+    browseFiles("open");
+  });
   function selectSource(source) {
     if (openSource === source) return;
     closePathBrowser();
@@ -544,11 +601,21 @@ function createFilePanels({
       ? byId("save-package-layout").value === "archive"
         ? "New package archive (.ortpackage)"
         : "New package directory"
-      : "Destination path";
+      : "File name or path";
+    const directory =
+      packageKind && byId("save-package-layout").value === "directory";
+    byId("save-path-browse").setAttribute(
+      "aria-label",
+      directory ? "Choose new package directory name" : "Choose output file",
+    );
+    byId("save-path-help").textContent = directory
+      ? "Enter a new package directory name. Browse chooses its name and parent; Save copy creates it."
+      : "Choose the output file, including its name. Browse selects a path; Save copy writes it.";
     byId("save-overwrite").disabled = packageKind;
     if (packageKind) byId("save-overwrite").checked = false;
   }
   byId("save-form").addEventListener("change", (event) => {
+    invalidateSavePicker();
     updateSaveChoices();
     const packageKind = byId("save-container").value !== "model";
     if (event.target.id === "save-container" && packageKind !== savePackage) {
@@ -650,7 +717,22 @@ function createFilePanels({
   });
 
   function handleMessage(data) {
-    if (
+    if (data?.type === "save-path-selected") {
+      if (
+        data.requestId !== savePathRequest ||
+        savePathSelection === undefined ||
+        byId("save-options").hidden ||
+        isReplacing()
+      )
+        return true;
+      const unchanged = byId("save-file").value === savePathSelection;
+      invalidateSavePicker();
+      if (data.error) byId("save-options-error").textContent = data.error;
+      else if (data.location && unchanged)
+        byId("save-file").value = data.location;
+      byId("save-file").focus();
+      return true;
+    } else if (
       data?.type === "runtime-package-info" ||
       data?.type === "runtime-package-error"
     ) {
@@ -782,7 +864,7 @@ function createFilePanels({
       checkPipelines();
     } else if (data?.type === "file-list" || data?.type === "file-list-error") {
       if (
-        !["open", "save"].includes(data.target) ||
+        data.target !== "open" ||
         data.requestId !== fileRequests[data.target]
       )
         return true;
@@ -799,15 +881,6 @@ function createFilePanels({
       fileParents[target] = data.parent;
       byId(`${target}-parent`).disabled =
         !data.parent || data.parent === data.location;
-      if (target === "save" && data.location) {
-        const name =
-          byId("save-file").value.split(/[\\/]/).pop() || "model-copy.onnx";
-        const separator = /^(?:[a-z]:\\|\\\\)/i.test(data.location)
-          ? "\\"
-          : "/";
-        byId("save-file").value =
-          `${data.location.replace(/[\\/]$/, "")}${separator}${name}`;
-      }
       list.replaceChildren(
         ...data.entries.map((entry) => {
           const item = document.createElement("li");
@@ -884,15 +957,17 @@ function createFilePanels({
   function reset() {
     closePathBrowser();
     invalidateNativePicker();
+    invalidateSavePicker();
     invalidateHubSearch();
     for (const target of ["open", "save"]) {
       fileRequests[target]++;
-      byId(`${target}-files`).setAttribute("aria-busy", "false");
     }
+    byId("open-files").setAttribute("aria-busy", "false");
     byId("save-status").textContent = "";
   }
   function setFile(file) {
     if (file) {
+      invalidateSavePicker();
       pipelineFile = file.pipeline === true;
       savePackages = {
         genai: file.package?.genai === true,
@@ -905,7 +980,6 @@ function createFilePanels({
         byId("save-confirmation").value = "";
       }
       if (openSource === "local") byId("open-location").value = file.directory;
-      byId("save-location").value = file.saveDirectory ?? file.directory;
       byId("save-file").value =
         file.savePath +
         (document.querySelector('input[name="save-format"]:checked').value ===
@@ -935,6 +1009,8 @@ function createFilePanels({
     byId("save-model").setAttribute("aria-busy", "true");
     byId("save-status").textContent = "Saving model…";
     byId("save-submit").disabled = true;
+    invalidateSavePicker();
+    byId("save-path-browse").disabled = true;
   }
   function finishOpening(status) {
     if (status === "SUCCEEDED") {
@@ -948,6 +1024,7 @@ function createFilePanels({
     byId("save-model").setAttribute("aria-busy", "false");
     byId("save-model").disabled = disabled;
     byId("save-submit").disabled = false;
+    invalidateSavePicker();
     if (status === "CANCELLED")
       byId("save-status").textContent = "Save cancelled.";
   }
@@ -955,7 +1032,12 @@ function createFilePanels({
     if (pending) {
       closePathBrowser();
       invalidateNativePicker();
+      invalidateSavePicker();
     }
+    byId("save-path-browse").disabled =
+      pending ||
+      byId("save-submit").disabled ||
+      savePathSelection !== undefined;
     showProgress("open", pending);
     byId("open-model").disabled = pending;
     byId("open-submit").disabled = pending;

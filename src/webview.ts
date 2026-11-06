@@ -571,19 +571,18 @@ export function webviewHtml(
           </dialog>
           <section id="save-options" class="inspector-panel file-panel" aria-labelledby="save-title" hidden>
             <h2 id="save-title" class="eyebrow panel-title">Save model copy</h2>
-            <form id="save-browse" class="file-browse">
-              <label for="save-location">Destination directory</label>
-              <input id="save-location" type="text" autocomplete="off" list="save-location-history"><datalist id="save-location-history"></datalist>
-              <div><button type="submit">Browse</button><button id="save-parent" type="button" disabled>Parent folder</button></div>
-            </form>
-            <ul id="save-files" class="file-list" aria-label="Destination folders and models"></ul>
             <form id="save-form">
               <label for="save-container">What to save</label>
               <select id="save-container"><option value="model">Model file</option><option value="generic">Generic runtime package (models + weights)</option><option value="genai" disabled>GenAI runtime package (+ configuration + tokenizer)</option><option value="compiled" disabled>Compiled EPContext package (+ provider assets)</option></select>
               <div id="save-package-layout-options" hidden><label for="save-package-layout">Package container</label><select id="save-package-layout"><option value="archive">ZIP archive (.ortpackage)</option><option value="directory">Directory</option></select></div>
+              <label id="save-file-label" for="save-file">File name or path</label>
+              <div class="save-path-field">
+                <input id="save-file" type="text" value="model-copy.onnx" required autocomplete="off" aria-describedby="save-path-help">
+                <button id="save-path-browse" type="button" aria-label="Choose output file">Browse...</button>
+              </div>
+              <p id="save-path-help">Choose the output file, including its name. Browse selects a path; Save copy writes it.</p>
+              <select id="save-file-history" aria-label="Recent destination paths" disabled hidden><option value="">Choose a recent path...</option></select>
               <p id="save-package-note" hidden>Choose a new .ortpackage archive or directory. Save preserves all package assets and replaces only the selected model with its current edits. GenAI and compiled packages require an existing package; Save does not generate a tokenizer, GenAI configuration or provider compilation.</p>
-              <label id="save-file-label" for="save-file">Destination path</label><input id="save-file" type="text" value="model-copy.onnx" required autocomplete="off">
-              <select id="save-file-history" aria-label="Recent destination paths" disabled><option value="">Choose a recent path...</option></select>
               <fieldset class="save-grid">
                 <legend>Model serialization, weight storage and encryption</legend>
                 <label><input type="radio" name="save-format" value="embedded-plain" checked>ONNX protobuf (.onnx) or pipeline (.pipe-onnx), with embedded weights</label>

@@ -92,6 +92,9 @@ onnx-light reads and writes the contained models.
 **Save → What to save** chooses a generic, GenAI or compiled EPContext package.
 Choose **ZIP archive (.ortpackage)** or **Directory** independently of the
 model serialization: ONNX protobuf, ORT FlatBuffer, or a pipeline.
+One output field adapts to a file or a new directory. **Browse...** chooses its
+name and location; **Save copy** writes it. There is no separate destination
+directory or unlabeled file listing.
 New archives contain a version-1 manifest; existing manifests and other assets
 are preserved, with references updated when the selected model changes format.
 GenAI and compiled packages require existing configuration/provider assets;

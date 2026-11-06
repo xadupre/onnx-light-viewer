@@ -2949,7 +2949,84 @@ test("native path selection detects files and package folders without loading or
   assert.deepEqual(extension.errors, []);
 });
 
-test("opens outside-workspace models through the path dialog and saves encrypted copies without popup pickers", async (t) => {
+test("chooses format-aware save paths without writing or replacing the model", async (t) => {
+  const extension = await openExtension("relu.onnx");
+  t.after(() => extension.dispose());
+  const reads = extension.reads.length;
+  const graphs = extension.messages.filter(
+    ({ type }) => type === "graph",
+  ).length;
+  for (const [requestId, format] of [
+    "onnx",
+    "ort",
+    "enc",
+    "pipe-onnx",
+    "ortpackage",
+    "directory",
+  ].entries()) {
+    extension.setSaveDestination("/chosen/new-output");
+    await extension.receive({
+      type: "select-save-path",
+      requestId,
+      format,
+      location: "/suggested/new-output",
+    });
+    const dialog = extension.saveDialogs.at(-1);
+    assert.equal(dialog.defaultUri.fsPath, "/suggested/new-output");
+    assert.deepEqual(
+      dialog.filters,
+      format === "directory"
+        ? undefined
+        : {
+            "Output file": [format],
+          },
+    );
+    assert.match(
+      dialog.title,
+      format === "directory" ? /directory name/ : /output file/,
+    );
+    assert.deepEqual(extension.messages.at(-1), {
+      type: "save-path-selected",
+      requestId,
+      location: "/chosen/new-output",
+    });
+  }
+  extension.setSaveDestination(undefined);
+  await extension.receive({
+    type: "select-save-path",
+    requestId: 7,
+    format: "onnx",
+    location: "/suggested/copy.onnx",
+  });
+  assert.equal(extension.messages.at(-1).location, null);
+  await extension.receive({
+    type: "select-save-path",
+    requestId: 9,
+    format: "ort",
+    location: "",
+  });
+  assert.equal(
+    extension.saveDialogs.at(-1).defaultUri.fsPath,
+    path.dirname(require.resolve("./models/relu.onnx")),
+  );
+  const dialogs = extension.saveDialogs.length;
+  await extension.receive({
+    type: "select-save-path",
+    requestId: 8,
+    format: "invalid",
+    location: "/suggested/copy.onnx",
+  });
+  assert.match(extension.messages.at(-1).error, /Invalid save destination/);
+  assert.equal(extension.saveDialogs.length, dialogs);
+  assert.equal(extension.reads.length, reads);
+  assert.equal(
+    extension.messages.filter(({ type }) => type === "graph").length,
+    graphs,
+  );
+  assert.deepEqual(extension.errors, []);
+});
+
+test("opens outside-workspace models and saves encrypted copies through an optional path chooser", async (t) => {
   const directory = await mkdtemp(
     path.join(tmpdir(), "onnx-light-inline-files-"),
   );
@@ -3052,8 +3129,19 @@ test("opens outside-workspace models through the path dialog and saves encrypted
   assert.equal(document.querySelector("dialog[open]"), null);
   const encrypted = document.querySelector('input[value="embedded-encrypted"]');
   encrypted.click();
-  const destination = path.join(directory, "source-copy.onnx.enc");
+  assert.equal(
+    document.getElementById("save-file").value,
+    path.join(directory, "source-copy.onnx.enc"),
+  );
+  const destination = path.join(directory, "chosen-copy.onnx.enc");
+  extension.setSaveDestination(destination);
+  document.getElementById("save-path-browse").click();
+  await flush();
   assert.equal(document.getElementById("save-file").value, destination);
+  assert.deepEqual(extension.saveDialogs.at(-1).filters, {
+    "Output file": ["enc"],
+  });
+  await assert.rejects(stat(destination), { code: "ENOENT" });
   document.getElementById("save-password").value = "inline-password";
   document.getElementById("save-confirmation").value = "wrong";
   submit("save-form");
@@ -3101,7 +3189,7 @@ test("opens outside-workspace models through the path dialog and saves encrypted
   assert.deepEqual(await readFile(source), original);
   assert.deepEqual(extension.picks, []);
   assert.deepEqual(extension.passwordPrompts, []);
-  assert.deepEqual(extension.saveDialogs, []);
+  assert.equal(extension.saveDialogs.length, 1);
   assert.equal(extension.errors.length, 1);
   assert.ok(
     extension.logs.every((entry) => !entry.includes("inline-password")),
