@@ -125,8 +125,8 @@ VS Code's user storage across viewer reloads and application restarts.
 Failed or cancelled operations and browsing alone do not add entries.
 
 Use the recent-path selector to fill a saved model path, or type any new path.
-Open suggestions follow the selected source. **Recent paths** also offers buttons,
-**Remove** for individual entries and **Clear Open/Save history**. In Save,
+Open suggestions follow the selected source. **Settings → History** offers
+per-entry removal and clearing. In Save,
 selecting a remembered folder keeps the output name and places it in that folder.
 Selecting history never opens or saves automatically.
 Paths are still validated when used, even if remembered. Passwords and URL

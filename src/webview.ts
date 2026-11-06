@@ -20,8 +20,6 @@ export function webviewHtml(
   onnxLightVersion: string,
   initialTab: "model" | "logs" = "model",
 ): string {
-  const historyControls = (target: "open" | "save"): string =>
-    `<details id="${target}-history" class="path-history" hidden><summary>Recent paths</summary><p>Missing local paths are removed automatically. Selecting a path only fills the field.</p><button id="${target}-clear-history" type="button">Clear ${target === "open" ? "Open" : "Save"} history</button><ul id="${target}-history-entries" aria-label="Recent ${target} paths"></ul></details>`;
   const documentationLink = (name: string, url: string): string =>
     `<a class="repository-documentation" href="${url}" aria-label="${name} documentation" title="${name} documentation"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path d="M12 5v16M12 5C9 3 5 3 2 4v15c3-1 7-1 10 2 3-3 7-3 10-2V4c-3-1-7-1-10 1Z"/></svg></a>`;
   const refreshIcon = `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2 6M20 4v7h-7"/></svg>`;
@@ -532,7 +530,9 @@ export function webviewHtml(
                 <button id="open-path-browse" type="button" aria-haspopup="dialog" aria-controls="open-path-dialog">Browse folders...</button>
                 <button id="open-native-picker" type="button">VS Code file picker...</button>
                 <button id="open-native-folder-picker" type="button">VS Code folder picker...</button>
+                <button id="open-load-pipeline" type="button" data-load-pipeline hidden>Load as pipeline</button>
               </div>
+              <p id="open-pipeline-status" class="pipeline-status" role="status" hidden></p>
               <div id="open-package-options" hidden>
                 <button id="inspect-open-package" type="button">Inspect package</button>
                 <label for="open-package-model">Model inside the package</label><select id="open-package-model" disabled><option value="">Use the package default model</option></select>
@@ -546,7 +546,6 @@ export function webviewHtml(
               <p id="open-error" role="alert"></p>
               <footer><button id="cancel-open" type="button">Close</button><button id="open-submit" class="primary" type="submit">Open model</button></footer>
             </form>
-            ${historyControls("open")}
           </section>
           <dialog id="open-path-dialog" class="file-panel" aria-labelledby="open-path-title" aria-describedby="open-path-help">
             <h2 id="open-path-title">Choose a model path</h2>
@@ -607,14 +606,12 @@ export function webviewHtml(
                 <label for="save-password">Password</label><input id="save-password" type="password" autocomplete="new-password">
                 <label for="save-confirmation">Confirm password</label><input id="save-confirmation" type="password" autocomplete="new-password">
               </div>
-              <label><input id="save-rewritings" type="checkbox" aria-describedby="save-rewritings-note">Include fusion rewritings</label>
-              <p id="save-rewritings-note">Unchecked: save the current graph without rewriting plans. Checked: save the original graph and one concatenated RewritingProto plan per modified model, including pending rewritings. Undo history is session-local.</p>
+              <label><input id="save-rewritings" type="checkbox">Include fusion rewritings</label>
               <label><input id="save-overwrite" type="checkbox">Replace an existing destination copy</label>
               <progress id="save-progress" aria-label="Saving model or package" aria-describedby="save-progress-status" hidden></progress><p id="save-progress-status" role="status" hidden></p>
               <p id="save-options-error" role="alert"></p>
               <footer><button id="cancel-save" type="button">Close</button><button id="save-submit" class="primary" type="submit">Save copy</button></footer>
             </form>
-            ${historyControls("save")}
           </section>
         </aside>
       </div>

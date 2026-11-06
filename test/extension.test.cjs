@@ -8619,9 +8619,10 @@ test("reports a file deleted after history display as soon as opening fails and 
   byId("open-model").click();
   while (requests.length) await Promise.all(requests.splice(0));
   await rm(deleted);
-  [...byId("open-history-entries").querySelectorAll("button")]
-    .find((button) => button.textContent === deleted)
-    .click();
+  byId("open-file-history").value = deleted;
+  byId("open-file-history").dispatchEvent(
+    new window.Event("change", { bubbles: true }),
+  );
   byId("open-form").requestSubmit();
   while (requests.length) await Promise.all(requests.splice(0));
   assert.equal(failureFeedback.visible, true);

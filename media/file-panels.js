@@ -57,6 +57,7 @@ function createFilePanels({
     packageDirectory = directory;
     invalidatePackage();
     updateOpenFormat();
+    updatePipelineChoice();
   }
   function invalidatePackage() {
     packageRequest++;
@@ -119,6 +120,24 @@ function createFilePanels({
   let pathHistory = { open: [], save: [] };
   let pipelineRequest = 0;
   const pipelineInfo = new Map();
+  function updatePipelineChoice() {
+    const info =
+      openSource === "local" && !byId("open-panel").hidden
+        ? pipelineInfo.get(openPath())
+        : undefined;
+    byId("open-load-pipeline").hidden = !info?.available;
+    byId("open-pipeline-status").hidden = !info;
+    byId("open-pipeline-status").textContent = info?.label ?? "";
+  }
+  byId("open-load-pipeline").addEventListener("click", () => {
+    if (isReplacing() || byId("open-load-pipeline").hidden) return;
+    requestAction("open", "Load generation pipeline", {
+      source: "local",
+      location: byId("open-file").value,
+      password: "",
+      asPipeline: true,
+    });
+  });
   function checkPipelines() {
     const requestId = ++pipelineRequest;
     if (openSource !== "local" || byId("open-panel").hidden) return;
@@ -155,11 +174,14 @@ function createFilePanels({
         const suggestions = byId(`${target}-${field}-history`);
         suggestions.replaceChildren(
           ...entries
-            .filter((entry) => entry.kind === kind)
+            .filter((entry) => target === "save" || entry.kind === kind)
             .map((entry) => {
               const option = document.createElement("option");
               option.value = entry.path;
-              option.textContent = entry.path;
+              option.textContent =
+                target === "save" && entry.kind === "directory"
+                  ? `[Folder] ${entry.path}`
+                  : entry.path;
               return option;
             }),
         );
@@ -173,90 +195,8 @@ function createFilePanels({
           suggestions.value = "";
         }
       }
-      byId(`${target}-history`).hidden = entries.length === 0;
-      byId(`${target}-history-entries`).replaceChildren(
-        ...entries.map((entry) => {
-          const item = document.createElement("li");
-          const choose = document.createElement("button");
-          choose.type = "button";
-          choose.textContent = `${entry.kind === "directory" ? "[Folder] " : ""}${entry.path}`;
-          choose.addEventListener("click", () => {
-            if (target === "save") {
-              invalidateSavePicker();
-              byId("save-file").value =
-                entry.kind === "directory"
-                  ? savePathInDirectory(entry.path)
-                  : entry.path;
-              byId("save-file").focus();
-              return;
-            }
-            const field = entry.kind === "directory" ? "location" : "file";
-            byId(`${target}-${field}`).value = entry.path;
-            if (target === "open" && field === "file") changedOpenPath();
-            if (
-              target === "open" &&
-              field === "location" &&
-              openSource === "local"
-            )
-              openPathBrowser(false);
-            else byId(`${target}-${field}`).focus();
-          });
-          const remove = document.createElement("button");
-          remove.type = "button";
-          remove.textContent = "Remove";
-          remove.setAttribute(
-            "aria-label",
-            `Remove ${entry.path} from ${target} history`,
-          );
-          remove.addEventListener("click", () =>
-            postMessage({
-              type: "path-history-edit",
-              target,
-              historyAction: "remove",
-              historyEntry: entry,
-            }),
-          );
-          item.append(choose);
-          if (
-            target === "open" &&
-            source === "local" &&
-            entry.kind === "file"
-          ) {
-            const info = pipelineInfo.get(entry.path);
-            const status = document.createElement("span");
-            status.className = "history-pipeline-status";
-            status.textContent =
-              info?.label ?? "Generation pipeline not checked yet";
-            status.title =
-              "Checks exported assets and graph inputs without running inference. Runtime operator support is checked when running the prompt.";
-            item.append(status);
-            if (info?.available) {
-              const load = document.createElement("button");
-              load.type = "button";
-              load.dataset.loadPipeline = "";
-              load.textContent = "Load as pipeline";
-              load.setAttribute(
-                "aria-label",
-                `Load ${entry.path} as generation pipeline`,
-              );
-              load.disabled = isReplacing();
-              load.addEventListener("click", () => {
-                if (isReplacing()) return;
-                requestAction("open", "Load generation pipeline", {
-                  source: "local",
-                  location: entry.path,
-                  password: "",
-                  asPipeline: true,
-                });
-              });
-              item.append(load);
-            }
-          }
-          item.append(remove);
-          return item;
-        }),
-      );
     }
+    updatePipelineChoice();
   }
   function fileError(target) {
     return byId(
@@ -407,6 +347,7 @@ function createFilePanels({
     if (visible) toggleFilePanel(target === "open" ? "save" : "open", false);
     const panel = byId(target === "open" ? "open-panel" : "save-options");
     panel.hidden = !visible;
+    updatePipelineChoice();
     byId(`${target}-model`).setAttribute("aria-expanded", String(visible));
     if (visible) {
       revealPanel(panel);
@@ -430,24 +371,24 @@ function createFilePanels({
     }
   }
   for (const target of ["open", "save"]) {
-    byId(`${target}-history`).addEventListener("toggle", (event) => {
-      if (event.target.open) postMessage({ type: "get-path-history", target });
-    });
     byId(`${target}-file-history`).addEventListener("change", (event) => {
       if (!event.target.value) return;
-      byId(`${target}-file`).value = event.target.value;
+      const directory =
+        target === "save" &&
+        pathHistory.save.some(
+          (entry) =>
+            entry.source === "local" &&
+            entry.kind === "directory" &&
+            entry.path === event.target.value,
+        );
+      byId(`${target}-file`).value = directory
+        ? savePathInDirectory(event.target.value)
+        : event.target.value;
       if (target === "open") changedOpenPath();
       else invalidateSavePicker();
       event.target.value = "";
       byId(`${target}-file`).focus();
     });
-    byId(`${target}-clear-history`).addEventListener("click", () =>
-      postMessage({
-        type: "path-history-edit",
-        target,
-        historyAction: "clear",
-      }),
-    );
     byId(`${target}-model`).addEventListener("click", () =>
       toggleFilePanel(
         target,
@@ -1043,10 +984,7 @@ function createFilePanels({
     byId("open-submit").disabled = pending;
     byId("open-path-browse").disabled = pending;
     setNativePickersBusy(pending);
-    for (const button of byId("open-history-entries").querySelectorAll(
-      "[data-load-pipeline]",
-    ))
-      button.disabled = pending;
+    byId("open-load-pipeline").disabled = pending;
     byId("save-model").disabled =
       pending ||
       !hasModel ||
