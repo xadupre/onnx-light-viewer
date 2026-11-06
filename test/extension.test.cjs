@@ -2952,6 +2952,9 @@ test("native path selection detects files and package folders without loading or
 test("chooses format-aware save paths without writing or replacing the model", async (t) => {
   const extension = await openExtension("relu.onnx");
   t.after(() => extension.dispose());
+  const suggested = path.join(tmpdir(), "suggested", "new-output");
+  const chosen = path.join(tmpdir(), "chosen", "new-output");
+  const copy = path.join(tmpdir(), "suggested", "copy.onnx");
   const reads = extension.reads.length;
   const graphs = extension.messages.filter(
     ({ type }) => type === "graph",
@@ -2964,15 +2967,15 @@ test("chooses format-aware save paths without writing or replacing the model", a
     "ortpackage",
     "directory",
   ].entries()) {
-    extension.setSaveDestination("/chosen/new-output");
+    extension.setSaveDestination(chosen);
     await extension.receive({
       type: "select-save-path",
       requestId,
       format,
-      location: "/suggested/new-output",
+      location: suggested,
     });
     const dialog = extension.saveDialogs.at(-1);
-    assert.equal(dialog.defaultUri.fsPath, "/suggested/new-output");
+    assert.equal(dialog.defaultUri.fsPath, suggested);
     assert.deepEqual(
       dialog.filters,
       format === "directory"
@@ -2988,7 +2991,7 @@ test("chooses format-aware save paths without writing or replacing the model", a
     assert.deepEqual(extension.messages.at(-1), {
       type: "save-path-selected",
       requestId,
-      location: "/chosen/new-output",
+      location: chosen,
     });
   }
   extension.setSaveDestination(undefined);
@@ -2996,7 +2999,7 @@ test("chooses format-aware save paths without writing or replacing the model", a
     type: "select-save-path",
     requestId: 7,
     format: "onnx",
-    location: "/suggested/copy.onnx",
+    location: copy,
   });
   assert.equal(extension.messages.at(-1).location, null);
   await extension.receive({
@@ -3014,7 +3017,7 @@ test("chooses format-aware save paths without writing or replacing the model", a
     type: "select-save-path",
     requestId: 8,
     format: "invalid",
-    location: "/suggested/copy.onnx",
+    location: copy,
   });
   assert.match(extension.messages.at(-1).error, /Invalid save destination/);
   assert.equal(extension.saveDialogs.length, dialogs);
