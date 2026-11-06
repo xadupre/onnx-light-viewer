@@ -35,6 +35,23 @@ function workflow(name) {
 
 const documentation = workflow("documentation.yml");
 
+test("extension release versions stay consistent", () => {
+  const manifest = JSON.parse(
+    readFileSync(path.resolve(__dirname, "..", "package.json"), "utf8"),
+  );
+  const lock = JSON.parse(
+    readFileSync(path.resolve(__dirname, "..", "package-lock.json"), "utf8"),
+  );
+  const changelog = readFileSync(
+    path.resolve(__dirname, "..", "CHANGELOGS.md"),
+    "utf8",
+  );
+  assert.equal(manifest.version, "0.2.5");
+  assert.equal(lock.version, manifest.version);
+  assert.equal(lock.packages[""].version, manifest.version);
+  assert.equal(changelog.match(/^(\d+\.\d+\.\d+) \(/m)[1], manifest.version);
+});
+
 test("native builds use onnx-light 0.2.6 with pinned checksums", () => {
   const cmake = readFileSync(
     path.resolve(__dirname, "..", "CMakeLists.txt"),

@@ -3,7 +3,7 @@ Changelogs
 
 Notable changes to ONNX Light Viewer, newest first.
 
-0.2.4 (unreleased)
+0.2.5 (unreleased)
 ------------------
 
 - Select saved rewriting alternatives beside the graph name, with **None** as
