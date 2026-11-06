@@ -11,6 +11,8 @@ const {
   mkdir,
   rename,
   symlink,
+  link,
+  copyFile,
 } = require("node:fs/promises");
 const path = require("node:path");
 const { tmpdir } = require("node:os");
@@ -104,6 +106,33 @@ test("runtime package roots keep nested GenAI models executable after ORT packag
       [1, 1, 1],
     );
   }
+});
+
+test("GenAI decoder validation accepts filesystem aliases but rejects distinct model files", async (t) => {
+  const { root, model } = await fixture(t);
+  const alias = path.join(root, "decoder-alias.onnx");
+  await link(model, alias);
+  const generate = () =>
+    runPrompt(
+      alias,
+      options,
+      python,
+      signal(),
+      () => {},
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      root,
+    );
+  const result = await generate();
+  assert.deepEqual(
+    result.tokens.map((token) => token.id),
+    [1, 1, 1],
+  );
+  await rm(alias);
+  await copyFile(model, alias);
+  await assert.rejects(generate(), /not the GenAI configuration's decoder/);
 });
 
 test("GenAI .ortpackage ZIPs reload and generate with both engines from their selected variant", async (t) => {

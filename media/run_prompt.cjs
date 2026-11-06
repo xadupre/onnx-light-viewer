@@ -3,7 +3,7 @@ const {
   readdirSync,
   writeFileSync,
   writeSync,
-  realpathSync,
+  statSync,
 } = require("node:fs");
 const { execFileSync } = require("node:child_process");
 const { isAbsolute, join, resolve } = require("node:path");
@@ -22,14 +22,16 @@ function run(input, output, sessionKey) {
       request.genaiConfiguration ??
       JSON.parse(readFileSync(join(directory, "genai_config.json"), "utf8"));
     const decoder = config.model.decoder.filename;
-    if (
-      decoder &&
-      realpathSync(resolve(directory, decoder)) !==
-        realpathSync(request.modelPath)
-    )
-      throw new Error(
-        "The selected model is not the GenAI configuration's decoder.",
-      );
+    if (decoder) {
+      const configured = statSync(resolve(directory, decoder), {
+        bigint: true,
+      });
+      const selected = statSync(request.modelPath, { bigint: true });
+      if (configured.dev !== selected.dev || configured.ino !== selected.ino)
+        throw new Error(
+          "The selected model is not the GenAI configuration's decoder.",
+        );
+    }
   }
   const libraryPath =
     process.env.ONNX_LIGHT_VIEWER_GENAI_LIBRARY ||
