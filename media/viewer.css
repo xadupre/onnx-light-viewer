@@ -75,14 +75,6 @@ p {
 .feature-group {
   min-width: 0;
 }
-.feature-group-title {
-  display: block;
-  padding: 4px 8px;
-  color: var(--muted);
-  font-size: 10px;
-  font-weight: 600;
-  text-transform: uppercase;
-}
 .feature-group-controls {
   display: flex;
   gap: 4px;
@@ -113,7 +105,9 @@ p {
 }
 #model-view {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr);
+  min-width: 0;
   min-height: 0;
 }
 #logs-view,
@@ -533,6 +527,17 @@ body.resizing-tensor-column * {
   gap: 10px;
   flex-wrap: wrap;
 }
+.graph-toolbar > .graph-heading {
+  flex: 0 0 100%;
+  flex-wrap: nowrap;
+}
+.graph-toolbar > [role="status"]:empty {
+  display: none;
+}
+#rewriting-count {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
 #repository-link {
   display: flex;
   align-items: center;
@@ -645,9 +650,13 @@ a:focus-visible {
   display: none;
 }
 .graph-stats {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
   color: var(--muted);
   font-size: 11px;
-  flex-wrap: wrap;
+  white-space: nowrap;
 }
 .graph-body {
   --sidebar-min-width: 200px;
@@ -687,8 +696,9 @@ body.resizing-sidebar {
 }
 #graph-navigation:not([hidden]) {
   display: flex;
-  flex: 0 0 100%;
-  flex-wrap: wrap;
+  flex: 1;
+  min-width: 0;
+  flex-wrap: nowrap;
   gap: 6px;
 }
 #model-error {
@@ -714,9 +724,26 @@ body.resizing-sidebar {
 }
 #graph-navigation button {
   max-width: 100%;
-  overflow-wrap: anywhere;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   text-align: left;
   background: var(--panel);
+}
+#graph-navigation button[aria-haspopup="menu"] {
+  position: relative;
+  padding-right: 24px;
+}
+#graph-navigation button[aria-haspopup="menu"]::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  transform: translateY(-50%);
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid currentColor;
 }
 #graph {
   display: block;
@@ -1365,7 +1392,8 @@ button:disabled {
   stroke: currentColor;
   stroke-width: 1.8;
 }
-#graph-context-menu {
+#graph-context-menu,
+#graph-switcher {
   position: fixed;
   z-index: 1000;
   padding: 4px;
@@ -1375,11 +1403,26 @@ button:disabled {
   border-radius: 6px;
   box-shadow: 0 4px 16px #0005;
 }
-#graph-context-menu button {
+#graph-context-menu button,
+#graph-switcher button {
   display: block;
   width: 100%;
   margin: 0;
   text-align: left;
+}
+#graph-switcher {
+  max-width: min(520px, calc(100vw - 16px));
+  max-height: min(500px, calc(100vh - 16px));
+  overflow-y: auto;
+}
+#graph-switcher button {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.graph-switcher-heading {
+  padding: 6px 8px;
+  color: var(--muted);
+  font-size: 11px;
 }
 #selection-pattern-text,
 #selection-pattern-replacement,

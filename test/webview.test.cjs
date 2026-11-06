@@ -6,7 +6,7 @@ const { huggingFaceTasks } = require("../dist/huggingFaceTasks");
 const { webviewHtml } = require("../dist/webview");
 
 for (const initialTab of ["model", "logs"]) {
-  test(`keeps sidebar actions ungrouped when opening ${initialTab}`, (t) => {
+  test(`keeps controls and model header compact when opening ${initialTab}`, (t) => {
     const dom = new JSDOM(
       webviewHtml(
         (name) => name,
@@ -14,46 +14,43 @@ for (const initialTab of ["model", "logs"]) {
         "test-nonce",
         "test",
         initialTab,
-        require("../package.json").version,
       ),
     );
     t.after(() => dom.window.close());
     const { document } = dom.window;
+    assert.equal(document.getElementById("app-version"), null);
+    assert.equal(document.getElementById("onnx-light-version"), null);
+    assert.equal(document.querySelector(".feature-group-title"), null);
     assert.equal(
-      document.getElementById("app-version").textContent,
-      `ONNX Light Viewer ${require("../package.json").version}`,
+      document.getElementById("graph-navigation").parentElement,
+      document.getElementById("rewriting-count").parentElement,
     );
-    if (initialTab === "model")
-      assert.equal(
-        document.getElementById("app-version").closest("[hidden]"),
-        null,
-      );
+    assert.equal(
+      document.getElementById("graph-summary").closest(".graph-stats")
+        .parentElement,
+      document.getElementById("rewriting-count").parentElement,
+    );
+    assert.ok(document.getElementById("settings-app-version"));
+    assert.ok(document.getElementById("settings-native-version"));
     const groups = (selector) =>
-      [...document.querySelectorAll(selector)].map((group) => [
-        group.querySelector(".feature-group-title").textContent,
+      [...document.querySelectorAll(selector)].map((group) =>
         [...group.querySelectorAll("button")].map((button) => button.id),
-      ]);
+      );
     assert.deepEqual(groups(".viewer-tabs > .feature-group"), [
       [
-        "Navigation",
-        [
-          "model-tab",
-          "statistics-tab",
-          "memory-tab",
-          "tensors-tab",
-          "prompt-tab",
-        ],
+        "model-tab",
+        "statistics-tab",
+        "memory-tab",
+        "tensors-tab",
+        "prompt-tab",
       ],
       [
-        "Application",
-        [
-          "logs-tab",
-          "status-tab",
-          "controls-tab",
-          "repositories-tab",
-          "patterns-tab",
-          "settings-tab",
-        ],
+        "logs-tab",
+        "status-tab",
+        "controls-tab",
+        "repositories-tab",
+        "patterns-tab",
+        "settings-tab",
       ],
     ]);
     const controls = document.getElementById("sidebar-controls");

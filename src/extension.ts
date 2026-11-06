@@ -4348,7 +4348,6 @@ async function configurePanel(
     nonce,
     onnxLightVersion,
     initialTab,
-    context.extension.packageJSON.version,
   );
   if (uri) {
     try {

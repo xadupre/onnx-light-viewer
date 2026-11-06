@@ -4674,7 +4674,7 @@ test("keeps all pipeline models accessible from the permanent navigation bar", (
     );
     assert.equal(
       buttons().find((button) => button.textContent === role).disabled,
-      true,
+      false,
     );
   }
   buttons()[0].click();
@@ -8431,7 +8431,7 @@ test("preserves save destination separators while browsing directories inline", 
   }
 });
 
-test("tab keyboard order follows the Navigation and Application themes", (t) => {
+test("tab keyboard order is preserved without group headings", (t) => {
   const { document, window } = openViewer(t);
   const tabs = [...document.querySelectorAll(".viewer-tabs [role=tab]")];
   assert.deepEqual(
@@ -11328,14 +11328,15 @@ for (const initialTab of ["model", "logs"]) {
   });
 }
 
-test("shows the compiled onnx-light release before loading a graph and after model replacement", (t) => {
+test("keeps native source-link version metadata without displaying versions in the model header", (t) => {
   const { document, load } = openViewer(t);
   const version = readFileSync(
     require.resolve("../CMakeLists.txt"),
     "utf8",
   ).match(/set\(ONNX_LIGHT_VERSION\s+"([^"]+)"\)/)[1];
-  const release = document.getElementById("onnx-light-version");
-  assert.equal(release.textContent, `onnx-light ${version}`);
+  assert.equal(document.getElementById("onnx-light-version"), null);
+  assert.equal(document.getElementById("app-version"), null);
+  assert.equal(document.body.dataset.onnxLightVersion, version);
   load(demoGraph);
   load(
     decodeGraph(
@@ -11343,7 +11344,7 @@ test("shows the compiled onnx-light release before loading a graph and after mod
       "passthrough.onnx",
     ),
   );
-  assert.equal(release.textContent, `onnx-light ${version}`);
+  assert.equal(document.body.dataset.onnxLightVersion, version);
 });
 
 test("requests model opening without a separate Hugging Face button and clears busy state after cancellation or failure", (t) => {
@@ -11496,6 +11497,10 @@ test("opens graph attributes and nested breadcrumbs, including empty graphs and 
     document.querySelector("#graph-navigation [aria-current]").textContent,
     root.name,
   );
+  assert.equal(
+    document.querySelector("#graph-navigation [aria-current]").title,
+    root.name,
+  );
   const buttons = document.querySelectorAll("#node-attributes button");
   assert.equal(buttons.length, 2);
   assert.match(
@@ -11514,7 +11519,7 @@ test("opens graph attributes and nested breadcrumbs, including empty graphs and 
   assert.equal(document.querySelectorAll("#graph-navigation button").length, 2);
   assert.equal(
     document.querySelector("#graph-navigation [aria-current]").disabled,
-    true,
+    false,
   );
   assert.equal(document.querySelectorAll(".graph-node").length, 2);
   document
@@ -14762,6 +14767,230 @@ test("background selection inspects the current model, subgraph, function or pip
   }
 });
 
+test("graph names, node/initializer counts and pending rewritings share one header row", (t) => {
+  const { document, load } = openViewer(t);
+  load(
+    decodeGraph(
+      readFileSync(require.resolve("./models/subgraphs.onnx")),
+      "subgraphs.onnx",
+    ),
+  );
+  const heading = document.querySelector(".graph-heading");
+  assert.deepEqual(
+    [...heading.children].map((element) => element.id || element.className),
+    ["graph-navigation", "graph-stats", "rewriting-count"],
+  );
+  assert.equal(
+    document.querySelector(".graph-stats").textContent,
+    "2 nodes / 1 initializer",
+  );
+});
+
+test("graph-name menu switches real subgraphs, siblings and parents with keyboard dismissal", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const model = loadModel(
+    readFileSync(require.resolve("./models/subgraphs.onnx")),
+    "subgraphs.onnx",
+  );
+  const root = model.graph();
+  const links = root.nodes.flatMap((node) =>
+    node.attributes.flatMap((attribute) => attribute.graphs ?? []),
+  );
+  const menu = document.getElementById("graph-switcher");
+  const current = () =>
+    document.querySelector("#graph-navigation [aria-current]");
+  const item = (path) =>
+    [...menu.querySelectorAll('[role="menuitem"]')].find(
+      (button) => button.dataset.path === JSON.stringify(path),
+    );
+  const key = (target, value) =>
+    target.dispatchEvent(
+      new window.KeyboardEvent("keydown", {
+        key: value,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+  load(root);
+  const before = messages.length;
+  key(current(), "ArrowDown");
+  assert.equal(menu.hidden, false);
+  assert.equal(current().getAttribute("aria-expanded"), "true");
+  assert.equal(messages.length, before, "opening needs no native projection");
+  for (const link of links) assert.ok(item(link.path));
+  const buttons = [...menu.querySelectorAll('[role="menuitem"]')];
+  assert.equal(document.activeElement, buttons[0]);
+  key(document.activeElement, "End");
+  assert.equal(document.activeElement, buttons.at(-1));
+  key(document.activeElement, "ArrowDown");
+  assert.equal(document.activeElement, buttons[0]);
+  key(document.activeElement, "Escape");
+  assert.equal(menu.hidden, true);
+  assert.equal(document.activeElement, current());
+  assert.equal(current().getAttribute("aria-expanded"), "false");
+  current().click();
+  const detached = item(links[1].path);
+  item(links[0].path).click();
+  assert.equal(menu.hidden, true);
+  assert.equal(
+    JSON.stringify(messages.at(-1).path),
+    JSON.stringify(links[0].path),
+  );
+  current().click();
+  assert.equal(menu.hidden, true, "cannot open while navigation is busy");
+  load(model.graph(false, messages.at(-1).path));
+  current().click();
+  const childMessages = messages.length;
+  detached.click();
+  assert.equal(messages.length, childMessages, "detached entries are rejected");
+  assert.ok(item([]), "the parent is accessible");
+  assert.ok(item(links[1].path), "siblings retain their supplied native paths");
+  item(links[1].path).click();
+  const sibling = model.graph(false, messages.at(-1).path);
+  load(sibling);
+  const nested = sibling.nodes.flatMap((node) =>
+    node.attributes.flatMap((attribute) => attribute.graphs ?? []),
+  )[0];
+  current().click();
+  assert.ok(
+    item(nested.path),
+    "children of the current subgraph are available",
+  );
+  item(nested.path).click();
+  load(model.graph(false, messages.at(-1).path));
+  current().click();
+  item(sibling.breadcrumbs.at(-1).path).click();
+  load(model.graph(false, messages.at(-1).path));
+  current().click();
+  item([]).click();
+  assert.deepEqual(JSON.parse(JSON.stringify(messages.at(-1).path)), []);
+  load(model.graph(false, []));
+  current().click();
+  key(document.activeElement, "Tab");
+  assert.equal(menu.hidden, true);
+  current().click();
+  document.body.dispatchEvent(
+    new window.MouseEvent("pointerdown", { bubbles: true }),
+  );
+  assert.equal(menu.hidden, true);
+  current().click();
+  window.dispatchEvent(new window.Event("resize"));
+  assert.equal(menu.hidden, true);
+  current().click();
+  document.getElementById("status-tab").click();
+  assert.equal(menu.hidden, true);
+});
+
+test("graph-name menu retains local definitions in a function and invalidates replaced scopes", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const model = loadModel(
+    readFileSync(require.resolve("./models/functions.onnx")),
+    "functions.onnx",
+  );
+  const root = model.graph();
+  const menu = document.getElementById("graph-switcher");
+  const current = () =>
+    document.querySelector("#graph-navigation [aria-current]");
+  const item = (path) =>
+    [...menu.querySelectorAll('[role="menuitem"]')].find(
+      (button) => button.dataset.path === JSON.stringify(path),
+    );
+  load(root);
+  current().click();
+  for (const definition of root.localFunctions)
+    assert.ok(item(definition.path), definition.name);
+  item(root.localFunctions[0].path).click();
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: { type: "navigation-error", error: "temporarily unavailable" },
+    }),
+  );
+  current().click();
+  assert.ok(item(root.localFunctions[0].path));
+  item(root.localFunctions[0].path).click();
+  load(model.graph(false, messages.at(-1).path));
+  current().click();
+  assert.ok(item(root.localFunctions[1].path));
+  document.getElementById("refresh-metadata").click();
+  assert.equal(menu.hidden, true);
+  current().click();
+  assert.ok(
+    item(root.localFunctions[1].path),
+    "read-only actions retain scopes",
+  );
+  item(root.localFunctions[1].path).click();
+  load(model.graph(false, messages.at(-1).path));
+  current().click();
+  assert.ok(item(root.localFunctions[0].path));
+  load(model.graph(false, root.localFunctions[1].path));
+  current().click();
+  assert.equal(
+    item(root.localFunctions[0].path),
+    undefined,
+    "non-navigation graph updates invalidate remembered definitions",
+  );
+  load(demoGraph);
+  assert.equal(menu.hidden, true);
+  assert.equal(
+    menu.children.length,
+    0,
+    "closed menus release snapshot closures",
+  );
+  current().click();
+  assert.equal(menu.querySelectorAll('[role="menuitem"]').length, 0);
+  assert.match(menu.textContent, /No functions or subgraphs/);
+  assert.equal(document.activeElement, menu);
+});
+
+test("graph-name menu switches between actual pipeline stages", (t) => {
+  const { document, messages, load } = openViewer(t);
+  const pipeline = loadModel(
+    readFileSync(require.resolve("./models/tiny.pipe-onnx")),
+    "tiny.pipe-onnx",
+  );
+  const overview = pipeline.graph();
+  const menu = document.getElementById("graph-switcher");
+  const current = () =>
+    document.querySelector("#graph-navigation [aria-current]");
+  const item = (path) =>
+    [...menu.querySelectorAll('[role="menuitem"]')].find(
+      (button) => button.dataset.path === JSON.stringify(path),
+    );
+  load(overview);
+  current().click();
+  for (const stage of overview.pipelineStages) assert.ok(item(stage.path));
+  item([{ pipeline: "prefill" }]).click();
+  load(pipeline.graph(false, messages.at(-1).path));
+  current().click();
+  assert.equal(item([{ pipeline: "prefill" }]), undefined);
+  item([{ pipeline: "decode" }]).click();
+  assert.deepEqual(JSON.parse(JSON.stringify(messages.at(-1).path)), [
+    { pipeline: "decode" },
+  ]);
+  load(pipeline.graph(false, messages.at(-1).path));
+  assert.equal(current().textContent, "decode");
+});
+
+test("graph-name menu scans large-scope links lazily and reuses them while unchanged", (t) => {
+  const { document, load } = openViewer(t);
+  const graph = chainGraph(1000);
+  let traversals = 0;
+  Object.defineProperty(graph.nodes, Symbol.iterator, {
+    value() {
+      traversals++;
+      return Array.prototype[Symbol.iterator].call(this);
+    },
+  });
+  load(graph);
+  traversals = 0;
+  const current = document.querySelector("#graph-navigation [aria-current]");
+  current.click();
+  assert.equal(traversals, 1);
+  current.click();
+  current.click();
+  assert.equal(traversals, 1, "reopening reuses lightweight scope links");
+});
+
 test("pipeline model boxes show the stage identity and imports rather than operator placeholders", (t) => {
   const { document, load, pointer, messages } = openViewer(t);
   const pipeline = loadModel(
@@ -14772,7 +15001,7 @@ test("pipeline model boxes show the stage identity and imports rather than opera
   load(overview);
   assert.match(
     document.getElementById("graph-summary").textContent,
-    /^3 models /,
+    /^3 models$/,
   );
   const boxes = [...document.querySelectorAll(".graph-node")];
   const positions = nodePositions(document);
@@ -14827,7 +15056,7 @@ test("pipeline model boxes show the stage identity and imports rather than opera
   load(stage);
   assert.match(
     document.getElementById("graph-summary").textContent,
-    /^\d+ nodes? /,
+    /^\d+ nodes?$/,
   );
   assert.equal(
     document.getElementById("node-name-label").textContent,

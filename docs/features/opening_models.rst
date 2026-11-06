@@ -15,8 +15,9 @@ Opening models
 * **ONNX Light Viewer: Open Graph** opens the bundled Relu demo.
   **ONNX Light Viewer: Open Symbolic Transformer Example** opens a bundled,
   randomly initialized transformer graph with symbolic batch/sequence dimensions.
-* The toolbar shows the native onnx-light C++ release, graph counts, refresh
-  progress and errors. Its logo links to the GitHub repository.
+* The toolbar shows graph counts, refresh progress and errors. Viewer and
+  native onnx-light C++ versions are shown in **Status**.
+  Its logo links to the GitHub repository.
   Loading failures also display an error panel directly over the graph canvas,
   including when the first model cannot be opened. The previous graph, if any,
   is preserved; use **Open** to try another file.

@@ -12,16 +12,28 @@ This overview describes the default branch, not every capability of the
 underlying onnx-light libraries. Start with the worked example in
 :doc:`getting_started`; the linked guides explain each control in detail.
 
-Controls are grouped by theme: **Navigation** (including statistics),
-**Convert**, **Optimization** and **Application** (logs, status, help and settings).
-Model actions remain in the sidebar; application tabs are available without
-loading a model. See :doc:`features/navigation`.
+Tabs share one compact row, without Navigation/Application headings.
+The graph name, node/initializer counts and pending-rewriting counter share a
+single header row. Versions are shown in **Status**, not above the graph.
+Model actions remain in the sidebar;
+application tabs are available without loading a model.
+See :doc:`features/navigation`.
 
 .. figure:: _static/feature-themes.png
-   :alt: Viewer with Navigation and Application tab groups and Navigation, Convert and Optimization sidebar groups.
+   :alt: Graph name, node and initializer counts, and pending rewritings on one line, without duplicate version labels.
    :width: 100%
 
-   Find related controls together without changing the model.
+   Keep the graph header compact without removing controls or Status details.
+
+Click the current graph-name button to choose functions, child subgraphs or
+pipeline models. The menu also links to parents and remembered sibling
+subgraphs, without adding another header row.
+
+.. figure:: _static/feature-graph-switcher.png
+   :alt: Current graph-name button with a menu of subgraphs from a real ONNX model.
+   :width: 100%
+
+   Jump directly between graph scopes.
 
 Opening models
 ^^^^^^^^^^^^^^

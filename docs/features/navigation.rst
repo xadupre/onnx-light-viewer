@@ -27,15 +27,24 @@ connections, or placed on the other side, when space permits.
 
    Read carried results without placing every label on the same horizontal line.
 
-Features are grouped by theme:
+The top row provides Model, Statistics, Memory, Tensors and Run, followed by
+Logs, Status, Controls, ONNX, Patterns and Settings. There are no
+Navigation/Application headings. Model actions, conversion and optimization
+controls remain in the sidebar.
+The graph name, node/initializer counts and pending-rewriting counter share
+one header row. Click the current graph-name button to switch to functions,
+direct subgraphs or pipeline models. Parent graphs and subgraphs of visited
+parent scopes are also available. Arrow keys select an entry; Enter opens it;
+Escape closes the menu. Hover over a shortened title for its full name.
+Package versions are available in **Status**.
 
-* **Navigation** includes Model, Statistics, Memory and Tensors, with Open,
-  Save, Find, Op and Data controls in the model sidebar.
-* **Convert** groups model conversion controls in the sidebar.
-* **Optimization** groups Optimize, Fuse and Unfuse in the sidebar.
-* **Application** includes Logs, Status, Controls, ONNX links and Settings.
+.. figure:: ../_static/feature-graph-switcher.png
+   :alt: Graph-name dropdown listing actual child subgraphs with their operator and attribute names.
+   :width: 100%
 
-The **Controls** tab under **Application** groups keyboard shortcuts, mouse
+   Switch scopes without opening each operator's inspector.
+
+The **Controls** tab groups keyboard shortcuts, mouse
 gestures and navigation buttons into two-column tables: **Control** and
 **Action**. It is available even before a model is loaded.
 

@@ -11,7 +11,6 @@ import { huggingFaceTasks } from "./huggingFaceTasks";
  * @param nonce Fresh per-panel nonce authorizing only the bundled scripts.
  * @param onnxLightVersion C++ release embedded in the compiled native addon.
  * @param initialTab Initially selected viewer tab.
- * @param appVersion Viewer release from the extension's package metadata.
  * @returns Complete HTML document; graph and log data require the ready handshake.
  */
 export function webviewHtml(
@@ -20,7 +19,6 @@ export function webviewHtml(
   nonce: string,
   onnxLightVersion: string,
   initialTab: "model" | "logs" = "model",
-  appVersion: string = "",
 ): string {
   const historyControls = (target: "open" | "save"): string =>
     `<details id="${target}-history" class="path-history" hidden><summary>Recent paths</summary><p>Missing local paths are removed automatically. Selecting a path only fills the field.</p><button id="${target}-clear-history" type="button">Clear ${target === "open" ? "Open" : "Save"} history</button><ul id="${target}-history-entries" aria-label="Recent ${target} paths"></ul></details>`;
@@ -150,11 +148,10 @@ export function webviewHtml(
   <link rel="stylesheet" href="${resource("viewer.css")}">
   <title>ONNX Light Viewer</title>
 </head>
-<body>
+<body data-onnx-light-version="${onnxLightVersion}">
   <main class="workspace" aria-label="ONNX graph explorer">
     <nav class="viewer-tabs" role="tablist" aria-label="Viewer">
       <div class="feature-group" role="presentation">
-        <span class="feature-group-title" id="navigation-theme">Navigation</span>
         <div class="feature-group-controls" role="presentation">
           <a id="repository-link" href="https://github.com/xadupre/onnx-light-viewer" title="ONNX Light Viewer on GitHub" aria-label="Open the ONNX Light Viewer GitHub repository"><img src="${resource("logo.svg")}" alt="" width="24" height="24"></a>
           <button id="model-tab" role="tab" aria-controls="model-view" aria-selected="${initialTab === "model"}" tabindex="${initialTab === "model" ? 0 : -1}">Model</button>
@@ -165,7 +162,6 @@ export function webviewHtml(
         </div>
       </div>
       <div class="feature-group" role="presentation">
-        <span class="feature-group-title" id="application-theme">Application</span>
         <div class="feature-group-controls" role="presentation">
           <button id="logs-tab" role="tab" aria-controls="logs-view" aria-selected="${initialTab === "logs"}" tabindex="${initialTab === "logs" ? 0 : -1}">Logs</button>
           <button id="status-tab" role="tab" aria-controls="status-view" aria-selected="false" tabindex="-1">Status</button>
@@ -178,11 +174,15 @@ export function webviewHtml(
     </nav>
     <section id="model-view" role="tabpanel" aria-labelledby="model-tab"${initialTab === "logs" ? " hidden" : ""}>
       <header class="graph-toolbar">
-        <div class="graph-stats" aria-live="polite"><span id="graph-summary">No model loaded</span><span id="initializer-count">0 initializers</span><span id="app-version" title="ONNX Light Viewer version">ONNX Light Viewer ${appVersion}</span><span id="onnx-light-version" data-version="${onnxLightVersion}" title="onnx-light C++ release used by this viewer">onnx-light ${onnxLightVersion}</span><span id="navigation-status" role="status"></span><span id="load-status" role="status"></span></div>
-        <span id="rewriting-count" role="status" title="Rewritings waiting to be reapplied before the next native matching or optimization">0 pending rewritings</span>
+        <div class="graph-heading">
+          <nav id="graph-navigation" aria-label="Graph breadcrumbs" hidden></nav>
+          <div class="graph-stats" aria-live="polite"><span id="graph-summary">No model loaded</span><span aria-hidden="true"> / </span><span id="initializer-count">0 initializers</span></div>
+          <span id="rewriting-count" role="status" title="Rewritings waiting to be reapplied before the next native matching or optimization">0 pending rewritings</span>
+        </div>
+        <span id="navigation-status" role="status"></span>
+        <span id="load-status" role="status"></span>
         <span id="save-status" role="status"></span>
         <span id="fusion-status" role="status"></span>
-        <nav id="graph-navigation" aria-label="Graph breadcrumbs" hidden></nav>
         <progress id="load-progress" aria-label="Loading ONNX model" hidden></progress>
       </header>
       <div class="graph-body">
@@ -1209,6 +1209,7 @@ export function webviewHtml(
       </section>
     </section>
   </main>
+  <div id="graph-switcher" role="menu" aria-label="Functions and subgraphs" tabindex="-1" hidden></div>
   <div id="graph-context-menu" role="menu" aria-label="Selected operators" hidden>
     <button id="open-selection-pattern" role="menuitem" aria-haspopup="dialog" aria-controls="selection-pattern-dialog">Create / edit FunctionPattern...</button>
   </div>

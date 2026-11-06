@@ -44,6 +44,9 @@ let inPlaceDecisions = new Map();
 let hasModel = false;
 let fusionUndoCount = 0;
 let displayedGraph;
+const graphSwitcherScopes = new Map();
+let graphSwitcherTarget;
+let graphSwitcherAnchor;
 let graphConstants = [];
 let constantsByOutput = new Map();
 let statisticsRequest = 0;
@@ -103,7 +106,7 @@ const inspector = createInspector({
   byId,
   tensorDescription,
   subgraphLabel,
-  navigate,
+  navigate: navigateGraph,
   openTensorStatistics: (name) =>
     openTensorStatistics(tensorListPanel.storedTensorNames(), name),
   hasStoredTensor: (name) => tensorListPanel.hasStoredTensor(name),
@@ -162,7 +165,7 @@ const memoryPanel = createMemoryPanel({
     const currentPath = displayedGraph.breadcrumbs?.at(-1)?.path ?? [];
     if (JSON.stringify(currentPath) === JSON.stringify(path ?? []))
       focusNodes([index]);
-    else navigate(path ?? [], index);
+    else navigateGraph(path ?? [], index);
   },
 });
 const filePanels = createFilePanels({
@@ -206,6 +209,170 @@ const patternPanel = createPatternPanel({
   postMessage: (message) => vscode.postMessage(message),
 });
 
+function closeGraphSwitcher(restoreFocus = false) {
+  const menu = byId("graph-switcher");
+  if (menu.hidden) return;
+  menu.hidden = true;
+  menu.replaceChildren();
+  const anchor = graphSwitcherAnchor;
+  graphSwitcherAnchor = undefined;
+  anchor?.setAttribute("aria-expanded", "false");
+  if (restoreFocus && anchor?.isConnected)
+    anchor.focus({ preventScroll: true });
+}
+
+function canSwitchGraphs() {
+  return (
+    hasModel &&
+    displayedGraph &&
+    !replacementPending &&
+    !byId("model-view").hidden &&
+    svg.getAttribute("aria-busy") !== "true" &&
+    byId("shorten-dimensions").getAttribute("aria-busy") !== "true"
+  );
+}
+
+function graphSwitcherScope() {
+  const graph = displayedGraph;
+  const key = JSON.stringify(graph.breadcrumbs.at(-1).path);
+  let scope = graphSwitcherScopes.get(key);
+  if (!scope) {
+    const children = [];
+    const functions = graph.localFunctions.length ? graph.localFunctions : [];
+    for (const node of graph.nodes) {
+      for (const attribute of node.attributes) {
+        if (!attribute.graphs) continue;
+        for (const [index, link] of attribute.graphs.entries())
+          children.push({
+            ...link,
+            label: `${node.name || node.opType} / ${subgraphLabel(attribute, index)}: ${link.name}`,
+          });
+      }
+      if (!graph.localFunctions.length && node.function)
+        functions.push({
+          ...node.function,
+          label: `${node.function.name} (${node.name || node.opType})`,
+        });
+    }
+    scope = {
+      name: graph.breadcrumbs.at(-1).name,
+      children,
+      functions,
+    };
+    graphSwitcherScopes.set(key, scope);
+  }
+  return scope;
+}
+
+function showGraphSwitcher(anchor, last = false) {
+  if (!canSwitchGraphs()) return;
+  const menu = byId("graph-switcher");
+  if (!menu.hidden && graphSwitcherAnchor === anchor) {
+    closeGraphSwitcher(true);
+    return;
+  }
+  closeGraphContextMenu();
+  closeGraphSwitcher();
+  const owner = displayedGraph;
+  const scope = graphSwitcherScope();
+  const breadcrumbs = owner.breadcrumbs;
+  const ancestors = breadcrumbs
+    .slice(0, -1)
+    .map((crumb) => graphSwitcherScopes.get(JSON.stringify(crumb.path)))
+    .filter(Boolean);
+  const seen = new Set([JSON.stringify(breadcrumbs.at(-1).path)]);
+  menu.replaceChildren();
+  const group = (label, links) => {
+    const entries = links.filter((link) => {
+      const key = JSON.stringify(link.path);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    if (!entries.length) return;
+    const section = document.createElement("div");
+    section.setAttribute("role", "group");
+    section.setAttribute("aria-label", label);
+    const heading = document.createElement("div");
+    heading.className = "graph-switcher-heading";
+    heading.textContent = label;
+    section.append(heading);
+    for (const link of entries) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.setAttribute("role", "menuitem");
+      button.dataset.path = JSON.stringify(link.path);
+      button.textContent =
+        (link.label ?? link.name) +
+        (link.nodeCount === undefined
+          ? ""
+          : ` (${link.nodeCount} node${link.nodeCount === 1 ? "" : "s"})`);
+      button.addEventListener("click", () => {
+        if (
+          menu.hidden ||
+          !menu.contains(button) ||
+          displayedGraph !== owner ||
+          !canSwitchGraphs()
+        )
+          return;
+        closeGraphSwitcher(true);
+        navigateGraph(link.path);
+      });
+      section.append(button);
+    }
+    menu.append(section);
+  };
+  group("Parent graphs", breadcrumbs.slice(0, -1));
+  group("Pipeline models", owner.pipelineStages ?? []);
+  group("Functions", [
+    ...ancestors.flatMap((ancestor) => ancestor.functions),
+    ...scope.functions,
+  ]);
+  const parent = ancestors.at(-1);
+  if (parent) group(`Subgraphs in ${parent.name}`, parent.children);
+  group(`Subgraphs in ${scope.name}`, scope.children);
+  if (!menu.children.length) {
+    const empty = document.createElement("p");
+    empty.className = "graph-switcher-heading";
+    empty.textContent = "No functions or subgraphs in this graph.";
+    menu.append(empty);
+  }
+  graphSwitcherAnchor = anchor;
+  anchor.setAttribute("aria-expanded", "true");
+  menu.hidden = false;
+  menu.scrollTop = 0;
+  const bounds = anchor.getBoundingClientRect();
+  const { width, height } = menu.getBoundingClientRect();
+  menu.style.left = `${Math.max(8, Math.min(bounds.left, window.innerWidth - width - 8))}px`;
+  menu.style.top = `${Math.max(8, Math.min(bounds.bottom, window.innerHeight - height - 8))}px`;
+  const buttons = [...menu.querySelectorAll('[role="menuitem"]')];
+  (last ? buttons.at(-1) : buttons[0])?.focus();
+  if (!buttons.length) menu.focus();
+}
+
+byId("graph-switcher").addEventListener("keydown", (event) => {
+  event.stopPropagation();
+  if (event.key === "Escape" || event.key === "Tab") {
+    if (event.key === "Escape") event.preventDefault();
+    closeGraphSwitcher(true);
+  } else if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+    event.preventDefault();
+    const buttons = [
+      ...byId("graph-switcher").querySelectorAll('[role="menuitem"]'),
+    ];
+    if (!buttons.length) return;
+    const index = buttons.indexOf(document.activeElement);
+    const next =
+      event.key === "Home"
+        ? 0
+        : event.key === "End"
+          ? buttons.length - 1
+          : (index + (event.key === "ArrowDown" ? 1 : -1) + buttons.length) %
+            buttons.length;
+    buttons[next].focus();
+  }
+});
+
 function closeGraphContextMenu(restoreFocus = false) {
   const menu = byId("graph-context-menu");
   if (menu.hidden) return;
@@ -246,9 +413,20 @@ byId("graph-context-menu").addEventListener("keydown", (event) => {
 document.addEventListener("pointerdown", (event) => {
   if (!byId("graph-context-menu").contains(event.target))
     closeGraphContextMenu();
+  if (
+    !byId("graph-switcher").contains(event.target) &&
+    !graphSwitcherAnchor?.contains(event.target)
+  )
+    closeGraphSwitcher();
 });
-window.addEventListener("resize", () => closeGraphContextMenu());
-window.addEventListener("blur", () => closeGraphContextMenu());
+window.addEventListener("resize", () => {
+  closeGraphContextMenu();
+  closeGraphSwitcher();
+});
+window.addEventListener("blur", () => {
+  closeGraphContextMenu();
+  closeGraphSwitcher();
+});
 svg.addEventListener("wheel", () => closeGraphContextMenu(), { passive: true });
 
 function focusNodes(nodes) {
@@ -382,6 +560,10 @@ function newAction(action) {
 }
 
 function requestAction(type, action, parameters = {}) {
+  closeGraphSwitcher();
+  if (type !== "navigate") {
+    graphSwitcherTarget = undefined;
+  }
   if (
     ["open", "export", "navigate", "undo-fusion", "select-fusion"].includes(
       type,
@@ -401,6 +583,15 @@ function requestAction(type, action, parameters = {}) {
 }
 
 function setLoading(pending, message = "") {
+  if (pending) {
+    closeGraphSwitcher();
+    graphSwitcherScopes.clear();
+    graphSwitcherTarget = undefined;
+  }
+  for (const button of byId("graph-navigation").querySelectorAll(
+    '[aria-haspopup="menu"]',
+  ))
+    button.disabled = pending;
   const wasLoading = byId("model-view").getAttribute("aria-busy") === "true";
   if (pending) {
     symbolicDimensionRequest++;
@@ -1801,6 +1992,7 @@ function moveNodes(origins, dx, dy) {
 }
 
 function endGesture(cancel = false) {
+  closeGraphSwitcher();
   setZoomAreaMode(false);
   if (!gesture) return;
   const previous = gesture;
@@ -2346,8 +2538,10 @@ function findNode(event) {
   selectSearchMatch(matches[index], index, matches.length);
 }
 
-function navigate(path, nodeIndex) {
+function navigateGraph(path, nodeIndex) {
   if (byId("shorten-dimensions").getAttribute("aria-busy") === "true") return;
+  graphSwitcherScope();
+  graphSwitcherTarget = JSON.stringify(path);
   tensorStatisticsPanel.reset();
   tensorListPanel.setBusy(true);
   endGesture();
@@ -2362,6 +2556,10 @@ function navigate(path, nodeIndex) {
 }
 
 function render(graph, metadata) {
+  const currentPath = JSON.stringify(graph.breadcrumbs?.at(-1)?.path);
+  if (graphSwitcherTarget === undefined || graphSwitcherTarget !== currentPath)
+    graphSwitcherScopes.clear();
+  graphSwitcherTarget = undefined;
   graphConstants = [];
   constantsByOutput = new Map();
   const operators = [];
@@ -2397,18 +2595,30 @@ function render(graph, metadata) {
   const navigation = graph.pipelineStages?.length
     ? [breadcrumbs[0], ...graph.pipelineStages, ...breadcrumbs.slice(2)]
     : breadcrumbs;
-  const currentPath = JSON.stringify(breadcrumbs.at(-1)?.path);
   byId("graph-navigation").hidden = false;
   byId("graph-navigation").replaceChildren(
     ...navigation.map((crumb) => {
       const button = document.createElement("button");
+      button.type = "button";
       button.className = "icon-button";
       button.textContent = crumb.name;
+      button.title = crumb.name;
       if (JSON.stringify(crumb.path) === currentPath) {
-        button.disabled = true;
+        button.disabled = replacementPending;
         button.setAttribute("aria-current", "page");
+        button.setAttribute("aria-haspopup", "menu");
+        button.setAttribute("aria-controls", "graph-switcher");
+        button.setAttribute("aria-expanded", "false");
+        button.addEventListener("click", () => showGraphSwitcher(button));
+        button.addEventListener("keydown", (event) => {
+          if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+            event.preventDefault();
+            event.stopPropagation();
+            showGraphSwitcher(button, event.key === "ArrowUp");
+          }
+        });
       } else {
-        button.addEventListener("click", () => navigate(crumb.path));
+        button.addEventListener("click", () => navigateGraph(crumb.path));
       }
       return button;
     }),
@@ -2447,15 +2657,10 @@ function render(graph, metadata) {
   unusedLabels = [];
   metadataPanel.reset();
   metadataStatus(false);
-  const tensors = new Set([
-    ...graph.inputs,
-    ...graph.outputs,
-    ...graph.nodes.flatMap((node) => [...node.inputs, ...node.outputs]),
-  ]);
   const unit =
     graph.pipeline && graph.breadcrumbs.length === 1 ? "model" : "node";
   byId("graph-summary").textContent =
-    `${graph.nodes.length} ${unit}${graph.nodes.length === 1 ? "" : "s"} / ${tensors.size} tensors`;
+    `${graph.nodes.length} ${unit}${graph.nodes.length === 1 ? "" : "s"}`;
   byId("initializer-count").textContent =
     `${graph.initializerCount} initializer${graph.initializerCount === 1 ? "" : "s"}`;
 
@@ -2775,7 +2980,7 @@ function render(graph, metadata) {
           "subgraph-label",
           "end",
         );
-        bindGraphLink(link, () => navigate(graph.path));
+        bindGraphLink(link, () => navigateGraph(graph.path));
         group.append(link);
       });
       return group;
@@ -3293,6 +3498,7 @@ window.addEventListener("message", (event) => {
     byId("fusion-status").textContent =
       `Could not undo fusion: ${event.data.error}`;
   } else if (event.data?.type === "navigation-error") {
+    graphSwitcherTarget = undefined;
     svg.setAttribute("aria-busy", "false");
     tensorListPanel.setBusy(replacementPending);
     updateDimensionEnabled();

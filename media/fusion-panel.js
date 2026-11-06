@@ -227,7 +227,7 @@ function createFusionPanel({
       parts.some((part) => !part || part === "." || part === "..")
     )
       return document.createTextNode(location);
-    const version = byId("onnx-light-version").dataset.version;
+    const version = document.body.dataset.onnxLightVersion;
     const link = document.createElement("a");
     link.className = "native-source-link";
     link.href = `https://github.com/xadupre/onnx-light/blob/${encodeURIComponent(version)}/${parts.map(encodeURIComponent).join("/")}${line ? `#L${line}` : ""}`;
