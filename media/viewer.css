@@ -1547,7 +1547,7 @@ button:disabled {
 }
 #rewriting-steps .rewriting-pending > .rewriting-step {
   color: var(--muted);
-  opacity: 0.5;
+  opacity: 1;
 }
 .fusion-selection-controls {
   display: flex;

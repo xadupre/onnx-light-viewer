@@ -448,6 +448,9 @@ function createFusionPanel({
       (!path.length && !fusionGraph?.pipeline) ||
       (path.length === 1 && stage !== undefined);
     let nodesByKey;
+    const pendingMatches = pendingRewritings
+      .filter((operation) => operation.stage === stage)
+      .flatMap((operation) => operation.matches);
     const workingSteps = [
       ...optimizationHistory
         .filter((operation) => operation.stage === stage)
@@ -457,15 +460,12 @@ function createFusionPanel({
           path: match.impact?.scope ?? [],
           applied: true,
         })),
-      ...pendingRewritings
-        .filter((operation) => operation.stage === stage)
-        .flatMap((operation) => operation.matches)
-        .map((match) => ({
-          ...match,
-          path: match.impact?.scope ?? [],
-          nodes: nodesBeforeRewriting(match),
-          applied: false,
-        })),
+      ...pendingMatches.map((match) => ({
+        ...match,
+        path: match.impact?.scope ?? [],
+        nodes: nodesBeforeRewriting(match),
+        applied: false,
+      })),
     ];
     const steps = workingSteps.length
       ? workingSteps
@@ -473,12 +473,14 @@ function createFusionPanel({
           ...step,
           applied: index < scenario.applied,
         }));
-    if (workingSteps.length && !pendingRewritings.length && scenario?.available)
+    if (workingSteps.length && scenario?.available)
       steps.push(
-        ...scenario.steps.slice(scenario.applied).map((step) => ({
-          ...step,
-          applied: false,
-        })),
+        ...scenario.steps
+          .slice(scenario.applied + pendingMatches.length)
+          .map((step) => ({
+            ...step,
+            applied: false,
+          })),
       );
     for (const [index, step] of steps.entries()) {
       const item = document.createElement("li");
@@ -619,7 +621,9 @@ function createFusionPanel({
     byId("optimization-rewriting-name").setCustomValidity(
       duplicateName ? "This rewriting name already exists." : "",
     );
-    const canRecord = optimizationFinished && canFuse() && undoCount && !busy;
+    const hasPending = pendingRewritings.length > 0;
+    const canRecord =
+      optimizationFinished && canFuse() && undoCount && !busy && !hasPending;
     byId("optimization-rewriting-name").disabled = !canRecord;
     byId("create-optimization-rewriting").disabled =
       !canRecord || !rewritingName || duplicateName;
@@ -636,6 +640,7 @@ function createFusionPanel({
       busy ||
       !canFuse() ||
       !undoCount ||
+      hasPending ||
       (!selectedRewriting && (!workingName || workingDuplicate));
     byId("record-working-rewriting").textContent = selectedRewriting
       ? `Update ${selectedRewriting}`
@@ -645,6 +650,14 @@ function createFusionPanel({
     byId("append-optimization-rewriting").textContent = selectedRewriting
       ? `Add to ${selectedRewriting}`
       : "Add to selected rewriting";
+    for (const id of [
+      "record-working-rewriting",
+      "create-optimization-rewriting",
+      "append-optimization-rewriting",
+    ])
+      byId(id).title = hasPending
+        ? "Reapply or discard pending rewritings before recording."
+        : "";
     for (const id of [
       "optimization-unfuse-last",
       "optimization-restore-original",

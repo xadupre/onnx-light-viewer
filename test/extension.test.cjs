@@ -8220,6 +8220,64 @@ test("Rewritings exposes four actions, appends one match and refuses one next st
   assert.deepEqual(extension.errors, []);
 });
 
+test("rejects recording while undone steps remain pending without losing replay or saved rewritings", async (t) => {
+  const { loadModel } = require("../dist/graph");
+  const extension = await openExtension("fusion.onnx", undefined, true);
+  t.after(() => extension.dispose());
+  const latest = () =>
+    extension.messages.findLast((message) => message.type === "graph");
+  await extension.receive({
+    type: "apply-optimization",
+    operation: "Optimize",
+    patterns: ["TransposeTranspose"],
+    requestId: 1,
+  });
+  const full = latest().graph;
+  await extension.receive({ type: "undo-fusion", step: true, requestId: 2 });
+  const partial = latest();
+  assert.equal(partial.file.fusionHistory[0].matches.length, 1);
+  assert.equal(partial.file.pendingRewritings[0].matches.length, 1);
+  await extension.receive({
+    type: "record-rewriting",
+    name: "Subset",
+    append: false,
+    requestId: 3,
+  });
+  assert.equal(extension.messages.at(-1).type, "fusion-error");
+  assert.match(extension.messages.at(-1).error, /Reapply or discard pending/);
+  assert.equal(latest(), partial);
+  const directory = await mkdtemp(
+    path.join(tmpdir(), "viewer-pending-record-"),
+  );
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const destination = path.join(directory, "pending.onnx");
+  await extension.receive({
+    type: "save",
+    location: destination,
+    overwrite: false,
+    includeRewritings: true,
+  });
+  const saved = loadModel(await readFile(destination), "Pending");
+  const [scenario] = saved.rewritingScenarios();
+  assert.equal(scenario.steps.length, 2);
+  assert.deepEqual(
+    (await saved.applyRewritingScenario(scenario.name, true)).graph(),
+    full,
+  );
+  await extension.receive({ type: "refuse-next", requestId: 4 });
+  assert.deepEqual(latest().graph, full);
+  assert.deepEqual(latest().file.pendingRewritings, []);
+  await extension.receive({
+    type: "record-rewriting",
+    name: "Complete",
+    append: false,
+    requestId: 5,
+  });
+  assert.equal(extension.messages.at(-1).type, "rewriting-recorded");
+  assert.deepEqual(latest().file.rewriting.names, ["Complete"]);
+  assert.deepEqual(latest().graph, full);
+});
+
 test("keeps unfused steps dim and discards them only when adding new patterns", async (t) => {
   const { loadModel } = require("../dist/graph");
   const extension = await openExtension("fusion.onnx", undefined, true);

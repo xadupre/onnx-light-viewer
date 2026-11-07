@@ -7347,6 +7347,121 @@ test("inspects and locates saved rewritings before and after Refuse Next", async
   );
 });
 
+test("keeps never-applied saved steps alongside the undo queue without duplicates", async (t) => {
+  const original = loadModel(
+    readFileSync(require.resolve("./models/fusion.onnx")),
+    "Three saved steps",
+  );
+  original.createFunctionPattern([4], "Projection");
+  const full = await original.applyFusion(
+    ["Projection", "TransposeTranspose", "TransposeTranspose"],
+    [4, 0, 2],
+  );
+  const recorded = await full.recordRewriting("Three", false);
+  const saved = loadModel(
+    await recorded.serialize(undefined, undefined, true),
+    "Three saved steps",
+  );
+  const one = await saved.applyRewritingScenario("Three", false);
+  const two = await one.applyRewritingScenario("Three", false);
+  for (const stage of [undefined, "prefill"]) {
+    await t.test(stage ?? "standalone", (t) => {
+      const { document, window, messages } = openViewer(t);
+      const graph = (model) => {
+        const value = model.graph();
+        if (stage) {
+          value.pipeline = true;
+          value.canFuse = true;
+          for (const crumb of value.breadcrumbs)
+            crumb.path = [{ pipeline: stage }, ...crumb.path];
+        }
+        return value;
+      };
+      const history = (model) =>
+        model.fusionHistory(true).map((operation) => ({
+          ...operation,
+          ...(stage ? { stage } : {}),
+        }));
+      const send = (data) =>
+        window.dispatchEvent(new window.MessageEvent("message", { data }));
+      const pending = history(two).slice(1);
+      send({
+        type: "graph",
+        graph: graph(one),
+        file: {
+          fusionCount: one.fusionCount(),
+          fusionHistory: history(one),
+          pendingRewritings: pending,
+          rewriting: { names: ["Three"], selected: "Three" },
+        },
+      });
+      document.getElementById("fuse-pattern").click();
+      send({
+        type: "fusion-patterns",
+        requestId: messages.at(-1).requestId,
+        patterns: [],
+        scenarios: one.rewritingScenarios(),
+        name: "Three",
+      });
+      assert.equal(
+        document.querySelectorAll("#rewriting-steps .rewriting-step").length,
+        3,
+      );
+      assert.equal(
+        document.querySelectorAll("#rewriting-steps .rewriting-applied").length,
+        1,
+      );
+      assert.equal(
+        document.querySelectorAll("#rewriting-steps .rewriting-pending").length,
+        2,
+      );
+      assert.equal(
+        document.getElementById("rewriting-progress").textContent,
+        "1 / 3 steps applied.",
+      );
+      document.getElementById("working-rewriting-name").value = "Subset";
+      document
+        .getElementById("working-rewriting-name")
+        .dispatchEvent(new window.Event("input"));
+      const record = document.getElementById("record-working-rewriting");
+      assert.equal(record.disabled, true);
+      assert.match(record.title, /Reapply or discard pending/);
+      for (const label of document.querySelectorAll(
+        "#rewriting-steps .rewriting-pending > .rewriting-step",
+      )) {
+        assert.equal(label.disabled, false);
+        assert.equal(window.getComputedStyle(label).opacity, "1");
+      }
+      send({
+        type: "graph",
+        graph: graph(two),
+        file: {
+          fusionCount: two.fusionCount(),
+          fusionHistory: history(two),
+          pendingRewritings: [],
+          rewriting: { names: ["Three"], selected: "Three" },
+        },
+      });
+      document.getElementById("fuse-pattern").click();
+      send({
+        type: "fusion-patterns",
+        requestId: messages.at(-1).requestId,
+        patterns: [],
+        scenarios: two.rewritingScenarios(),
+        name: "Three",
+      });
+      assert.equal(
+        document.querySelectorAll("#rewriting-steps .rewriting-step").length,
+        3,
+      );
+      assert.equal(
+        document.querySelectorAll("#rewriting-steps .rewriting-pending").length,
+        1,
+      );
+    });
+  }
+});
+
 test("keeps root rewriting inspection visible without focusing nested graph indices", async (t) => {
   const { document, window } = openViewer(t);
   const original = loadModel(

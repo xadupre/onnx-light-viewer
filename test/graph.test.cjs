@@ -6539,6 +6539,35 @@ test("applies terminal scenario moves only after all edits and retains mapped hi
       ).graph(),
       expected.graph(),
     );
+    const preview = await full.previewFusion("TransposeTranspose");
+    const third = await full.applyFusion("TransposeTranspose", [
+      preview.matches[0].anchor,
+    ]);
+    const recorded = await third.recordRewriting("Recorded moves", false);
+    assert.deepEqual((await recorded.fusionPrefix(2)).graph(), full.graph());
+    assert.deepEqual((await recorded.fusionPrefix(1)).graph(), partial.graph());
+    assert.deepEqual((await recorded.fusionPrefix(0)).graph(), source.graph());
+    const reloaded = loadModel(
+      await recorded.serialize(undefined, undefined, true),
+      "Saved recorded moves",
+    );
+    assert.equal(
+      reloaded
+        .rewritingScenarios()
+        .find((item) => item.name === "Recorded moves").steps.length,
+      3,
+    );
+    const first = await reloaded.applyRewritingScenario(
+      "Recorded moves",
+      false,
+    );
+    assert.deepEqual(first.graph(), partial.graph());
+    const second = await first.applyRewritingScenario("Recorded moves", false);
+    assert.deepEqual(second.graph(), full.graph());
+    assert.deepEqual(
+      (await second.applyRewritingScenario("Recorded moves", false)).graph(),
+      third.graph(),
+    );
   }
 });
 

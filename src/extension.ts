@@ -3408,6 +3408,10 @@ async function configurePanel(
                   throw new Error(
                     "Append only to the currently selected rewriting.",
                   );
+                if (current.rewritingQueue)
+                  throw new Error(
+                    "Reapply or discard pending rewritings before recording.",
+                  );
                 const native = await nativeModel(
                   current,
                   log,
