@@ -155,6 +155,8 @@ interface LoadedModel {
   fusionCount?: number;
   fusionHistory?: FusionOperation[];
   rewritingState?: ReturnType<NativeModel["rewritingState"]>;
+  /** Header choices survive edits independently of native replay progress. */
+  rewritingSelections?: ReadonlyMap<string, string | null>;
   /** Retains the optimized snapshot for replay without recomputing its rewritings. */
   rewritingQueue?: { model: NativeModel; operations: FusionOperation[] };
   /** Materialized Python edits remain modified after undoing later native edits. */
@@ -952,6 +954,8 @@ async function configurePanel(
       directory: false,
       ...(file.size === undefined ? {} : { size: file.size }),
     }));
+  const rewritingSelectionKey = (path: GraphPath) =>
+    JSON.stringify(path[0] && "pipeline" in path[0] ? [path[0]] : []);
   const sendGraph = (
     selectedNodes?: number[],
     fusionRequestId?: unknown,
@@ -963,10 +967,17 @@ async function configurePanel(
     fusionRequest++;
     diagnosticRequest++;
     const current = requireModel();
-    if (current.native)
-      current.rewritingState = current.native.rewritingState(
-        current.graph.breadcrumbs.at(-1)?.path ?? [],
+    if (current.native) {
+      const path = current.graph.breadcrumbs.at(-1)?.path ?? [];
+      const state = current.native.rewritingState(path);
+      const selected = current.rewritingSelections?.get(
+        rewritingSelectionKey(path),
       );
+      current.rewritingState =
+        selected === undefined
+          ? state
+          : { ...state, selected: selected ?? undefined };
+    }
     void sendStatus();
     return postMessage({
       type: "graph",
@@ -3289,6 +3300,10 @@ async function configurePanel(
                 const retained = edited.clone();
                 const replacement: LoadedModel = {
                   ...current,
+                  rewritingSelections: new Map(current.rewritingSelections).set(
+                    rewritingSelectionKey(path),
+                    message.scenario,
+                  ),
                   native: edited,
                   nativeReload: undefined,
                   graph,
