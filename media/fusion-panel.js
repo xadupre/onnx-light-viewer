@@ -393,7 +393,10 @@ function createFusionPanel({
     byId("rewriting-restart").disabled = fusionBusy || !scenario || !canFuse();
     byId("rewriting-steps").replaceChildren();
     const path = fusionGraph?.breadcrumbs?.at(-1)?.path ?? [];
-    const stage = path.length === 1 ? path[0].pipeline : undefined;
+    const stage = path[0]?.pipeline;
+    const rootVisible =
+      (!path.length && !fusionGraph?.pipeline) ||
+      (path.length === 1 && stage !== undefined);
     let nodesByKey;
     const workingSteps = [
       ...optimizationHistory
@@ -453,9 +456,11 @@ function createFusionPanel({
         content ??= appendImpactDetails(item, step, true);
         if (content) content.open = true;
         const nodes =
-          !step.applied && !step.nodes.length
-            ? nodesBeforeRewriting(step)
-            : step.nodes;
+          !rootVisible || step.path.length
+            ? []
+            : !step.applied && !step.nodes.length
+              ? nodesBeforeRewriting(step)
+              : step.nodes;
         focusNodes(nodes);
         byId("fusion-feedback").textContent = step.inspectionError
           ? `Could not inspect this rewriting: ${step.inspectionError}`
@@ -466,11 +471,11 @@ function createFusionPanel({
       byId("rewriting-steps").append(item);
     }
     function nodesBeforeRewriting(match) {
+      if (!rootVisible || match.impact?.scope?.length) return [];
       const key = (node) =>
         JSON.stringify([
           node.domain || "ai.onnx",
           node.opType,
-          node.name,
           node.inputs,
           node.outputs,
         ]);

@@ -664,13 +664,36 @@ export class PipelineModel implements NativeModel {
       sourceFilePath,
     );
     const replacement = this.replace(stage.role, edited);
-    return new PipelineModel(
+    const order = [
+      ...this.fusionOrder.filter((role) => role !== stage.role),
+      stage.role,
+    ];
+    const snapshots = [replacement.models];
+    let models = replacement.models;
+    for (const role of [...order].reverse()) {
+      const model = models[role];
+      if (!model) throw new Error("Invalid pipeline stage.");
+      models = { ...models, [role]: model.undoFusion() };
+      snapshots.push(models);
+    }
+    let rebuilt = new PipelineModel(
       this.data,
       this.fileName,
-      replacement.models,
-      this,
-      [...this.fusionOrder.filter((role) => role !== stage.role), stage.role],
+      snapshots[order.length],
+      undefined,
+      [],
+      this.undoDimensionEdits,
     );
+    for (let i = order.length - 1; i >= 0; --i)
+      rebuilt = new PipelineModel(
+        this.data,
+        this.fileName,
+        snapshots[i],
+        rebuilt,
+        order.slice(0, order.length - i),
+        this.undoDimensionEdits,
+      );
+    return rebuilt;
   };
 
   previewFusion = async (

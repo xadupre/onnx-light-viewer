@@ -5306,6 +5306,29 @@ test("tracks independent rewrites without changing earlier selections", () => {
   assert.deepEqual(result.history, reference.history);
 });
 
+test("inspects long saved rewriting scenarios with indexed node provenance", () => {
+  const names = Array.from({ length: 10000 }, (_, i) => `original-${i}`);
+  const bytes = tracingModelBytes(
+    names,
+    Array.from({ length: 500 }, (_, i) => ({
+      removed: [i],
+      added: [[`replacement-${i}`, i]],
+    })),
+  );
+  const saved = loadModel(
+    Buffer.concat([varintField(1, 9), bytes]),
+    "Large saved scenario",
+  );
+  const [scenario] = saved.rewritingScenarios();
+  assert.equal(scenario.steps.length, 500);
+  assert.deepEqual(scenario.steps[0].nodes, [0]);
+  for (const [i, step] of scenario.steps.entries()) {
+    assert.equal(step.inspectionError, undefined);
+    assert.equal(step.impact.before[0].name, names[i]);
+    assert.equal(step.impact.after[0].name, `replacement-${i}`);
+  }
+});
+
 test("agrees with sequential tracing across mixed deterministic rewrite sequences", () => {
   const names = Array.from({ length: 32 }, (_, i) => `original-${i}`);
   let current = [...names];
@@ -5853,6 +5876,131 @@ test("records optimized models as new named rewritings or extensions without cha
     stageRecorded.graph(false, [{ pipeline: "decode" }]),
     pipeline.graph(false, [{ pipeline: "decode" }]),
   );
+});
+
+test("replays and records each selected manual match as an independent rewriting step", async () => {
+  for (const [file, patterns, anchors] of [
+    ["fusion.onnx", ["TransposeTranspose", "TransposeTranspose"], [0, 2]],
+    [
+      "fusion.onnx",
+      ["Projection", "TransposeTranspose", "TransposeTranspose"],
+      [4, 0, 2],
+    ],
+    ["fusion-scaled.onnx", ["MatMulScaleFusion", "TransposeTranspose"], [4, 0]],
+  ]) {
+    const original = loadModel(modelBytes(file), "Manual steps");
+    if (patterns.includes("Projection"))
+      original.createFunctionPattern([4], "Projection");
+    const first = await original.applyFusion(patterns[0], [anchors[0]]);
+    const full = await original.applyFusion(patterns, anchors);
+    const prefix = await full.fusionPrefix(1);
+    prefix.verify();
+    assert.deepEqual(prefix.graph(), first.graph());
+    assert.equal(prefix.fusionHistory()[0].matches.length, 1);
+    assert.deepEqual((await full.fusionPrefix(0)).graph(), original.graph());
+    if (patterns.length === 3) {
+      const second = await first.applyFusion(patterns[1], [anchors[1]]);
+      assert.deepEqual((await full.fusionPrefix(2)).graph(), second.graph());
+    }
+    assert.deepEqual(
+      (await full.fusionPrefix(patterns.length)).graph(),
+      full.graph(),
+    );
+    const recorded = await full.recordRewriting("Manual", false);
+    assert.equal(
+      recorded.rewritingScenarios()[0].steps.length,
+      patterns.length,
+    );
+    assert.equal(recorded.rewritingScenarios()[0].applied, patterns.length);
+    assert.deepEqual((await recorded.fusionPrefix(1)).graph(), first.graph());
+    const saved = loadModel(
+      await recorded.serialize(undefined, undefined, true),
+      "Saved manual steps",
+    );
+    const replayed = await saved.applyRewritingScenario("Manual", false);
+    assert.deepEqual(replayed.graph(), first.graph());
+    let stepwise = replayed;
+    for (let i = 1; i < patterns.length; ++i)
+      stepwise = await stepwise.applyRewritingScenario("Manual", false);
+    assert.deepEqual(stepwise.graph(), full.graph());
+    assert.deepEqual(
+      (await saved.applyRewritingScenario("Manual", true)).graph(),
+      full.graph(),
+    );
+  }
+});
+
+test("recording interleaved pipeline edits aligns undo order and retains named alternatives", async () => {
+  const original = loadModel(modelBytes("fusion.onnx"), "Interleaved steps");
+  const baseline = (
+    await (
+      await original.applyFusion("TransposeTranspose", [0])
+    ).recordRewriting("Baseline", false)
+  ).withoutFusions();
+  const source = new PipelineModel(
+    {
+      name: "Interleaved",
+      metadata: [],
+      models: { prefill: baseline, decode: original.clone() },
+      assemble: async (models) => pipelineBytes(models),
+    },
+    "interleaved.pipe-onnx",
+  );
+  const prefill = [{ pipeline: "prefill" }];
+  const decode = [{ pipeline: "decode" }];
+  const first = await source.applyFusion("TransposeTranspose", [0], prefill);
+  const other = await first.applyFusion("TransposeTranspose", [0], decode);
+  const namedOther = await other.recordRewriting(
+    "Decode",
+    false,
+    undefined,
+    decode,
+  );
+  const full = await namedOther.applyFusion("TransposeTranspose", [1], prefill);
+  const recorded = await full.recordRewriting(
+    "Prefill",
+    false,
+    undefined,
+    prefill,
+  );
+  assert.deepEqual(recorded.graph(false, prefill), full.graph(false, prefill));
+  assert.deepEqual(recorded.graph(false, decode), full.graph(false, decode));
+  assert.deepEqual(
+    recorded.fusionHistory().map((operation) => operation.stage),
+    ["decode", "prefill"],
+  );
+  const partial = await recorded.fusionPrefix(2);
+  assert.deepEqual(partial.graph(false, prefill), first.graph(false, prefill));
+  assert.deepEqual(partial.graph(false, decode), other.graph(false, decode));
+  const before = await recorded.fusionPrefix(1);
+  assert.equal(before.fusionCount(), 1);
+  assert.deepEqual(before.graph(false, prefill), source.graph(false, prefill));
+  assert.deepEqual(before.graph(false, decode), other.graph(false, decode));
+  assert.deepEqual(before.rewritingState(prefill).names, [
+    "Baseline",
+    "Prefill",
+  ]);
+  assert.deepEqual(before.rewritingState(decode).names, ["Decode"]);
+  assert.deepEqual(
+    recorded.undoFusion().graph(false, decode),
+    before.graph(false, decode),
+  );
+  const empty = before.undoFusion();
+  assert.equal(empty.fusionCount(), 0);
+  assert.deepEqual(empty.graph(false, prefill), source.graph(false, prefill));
+  assert.deepEqual(empty.graph(false, decode), source.graph(false, decode));
+  assert.deepEqual(empty.rewritingState(prefill).names, [
+    "Baseline",
+    "Prefill",
+  ]);
+  assert.deepEqual(empty.rewritingState(decode).names, ["Decode"]);
+  const replayed = await empty.applyRewritingScenario(
+    "Prefill",
+    true,
+    undefined,
+    prefill,
+  );
+  assert.deepEqual(replayed.graph(false, prefill), full.graph(false, prefill));
 });
 
 test("restores exactly one rewriting from native batches and independent pipeline stages", async () => {

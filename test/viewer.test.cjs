@@ -7347,6 +7347,106 @@ test("inspects and locates saved rewritings before and after Refuse Next", async
   );
 });
 
+test("keeps root rewriting inspection visible without focusing nested graph indices", async (t) => {
+  const { document, window } = openViewer(t);
+  const original = loadModel(
+    readFileSync(require.resolve("./models/fusion.onnx")),
+    "Root history",
+  );
+  const fused = await original.applyFusion("TransposeTranspose", [0]);
+  const nested = loadModel(
+    readFileSync(require.resolve("./models/subgraphs.onnx")),
+    "Nested graph",
+  );
+  const path = nested
+    .graph()
+    .nodes[0].attributes.find((attribute) => attribute.graphs?.length)
+    .graphs[0].path;
+  for (const stage of [undefined, "prefill"]) {
+    const graph = nested.graph(false, path);
+    if (stage) {
+      for (const crumb of graph.breadcrumbs)
+        crumb.path = [{ pipeline: stage }, ...crumb.path];
+      graph.pipeline = true;
+      graph.canFuse = false;
+    }
+    window.dispatchEvent(
+      new window.MessageEvent("message", {
+        data: {
+          type: "graph",
+          graph,
+          file: {
+            fusionCount: 1,
+            fusionHistory: fused.fusionHistory(true).map((operation) => ({
+              ...operation,
+              ...(stage ? { stage } : {}),
+            })),
+          },
+        },
+      }),
+    );
+    document.getElementById("fuse-pattern").click();
+    const label = document.querySelector("#rewriting-steps .rewriting-step");
+    assert.ok(label);
+    assert.equal(label.disabled, false);
+    label.click();
+    assert.equal(document.querySelectorAll(".graph-node.selected").length, 0);
+    assert.match(
+      document.getElementById("fusion-feedback").textContent,
+      /not present in the current graph/,
+    );
+    assert.match(
+      document.querySelector("#rewriting-steps .fusion-impact").textContent,
+      /Before.*Transpose.*After/s,
+    );
+  }
+});
+
+test("locates pending rewritings of unnamed nodes after undo", async (t) => {
+  const { document, window, messages } = openViewer(t);
+  const original = loadModel(
+    readFileSync(require.resolve("./models/fusion-scaled.onnx")),
+    "Unnamed nodes",
+  );
+  const full = await original.applyFusion("MatMulScaleFusion", [4]);
+  const pending = full.fusionHistory(true);
+  assert.ok(pending[0].matches[0].impact.before.every((node) => !node.name));
+  assert.ok(
+    original
+      .graph()
+      .nodes.slice(4)
+      .every((node) => node.name),
+  );
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: {
+        type: "graph",
+        graph: original.graph(),
+        file: { fusionCount: 0, pendingRewritings: pending },
+      },
+    }),
+  );
+  document.getElementById("fuse-pattern").click();
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: {
+        type: "fusion-patterns",
+        requestId: messages.at(-1).requestId,
+        patterns: [],
+        scenarios: [],
+      },
+    }),
+  );
+  document.querySelector("#rewriting-steps .rewriting-step").click();
+  assert.deepEqual(
+    [...document.querySelectorAll(".graph-node.selected")].map(
+      (node) => node.dataset.id,
+    ),
+    ["node-4", "node-5"],
+  );
+  assert.equal(document.getElementById("fusion-feedback").textContent, "");
+});
+
 test("rejects queued fusion and scenario completions after local close or navigation", async (t) => {
   const saved = loadModel(
     readFileSync(require.resolve("../examples/rewriting-scenarios.onnx")),
