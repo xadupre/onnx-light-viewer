@@ -257,6 +257,8 @@ After each run, click **Show optimization report** to open a wide dialog outside
 the sidebar. Its tables show iteration and rewrite counters, elapsed and phase
 timings in milliseconds, per-pattern attempts and accepted matches, rejection reasons with
 occurrence counts and native source locations, and nested-graph statistics.
+Use the table of contents to jump to a section. Click any column header to sort
+ascending; click it again to sort descending. Counts and timings sort numerically.
 Source locations link to the corresponding release file and line on GitHub.
 The dialog opens only when requested; **Close** or Escape returns to the graph.
 The report is also available after a no-op run and when reopening Optimize.

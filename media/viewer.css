@@ -1640,6 +1640,16 @@ button:disabled {
 #optimization-report thead {
   background: var(--bg);
 }
+#optimization-report th button {
+  width: 100%;
+  text-align: left;
+}
+#optimization-report th[aria-sort="ascending"] button::after {
+  content: " ▲";
+}
+#optimization-report th[aria-sort="descending"] button::after {
+  content: " ▼";
+}
 .save-grid {
   min-width: 0;
   margin: 12px 0;
