@@ -92,6 +92,7 @@ struct StoredModel {
   std::shared_ptr<StoredModel> rewriting_base;
   std::string rewriting_name;
   std::vector<size_t> rewriting_batches;
+  bool rewriting_recorded = false;
 };
 
 std::shared_ptr<StoredModel> CloneStoredModel(const std::shared_ptr<StoredModel> &model);

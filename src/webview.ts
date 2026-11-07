@@ -176,7 +176,7 @@ export function webviewHtml(
           <nav id="graph-navigation" aria-label="Graph breadcrumbs" hidden></nav>
           <select id="rewriting-scenario" aria-label="Rewriting" title="Choose a saved rewriting or None for the original model" disabled><option value="">None</option></select>
           <div class="graph-stats" aria-live="polite"><span id="graph-summary">No model loaded</span><span aria-hidden="true"> / </span><span id="initializer-count">0 initializers</span></div>
-          <span id="rewriting-count" role="status" title="Rewritings waiting to be reapplied before the next native matching or optimization">0 pending rewritings</span>
+          <span id="rewriting-count" role="status" title="Rewritings waiting to be reapplied before the next native matching or optimization" hidden></span>
         </div>
         <span id="navigation-status" role="status"></span>
         <span id="load-status" role="status"></span>
@@ -201,7 +201,7 @@ export function webviewHtml(
             <button id="show-symbolic" class="icon-button" aria-expanded="false" aria-controls="symbolic-panel" title="Show or hide symbolic dimension and model checks">Symbolic</button>
             <button id="export-model" class="icon-button" title="Convert a model to ONNX with Python" aria-expanded="false" aria-controls="export-panel">Convert</button>
             <button id="optimize-model" class="icon-button" disabled title="Show or hide full native model optimization" aria-expanded="false" aria-controls="optimization-panel">Optimize${fusionHourglass}</button>
-            <button id="fuse-pattern" class="icon-button" disabled title="Show fusion patterns, saved rewritings and applied operations to unfuse" aria-expanded="false" aria-controls="fusion-panel">Fuse / Unfuse${fusionHourglass}</button>
+            <button id="fuse-pattern" class="icon-button" disabled title="Show rewriting steps and add native patterns" aria-expanded="false" aria-controls="fusion-panel">Rewritings${fusionHourglass}</button>
           </nav>
           <section id="symbolic-panel" class="inspector-panel" aria-labelledby="symbolic-title" hidden>
             <h2 id="symbolic-title" class="eyebrow panel-title">Symbolic</h2>
@@ -437,6 +437,7 @@ export function webviewHtml(
               <div id="native-optimization-patterns">
               <fieldset id="optimization-pattern-group" disabled aria-label="Native pattern groups"><legend>Select pattern groups</legend></fieldset>
               <div class="fusion-selection-controls"><button id="select-optimization-patterns" disabled>Select all</button><button id="clear-optimization-patterns" disabled>Clear selection</button></div>
+              <input id="optimization-filter" type="search" placeholder="Filter patterns..." aria-label="Filter optimization patterns" aria-controls="optimization-patterns" autocomplete="off">
               <fieldset id="optimization-patterns" disabled aria-label="Optimization patterns"></fieldset>
               <p id="optimization-feedback" role="status"></p>
               </div>
@@ -459,37 +460,48 @@ export function webviewHtml(
             <div id="optimization-report-section" hidden>
               <button id="show-optimization-report" disabled aria-haspopup="dialog">Show optimization report</button>
             </div>
+            <section id="optimization-rewriting" hidden aria-label="Keep optimized model as a rewriting">
+              <div class="form-grid"><label for="optimization-rewriting-name">New rewriting name</label><input id="optimization-rewriting-name" type="text" autocomplete="off"></div>
+              <div class="fusion-selection-controls"><button id="create-optimization-rewriting" disabled>Create rewriting</button><button id="append-optimization-rewriting" disabled>Add to selected rewriting</button></div>
+              <p>Keep the model optimized and record a replayable native plan. Creating preserves existing rewritings; adding extends the selected rewriting. Save with Include fusion rewritings to keep these plans in the file.</p>
+              <p id="optimization-rewriting-status" role="status"></p>
+            </section>
           </section>
           <section id="fusion-panel" class="inspector-panel" aria-labelledby="fusion-title" hidden>
-            <h2 id="fusion-title" class="eyebrow panel-title">Fuse / Unfuse${fusionHourglass}</h2>
-            <p>Select patterns, run matching, then fuse selected candidates. Run global passes one at a time.</p>
-            <details id="rewriting-scenarios" class="fusion-picker">
-              <summary>Saved rewriting scenarios</summary>
+            <h2 id="fusion-title" class="eyebrow panel-title">Rewritings${fusionHourglass}</h2>
+            <ol id="rewriting-steps" aria-label="Rewriting steps"></ol>
+            <div id="rewriting-actions" class="fusion-selection-controls" role="group" aria-label="Rewriting actions">
+              <button id="unfuse-last" disabled>Unfuse Last</button>
+              <button id="refuse-next" disabled>Refuse Next</button>
+              <button id="append-new" disabled>Append New</button>
+              <button id="record-working-rewriting" disabled>Create rewriting</button>
+            </div>
+            <div id="working-rewriting-name-field" class="form-grid" hidden><label for="working-rewriting-name">New rewriting name</label><input id="working-rewriting-name" type="text" autocomplete="off"></div>
+            <fieldset id="fusion-pattern-group" disabled aria-label="Native pattern groups"><legend>Select pattern groups</legend></fieldset>
+            <input id="fusion-filter" type="search" placeholder="Filter patterns..." aria-label="Filter rewriting patterns" aria-controls="fusion-pattern" autocomplete="off">
+            <fieldset id="fusion-pattern" disabled aria-label="Native patterns" aria-describedby="fusion-feedback"></fieldset>
+            <p id="fusion-feedback" role="status"></p>
+            <div hidden>
+            <details id="rewriting-scenarios">
               <p id="rewriting-progress" role="status">No saved rewriting scenarios in this model.</p>
-              <ol id="rewriting-steps" aria-label="Stored rewriting steps"></ol>
               <div class="fusion-selection-controls"><button id="rewriting-restart" disabled>Restart step by step</button><button id="rewriting-next" disabled>Apply next pattern</button><button id="rewriting-all" disabled>Apply remaining scenario</button></div>
-              <p>Choose a saved rewriting in the graph header to display its result, or None for the original graph. Switching replaces current native fusion edits; it never changes the source file.</p>
             </details>
-            <section id="unfuse-panel" class="fusion-picker" aria-labelledby="unfuse-title" hidden>
-              <h3 id="unfuse-title">Applied fusions</h3>
-              <p id="unfuse-count" role="status"></p>
-              <p>Unfuse last reverses one operation; Unfuse all restores the original graph and keeps the operations pending.</p>
-              <div class="fusion-selection-controls"><button id="unfuse-last" disabled>Unfuse last</button><button id="unfuse-all" disabled>Unfuse all</button></div>
-              <ol id="unfuse-history" reversed aria-label="Applied fusion operations, most recent first"></ol>
+            <section aria-label="Record working rewriting">
+              <p id="working-rewriting-status" role="status"></p>
             </section>
-            <details class="fusion-picker" open>
-              <summary>Native patterns</summary>
-              <fieldset id="fusion-pattern-group" disabled aria-label="Native pattern groups"><legend>Select pattern groups</legend></fieldset>
+            <section id="unfuse-panel" class="fusion-picker" aria-labelledby="unfuse-title" hidden>
+              <h3 id="unfuse-title">Unfuse steps</h3>
+              <p id="unfuse-count" role="status"></p>
+              <button id="unfuse-all" disabled>Unfuse all</button>
+              <ol id="unfuse-history" reversed aria-label="Applied fusion operations, most recent first" hidden></ol>
+            </section>
               <div class="fusion-selection-controls"><button id="select-patterns" disabled>Select all</button><button id="clear-patterns" disabled>Clear selection</button></div>
-              <fieldset id="fusion-pattern" disabled aria-label="Native patterns" aria-describedby="fusion-feedback"></fieldset>
               <button id="preview-fusion" disabled>Run Matching</button>
-              <p id="fusion-feedback" role="status"></p>
-            </details>
             <details class="fusion-picker" open>
               <summary>Fusion candidates</summary>
               <div class="fusion-selection-controls"><button id="select-fusions" disabled>Select all compatible</button><button id="clear-fusions" disabled>Clear selection</button></div>
               <ul id="fusion-matches" aria-label="Fusion candidates"></ul>
-              <footer><button id="apply-fusion" class="primary" disabled>Fuse selected</button></footer>
+              <footer><button id="apply-fusion" class="primary" disabled>Add selected patterns</button></footer>
             </details>
             <details id="fusion-diagnostics" class="fusion-picker" aria-disabled="true">
               <summary tabindex="-1">Why did matching fail?</summary>
@@ -499,6 +511,7 @@ export function webviewHtml(
               <p id="diagnostic-feedback" role="status"></p>
               <section id="diagnostic-source" hidden><h3>Native source location</h3><p id="diagnostic-location" class="native-report"></p></section>
             </details>
+            </div>
           </section>
           <section id="open-panel" class="inspector-panel file-panel" aria-labelledby="open-title" hidden>
             <h2 id="open-title" class="eyebrow panel-title">Open model</h2>

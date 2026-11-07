@@ -34,6 +34,9 @@ function createFusionPanel({
   let diagnosticNode;
   let diagnosticResult;
   let nativePatterns = new Set();
+  let optimizationFinished = false;
+  let recordingFromRewritings = false;
+  let appendOne = false;
   let creatingPattern = false;
   let selectionCatalogLoaded = false;
   let functionBodyRequest = 0;
@@ -199,12 +202,15 @@ function createFusionPanel({
     const picker = byId("diagnostic-pattern");
     const previous = picker.value;
     picker.replaceChildren();
-    for (const input of byId("fusion-pattern").querySelectorAll(
-      "input:checked",
-    )) {
-      if (!nativePatterns.has(input.value)) continue;
+    const names = [
+      ...byId("fusion-pattern").querySelectorAll("input[data-pattern]:checked"),
+    ]
+      .map((input) => input.value)
+      .filter((name) => nativePatterns.has(name))
+      .sort();
+    for (const name of names) {
       const option = document.createElement("option");
-      option.value = option.textContent = input.value;
+      option.value = option.textContent = name;
       picker.append(option);
     }
     if ([...picker.options].some((option) => option.value === previous))
@@ -371,7 +377,7 @@ function createFusionPanel({
     if (fusionBusy || !canFuse() || !step?.nodes.length) return;
     selectedStep = { name: scenario.name, index };
     for (const [stepIndex, button] of [
-      ...byId("rewriting-steps").querySelectorAll("button"),
+      ...byId("rewriting-steps").querySelectorAll(".rewriting-step"),
     ].entries())
       button.setAttribute("aria-current", String(stepIndex === index));
     focusNodes(step.nodes);
@@ -386,31 +392,108 @@ function createFusionPanel({
       byId(id).disabled = fusionBusy || !scenario?.available || !canFuse();
     byId("rewriting-restart").disabled = fusionBusy || !scenario || !canFuse();
     byId("rewriting-steps").replaceChildren();
-    for (const [index, step] of (scenario?.steps ?? []).entries()) {
+    const path = fusionGraph?.breadcrumbs?.at(-1)?.path ?? [];
+    const stage = path.length === 1 ? path[0].pipeline : undefined;
+    let nodesByKey;
+    const workingSteps = [
+      ...optimizationHistory
+        .filter((operation) => operation.stage === stage)
+        .flatMap((operation) => operation.matches)
+        .map((match) => ({
+          ...match,
+          path: match.impact?.scope ?? [],
+          applied: true,
+        })),
+      ...pendingRewritings
+        .filter((operation) => operation.stage === stage)
+        .flatMap((operation) => operation.matches)
+        .map((match) => ({
+          ...match,
+          path: match.impact?.scope ?? [],
+          nodes: nodesBeforeRewriting(match),
+          applied: false,
+        })),
+    ];
+    const steps = workingSteps.length
+      ? workingSteps
+      : (scenario?.steps ?? []).map((step, index) => ({
+          ...step,
+          applied: index < scenario.applied,
+        }));
+    if (workingSteps.length && !pendingRewritings.length && scenario?.available)
+      steps.push(
+        ...scenario.steps.slice(scenario.applied).map((step) => ({
+          ...step,
+          applied: false,
+        })),
+      );
+    for (const [index, step] of steps.entries()) {
       const item = document.createElement("li");
-      const button = document.createElement("button");
-      button.textContent = `${index < scenario.applied ? "Applied: " : ""}${step.pattern}${step.path.length ? ` [${step.path.join(" / ")}]` : ""}`;
-      button.disabled = fusionBusy || !canFuse() || !step.nodes.length;
-      button.title = step.path.length
-        ? "This step edits a subgraph, not nodes in the main graph."
-        : index > scenario.applied
-          ? "Apply preceding steps to inspect these nodes."
-          : step.nodes.length
-            ? "Select this step's nodes in the graph."
-            : "No nodes from this step are present in the main graph.";
-      button.setAttribute(
+      item.className = step.applied ? "rewriting-applied" : "rewriting-pending";
+      const label = document.createElement("button");
+      label.className = "rewriting-step";
+      label.disabled = fusionBusy;
+      label.textContent = `${step.pattern}${step.path.length ? ` [${step.path.join(" / ")}]` : ""}`;
+      label.setAttribute(
         "aria-current",
         String(
-          selectedStep?.name === scenario.name && selectedStep.index === index,
+          selectedStep?.name === scenario?.name &&
+            selectedStep?.index === index,
         ),
       );
-      button.addEventListener("click", () => focusScenarioStep(index));
-      item.append(button);
+      item.append(label);
+      let content;
+      label.addEventListener("click", () => {
+        if (fusionBusy) return;
+        selectedStep = { name: scenario?.name, index };
+        for (const [otherIndex, other] of [
+          ...byId("rewriting-steps").querySelectorAll(".rewriting-step"),
+        ].entries())
+          other.setAttribute("aria-current", String(otherIndex === index));
+        content ??= appendImpactDetails(item, step, true);
+        if (content) content.open = true;
+        const nodes =
+          !step.applied && !step.nodes.length
+            ? nodesBeforeRewriting(step)
+            : step.nodes;
+        focusNodes(nodes);
+        byId("fusion-feedback").textContent = step.inspectionError
+          ? `Could not inspect this rewriting: ${step.inspectionError}`
+          : nodes.length
+            ? ""
+            : "These nodes are not present in the current graph.";
+      });
       byId("rewriting-steps").append(item);
     }
-    byId("rewriting-progress").textContent = scenario
-      ? `${scenario.applied} / ${scenario.steps.length} steps applied.${!scenario.available && scenario.applied < scenario.steps.length ? " Unfuse current edits before applying this scenario." : ""}`
-      : "None selected: the model is shown without a saved rewriting.";
+    function nodesBeforeRewriting(match) {
+      const key = (node) =>
+        JSON.stringify([
+          node.domain || "ai.onnx",
+          node.opType,
+          node.name,
+          node.inputs,
+          node.outputs,
+        ]);
+      const before = new Set((match.impact?.before ?? []).map(key));
+      if (!before.size) return [];
+      if (!nodesByKey) {
+        nodesByKey = new Map();
+        for (const [index, node] of (fusionGraph?.nodes ?? []).entries()) {
+          const signature = key(node);
+          const indices = nodesByKey.get(signature);
+          if (indices) indices.push(index);
+          else nodesByKey.set(signature, [index]);
+        }
+      }
+      return [...before]
+        .flatMap((signature) => nodesByKey.get(signature) ?? [])
+        .sort((left, right) => left - right);
+    }
+    byId("rewriting-progress").textContent = workingSteps.length
+      ? `${steps.filter((step) => step.applied).length} / ${steps.length} steps applied.`
+      : scenario
+        ? `${scenario.applied} / ${scenario.steps.length} steps applied.${!scenario.available && scenario.applied < scenario.steps.length ? " Unfuse current edits before applying this scenario." : ""}`
+        : "None selected: the model is shown without a saved rewriting.";
   }
   function showRewritingState(state) {
     rewritingState = state;
@@ -427,7 +510,7 @@ function createFusionPanel({
     const hadScenarios = scenarios.length > 0;
     scenarios = values ?? [];
     if (!scenarios.length || !hadScenarios)
-      byId("rewriting-scenarios").open = scenarios.length > 0;
+      byId("rewriting-scenarios").open = true;
     if (values) {
       showRewritingState({
         names: scenarios.map((scenario) => scenario.name),
@@ -442,6 +525,18 @@ function createFusionPanel({
     fusionBusy = busy;
     for (const id of ["unfuse-last", "unfuse-all"])
       byId(id).disabled = busy || !undoCount;
+    const path = fusionGraph?.breadcrumbs?.at(-1)?.path ?? [];
+    const stage = path.length === 1 ? path[0].pipeline : undefined;
+    byId("refuse-next").disabled =
+      busy ||
+      !canFuse() ||
+      !(pendingRewritings.length
+        ? pendingRewritings[0].stage === stage
+        : currentScenario()?.available);
+    byId("append-new").disabled =
+      busy ||
+      !canFuse() ||
+      !byId("fusion-pattern").querySelector("input[data-pattern]:checked");
     for (const button of byId("unfuse-history").querySelectorAll("button"))
       button.disabled = busy || button.dataset.nodeCount === "0";
     selectionPatternControls();
@@ -461,7 +556,40 @@ function createFusionPanel({
     const output = byId("onnxscript-optimization-output");
     output.hidden = optimizationBackend !== "onnxscript" || !output.textContent;
     byId("native-optimization-history").hidden =
-      optimizationBackend !== "onnx-light";
+      optimizationBackend !== "onnx-light" || optimizationFinished;
+    byId("optimization-rewriting").hidden =
+      !optimizationFinished || optimizationBackend !== "onnx-light";
+    const rewritingName = byId("optimization-rewriting-name").value.trim();
+    const duplicateName = rewritingState.names.includes(rewritingName);
+    byId("optimization-rewriting-name").setCustomValidity(
+      duplicateName ? "This rewriting name already exists." : "",
+    );
+    const canRecord = optimizationFinished && canFuse() && undoCount && !busy;
+    byId("optimization-rewriting-name").disabled = !canRecord;
+    byId("create-optimization-rewriting").disabled =
+      !canRecord || !rewritingName || duplicateName;
+    const selectedRewriting = rewritingState.selected;
+    const workingName = byId("working-rewriting-name").value.trim();
+    const workingDuplicate = rewritingState.names.includes(workingName);
+    byId("working-rewriting-name-field").hidden =
+      !!selectedRewriting || !undoCount;
+    byId("working-rewriting-name").disabled = busy || !canFuse() || !undoCount;
+    byId("working-rewriting-name").setCustomValidity(
+      workingDuplicate ? "This rewriting name already exists." : "",
+    );
+    byId("record-working-rewriting").disabled =
+      busy ||
+      !canFuse() ||
+      !undoCount ||
+      (!selectedRewriting && (!workingName || workingDuplicate));
+    byId("record-working-rewriting").textContent = selectedRewriting
+      ? `Update ${selectedRewriting}`
+      : "Create rewriting";
+    byId("append-optimization-rewriting").disabled =
+      !canRecord || !selectedRewriting;
+    byId("append-optimization-rewriting").textContent = selectedRewriting
+      ? `Add to ${selectedRewriting}`
+      : "Add to selected rewriting";
     for (const id of [
       "optimization-unfuse-last",
       "optimization-restore-original",
@@ -487,9 +615,9 @@ function createFusionPanel({
       patterns.disabled || !byId("fusion-pattern-group").querySelector("input");
     byId("select-patterns").disabled = patterns.disabled;
     byId("clear-patterns").disabled =
-      busy || !patterns.querySelector("input:checked");
+      busy || !patterns.querySelector("input[data-pattern]:checked");
     byId("preview-fusion").disabled =
-      busy || !patterns.querySelector("input:checked");
+      busy || !patterns.querySelector("input[data-pattern]:checked");
     byId("select-fusions").disabled = busy || !fusionPreview?.matches.length;
     byId("clear-fusions").disabled = busy || !fusionSelection().length;
     byId("apply-fusion").disabled = busy || !fusionSelection().length;
@@ -552,10 +680,11 @@ function createFusionPanel({
             ? byId("diagnostic-pattern").options.length
               ? "No matching candidates. Select the operator where you expected a match, then use Why did matching fail? below."
               : "No matching candidates. The selected patterns or passes do not produce a rewrite."
-            : `${candidates.size} selected / ${fusionPreview.matches.length} matches. Check candidates, then click Fuse selected.`;
+            : `${candidates.size} selected / ${fusionPreview.matches.length} matches. Check candidates, then click Add selected patterns.`;
   }
 
   function clearFusionPreview() {
+    appendOne = false;
     if (fusionPreview) {
       clearSelection();
     }
@@ -566,10 +695,50 @@ function createFusionPanel({
     fusionControls(false);
   }
 
+  function filterPatterns(fieldsetId, filterId) {
+    const query = byId(filterId).value.trim().toLocaleLowerCase();
+    for (const group of byId(fieldsetId).querySelectorAll("details")) {
+      const labels = [...group.querySelectorAll("label")];
+      for (const label of labels)
+        label.hidden = !label
+          .querySelector("input")
+          .value.toLocaleLowerCase()
+          .includes(query);
+      group.hidden = labels.every((label) => label.hidden);
+      if (query) {
+        group.dataset.filterOpen ??= String(group.open);
+        group.open = !group.hidden;
+      } else if (group.dataset.filterOpen !== undefined) {
+        group.open = group.dataset.filterOpen === "true";
+        delete group.dataset.filterOpen;
+      }
+    }
+  }
+  byId("optimization-filter").addEventListener("input", () =>
+    filterPatterns("optimization-patterns", "optimization-filter"),
+  );
+  byId("fusion-filter").addEventListener("input", () =>
+    filterPatterns("fusion-pattern", "fusion-filter"),
+  );
+
   function showOptimizationPatterns(patterns) {
     if (!patterns) return;
     nativePatterns = new Set(patterns.map((pattern) => pattern.name));
-    const fieldset = byId("optimization-patterns");
+    patterns = patterns.filter(
+      (pattern) =>
+        pattern.name !== "RepeatedLayer" && pattern.name !== "PartitionGroup",
+    );
+    showPatternPicker(
+      "optimization-patterns",
+      "optimization-filter",
+      patterns,
+      optimizationSelection,
+    );
+    updateOptimizationSelection();
+  }
+
+  function showPatternPicker(fieldsetId, filterId, patterns, selection) {
+    const fieldset = byId(fieldsetId);
     fieldset.replaceChildren();
     const fromSelection = (pattern) =>
       pattern.groups?.includes("Selection patterns");
@@ -618,8 +787,8 @@ function createFusionPanel({
         input.type = "checkbox";
         input.value = pattern.name;
         input.dataset.pattern = pattern.name;
-        input.checked = optimizationSelection
-          ? optimizationSelection.has(pattern.name)
+        input.checked = selection
+          ? selection.has(pattern.name)
           : pattern.enabledByDefault !== false;
         label.title = `${pattern.device}; native priority ${pattern.priority}`;
         label.append(input, document.createTextNode(pattern.name));
@@ -631,7 +800,8 @@ function createFusionPanel({
       });
       fieldset.append(group);
     }
-    updateOptimizationSelection();
+    filterPatterns(fieldsetId, filterId);
+    syncPatternPriorities(fieldsetId);
   }
 
   function showPatternGroups(id, fieldsetId, patterns, changed) {
@@ -707,7 +877,13 @@ function createFusionPanel({
       ...fieldset.querySelectorAll("input[data-pattern]:checked"),
     ];
     optimizationSelection = new Set(selected.map((input) => input.value));
-    for (const group of fieldset.querySelectorAll("details")) {
+    syncPatternPriorities("optimization-patterns");
+    byId("optimization-feedback").textContent =
+      `${selected.length} / ${fieldset.querySelectorAll("input[data-pattern]").length} patterns selected.`;
+    fusionControls(fusionBusy);
+  }
+  function syncPatternPriorities(fieldsetId) {
+    for (const group of byId(fieldsetId).querySelectorAll("details")) {
       const toggle = group.querySelector("input[data-priority]");
       const count = group.querySelectorAll("input[data-pattern]").length;
       const checked = group.querySelectorAll(
@@ -716,9 +892,6 @@ function createFusionPanel({
       toggle.checked = count === checked;
       toggle.indeterminate = checked > 0 && checked < count;
     }
-    byId("optimization-feedback").textContent =
-      `${selected.length} / ${fieldset.querySelectorAll("input[data-pattern]").length} patterns selected.`;
-    fusionControls(fusionBusy);
   }
 
   function impactSummary(match) {
@@ -739,15 +912,21 @@ function createFusionPanel({
         parts.push(`${count} initializer${count === 1 ? "" : "s"} ${action}`);
     return parts.join("; ");
   }
-  function appendImpactDetails(container, match) {
-    if (!match.impact) return;
+  function appendImpactDetails(container, match, expanded = false) {
+    if (!match.impact && !match.inspectionError) return;
     const details = document.createElement("details");
     details.className = "fusion-impact";
     const summary = document.createElement("summary");
     summary.textContent = "Before / after this operation";
     details.append(summary);
-    details.addEventListener("toggle", () => {
+    const populate = () => {
       if (!details.open || details.childElementCount > 1) return;
+      if (match.inspectionError) {
+        const error = document.createElement("p");
+        error.textContent = `Could not inspect this rewriting: ${match.inspectionError}`;
+        details.append(error);
+      }
+      if (!match.impact) return;
       if (match.impact.scope.length) {
         const scope = document.createElement("p");
         scope.textContent = `Scope: ${match.impact.scope.join(" / ")}`;
@@ -774,8 +953,14 @@ function createFusionPanel({
           : "No nodes.";
         details.append(heading, text);
       }
-    });
+    };
+    details.addEventListener("toggle", populate);
+    if (expanded) {
+      details.open = true;
+      populate();
+    }
     container.append(details);
+    return details;
   }
   function showOptimizationResults() {
     const queued = pendingRewritings.flatMap((operation) =>
@@ -784,8 +969,10 @@ function createFusionPanel({
         stage: operation.stage,
       })),
     );
-    byId("rewriting-count").textContent =
-      `${queued.length} pending rewriting${queued.length === 1 ? "" : "s"}`;
+    byId("rewriting-count").hidden = !queued.length;
+    byId("rewriting-count").textContent = queued.length
+      ? `${queued.length} pending rewriting${queued.length === 1 ? "" : "s"}`
+      : "";
     byId("pending-rewritings").hidden = !queued.length;
     byId("pending-rewriting-steps").replaceChildren(
       ...queued.map((match) => {
@@ -795,6 +982,7 @@ function createFusionPanel({
       }),
     );
     byId("optimization-results").replaceChildren();
+    if (optimizationFinished) return;
     const path = fusionGraph?.breadcrumbs?.at(-1)?.path ?? [];
     const stage = path.length === 1 ? path[0].pipeline : undefined;
     const matches = optimizationHistory
@@ -824,15 +1012,21 @@ function createFusionPanel({
     }
   }
 
-  function previewFusion() {
+  function previewFusion(single = false) {
     clearFusionPreview();
+    appendOne = single;
     byId("fusion-status").textContent = "";
     fusionControls(true, "Matching patterns and building replacements…");
     requestAction("preview-fusion", "Preview fusion pattern", {
       requestId: ++fusionRequest,
       patterns: [
-        ...byId("fusion-pattern").querySelectorAll("input:checked"),
-      ].map((input) => input.value),
+        ...byId("fusion-pattern").querySelectorAll(
+          "input[data-pattern]:checked",
+        ),
+      ]
+        .map((input) => input.value)
+        .sort(),
+      discardPending: true,
     });
   }
 
@@ -993,11 +1187,50 @@ function createFusionPanel({
   for (const backend of ["onnx-light", "onnxscript"])
     byId(`optimizer-${backend}`).addEventListener("click", () => {
       optimizationBackend = backend;
-      showOptimizationReport(null);
       byId("optimization-status").textContent = "";
       showOptimizationResults();
       fusionControls(fusionBusy);
     });
+  byId("optimization-rewriting-name").addEventListener("input", () =>
+    fusionControls(fusionBusy),
+  );
+  for (const [id, append] of [
+    ["create-optimization-rewriting", false],
+    ["append-optimization-rewriting", true],
+  ])
+    byId(id).addEventListener("click", () => {
+      recordingFromRewritings = false;
+      const name = append
+        ? rewritingState.selected
+        : byId("optimization-rewriting-name").value.trim();
+      if (byId(id).disabled || !name) return;
+      byId("optimization-rewriting-status").textContent =
+        "Recording rewriting…";
+      fusionControls(true);
+      requestAction("record-rewriting", "Record optimization rewriting", {
+        requestId: ++fusionRequest,
+        name,
+        append,
+      });
+    });
+  byId("working-rewriting-name").addEventListener("input", () =>
+    fusionControls(fusionBusy),
+  );
+  byId("record-working-rewriting").addEventListener("click", () => {
+    if (byId("record-working-rewriting").disabled) return;
+    const append = !!rewritingState.selected;
+    const name = append
+      ? rewritingState.selected
+      : byId("working-rewriting-name").value.trim();
+    recordingFromRewritings = true;
+    byId("working-rewriting-status").textContent = "Recording rewriting…";
+    fusionControls(true);
+    requestAction("record-rewriting", "Record working rewriting", {
+      requestId: ++fusionRequest,
+      name,
+      append,
+    });
+  });
   for (const [id, all] of [
     ["optimization-unfuse-last", false],
     ["optimization-restore-original", true],
@@ -1073,11 +1306,12 @@ function createFusionPanel({
     });
   });
   function changeFusionPatterns() {
+    syncPatternPriorities("fusion-pattern");
     fusionRequest++;
     clearFusionPreview();
     updateDiagnosticPatterns();
     byId("fusion-feedback").textContent =
-      "Click Run Matching to find candidates for the selected patterns.";
+      "Click Append New to apply one match.";
     postMessage({ type: "cancel-fusion" });
   }
   byId("selection-pattern-name").addEventListener(
@@ -1177,7 +1411,15 @@ function createFusionPanel({
         input.checked = checked;
       byId("fusion-pattern").dispatchEvent(new Event("change"));
     });
-  byId("preview-fusion").addEventListener("click", previewFusion);
+  byId("preview-fusion").addEventListener("click", () => previewFusion());
+  byId("append-new").addEventListener("click", () => previewFusion(true));
+  byId("refuse-next").addEventListener("click", () => {
+    clearFusionPreview();
+    fusionControls(true);
+    requestAction("refuse-next", "Reapply next rewriting", {
+      requestId: ++fusionRequest,
+    });
+  });
   byId("select-fusions").addEventListener("click", () => {
     const used = new Set();
     let global = false;
@@ -1285,15 +1527,27 @@ function createFusionPanel({
     showSelectionPattern();
     showScenarios(data.scenarios, data.name);
     showOptimizationPatterns(data.optimizationPatterns);
-    byId("fusion-pattern").replaceChildren();
-    for (const pattern of [...data.patterns].sort()) {
-      const label = document.createElement("label");
-      const checkbox = document.createElement("input");
-      checkbox.type = "checkbox";
-      checkbox.value = pattern;
-      label.append(checkbox, document.createTextNode(pattern));
-      byId("fusion-pattern").append(label);
-    }
+    const catalog = new Map(
+      (data.optimizationPatterns ?? []).map((pattern) => [
+        pattern.name,
+        pattern,
+      ]),
+    );
+    showPatternPicker(
+      "fusion-pattern",
+      "fusion-filter",
+      data.patterns.map(
+        (name) =>
+          catalog.get(name) ?? {
+            name,
+            priority: 1,
+            device: "cpu",
+            enabledByDefault: false,
+            groups: [],
+          },
+      ),
+      new Set(),
+    );
     showPatternGroups(
       "fusion-pattern-group",
       "fusion-pattern",
@@ -1388,7 +1642,7 @@ function createFusionPanel({
         "Run Matching to find this pattern throughout the model.",
       );
       byId("selection-pattern-status").textContent =
-        `Ready: ${data.pattern.name}. Close this window, open Fuse and select this pattern, or enable Selection patterns in Global optimization.`;
+        `Ready: ${data.pattern.name}. Close this window, open Rewritings and select this pattern, or enable Selection patterns in Global optimization.`;
       return true;
     }
     if (
@@ -1433,6 +1687,7 @@ function createFusionPanel({
       data?.type === "fusion-patterns" ||
       data?.type === "optimization-info" ||
       data?.type === "rewriting-info" ||
+      data?.type === "rewriting-recorded" ||
       data?.type === "fusion-info"
     ) {
       if (data.type === "fusion-patterns" && data.requestId !== fusionRequest)
@@ -1445,7 +1700,9 @@ function createFusionPanel({
         )
           return true;
         fusionCompletion = undefined;
-        const optimize = data.type === "optimization-info";
+        const optimize =
+          data.type === "optimization-info" ||
+          (data.type === "rewriting-recorded" && !recordingFromRewritings);
         byId(optimize ? "optimization-panel" : "fusion-panel").hidden = false;
         byId(optimize ? "optimize-model" : "fuse-pattern").setAttribute(
           "aria-expanded",
@@ -1454,6 +1711,11 @@ function createFusionPanel({
       }
       showFusionCatalog(data);
       showOptimizationReport(data.optimizationReport);
+      optimizationFinished =
+        data.type === "optimization-info" ||
+        data.type === "rewriting-recorded" ||
+        !!data.optimizationReport;
+      if (optimizationFinished) showOptimizationResults();
       if (data.type === "optimization-info")
         byId("onnxscript-optimization-output").textContent =
           data.backend === "onnxscript" ? (data.logs ?? "") : "";
@@ -1463,7 +1725,7 @@ function createFusionPanel({
       fusionControls(
         false,
         data.patterns.length
-          ? `${data.patterns.length} native patterns available. Select patterns, then click Run Matching.`
+          ? "Select patterns, then click Append New."
           : "No native patterns have compatible anchors in this graph.",
       );
       if (
@@ -1479,18 +1741,21 @@ function createFusionPanel({
                 ? ""
                 : "ONNX Script: no changes."
               : data.changed
-                ? `${data.operation}: applied ${data.matches.length} rewriting steps. Use Unfuse to undo, or Save with or without rewritings.`
+                ? `${data.operation}: applied ${data.matches.length} rewriting steps. The model remains optimized; record a named rewriting or save a copy.`
                 : `${data.operation}: no changes.`
-            : data.type === "rewriting-info"
-              ? data.name === null
-                ? "Original model selected; no rewriting applied."
-                : `Applied rewriting scenario ${data.name}. Use Unfuse to undo.`
-              : `Applied ${data.count} fusion matches. Save a copy to keep changes.`;
+            : data.type === "rewriting-recorded"
+              ? `${data.append ? "Updated" : "Created"} rewriting ${data.name}. The model remains optimized.`
+              : data.type === "rewriting-info"
+                ? data.name === null
+                  ? ""
+                  : `Applied rewriting scenario ${data.name}. Use Unfuse to undo.`
+                : `Applied ${data.count} fusion matches. Save a copy to keep changes.`;
         if (data.notice) byId("fusion-status").textContent += ` ${data.notice}`;
         updateScenario();
         revealPanel(
           byId(
-            data.type === "optimization-info"
+            data.type === "optimization-info" ||
+              (data.type === "rewriting-recorded" && !recordingFromRewritings)
               ? "optimization-panel"
               : "fusion-panel",
           ),
@@ -1498,9 +1763,21 @@ function createFusionPanel({
         fit();
         if (data.type === "rewriting-info")
           focusScenarioStep(currentScenario()?.applied);
-        if (data.type === "optimization-info") {
+        if (data.type === "rewriting-recorded") {
+          byId("working-rewriting-status").textContent =
+            byId("fusion-status").textContent;
+          recordingFromRewritings = false;
+        }
+        if (
+          data.type === "optimization-info" ||
+          data.type === "rewriting-recorded"
+        ) {
           byId("optimization-status").textContent =
             byId("fusion-status").textContent;
+          byId("optimization-rewriting-status").textContent =
+            data.type === "rewriting-recorded"
+              ? byId("fusion-status").textContent
+              : "";
           showOptimizationResults();
         }
       }
@@ -1521,7 +1798,15 @@ function createFusionPanel({
         showFusionMatches(data);
         revealPanel(byId("fusion-panel"));
         fit();
-      } else if (data.requestId === fusionRequest) showFusionMatches(data);
+      } else if (data.requestId === fusionRequest) {
+        const single = appendOne;
+        appendOne = false;
+        showFusionMatches(data);
+        if (single && data.matches.length) applyFusion([0]);
+        else if (single)
+          byId("fusion-feedback").textContent =
+            "No match for the selected patterns.";
+      }
     } else if (data?.type === "fusion-error") {
       if (data.requestId !== fusionRequest) return true;
       byId("rewriting-scenario").value = rewritingState.selected ?? "";
@@ -1535,6 +1820,8 @@ function createFusionPanel({
         byId("selection-pattern-status").textContent =
           `Could not load patterns: ${data.error}`;
       byId("fusion-status").textContent = `Fusion failed: ${data.error}`;
+      byId("optimization-rewriting-status").textContent = data.error;
+      byId("working-rewriting-status").textContent = data.error;
       if (!byId("optimization-panel").hidden)
         byId("optimization-status").textContent =
           `Optimization failed: ${data.error}`;
@@ -1563,6 +1850,11 @@ function createFusionPanel({
     restoreRequest = undefined;
     restoreNotice = "";
     fusionGraph = graph;
+    optimizationFinished = false;
+    byId("optimization-rewriting-status").textContent = "";
+    byId("optimization-rewriting-name").value = "";
+    byId("working-rewriting-name").value = "";
+    byId("working-rewriting-status").textContent = "";
     optimizationHistory = file?.fusionHistory ?? [];
     pendingRewritings = file?.pendingRewritings ?? [];
     undoCount = file?.fusionCount ?? 0;

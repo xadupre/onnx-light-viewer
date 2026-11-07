@@ -17,5 +17,7 @@ void LoadExternalTensor(ol::EncodedValueProto &tensor, const std::filesystem::pa
 std::vector<ol::TensorProto *>
 ModelSaveTensors(ol::ModelProto &model, std::vector<ol::EncodedValueProto *> *encoded = nullptr,
                  std::set<const ol::TensorProto *> *layout_tensors = nullptr);
+ol::RewritingProto CombineFusionPlans(const StoredModel &model);
+void CaptureRewritingPlan(ol::ModelProto &model, ol::RewritingProto &plan);
 
 } // namespace onnx_light_viewer
