@@ -7758,6 +7758,138 @@ test("opens tabular optimization reports only on request, including no-op runs a
   assert.equal(showReport.disabled, true);
 });
 
+test("optimization report sorts columns and links to every section", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  load(demoGraph);
+  document.getElementById("optimize-model").click();
+  const pattern = (name, attempts, matchTimeNs) => ({
+    name,
+    attempts,
+    matches: 0,
+    matchTimeNs,
+    applyTimeNs: 0,
+    noMatches: [
+      {
+        reason: "Rejected",
+        occurrences: attempts,
+        sourceFile: "onnx_light/pattern.cc",
+        sourceLine: attempts,
+      },
+    ],
+  });
+  const data = {
+    iterations: 1,
+    rewrites: 0,
+    wallTimeNs: 0,
+    totalTimeNs: 0,
+    matchingTimeNs: 0,
+    rewritingTimeNs: 0,
+    cleanupTimeNs: 0,
+    moveShapeAndSizeTimeNs: 0,
+    constantFoldingTimeNs: 0,
+    subgraphOptimizationTimeNs: 0,
+    patterns: [
+      pattern("Zulu <pattern>", 10, 10000000000),
+      pattern("Alpha", 2, 2000000),
+      pattern("Beta", 2, 2000001),
+    ],
+    subgraphs: [],
+  };
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: {
+        type: "fusion-patterns",
+        requestId: messages.at(-1).requestId,
+        patterns: [],
+        optimizationPatterns: [],
+        optimizationReport: data,
+      },
+    }),
+  );
+  const show = document.getElementById("show-optimization-report");
+  show.click();
+  const dialog = document.getElementById("optimization-report");
+  const tables = [...dialog.querySelectorAll("table")];
+  const links = [...document.querySelectorAll("#optimization-report-toc a")];
+  assert.equal(links.length, 5);
+  assert.equal(
+    document
+      .getElementById("optimization-report-toc")
+      .parentElement.getAttribute("aria-label"),
+    "Table of contents",
+  );
+  for (const [index, link] of links.entries()) {
+    assert.equal(link.hash, `#${tables[index].id}`);
+    assert.equal(link.textContent, tables[index].caption.textContent);
+    let scrolled = false;
+    tables[index].scrollIntoView = () => {
+      scrolled = true;
+    };
+    link.click();
+    assert.equal(scrolled, true);
+  }
+  for (const table of tables) {
+    assert.equal(
+      table.querySelectorAll("thead button").length,
+      table.tHead.rows[0].cells.length,
+    );
+  }
+  const table = document.getElementById("optimization-report-patterns");
+  const names = () =>
+    [...table.tBodies[0].rows].map((row) => row.cells[0].textContent);
+  const sort = (index) =>
+    table.tHead.rows[0].cells[index].querySelector("button").click();
+  sort(1);
+  assert.deepEqual(names(), ["Alpha", "Beta", "Zulu <pattern>"]);
+  assert.equal(
+    table.tHead.rows[0].cells[1].getAttribute("aria-sort"),
+    "ascending",
+  );
+  sort(1);
+  assert.deepEqual(names(), ["Zulu <pattern>", "Alpha", "Beta"]);
+  assert.equal(
+    table.tHead.rows[0].cells[1].getAttribute("aria-sort"),
+    "descending",
+  );
+  sort(0);
+  assert.deepEqual(names(), ["Alpha", "Beta", "Zulu <pattern>"]);
+  assert.equal(table.tHead.rows[0].cells[1].getAttribute("aria-sort"), "none");
+  sort(3);
+  assert.deepEqual(names(), ["Alpha", "Beta", "Zulu <pattern>"]);
+  sort(3);
+  assert.deepEqual(names(), ["Zulu <pattern>", "Beta", "Alpha"]);
+  const rejectionTable = document.getElementById(
+    "optimization-report-rejections",
+  );
+  const sourceLinks = [...rejectionTable.querySelectorAll("tbody a")];
+  rejectionTable.querySelectorAll("thead button")[2].click();
+  assert.equal(rejectionTable.querySelector("tbody a"), sourceLinks[1]);
+  assert.equal(sourceLinks[0].isConnected, true);
+  const empty = document.getElementById("optimization-report-subgraphs");
+  assert.ok(
+    [...empty.querySelectorAll("thead button")].every(
+      (button) => button.disabled,
+    ),
+  );
+  assert.match(empty.tBodies[0].textContent, /No subgraphs/);
+  assert.deepEqual(
+    data.patterns.map((item) => item.name),
+    ["Zulu <pattern>", "Alpha", "Beta"],
+  );
+  document.getElementById("close-optimization-report").click();
+  show.click();
+  assert.equal(
+    document.querySelectorAll("#optimization-report-toc a").length,
+    5,
+  );
+  assert.ok(
+    [...dialog.querySelectorAll("thead th")].every(
+      (cell) => cell.getAttribute("aria-sort") === "none",
+    ),
+  );
+  assert.equal(dialog.querySelector("pattern"), null);
+});
+
 test("renders report details safely and closes the report immediately on navigation", async (t) => {
   if (sdkReplaySkip) return t.skip(sdkReplaySkip);
   const { document, window, messages, load } = openViewer(t);

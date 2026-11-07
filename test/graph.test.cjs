@@ -6111,6 +6111,60 @@ test("opens the saved rewriting example and replays both patterns with undo", as
   assert.deepEqual(second.undoFusion().undoFusion().graph(), loaded.graph());
 });
 
+test("loads independent EP1 and EP2 rewriting plans and preserves their replay and undo on save", async () => {
+  const source = loadModel(modelBytes("rewritings-ep1-ep2.onnx"), "EP plans");
+  source.verify();
+  assert.deepEqual(source.rewritingState().names, ["EP1", "EP2"]);
+  assert.deepEqual(
+    source.rewritingScenarios().map(({ name, applied, available, steps }) => ({
+      name,
+      applied,
+      available,
+      steps: steps.length,
+    })),
+    [
+      { name: "EP1", applied: 0, available: true, steps: 1 },
+      { name: "EP2", applied: 0, available: true, steps: 2 },
+    ],
+  );
+  const ep1 = await source.applyRewritingScenario("EP1", true);
+  ep1.verify();
+  assert.deepEqual(
+    ep1.graph().nodes.map((node) => node.opType),
+    ["Identity", "Transpose", "Transpose"],
+  );
+  await assert.rejects(ep1.applyRewritingScenario("EP2", true), /Unfuse/);
+  const partial = await ep1.undoFusion().applyRewritingScenario("EP2", false);
+  assert.deepEqual(partial.graph(), ep1.graph());
+  const ep2 = await partial.applyRewritingScenario("EP2", false);
+  ep2.verify();
+  assert.deepEqual(
+    ep2.graph().nodes.map((node) => node.opType),
+    ["Identity", "Identity"],
+  );
+  const all = await source.applyRewritingScenario("EP2", true);
+  assert.deepEqual(all.graph(), ep2.graph());
+  assert.deepEqual(ep2.undoFusion().graph(), partial.graph());
+  assert.deepEqual(ep2.undoFusion().undoFusion().graph(), source.graph());
+  assert.deepEqual(all.undoFusion().graph(), source.graph());
+  assert.ok(
+    source.rewritingScenarios().every((scenario) => scenario.applied === 0),
+  );
+  const saved = loadModel(
+    await source.serialize(undefined, undefined, true),
+    "Saved EP plans",
+  );
+  assert.deepEqual(saved.rewritingScenarios(), source.rewritingScenarios());
+  for (const [name, expected] of [
+    ["EP1", ep1],
+    ["EP2", ep2],
+  ]) {
+    const replayed = await saved.applyRewritingScenario(name, true);
+    replayed.verify();
+    assert.deepEqual(replayed.graph(), expected.graph());
+  }
+});
+
 test("replays opset-only scenarios as one undoable step and preserves them on save", async () => {
   const original = memoryTestModel([1]);
   const bytes = captureRewritingPlans(

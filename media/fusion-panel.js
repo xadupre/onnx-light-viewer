@@ -250,10 +250,31 @@ function createFusionPanel({
     const caption = table.createCaption();
     caption.textContent = title;
     const heading = table.createTHead().insertRow();
-    for (const name of headers) {
+    const renderedRows = [];
+    for (const [index, name] of headers.entries()) {
       const cell = document.createElement("th");
       cell.scope = "col";
-      cell.textContent = name;
+      cell.setAttribute("aria-sort", "none");
+      const button = document.createElement("button");
+      button.textContent = name;
+      button.disabled = !rows.length;
+      button.addEventListener("click", () => {
+        const descending = cell.getAttribute("aria-sort") === "ascending";
+        for (const header of heading.cells)
+          header.setAttribute("aria-sort", "none");
+        cell.setAttribute("aria-sort", descending ? "descending" : "ascending");
+        renderedRows.sort((a, b) => {
+          const left = a.values[index];
+          const right = b.values[index];
+          const comparison =
+            typeof left === "number" && typeof right === "number"
+              ? left - right
+              : String(left).localeCompare(String(right));
+          return descending ? -comparison : comparison;
+        });
+        body.append(...renderedRows.map((item) => item.row));
+      });
+      cell.append(button);
       heading.append(cell);
     }
     const body = table.createTBody();
@@ -263,15 +284,33 @@ function createFusionPanel({
         const cell = document.createElement(index ? "td" : "th");
         if (!index) cell.scope = "row";
         if (value instanceof Node) cell.append(value);
-        else cell.textContent = String(value);
+        else cell.textContent = String(value?.text ?? value);
         row.append(cell);
       }
+      renderedRows.push({
+        row,
+        values: values.map((value) =>
+          value instanceof Node
+            ? value.textContent
+            : (value?.sortValue ?? value),
+        ),
+      });
     }
     if (!rows.length) {
       const cell = body.insertRow().insertCell();
       cell.colSpan = headers.length;
       cell.textContent = emptyMessage;
     }
+    const item = document.createElement("li");
+    const link = document.createElement("a");
+    link.href = `#${id}`;
+    link.textContent = title;
+    link.addEventListener("click", (event) => {
+      event.preventDefault();
+      table.scrollIntoView({ block: "start" });
+    });
+    item.append(link);
+    byId("optimization-report-toc").append(item);
     byId("optimization-report-body").append(table);
   }
   function openOptimizationReport() {
@@ -280,8 +319,19 @@ function createFusionPanel({
     const formatter = new Intl.NumberFormat(undefined, {
       maximumFractionDigits: 6,
     });
-    const milliseconds = (ns) => formatter.format(ns / 1e6);
+    const milliseconds = (ns) => ({
+      text: formatter.format(ns / 1e6),
+      sortValue: ns,
+    });
     byId("optimization-report-body").replaceChildren();
+    const contents = document.createElement("nav");
+    contents.setAttribute("aria-label", "Table of contents");
+    const title = document.createElement("h3");
+    title.textContent = "Table of contents";
+    const list = document.createElement("ul");
+    list.id = "optimization-report-toc";
+    contents.append(title, list);
+    byId("optimization-report-body").append(contents);
     byId("optimization-report-scope").textContent = fusionGraph.breadcrumbs
       .map((item) => item.name)
       .join(" / ");
