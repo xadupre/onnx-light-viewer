@@ -8171,23 +8171,14 @@ test("Rewritings removes identities introduced by patterns and keeps replayable 
   document.getElementById("fuse-pattern").click();
   await flush();
   const remove = document.getElementById("global-rewriting");
-  const globalDialog = document.getElementById("global-rewriting-dialog");
-  globalDialog.showModal = () => {
-    globalDialog.open = true;
-  };
-  globalDialog.close = () => {
-    globalDialog.open = false;
-  };
+  const globalPanel = document.getElementById("global-rewriting-panel");
   const removeIdentities = () => {
-    remove.click();
-    assert.equal(document.getElementById("global-rewriting-dialog").open, true);
+    if (globalPanel.hidden) remove.click();
+    assert.equal(globalPanel.hidden, false);
     document.getElementById("global-rewriting-operation").value =
       "IdentityRemoval";
     document.getElementById("apply-global-rewriting").click();
-    assert.equal(
-      document.getElementById("global-rewriting-dialog").open,
-      false,
-    );
+    assert.equal(globalPanel.hidden, false);
   };
   assert.equal(remove.disabled, false);
   removeIdentities();

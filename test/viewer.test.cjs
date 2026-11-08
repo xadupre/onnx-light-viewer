@@ -8266,27 +8266,34 @@ test("Global Rewriting exposes identity removal and partitions outside the patte
     );
   clearBusy();
   const picker = document.getElementById("global-rewriting-operation");
-  const dialog = document.getElementById("global-rewriting-dialog");
+  const panel = document.getElementById("global-rewriting-panel");
+  assert.equal(
+    panel.closest("#fusion-panel"),
+    document.getElementById("fusion-panel"),
+  );
+  assert.equal(document.getElementById("global-rewriting-dialog"), null);
   assert.deepEqual(
     Array.from(picker.options, (option) => option.value),
     ["IdentityRemoval", "RepeatedLayer", "PartitionGroup"],
   );
   const requestCount = messages.length;
   global.click();
-  assert.equal(dialog.open, true);
-  document.getElementById("close-global-rewriting").click();
-  assert.equal(dialog.open, false);
+  assert.equal(panel.hidden, false);
+  assert.equal(global.getAttribute("aria-expanded"), "true");
+  global.click();
+  assert.equal(panel.hidden, true);
+  assert.equal(global.getAttribute("aria-expanded"), "false");
   assert.equal(messages.length, requestCount);
   for (const pattern of [
     "IdentityRemoval",
     "RepeatedLayer",
     "PartitionGroup",
   ]) {
-    global.click();
-    assert.equal(dialog.open, true);
+    if (panel.hidden) global.click();
+    assert.equal(panel.hidden, false);
     picker.value = pattern;
     document.getElementById("apply-global-rewriting").click();
-    assert.equal(dialog.open, false);
+    assert.equal(panel.hidden, false);
     assert.equal(
       messages.at(-1).type,
       pattern === "IdentityRemoval" ? "remove-identities" : "partition-model",
@@ -8300,10 +8307,9 @@ test("Global Rewriting exposes identity removal and partitions outside the patte
     clearBusy();
     assert.equal(picker.disabled, false);
   }
-  global.click();
-  assert.equal(dialog.open, true);
   load(demoGraph);
-  assert.equal(dialog.open, false);
+  assert.equal(panel.hidden, false);
+  assert.equal(global.getAttribute("aria-expanded"), "true");
 });
 
 test("uses the same filtered priority picker for Rewritings and Optimize without changing selections", (t) => {

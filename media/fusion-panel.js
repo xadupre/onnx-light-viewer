@@ -1497,16 +1497,17 @@ function createFusionPanel({
   byId("append-new").addEventListener("click", () => previewFusion(true));
   byId("global-rewriting").addEventListener("click", () => {
     if (byId("global-rewriting").disabled) return;
-    byId("global-rewriting-dialog").showModal();
+    const panel = byId("global-rewriting-panel");
+    panel.hidden = !panel.hidden;
+    byId("global-rewriting").setAttribute(
+      "aria-expanded",
+      String(!panel.hidden),
+    );
   });
-  byId("close-global-rewriting").addEventListener("click", () =>
-    byId("global-rewriting-dialog").close(),
-  );
   byId("apply-global-rewriting").addEventListener("click", () => {
     if (byId("apply-global-rewriting").disabled) return;
     const operation = byId("global-rewriting-operation").value;
     const identity = operation === "IdentityRemoval";
-    byId("global-rewriting-dialog").close();
     clearFusionPreview();
     fusionControls(
       true,
@@ -1949,8 +1950,6 @@ function createFusionPanel({
     return true;
   }
   function reset(graph, operationRequestId, file) {
-    if (byId("global-rewriting-dialog").open)
-      byId("global-rewriting-dialog").close();
     const keepFusion = undoBusy && !byId("fusion-panel").hidden;
     undoBusy = false;
     if (operationRequestId !== fusionRequest) restoreFunctionEditor = false;

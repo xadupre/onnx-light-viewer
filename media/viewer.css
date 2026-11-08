@@ -1622,7 +1622,6 @@ button:disabled {
 }
 #operator-doc,
 #optimization-report,
-#global-rewriting-dialog,
 #selection-pattern-dialog {
   width: min(900px, 95vw);
   max-height: 90vh;
@@ -1634,12 +1633,8 @@ button:disabled {
 }
 #operator-doc::backdrop,
 #optimization-report::backdrop,
-#global-rewriting-dialog::backdrop,
 #selection-pattern-dialog::backdrop {
   background: #0009;
-}
-#global-rewriting-dialog {
-  width: min(500px, 95vw);
 }
 #optimization-report {
   width: min(1400px, 95vw);
