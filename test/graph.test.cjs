@@ -573,6 +573,25 @@ test("pipeline dimension edits use one prefix and preserve stage undo and Save",
     assert.deepEqual(shape(edited.model.undoFusion()), shape(edited.model));
     assert.match(shape(source)[0], /^component/);
   }
+  const recorded = await edited.model.recordRewriting(
+    "Shortened",
+    false,
+    undefined,
+    stage,
+  );
+  const restoredRecording = await recorded.fusionPrefix(0);
+  const shortenedSource = source.shortenDimensionNames().model;
+  for (const role of ["embedding", "prefill"]) {
+    const path = [{ pipeline: role }];
+    assert.deepEqual(
+      recorded.undoFusion().graph(false, path),
+      shortenedSource.graph(false, path),
+    );
+    assert.deepEqual(
+      restoredRecording.graph(false, path),
+      shortenedSource.graph(false, path),
+    );
+  }
   const saved = Buffer.from(
     await edited.model.serialize(undefined, undefined, true),
   );
@@ -596,6 +615,23 @@ test("pipeline dimension edits use one prefix and preserve stage undo and Save",
       restored.graph(false, [{ pipeline: role }]),
       expected.graph(false, [{ pipeline: role }]),
     );
+  const equalities = [{ source: "batch", target: "sequence_len" }];
+  const merged = next.mergeDimensionsBatch(equalities).model;
+  const recordedMerged = await merged.recordRewriting(
+    "Merged",
+    false,
+    undefined,
+    prefill,
+  );
+  const uneditedMerged = expected.mergeDimensionsBatch(equalities).model;
+  const restoredMerged = await recordedMerged.fusionPrefix(0);
+  for (const role of ["embedding", "prefill"]) {
+    const path = [{ pipeline: role }];
+    assert.deepEqual(
+      restoredMerged.graph(false, path),
+      uneditedMerged.graph(false, path),
+    );
+  }
   const mixed = loadModel(
     pipelineBytes({
       embedding: await memoryTestModel(["shared.embedding.batch"]).serialize(),
@@ -4392,6 +4428,14 @@ test("keeps local function replacements with and without root rewrites through u
     assert.equal(applied.rewritingScenarios()[0].available, false);
     assert.equal(applied.undoFusion().rewritingScenarios()[0].available, true);
     if (!rootRewrite) {
+      assert.equal(optimized.fusionHistory()[0].matches.length, 1);
+      const undone = await optimized.fusionPrefix(0);
+      assert.deepEqual(undone.graph(), source.graph());
+      assert.deepEqual(functionGraph(undone), functionGraph(source));
+      assert.deepEqual(
+        functionGraph(await optimized.fusionPrefix(1)),
+        functionGraph(optimized),
+      );
       const stepwise = await saved.applyRewritingScenario(scenario.name, false);
       assert.deepEqual(functionGraph(stepwise), functionGraph(optimized));
       await assert.rejects(
@@ -4614,6 +4658,9 @@ test("optimization keeps external weights unloaded through rewriting, clone and 
   const repeated = await optimized.optimize(["TransposeTranspose"], "Optimize");
   assert.deepEqual(repeated.graph(), optimized.graph());
   assert.deepEqual(repeated.externalDataLocations(), locations);
+  const recorded = await optimized.recordRewriting("Lazy", false);
+  assert.deepEqual(recorded.graph(), optimized.graph());
+  assert.deepEqual(recorded.externalDataLocations(), locations);
 
   for (const weight of files.weights)
     writeFileSync(path.join(directory, weight.name), weight.bytes);
@@ -4688,8 +4735,10 @@ test("optimization shares large initializer and Constant payloads across snapsho
         : []),
       node("Transpose", ["x"], "transposed", [perm]),
       node("Transpose", ["transposed"], "restored", [perm]),
+      node("Transpose", ["restored"], "transposedAgain", [perm]),
+      node("Transpose", ["transposedAgain"], "restoredAgain", [perm]),
       ...Array.from({ length: 2000 }, (_, i) =>
-        node("Relu", [i ? `r${i - 1}` : "restored"], `r${i}`),
+        node("Relu", [i ? `r${i - 1}` : "restoredAgain"], `r${i}`),
       ),
       node("Add", ["r1999", "weight"], "y"),
     ];
@@ -4715,11 +4764,11 @@ test("optimization shares large initializer and Constant payloads across snapsho
           `
           const assert = require("node:assert/strict");
           const { readFileSync } = require("node:fs");
-          const { loadModel } = require(${JSON.stringify(require.resolve("../dist/graph"))});
+          const { loadModel, loadModelFile } = require(${JSON.stringify(require.resolve("../dist/graph"))});
           (async () => {
             const source = loadModel(readFileSync(${JSON.stringify(file)}), "large");
             const preview = await source.previewFusion("TransposeTranspose", ${JSON.stringify(file)});
-            assert.equal(preview.matches.length, 1);
+            assert.equal(preview.matches.length, 3);
             global.gc();
             const before = process.memoryUsage.rss();
             let peak = before;
@@ -4735,12 +4784,44 @@ test("optimization shares large initializer and Constant payloads across snapsho
             const matched = await clones[1].previewFusion("TransposeTranspose");
             sample();
             clearInterval(sampling);
-            assert.equal(matched.matches.length, 1);
+            global.gc();
+            const recordingBefore = process.memoryUsage.rss();
+            let recordingPeak = recordingBefore;
+            const sampleRecording = () => { recordingPeak = Math.max(recordingPeak, process.memoryUsage.rss()); };
+            const recordingSampling = setInterval(sampleRecording, 1);
+            const recorded = await optimized.recordRewriting("Large", false);
+            sampleRecording();
+            clearInterval(recordingSampling);
+            assert.deepEqual(recorded.graph(), optimized.graph());
+            assert.equal(matched.matches.length, 3);
             optimized.verify();
-            assert.equal(optimized.optimizationReport().rewrites, 1);
+            assert.equal(optimized.optimizationReport().rewrites, 2);
+            const lazy = await loadModelFile(${JSON.stringify(file)}, "large");
+            const lazyOptimized = await lazy.optimize(["TransposeTranspose"], "Optimize");
+            global.gc();
+            const prefixBefore = process.memoryUsage.rss();
+            let prefixPeak = prefixBefore;
+            const samplePrefix = () => { prefixPeak = Math.max(prefixPeak, process.memoryUsage.rss()); };
+            const prefixSampling = setInterval(samplePrefix, 1);
+            const prefix = await lazyOptimized.fusionPrefix(1);
+            samplePrefix();
+            const savedPrefix = await recorded.fusionPrefix(1);
+            samplePrefix();
+            clearInterval(prefixSampling);
+            assert.equal(prefix.fusionHistory()[0].matches.length, 1);
+            assert.deepEqual(prefix.externalDataLocations(), lazyOptimized.externalDataLocations());
+            if (${JSON.stringify(external)})
+              assert.deepEqual(
+                prefix.graph().nodes.map(({ opType, inputs, outputs }) => ({ opType, inputs, outputs })),
+                savedPrefix.graph().nodes.map(({ opType, inputs, outputs }) => ({ opType, inputs, outputs })),
+              );
+            else
+              assert.deepEqual(prefix.graph(), savedPrefix.graph());
             const increase = peak - before;
             console.log(JSON.stringify({
               increase,
+              recordingIncrease: recordingPeak - recordingBefore,
+              prefixIncrease: prefixPeak - prefixBefore,
               elapsedMs,
               matchingTimeNs: optimized.optimizationReport().matchingTimeNs,
             }));
@@ -4754,6 +4835,14 @@ test("optimization shares large initializer and Constant payloads across snapsho
     assert.ok(
       measurement.increase < (size * 3) / 4,
       `${storage}: snapshots allocated ${measurement.increase} bytes`,
+    );
+    assert.ok(
+      measurement.recordingIncrease < (size * 3) / 4,
+      `${storage}: recording allocated ${measurement.recordingIncrease} bytes`,
+    );
+    assert.ok(
+      measurement.prefixIncrease < (size * 3) / 4,
+      `${storage}: partial replay allocated ${measurement.prefixIncrease} bytes`,
     );
     assert.ok(
       measurement.matchingTimeNs < 3e9,
@@ -5261,6 +5350,29 @@ test("tracks independent rewrites without changing earlier selections", () => {
   assert.deepEqual(result.history, reference.history);
 });
 
+test("inspects long saved rewriting scenarios with indexed node provenance", () => {
+  const names = Array.from({ length: 10000 }, (_, i) => `original-${i}`);
+  const bytes = tracingModelBytes(
+    names,
+    Array.from({ length: 500 }, (_, i) => ({
+      removed: [i],
+      added: [[`replacement-${i}`, i]],
+    })),
+  );
+  const saved = loadModel(
+    Buffer.concat([varintField(1, 9), bytes]),
+    "Large saved scenario",
+  );
+  const [scenario] = saved.rewritingScenarios();
+  assert.equal(scenario.steps.length, 500);
+  assert.deepEqual(scenario.steps[0].nodes, [0]);
+  for (const [i, step] of scenario.steps.entries()) {
+    assert.equal(step.inspectionError, undefined);
+    assert.equal(step.impact.before[0].name, names[i]);
+    assert.equal(step.impact.after[0].name, `replacement-${i}`);
+  }
+});
+
 test("agrees with sequential tracing across mixed deterministic rewrite sequences", () => {
   const names = Array.from({ length: 32 }, (_, i) => `original-${i}`);
   let current = [...names];
@@ -5702,6 +5814,329 @@ test("optimizes one pipeline stage without adding no-op undo entries or changing
   assert.equal(replayed.withoutFusions().fusionCount(), 0);
 });
 
+test("records optimized models as new named rewritings or extensions without changing their graphs", async () => {
+  const original = loadModel(modelBytes("fusion.onnx"), "Named rewritings");
+  const first = await original.applyFusion("TransposeTranspose", [0]);
+  const ep1 = await first.recordRewriting("EP1", false);
+  assert.deepEqual(ep1.graph(), first.graph());
+  assert.deepEqual(ep1.rewritingState(), { names: ["EP1"], selected: "EP1" });
+  const optimized = await ep1.optimize(["TransposeTranspose"], "Optimize");
+  const report = optimized.optimizationReport();
+  const appended = await optimized.recordRewriting("EP1", true);
+  appended.verify();
+  assert.deepEqual(appended.graph(), optimized.graph());
+  assert.deepEqual(appended.optimizationReport(), report);
+  assert.equal(appended.rewritingScenarios()[0].steps.length, 2);
+  assert.equal(ep1.rewritingScenarios()[0].steps.length, 1);
+  const ep2 = await optimized.recordRewriting("EP2", false);
+  assert.deepEqual(ep2.graph(), optimized.graph());
+  const saved = loadModel(
+    await ep2.serialize(undefined, undefined, true),
+    "Saved named rewritings",
+  );
+  assert.deepEqual(saved.rewritingState().names, ["EP1", "EP2"]);
+  assert.deepEqual(saved.graph(), original.graph());
+  for (const [name, expected] of [
+    ["EP1", first],
+    ["EP2", optimized],
+  ]) {
+    const replayed = await saved.applyRewritingScenario(name, true);
+    assert.deepEqual(replayed.graph(), expected.graph());
+  }
+  await assert.rejects(
+    optimized.recordRewriting("EP1", false),
+    /already exists/,
+  );
+  await assert.rejects(optimized.recordRewriting("missing", true), /Unknown/);
+  await assert.rejects(
+    original.recordRewriting("empty", false),
+    /no native edits/,
+  );
+  assert.throws(() => first.recordRewriting(" ", false), /non-empty/);
+  const partial = await saved.applyRewritingScenario("EP2", false);
+  await assert.rejects(
+    partial.recordRewriting("EP2", true),
+    /complete selected/,
+  );
+  assert.deepEqual(partial.graph(), first.graph());
+  partial.createFunctionPattern([1, 2], "DifferentPair");
+  const branched = await partial.applyFusion("DifferentPair", [2]);
+  const updated = await branched.recordRewriting("EP2", true);
+  assert.deepEqual(updated.graph(), branched.graph());
+  const savedBranch = loadModel(
+    await updated.serialize(undefined, undefined, true),
+    "Branched rewriting",
+  );
+  assert.deepEqual(
+    (await savedBranch.applyRewritingScenario("EP2", true)).graph(),
+    branched.graph(),
+  );
+  assert.deepEqual(
+    (await saved.applyRewritingScenario("EP2", true)).graph(),
+    optimized.graph(),
+  );
+  assert.deepEqual(optimized.graph(), ep2.graph());
+  const pipeline = new PipelineModel(
+    {
+      name: "Named stage",
+      metadata: [],
+      models: { prefill: original.clone(), decode: original.clone() },
+      assemble: async () => {
+        throw new Error("This test does not serialize the container.");
+      },
+    },
+    "named.pipe-onnx",
+  );
+  const path = [{ pipeline: "prefill" }];
+  const stageFirst = await pipeline.applyFusion(
+    "TransposeTranspose",
+    [0],
+    path,
+  );
+  const stageFull = await stageFirst.applyFusion(
+    "TransposeTranspose",
+    [1],
+    path,
+  );
+  const stageRecorded = await stageFull.recordRewriting(
+    "Stage",
+    false,
+    undefined,
+    path,
+  );
+  assert.deepEqual(
+    stageRecorded.graph(false, path),
+    stageFull.graph(false, path),
+  );
+  assert.equal(stageRecorded.fusionCount(), 1);
+  assert.equal(stageRecorded.fusionHistory().length, 1);
+  assert.equal(stageRecorded.fusionHistory()[0].stage, "prefill");
+  assert.deepEqual(stageRecorded.rewritingState(path).names, ["Stage"]);
+  assert.deepEqual(
+    stageRecorded.rewritingState([{ pipeline: "decode" }]).names,
+    [],
+  );
+  assert.deepEqual(
+    stageRecorded.graph(false, [{ pipeline: "decode" }]),
+    pipeline.graph(false, [{ pipeline: "decode" }]),
+  );
+});
+
+test("replays and records each selected manual match as an independent rewriting step", async () => {
+  for (const [file, patterns, anchors] of [
+    ["fusion.onnx", ["TransposeTranspose", "TransposeTranspose"], [0, 2]],
+    [
+      "fusion.onnx",
+      ["Projection", "TransposeTranspose", "TransposeTranspose"],
+      [4, 0, 2],
+    ],
+    ["fusion-scaled.onnx", ["MatMulScaleFusion", "TransposeTranspose"], [4, 0]],
+  ]) {
+    const original = loadModel(modelBytes(file), "Manual steps");
+    if (patterns.includes("Projection"))
+      original.createFunctionPattern([4], "Projection");
+    const first = await original.applyFusion(patterns[0], [anchors[0]]);
+    const full = await original.applyFusion(patterns, anchors);
+    const prefix = await full.fusionPrefix(1);
+    prefix.verify();
+    assert.deepEqual(prefix.graph(), first.graph());
+    assert.equal(prefix.fusionHistory()[0].matches.length, 1);
+    assert.deepEqual((await full.fusionPrefix(0)).graph(), original.graph());
+    if (patterns.length === 3) {
+      const second = await first.applyFusion(patterns[1], [anchors[1]]);
+      assert.deepEqual((await full.fusionPrefix(2)).graph(), second.graph());
+    }
+    assert.deepEqual(
+      (await full.fusionPrefix(patterns.length)).graph(),
+      full.graph(),
+    );
+    const recorded = await full.recordRewriting("Manual", false);
+    assert.equal(
+      recorded.rewritingScenarios()[0].steps.length,
+      patterns.length,
+    );
+    assert.equal(recorded.rewritingScenarios()[0].applied, patterns.length);
+    assert.deepEqual((await recorded.fusionPrefix(1)).graph(), first.graph());
+    const saved = loadModel(
+      await recorded.serialize(undefined, undefined, true),
+      "Saved manual steps",
+    );
+    const replayed = await saved.applyRewritingScenario("Manual", false);
+    assert.deepEqual(replayed.graph(), first.graph());
+    let stepwise = replayed;
+    for (let i = 1; i < patterns.length; ++i)
+      stepwise = await stepwise.applyRewritingScenario("Manual", false);
+    assert.deepEqual(stepwise.graph(), full.graph());
+    assert.deepEqual(
+      (await saved.applyRewritingScenario("Manual", true)).graph(),
+      full.graph(),
+    );
+  }
+});
+
+test("recording interleaved pipeline edits aligns undo order and retains named alternatives", async () => {
+  const original = loadModel(modelBytes("fusion.onnx"), "Interleaved steps");
+  const baseline = (
+    await (
+      await original.applyFusion("TransposeTranspose", [0])
+    ).recordRewriting("Baseline", false)
+  ).withoutFusions();
+  const source = new PipelineModel(
+    {
+      name: "Interleaved",
+      metadata: [],
+      models: { prefill: baseline, decode: original.clone() },
+      assemble: async (models) => pipelineBytes(models),
+    },
+    "interleaved.pipe-onnx",
+  );
+  const prefill = [{ pipeline: "prefill" }];
+  const decode = [{ pipeline: "decode" }];
+  const first = await source.applyFusion("TransposeTranspose", [0], prefill);
+  const other = await first.applyFusion("TransposeTranspose", [0], decode);
+  const namedOther = await other.recordRewriting(
+    "Decode",
+    false,
+    undefined,
+    decode,
+  );
+  const full = await namedOther.applyFusion("TransposeTranspose", [1], prefill);
+  const recorded = await full.recordRewriting(
+    "Prefill",
+    false,
+    undefined,
+    prefill,
+  );
+  assert.deepEqual(recorded.graph(false, prefill), full.graph(false, prefill));
+  assert.deepEqual(recorded.graph(false, decode), full.graph(false, decode));
+  assert.deepEqual(
+    recorded.fusionHistory().map((operation) => operation.stage),
+    ["decode", "prefill"],
+  );
+  const partial = await recorded.fusionPrefix(2);
+  assert.deepEqual(partial.graph(false, prefill), first.graph(false, prefill));
+  assert.deepEqual(partial.graph(false, decode), other.graph(false, decode));
+  const before = await recorded.fusionPrefix(1);
+  assert.equal(before.fusionCount(), 1);
+  assert.deepEqual(before.graph(false, prefill), source.graph(false, prefill));
+  assert.deepEqual(before.graph(false, decode), other.graph(false, decode));
+  assert.deepEqual(before.rewritingState(prefill).names, [
+    "Baseline",
+    "Prefill",
+  ]);
+  assert.deepEqual(before.rewritingState(decode).names, ["Decode"]);
+  assert.deepEqual(
+    recorded.undoFusion().graph(false, decode),
+    before.graph(false, decode),
+  );
+  const empty = before.undoFusion();
+  assert.equal(empty.fusionCount(), 0);
+  assert.deepEqual(empty.graph(false, prefill), source.graph(false, prefill));
+  assert.deepEqual(empty.graph(false, decode), source.graph(false, decode));
+  assert.deepEqual(empty.rewritingState(prefill).names, [
+    "Baseline",
+    "Prefill",
+  ]);
+  assert.deepEqual(empty.rewritingState(decode).names, ["Decode"]);
+  const replayed = await empty.applyRewritingScenario(
+    "Prefill",
+    true,
+    undefined,
+    prefill,
+  );
+  assert.deepEqual(replayed.graph(false, prefill), full.graph(false, prefill));
+});
+
+test("restores exactly one rewriting from native batches and independent pipeline stages", async () => {
+  const original = loadModel(modelBytes("fusion.onnx"), "Exact steps");
+  const first = await original.applyFusion("TransposeTranspose", [0]);
+  const full = await original.optimize(["TransposeTranspose"], "Optimize");
+  assert.equal(full.fusionHistory()[0].matches.length, 2);
+  const prefix = await full.fusionPrefix(1);
+  prefix.verify();
+  assert.deepEqual(prefix.graph(), first.graph());
+  assert.deepEqual(prefix.optimizationReport(), full.optimizationReport());
+  assert.equal(prefix.fusionHistory()[0].matches.length, 1);
+  assert.deepEqual((await full.fusionPrefix(0)).graph(), original.graph());
+  assert.deepEqual((await full.fusionPrefix(2)).graph(), full.graph());
+  for (const invalid of [-1, 0.5, 3, NaN, Infinity])
+    assert.throws(
+      () => full.fusionPrefix(invalid),
+      /Invalid rewriting step count/,
+    );
+  const recorded = await full.recordRewriting("EP2", false);
+  const saved = loadModel(
+    await recorded.serialize(undefined, undefined, true),
+    "Saved steps",
+  );
+  const replayed = await saved.applyRewritingScenario("EP2", true);
+  const savedPrefix = await replayed.fusionPrefix(1);
+  assert.deepEqual(savedPrefix.graph(), first.graph());
+  assert.equal(savedPrefix.rewritingScenarios()[0].applied, 1);
+  assert.deepEqual(
+    (await savedPrefix.applyRewritingScenario("EP2", false)).graph(),
+    replayed.graph(),
+  );
+  assert.deepEqual(
+    savedPrefix
+      .rewritingScenarios()[0]
+      .steps[1].impact.before.map((node) => node.opType),
+    ["Transpose", "Transpose"],
+  );
+  full.createFunctionPattern([2], "Projection");
+  const cleaned = await full.applyFusion("Projection", [2]);
+  const third = await cleaned.recordRewriting("EP3", false);
+  const threeOrMore = loadModel(
+    await third.serialize(undefined, undefined, true),
+    "Longer scenario",
+  );
+  const one = await threeOrMore.applyRewritingScenario("EP3", false);
+  const rest = await one.applyRewritingScenario("EP3", true);
+  assert.ok(rest.fusionHistory()[1].matches.length > 1);
+  const two = await rest.fusionPrefix(2);
+  assert.deepEqual(two.graph().nodes, full.graph().nodes);
+  assert.equal(two.rewritingScenarios()[0].applied, 2);
+  const pipeline = new PipelineModel(
+    {
+      name: "Exact pipeline",
+      metadata: [],
+      models: { prefill: original.clone(), decode: original.clone() },
+      assemble: async () => {
+        throw new Error("This test does not serialize the pipeline.");
+      },
+    },
+    "exact.pipe-onnx",
+  );
+  const prefill = [{ pipeline: "prefill" }];
+  const decode = [{ pipeline: "decode" }];
+  const other = await pipeline.applyFusion("TransposeTranspose", [0], decode);
+  const stages = await other.optimize(
+    ["TransposeTranspose"],
+    "Optimize",
+    undefined,
+    prefill,
+  );
+  const partial = await stages.fusionPrefix(2);
+  const stageFirst = await other.applyFusion(
+    "TransposeTranspose",
+    [0],
+    prefill,
+  );
+  assert.deepEqual(
+    partial.graph(false, prefill),
+    stageFirst.graph(false, prefill),
+  );
+  assert.deepEqual(partial.graph(false, decode), other.graph(false, decode));
+  assert.deepEqual(
+    (await stages.fusionPrefix(1)).graph(false, prefill),
+    pipeline.graph(false, prefill),
+  );
+  assert.deepEqual(
+    (await stages.fusionPrefix(0)).graph(false, decode),
+    pipeline.graph(false, decode),
+  );
+});
+
 test("opens the saved rewriting example and replays both patterns with undo", async () => {
   const loaded = loadModel(
     readFileSync(path.join(__dirname, "../examples/rewriting-scenarios.onnx")),
@@ -5775,7 +6210,7 @@ test("loads independent EP1 and EP2 rewriting plans and preserves their replay a
 });
 
 test("replays opset-only scenarios as one undoable step and preserves them on save", async () => {
-  const original = memoryTestModel([1]);
+  const original = loadModel(modelBytes("fusion.onnx"), "opset-only");
   const bytes = captureRewritingPlans(
     Buffer.concat([
       Buffer.from(await original.serialize()),
@@ -5822,7 +6257,172 @@ test("replays opset-only scenarios as one undoable step and preserves them on sa
       loadModel(plan.bytes, "replayed").graph(),
       applied.graph(),
     );
+    const declarationOnly = await applied.recordRewriting(
+      "Declarations alone",
+      false,
+    );
+    const declarationsReloaded = loadModel(
+      await declarationOnly.serialize(undefined, undefined, true),
+      "Saved declaration-only steps",
+    );
+    const replayedDeclarations =
+      await declarationsReloaded.applyRewritingScenario(
+        "Declarations alone",
+        all,
+      );
+    assert.deepEqual(replayedDeclarations.graph(), applied.graph());
+    assert.equal(replayedDeclarations.fusionHistory()[0].matches.length, 1);
+    const fused = await applied.applyFusion("TransposeTranspose", [0]);
+    const recorded = await fused.recordRewriting(
+      "Declarations and fusion",
+      false,
+    );
+    const recordedScenario = recorded
+      .rewritingScenarios()
+      .find((item) => item.name === "Declarations and fusion");
+    assert.equal(recordedScenario.steps.length, 2);
+    assert.equal(recordedScenario.applied, 2);
+    assert.deepEqual(recordedScenario.steps[0].nodes, []);
+    assert.deepEqual((await recorded.fusionPrefix(1)).graph(), applied.graph());
+    assert.deepEqual((await recorded.fusionPrefix(0)).graph(), saved.graph());
+    const reloaded = loadModel(
+      await recorded.serialize(undefined, undefined, true),
+      "Saved declaration and fusion steps",
+    );
+    const pending = reloaded
+      .rewritingScenarios()
+      .find((item) => item.name === "Declarations and fusion");
+    assert.equal(
+      pending.steps[0].pattern,
+      "Stored declarations and node moves",
+    );
+    assert.deepEqual(pending.steps[0].nodes, []);
+    assert.equal(pending.steps[0].impact, undefined);
+    const declared = await reloaded.applyRewritingScenario(
+      "Declarations and fusion",
+      false,
+    );
+    assert.deepEqual(declared.graph(), applied.graph());
+    const replayed = await declared.applyRewritingScenario(
+      "Declarations and fusion",
+      false,
+    );
+    assert.deepEqual(replayed.graph(), fused.graph());
+    assert.deepEqual(replayed.undoFusion().graph(), declared.graph());
+    assert.deepEqual(
+      (
+        await reloaded.applyRewritingScenario("Declarations and fusion", true)
+      ).graph(),
+      fused.graph(),
+    );
+    const rerecorded = await (
+      await declared.applyFusion("TransposeTranspose", [0])
+    ).recordRewriting("Recorded again", false);
+    assert.equal(
+      rerecorded
+        .rewritingScenarios()
+        .find((item) => item.name === "Recorded again").steps.length,
+      2,
+    );
   }
+});
+
+test("preserves consecutive declaration-only boundaries through recording and prefixes", async () => {
+  const original = loadModel(modelBytes("fusion.onnx"), "Declaration branches");
+  const saved = loadModel(
+    captureRewritingPlans(
+      Buffer.concat([
+        Buffer.from(await original.serialize()),
+        bytesField(
+          1001,
+          Buffer.concat([
+            bytesField(1, "Declarations"),
+            bytesField(
+              2,
+              Buffer.concat([
+                bytesField(
+                  2,
+                  Buffer.concat([
+                    bytesField(1, "scenario.custom"),
+                    varintField(2, 1),
+                  ]),
+                ),
+                bytesField(
+                  3,
+                  Buffer.concat([
+                    bytesField(
+                      1,
+                      "onnx-light-viewer.declaration-step-positions",
+                    ),
+                    bytesField(2, "0,0"),
+                  ]),
+                ),
+              ]),
+            ),
+          ]),
+        ),
+      ]),
+    ),
+    "Consecutive declarations",
+  );
+  const applied = await saved.applyRewritingScenario("Declarations", true);
+  assert.equal(applied.fusionHistory()[0].matches.length, 2);
+  const recorded = await applied.recordRewriting(
+    "Recorded declarations",
+    false,
+  );
+  const prefix = await recorded.fusionPrefix(1);
+  assert.equal(prefix.fusionHistory()[0].matches.length, 1);
+  const rerecorded = await prefix.recordRewriting("First declaration", false);
+  assert.equal(
+    rerecorded
+      .rewritingScenarios()
+      .find((item) => item.name === "First declaration").steps.length,
+    1,
+  );
+  const reloaded = loadModel(
+    await recorded.serialize(undefined, undefined, true),
+    "Reloaded declarations",
+  );
+  const first = await reloaded.applyRewritingScenario(
+    "Recorded declarations",
+    false,
+  );
+  await assert.rejects(
+    first.recordRewriting("Recorded declarations", true),
+    /complete selected/,
+  );
+  assert.equal(
+    first
+      .rewritingScenarios()
+      .find((item) => item.name === "Recorded declarations").steps.length,
+    2,
+  );
+  assert.equal(
+    first
+      .rewritingScenarios()
+      .find((item) => item.name === "Recorded declarations").applied,
+    1,
+  );
+  const second = await first.applyRewritingScenario(
+    "Recorded declarations",
+    false,
+  );
+  assert.equal(second.fusionCount(), 2);
+  assert.deepEqual(second.graph(), applied.graph());
+  assert.deepEqual(second.undoFusion().graph(), first.graph());
+  const branched = await first.applyFusion("TransposeTranspose", [0]);
+  const updated = await branched.recordRewriting("Recorded declarations", true);
+  const savedBranch = loadModel(
+    await updated.serialize(undefined, undefined, true),
+    "Declaration branch",
+  );
+  assert.deepEqual(
+    (
+      await savedBranch.applyRewritingScenario("Recorded declarations", true)
+    ).graph(),
+    branched.graph(),
+  );
 });
 
 test("validates saved scenario hashes before recapturing a strict prefix", async () => {
@@ -5871,17 +6471,23 @@ test("applies saved rewriting scenarios all at once or stepwise with independent
   const { stages, bytes } = await savedFusionScenario();
   const name = "onnx-light-viewer.fusions";
   const loaded = loadModel(bytes, "scenario");
-  assert.deepEqual(loaded.rewritingScenarios(), [
-    {
-      name,
-      applied: 0,
-      available: true,
-      steps: [
-        { pattern: "TransposeTranspose", path: [], nodes: [0, 1] },
-        { pattern: "TransposeTranspose", path: [], nodes: [] },
-      ],
-    },
-  ]);
+  assert.deepEqual(
+    loaded.rewritingScenarios().map(({ steps, ...scenario }) => ({
+      ...scenario,
+      steps: steps.map(({ impact, ...step }) => step),
+    })),
+    [
+      {
+        name,
+        applied: 0,
+        available: true,
+        steps: [
+          { pattern: "TransposeTranspose", path: [], nodes: [0, 1] },
+          { pattern: "TransposeTranspose", path: [], nodes: [] },
+        ],
+      },
+    ],
+  );
   const partial = await loaded.applyRewritingScenario(name, false);
   assert.deepEqual(partial.graph(), stages[1].graph());
   assert.equal(partial.rewritingScenarios()[0].applied, 1);
@@ -5996,6 +6602,11 @@ test("replays stored prefixes from canonical order despite Shape/Size finalizati
   const invalid = loadModel(malformed, "invalid");
   const original = invalid.graph();
   const scenarios = invalid.rewritingScenarios();
+  assert.match(
+    scenarios.find((scenario) => scenario.name === "bad").steps[0]
+      .inspectionError,
+    /\S/,
+  );
   assert.deepEqual(
     scenarios.find((scenario) => scenario.name === "bad").steps[0].nodes,
     [],
@@ -6136,6 +6747,35 @@ test("applies terminal scenario moves only after all edits and retains mapped hi
         "replayed",
       ).graph(),
       expected.graph(),
+    );
+    const preview = await full.previewFusion("TransposeTranspose");
+    const third = await full.applyFusion("TransposeTranspose", [
+      preview.matches[0].anchor,
+    ]);
+    const recorded = await third.recordRewriting("Recorded moves", false);
+    assert.deepEqual((await recorded.fusionPrefix(2)).graph(), full.graph());
+    assert.deepEqual((await recorded.fusionPrefix(1)).graph(), partial.graph());
+    assert.deepEqual((await recorded.fusionPrefix(0)).graph(), source.graph());
+    const reloaded = loadModel(
+      await recorded.serialize(undefined, undefined, true),
+      "Saved recorded moves",
+    );
+    assert.equal(
+      reloaded
+        .rewritingScenarios()
+        .find((item) => item.name === "Recorded moves").steps.length,
+      3,
+    );
+    const first = await reloaded.applyRewritingScenario(
+      "Recorded moves",
+      false,
+    );
+    assert.deepEqual(first.graph(), partial.graph());
+    const second = await first.applyRewritingScenario("Recorded moves", false);
+    assert.deepEqual(second.graph(), full.graph());
+    assert.deepEqual(
+      (await second.applyRewritingScenario("Recorded moves", false)).graph(),
+      third.graph(),
     );
   }
 });

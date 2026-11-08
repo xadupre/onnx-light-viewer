@@ -357,7 +357,13 @@ export interface MemoryProfile {
 
 export interface RewritingScenario {
   name: string;
-  steps: { pattern: string; path: string[]; nodes: number[] }[];
+  steps: {
+    pattern: string;
+    path: string[];
+    nodes: number[];
+    impact?: FusionOperation["matches"][number]["impact"];
+    inspectionError?: string;
+  }[];
   applied: number;
   available: boolean;
 }
@@ -495,11 +501,19 @@ export interface NativeModel {
   fusionHistory(includeImpact?: boolean): FusionOperation[];
   /** Returns an independent snapshot before the last Fuse operation. */
   undoFusion(): NativeModel;
+  /** Replays exactly this many applied rewriting steps, retaining saved alternatives. */
+  fusionPrefix(steps: number, sourceFilePath?: string): Promise<NativeModel>;
   /** Original graph before session fusions; retains saved rewriting alternatives. */
   withoutFusions(): NativeModel;
   /** Header metadata only: no step projection or graph traversal. */
   rewritingState(path?: GraphPath): { names: string[]; selected?: string };
   rewritingScenarios(path?: GraphPath): RewritingScenario[];
+  recordRewriting(
+    name: string,
+    append: boolean,
+    sourceFilePath?: string,
+    path?: GraphPath,
+  ): Promise<NativeModel>;
   applyRewritingScenario(
     name: string,
     all: boolean,

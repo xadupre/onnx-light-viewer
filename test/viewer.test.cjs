@@ -6168,7 +6168,7 @@ test("chooses saved rewriting scenarios, applies next or remaining steps and rec
   const next = document.getElementById("rewriting-next");
   const all = document.getElementById("rewriting-all");
   const section = document.getElementById("rewriting-scenarios");
-  assert.equal(section.open, false);
+  assert.equal(section.open, true);
   document.getElementById("fuse-pattern").click();
   send({
     type: "fusion-patterns",
@@ -6229,9 +6229,9 @@ test("chooses saved rewriting scenarios, applies next or remaining steps and rec
     document.getElementById("rewriting-progress").textContent,
     /1 \/ 2/,
   );
-  assert.match(
-    document.getElementById("rewriting-steps").children[0].textContent,
-    /^Applied:/,
+  assert.equal(
+    document.getElementById("rewriting-steps").children[0].className,
+    "rewriting-applied",
   );
   all.click();
   assert.equal(messages.at(-1).all, true);
@@ -6250,7 +6250,7 @@ test("chooses saved rewriting scenarios, applies next or remaining steps and rec
   assert.equal(all.disabled, true);
   load(demoGraph);
   assert.equal(select.options.length, 1);
-  assert.equal(section.open, false);
+  assert.equal(section.open, true);
 });
 
 test("Patterns page edits reusable templates, saves applied definitions and survives model changes", (t) => {
@@ -6692,7 +6692,10 @@ test("creates an editable selection FunctionPattern and offers an opt-in optimiz
     pattern.replacement,
   );
   assert.equal(byId("update-function-pattern").disabled, true);
-  assert.equal(byId("fusion-pattern").querySelector("input").checked, true);
+  assert.equal(
+    byId("fusion-pattern").querySelector("input[data-pattern]").checked,
+    true,
+  );
   const bucket = byId("optimization-patterns").querySelector("details");
   assert.match(
     bucket.querySelector("summary").textContent,
@@ -7196,7 +7199,50 @@ test("graph context menu preserves selection, stays on screen and dismisses with
   assert.equal(menu.hidden, true);
 });
 
-test("selects saved pattern nodes and automatically reveals the next pattern after applying a step", async (t) => {
+test("indexes displayed nodes once per update for large pending rewriting lists", async (t) => {
+  const { document, window } = openViewer(t);
+  const source = loadModel(
+    readFileSync(require.resolve("./models/fusion.onnx")),
+    "Pending rewritings",
+  );
+  const full = await source.optimize(["TransposeTranspose"], "Optimize");
+  const graph = source.graph();
+  let reads = 0;
+  for (const node of graph.nodes) {
+    const inputs = node.inputs;
+    Object.defineProperty(node, "inputs", {
+      get: () => {
+        reads++;
+        return inputs;
+      },
+    });
+  }
+  const match = full.fusionHistory(true)[0].matches[0];
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: {
+        type: "graph",
+        graph,
+        file: {
+          fusionCount: 0,
+          pendingRewritings: [
+            { matches: Array.from({ length: 128 }, () => match) },
+          ],
+        },
+      },
+    }),
+  );
+  assert.equal(
+    document.querySelectorAll("#rewriting-steps .rewriting-pending").length,
+    128,
+  );
+  assert.ok(
+    reads < graph.nodes.length * 20,
+    `Read node inputs ${reads} times.`,
+  );
+});
+
+test("inspects and locates saved rewritings before and after Refuse Next", async (t) => {
   const { document, window, messages, load } = openViewer(t);
   const saved = loadModel(
     readFileSync(require.resolve("../examples/rewriting-scenarios.onnx")),
@@ -7209,7 +7255,10 @@ test("selects saved pattern nodes and automatically reveals the next pattern aft
     [...document.querySelectorAll(".graph-node.selected")].map(
       (node) => node.dataset.id,
     );
-  const buttons = () => document.querySelectorAll("#rewriting-steps button");
+  const labels = () =>
+    document.querySelectorAll("#rewriting-steps .rewriting-step");
+  const name = saved.rewritingScenarios()[0].name;
+  const initialSelection = selectedNodes();
   document.getElementById("fuse-pattern").click();
   send({
     type: "fusion-patterns",
@@ -7218,48 +7267,73 @@ test("selects saved pattern nodes and automatically reveals the next pattern aft
     scenarios: saved.rewritingScenarios(),
     name: saved.rewritingScenarios()[0].name,
   });
-  assert.equal(buttons()[1].disabled, true);
-  buttons()[0].click();
+  assert.equal(labels().length, 2);
+  assert.deepEqual(selectedNodes(), initialSelection);
+  labels()[0].click();
+  await new Promise((resolve) => window.setTimeout(resolve, 0));
   assert.deepEqual(selectedNodes(), ["node-0", "node-1"]);
-  assert.equal(buttons()[0].getAttribute("aria-current"), "true");
-  document.getElementById("rewriting-next").click();
-  assert.equal(buttons()[0].disabled, true);
+  const content = document.querySelector("#rewriting-steps .fusion-impact");
+  assert.equal(content.hidden, false);
+  assert.equal(content.open, true);
+  assert.match(content.textContent, /Before.*Transpose.*After/s);
+  document.getElementById("refuse-next").click();
   const request = messages.at(-1);
-  const first = await saved.applyRewritingScenario(
-    request.scenario,
-    request.all,
-  );
+  const first = await saved.applyRewritingScenario(name, false);
   load(first.graph(), request.requestId);
   send({
     type: "rewriting-info",
     requestId: request.requestId,
-    name: request.scenario,
+    name,
     patterns: [],
     scenarios: first.rewritingScenarios(),
   });
   assert.deepEqual(selectedNodes(), ["node-1", "node-2"]);
-  assert.equal(buttons()[1].getAttribute("aria-current"), "true");
-  assert.equal(buttons()[1].disabled, false);
-  buttons()[0].click();
-  assert.deepEqual(selectedNodes(), ["node-0"]);
-  buttons()[1].click();
+  assert.equal(labels()[1].getAttribute("aria-current"), "true");
+  labels()[1].click();
+  await new Promise((resolve) => window.setTimeout(resolve, 0));
   assert.deepEqual(selectedNodes(), ["node-1", "node-2"]);
-  document.getElementById("rewriting-next").click();
+  assert.match(
+    document.querySelector("#rewriting-steps .rewriting-pending .fusion-impact")
+      .textContent,
+    /Before.*Transpose.*After/s,
+  );
+  document.getElementById("refuse-next").click();
   const remainingRequest = messages.at(-1).requestId;
-  const full = await first.applyRewritingScenario(request.scenario, false);
+  const full = await first.applyRewritingScenario(name, false);
   load(full.graph(), remainingRequest);
   send({
     type: "rewriting-info",
     requestId: remainingRequest,
-    name: request.scenario,
+    name,
     patterns: [],
     scenarios: full.rewritingScenarios(),
   });
-  assert.equal(document.getElementById("rewriting-next").disabled, true);
-  buttons()[1].click();
-  assert.deepEqual(selectedNodes(), ["node-1"]);
-  document.getElementById("fuse-pattern").click();
+  assert.equal(document.getElementById("refuse-next").disabled, true);
+  assert.equal(labels().length, 2);
+  labels()[0].click();
+  assert.deepEqual(selectedNodes(), ["node-0"]);
+  send({
+    type: "graph",
+    graph: full.graph(),
+    file: {
+      fusionCount: full.fusionCount(),
+      fusionHistory: full.fusionHistory(true).map((operation) => ({
+        ...operation,
+        matches: operation.matches.map((match) => ({ ...match, nodes: [] })),
+      })),
+    },
+  });
+  labels()[0].click();
   assert.deepEqual(selectedNodes(), []);
+  assert.match(
+    document.getElementById("fusion-feedback").textContent,
+    /not present in the current graph/,
+  );
+  assert.match(
+    document.querySelector("#rewriting-steps .fusion-impact").textContent,
+    /Before.*Transpose.*After/s,
+  );
+  document.getElementById("fuse-pattern").click();
   document.getElementById("fuse-pattern").click();
   send({
     type: "fusion-patterns",
@@ -7271,6 +7345,221 @@ test("selects saved pattern nodes and automatically reveals the next pattern aft
     document.querySelector('#rewriting-steps [aria-current="true"]'),
     null,
   );
+});
+
+test("keeps never-applied saved steps alongside the undo queue without duplicates", async (t) => {
+  const original = loadModel(
+    readFileSync(require.resolve("./models/fusion.onnx")),
+    "Three saved steps",
+  );
+  original.createFunctionPattern([4], "Projection");
+  const full = await original.applyFusion(
+    ["Projection", "TransposeTranspose", "TransposeTranspose"],
+    [4, 0, 2],
+  );
+  const recorded = await full.recordRewriting("Three", false);
+  const saved = loadModel(
+    await recorded.serialize(undefined, undefined, true),
+    "Three saved steps",
+  );
+  const one = await saved.applyRewritingScenario("Three", false);
+  const two = await one.applyRewritingScenario("Three", false);
+  for (const stage of [undefined, "prefill"]) {
+    await t.test(stage ?? "standalone", (t) => {
+      const { document, window, messages } = openViewer(t);
+      const graph = (model) => {
+        const value = model.graph();
+        if (stage) {
+          value.pipeline = true;
+          value.canFuse = true;
+          for (const crumb of value.breadcrumbs)
+            crumb.path = [{ pipeline: stage }, ...crumb.path];
+        }
+        return value;
+      };
+      const history = (model) =>
+        model.fusionHistory(true).map((operation) => ({
+          ...operation,
+          ...(stage ? { stage } : {}),
+        }));
+      const send = (data) =>
+        window.dispatchEvent(new window.MessageEvent("message", { data }));
+      const pending = history(two).slice(1);
+      send({
+        type: "graph",
+        graph: graph(one),
+        file: {
+          fusionCount: one.fusionCount(),
+          fusionHistory: history(one),
+          pendingRewritings: pending,
+          rewriting: { names: ["Three"], selected: "Three" },
+        },
+      });
+      document.getElementById("fuse-pattern").click();
+      send({
+        type: "fusion-patterns",
+        requestId: messages.at(-1).requestId,
+        patterns: [],
+        scenarios: one.rewritingScenarios(),
+        name: "Three",
+      });
+      assert.equal(
+        document.querySelectorAll("#rewriting-steps .rewriting-step").length,
+        3,
+      );
+      assert.equal(
+        document.querySelectorAll("#rewriting-steps .rewriting-applied").length,
+        1,
+      );
+      assert.equal(
+        document.querySelectorAll("#rewriting-steps .rewriting-pending").length,
+        2,
+      );
+      assert.equal(
+        document.getElementById("rewriting-progress").textContent,
+        "1 / 3 steps applied.",
+      );
+      document.getElementById("working-rewriting-name").value = "Subset";
+      document
+        .getElementById("working-rewriting-name")
+        .dispatchEvent(new window.Event("input"));
+      const record = document.getElementById("record-working-rewriting");
+      assert.equal(record.disabled, true);
+      assert.match(record.title, /Reapply or discard pending/);
+      for (const label of document.querySelectorAll(
+        "#rewriting-steps .rewriting-pending > .rewriting-step",
+      )) {
+        assert.equal(label.disabled, false);
+        assert.equal(window.getComputedStyle(label).opacity, "1");
+      }
+      send({
+        type: "graph",
+        graph: graph(two),
+        file: {
+          fusionCount: two.fusionCount(),
+          fusionHistory: history(two),
+          pendingRewritings: [],
+          rewriting: { names: ["Three"], selected: "Three" },
+        },
+      });
+      document.getElementById("fuse-pattern").click();
+      send({
+        type: "fusion-patterns",
+        requestId: messages.at(-1).requestId,
+        patterns: [],
+        scenarios: two.rewritingScenarios(),
+        name: "Three",
+      });
+      assert.equal(
+        document.querySelectorAll("#rewriting-steps .rewriting-step").length,
+        3,
+      );
+      assert.equal(
+        document.querySelectorAll("#rewriting-steps .rewriting-pending").length,
+        1,
+      );
+    });
+  }
+});
+
+test("keeps root rewriting inspection visible without focusing nested graph indices", async (t) => {
+  const { document, window } = openViewer(t);
+  const original = loadModel(
+    readFileSync(require.resolve("./models/fusion.onnx")),
+    "Root history",
+  );
+  const fused = await original.applyFusion("TransposeTranspose", [0]);
+  const nested = loadModel(
+    readFileSync(require.resolve("./models/subgraphs.onnx")),
+    "Nested graph",
+  );
+  const path = nested
+    .graph()
+    .nodes[0].attributes.find((attribute) => attribute.graphs?.length)
+    .graphs[0].path;
+  for (const stage of [undefined, "prefill"]) {
+    const graph = nested.graph(false, path);
+    if (stage) {
+      for (const crumb of graph.breadcrumbs)
+        crumb.path = [{ pipeline: stage }, ...crumb.path];
+      graph.pipeline = true;
+      graph.canFuse = false;
+    }
+    window.dispatchEvent(
+      new window.MessageEvent("message", {
+        data: {
+          type: "graph",
+          graph,
+          file: {
+            fusionCount: 1,
+            fusionHistory: fused.fusionHistory(true).map((operation) => ({
+              ...operation,
+              ...(stage ? { stage } : {}),
+            })),
+          },
+        },
+      }),
+    );
+    document.getElementById("fuse-pattern").click();
+    const label = document.querySelector("#rewriting-steps .rewriting-step");
+    assert.ok(label);
+    assert.equal(label.disabled, false);
+    label.click();
+    assert.equal(document.querySelectorAll(".graph-node.selected").length, 0);
+    assert.match(
+      document.getElementById("fusion-feedback").textContent,
+      /not present in the current graph/,
+    );
+    assert.match(
+      document.querySelector("#rewriting-steps .fusion-impact").textContent,
+      /Before.*Transpose.*After/s,
+    );
+  }
+});
+
+test("locates pending rewritings of unnamed nodes after undo", async (t) => {
+  const { document, window, messages } = openViewer(t);
+  const original = loadModel(
+    readFileSync(require.resolve("./models/fusion-scaled.onnx")),
+    "Unnamed nodes",
+  );
+  const full = await original.applyFusion("MatMulScaleFusion", [4]);
+  const pending = full.fusionHistory(true);
+  assert.ok(pending[0].matches[0].impact.before.every((node) => !node.name));
+  assert.ok(
+    original
+      .graph()
+      .nodes.slice(4)
+      .every((node) => node.name),
+  );
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: {
+        type: "graph",
+        graph: original.graph(),
+        file: { fusionCount: 0, pendingRewritings: pending },
+      },
+    }),
+  );
+  document.getElementById("fuse-pattern").click();
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: {
+        type: "fusion-patterns",
+        requestId: messages.at(-1).requestId,
+        patterns: [],
+        scenarios: [],
+      },
+    }),
+  );
+  document.querySelector("#rewriting-steps .rewriting-step").click();
+  assert.deepEqual(
+    [...document.querySelectorAll(".graph-node.selected")].map(
+      (node) => node.dataset.id,
+    ),
+    ["node-4", "node-5"],
+  );
+  assert.equal(document.getElementById("fusion-feedback").textContent, "");
 });
 
 test("rejects queued fusion and scenario completions after local close or navigation", async (t) => {
@@ -7437,6 +7726,114 @@ test("keeps deleted impacted nodes inspectable when no result nodes survive", as
   );
   assert.match(details.querySelector("pre").textContent, /a, b/);
   assert.match(details.querySelectorAll("pre")[1].textContent, /No nodes/);
+});
+
+test("recording uses the displayed pipeline stage's applied history, including no-op optimization", async (t) => {
+  const { PipelineModel } = require("../dist/pipeline");
+  const { document, window, messages } = openViewer(t);
+  const source = new PipelineModel(
+    {
+      name: "Stage recording",
+      metadata: [],
+      models: {
+        prefill: loadModel(
+          readFileSync(require.resolve("./models/fusion.onnx")),
+          "prefill",
+        ),
+        decode: loadModel(
+          readFileSync(require.resolve("./models/relu.onnx")),
+          "decode",
+        ),
+      },
+      assemble: async () => {
+        throw new Error("This test does not serialize the pipeline.");
+      },
+    },
+    "recording.pipe-onnx",
+  );
+  const edited = await source.applyFusion(
+    "TransposeTranspose",
+    [0],
+    [{ pipeline: "prefill" }],
+  );
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  for (const [stage, hasEdits] of [
+    ["decode", false],
+    ["prefill", true],
+  ]) {
+    const path = [{ pipeline: stage }];
+    const load = (model, requestId) =>
+      send({
+        type: "graph",
+        graph: model.graph(false, path),
+        fusionRequestId: requestId,
+        file: {
+          fusionCount: model.fusionCount(),
+          fusionHistory: model.fusionHistory(true),
+          rewriting: model.rewritingState(path),
+        },
+      });
+    const catalog = (model, type, requestId, extra = {}) =>
+      send({
+        type,
+        requestId,
+        patterns: model.fusionPatterns(path),
+        optimizationPatterns: model.optimizationPatterns(path),
+        scenarios: model.rewritingScenarios(path),
+        optimizationReport: model.optimizationReport(path),
+        ...extra,
+      });
+    load(edited);
+    document.getElementById("fuse-pattern").click();
+    catalog(edited, "fusion-patterns", messages.at(-1).requestId);
+    const workingName = document.getElementById("working-rewriting-name");
+    workingName.value = "Stage";
+    workingName.dispatchEvent(new window.Event("input"));
+    assert.equal(
+      document.getElementById("record-working-rewriting").disabled,
+      !hasEdits,
+    );
+    assert.equal(document.getElementById("unfuse-last").disabled, false);
+    document.getElementById("optimize-model").click();
+    catalog(edited, "fusion-patterns", messages.at(-1).requestId);
+    document.getElementById("clear-optimization-patterns").click();
+    document
+      .querySelector('#optimization-patterns input[value="MatMulScaleFusion"]')
+      .click();
+    document.getElementById("run-optimization").click();
+    const request = messages.at(-1);
+    assert.equal(request.type, "apply-optimization");
+    const noOp = await edited.optimize(
+      request.patterns,
+      "Optimize",
+      undefined,
+      path,
+    );
+    assert.equal(noOp.fusionCount(), edited.fusionCount());
+    load(noOp, request.requestId);
+    catalog(noOp, "optimization-info", request.requestId, {
+      operation: "Optimize",
+      changed: false,
+      matches: [],
+    });
+    const optimizedName = document.getElementById(
+      "optimization-rewriting-name",
+    );
+    optimizedName.value = "Noop";
+    optimizedName.dispatchEvent(new window.Event("input"));
+    workingName.value = "Stage";
+    workingName.dispatchEvent(new window.Event("input"));
+    assert.equal(
+      document.getElementById("create-optimization-rewriting").disabled,
+      !hasEdits,
+    );
+    assert.equal(
+      document.getElementById("record-working-rewriting").disabled,
+      !hasEdits,
+    );
+    assert.equal(document.getElementById("unfuse-last").disabled, false);
+  }
 });
 
 test("opens tabular optimization reports only on request, including no-op runs and reopened Optimize", async (t) => {
@@ -7816,6 +8213,129 @@ test("renders report details safely and closes the report immediately on navigat
   );
 });
 
+test("optimization excludes RepeatedLayer and PartitionGroup without hiding them from Fuse", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  load(demoGraph);
+  document.getElementById("optimize-model").click();
+  const names = ["RepeatedLayer", "PartitionGroup", "TransposeTranspose"];
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: {
+        type: "fusion-patterns",
+        requestId: messages.at(-1).requestId,
+        patterns: names,
+        optimizationPatterns: names.map((name) => ({
+          name,
+          priority: 1,
+          device: "cpu",
+          enabledByDefault: true,
+          groups: ["all", name === "TransposeTranspose" ? "Default" : "Layer"],
+        })),
+      },
+    }),
+  );
+  const patterns = document.getElementById("optimization-patterns");
+  for (const name of ["RepeatedLayer", "PartitionGroup"]) {
+    assert.equal(patterns.querySelector(`input[value="${name}"]`), null);
+    assert.ok(document.querySelector(`#fusion-pattern input[value="${name}"]`));
+  }
+  assert.equal(
+    document.querySelector('#optimization-pattern-group input[value="Layer"]'),
+    null,
+  );
+  document.getElementById("select-optimization-patterns").click();
+  document.getElementById("run-optimization").click();
+  assert.equal(messages.at(-1).type, "apply-optimization");
+  assert.deepEqual(Array.from(messages.at(-1).patterns), [
+    "TransposeTranspose",
+  ]);
+});
+
+test("uses the same filtered priority picker for Rewritings and Optimize without changing selections", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  load(demoGraph);
+  document.getElementById("optimize-model").click();
+  const names = ["MatMulAdd", "TransposeTranspose", "SameChildren"];
+  window.dispatchEvent(
+    new window.MessageEvent("message", {
+      data: {
+        type: "fusion-patterns",
+        requestId: messages.at(-1).requestId,
+        patterns: names,
+        optimizationPatterns: names.map((name, index) => ({
+          name,
+          priority: index < 2 ? 1 : 2,
+          device: "cpu",
+          enabledByDefault: name !== "TransposeTranspose",
+          groups: ["all"],
+        })),
+      },
+    }),
+  );
+  const patterns = document.getElementById("optimization-patterns");
+  const filter = document.getElementById("optimization-filter");
+  const groups = [...patterns.querySelectorAll("details")];
+  groups[0].open = true;
+  const selected = () =>
+    [...patterns.querySelectorAll("input[data-pattern]:checked")].map(
+      (input) => input.value,
+    );
+  const visible = () =>
+    [...patterns.querySelectorAll("label:not([hidden]) input")].map(
+      (input) => input.value,
+    );
+  const search = (query) => {
+    filter.value = query;
+    filter.dispatchEvent(new window.Event("input", { bubbles: true }));
+  };
+  search("  TRANSPOSE  ");
+  assert.deepEqual(visible(), ["TransposeTranspose"]);
+  assert.deepEqual(selected(), ["MatMulAdd", "SameChildren"]);
+  assert.equal(groups[0].open, true);
+  assert.equal(groups[1].hidden, true);
+  patterns.querySelector('input[value="TransposeTranspose"]').click();
+  search("no matching pattern");
+  assert.deepEqual(visible(), []);
+  assert.ok(groups.every((group) => group.hidden));
+  search("");
+  assert.deepEqual(visible(), names);
+  assert.equal(groups[0].open, true);
+  assert.equal(groups[1].open, false);
+  assert.ok(groups.every((group) => !group.hidden));
+  const rewritingPatterns = document.getElementById("fusion-pattern");
+  const rewritingFilter = document.getElementById("fusion-filter");
+  const rewritingGroups = [...rewritingPatterns.querySelectorAll("details")];
+  assert.deepEqual(
+    rewritingGroups.map((group) => group.querySelector("summary").textContent),
+    groups.map((group) => group.querySelector("summary").textContent),
+  );
+  rewritingGroups[0].open = true;
+  rewritingPatterns.querySelector('input[value="MatMulAdd"]').click();
+  rewritingFilter.value = "  TRANSPOSE  ";
+  rewritingFilter.dispatchEvent(new window.Event("input"));
+  assert.deepEqual(
+    [...rewritingPatterns.querySelectorAll("label:not([hidden]) input")].map(
+      (input) => input.value,
+    ),
+    ["TransposeTranspose"],
+  );
+  assert.deepEqual(
+    [...rewritingPatterns.querySelectorAll("input[data-pattern]:checked")].map(
+      (input) => input.value,
+    ),
+    ["MatMulAdd"],
+  );
+  assert.equal(rewritingGroups[1].hidden, true);
+  rewritingFilter.value = "";
+  rewritingFilter.dispatchEvent(new window.Event("input"));
+  assert.equal(rewritingGroups[0].open, true);
+  assert.equal(rewritingGroups[1].open, false);
+  search("transpose");
+  document.getElementById("run-optimization").click();
+  assert.equal(messages.at(-1).type, "apply-optimization");
+  assert.deepEqual(Array.from(messages.at(-1).patterns), names);
+});
+
 test("chooses the optimizer backend without losing native pattern selection", (t) => {
   const { document, window, messages, load } = openViewer(t);
   const source = loadModel(
@@ -7941,10 +8461,7 @@ test("chooses the optimizer backend without losing native pattern selection", (t
   ])
     assert.equal(document.getElementById(id).disabled, true, id);
   assert.equal(document.getElementById("unfuse-history").children.length, 0);
-  assert.equal(
-    document.getElementById("optimization-results").textContent,
-    "No applied pattern matches in this graph.",
-  );
+  assert.equal(document.getElementById("optimization-results").textContent, "");
   script.click();
   assert.equal(output.hidden, false);
   assert.equal(output.textContent, logs);
@@ -8072,10 +8589,6 @@ test("explains the selected pattern/node and distinguishes rejection, missing di
   const feedback = document.getElementById("diagnostic-feedback");
   const diagnostics = document.getElementById("fusion-diagnostics");
   const summary = diagnostics.querySelector("summary");
-  assert.equal(
-    document.getElementById("fusion-panel").lastElementChild.id,
-    "fusion-diagnostics",
-  );
   assert.equal(document.getElementById("diagnostic-source").tagName, "SECTION");
   assert.equal(document.querySelector("#diagnostic-source summary"), null);
   assert.equal(picker.options.length, 0);
@@ -8347,7 +8860,7 @@ test("offers last and all Unfuse actions inside Fuse and preserves repeated undo
   const all = document.getElementById("unfuse-all");
   const options = document.getElementById("unfuse-panel");
   const historyList = document.getElementById("unfuse-history");
-  assert.equal(undo.textContent, "Fuse / Unfuse");
+  assert.equal(undo.textContent, "Rewritings");
   assert.equal(undo.closest("nav").id, "sidebar-controls");
   graph(2);
   assert.equal(undo.disabled, false);
@@ -9097,7 +9610,7 @@ test("toggles separated, stacked sidebar panels independently from Op Data Find 
       "Symbolic",
       "Convert",
       "Optimize",
-      "Fuse / Unfuse",
+      "Rewritings",
     ],
   );
   assert.match(
@@ -9232,7 +9745,7 @@ test("runs matching explicitly, highlights candidates and fuses only checked mat
     button.closest("nav"),
     document.getElementById("sidebar-controls"),
   );
-  assert.equal(button.textContent, "Fuse / Unfuse");
+  assert.equal(button.textContent, "Rewritings");
   assert.equal(
     button.className,
     document.getElementById("show-operator").className,
@@ -9374,7 +9887,10 @@ test("selects multiple patterns, reruns matching from scratch and ignores old pr
   const identity = pattern.querySelector('input[value="Identity"]');
   assert.equal(document.getElementById("clear-patterns").disabled, true);
   document.getElementById("select-patterns").click();
-  assert.equal(pattern.querySelectorAll("input:checked").length, 2);
+  assert.equal(
+    pattern.querySelectorAll("input[data-pattern]:checked").length,
+    2,
+  );
   assert.equal(document.getElementById("preview-fusion").disabled, false);
   document.getElementById("clear-patterns").click();
   assert.equal(pattern.querySelectorAll("input:checked").length, 0);
@@ -9394,7 +9910,10 @@ test("selects multiple patterns, reruns matching from scratch and ignores old pr
   approved.dispatchEvent(new window.Event("change"));
   assert.equal(document.getElementById("apply-fusion").disabled, false);
   identity.parentElement.click();
-  assert.equal(pattern.querySelectorAll("input:checked").length, 2);
+  assert.equal(
+    pattern.querySelectorAll("input[data-pattern]:checked").length,
+    2,
+  );
   assert.equal(transpose.checked, true);
   assert.equal(messages.at(-1).type, "cancel-fusion");
   document.getElementById("preview-fusion").click();

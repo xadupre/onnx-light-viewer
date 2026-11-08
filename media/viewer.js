@@ -3225,12 +3225,12 @@ for (const [id, all] of [
   ["unfuse-all", true],
 ])
   byId(id).addEventListener("click", () => {
-    requestAction("undo-fusion", "Undo fusion", { all });
+    requestAction("undo-fusion", "Undo fusion", { all, step: !all });
     fusionPanel.setUndoBusy(true);
     setLoading(replacementPending);
     byId("fusion-status").textContent = all
       ? "Unfusing all operations…"
-      : "Unfusing the last operation…";
+      : "Unfusing the last rewriting…";
   });
 byId("verify-model").addEventListener("click", () => {
   verificationStatus(true, "Verifying model…");

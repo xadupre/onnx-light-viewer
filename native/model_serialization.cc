@@ -2,6 +2,7 @@
 #include "model_io.h"
 #include "model_storage.h"
 #include <algorithm>
+#include <charconv>
 #include <cmath>
 #include <cstring>
 #include <limits>
@@ -15,6 +16,94 @@
 #include <unordered_map>
 
 namespace onnx_light_viewer {
+
+namespace {
+constexpr auto declaration_positions_key = "onnx-light-viewer.declaration-step-positions";
+}
+
+std::vector<size_t> RewritingDeclarationPositions(const ol::RewritingProto &plan) {
+  std::vector<size_t> positions;
+  for (const auto &entry : plan.metadata_props()) {
+    if (entry.key() != declaration_positions_key)
+      continue;
+    const auto &text = entry.value().value();
+    size_t begin = 0;
+    do {
+      const auto comma = text.find(',', begin);
+      const auto end = comma == std::string::npos ? text.size() : comma;
+      size_t position = 0;
+      const auto parsed = std::from_chars(text.data() + begin, text.data() + end, position);
+      if (parsed.ec != std::errc() || parsed.ptr != text.data() + end ||
+          position > plan.rewrites().size() || (!positions.empty() && position < positions.back()))
+        throw std::runtime_error("Invalid viewer declaration-step positions.");
+      positions.push_back(position);
+      if (comma == std::string::npos)
+        break;
+      begin = comma + 1;
+    } while (begin <= text.size());
+  }
+  return positions;
+}
+
+void SetRewritingDeclarationPositions(ol::RewritingProto &plan,
+                                      const std::vector<size_t> &positions) {
+  auto metadata = plan.metadata_props().SharedCopy();
+  plan.clear_metadata_props();
+  for (const auto &entry : metadata)
+    if (entry.key() != declaration_positions_key)
+      *plan.add_metadata_props() = entry.SharedCopy();
+  if (positions.empty())
+    return;
+  std::string text;
+  for (const auto position : positions) {
+    if (!text.empty())
+      text += ',';
+    text += std::to_string(position);
+  }
+  auto *entry = plan.add_metadata_props();
+  entry->set_key(declaration_positions_key);
+  entry->set_value(std::move(text));
+}
+
+ol::RewritingProto CombineFusionPlans(const StoredModel &model) {
+  ol::RewritingProto combined;
+  std::set<std::string> replacements;
+  std::vector<size_t> declaration_positions;
+  for (const auto &plan : model.fusion_plans) {
+    auto positions = RewritingDeclarationPositions(plan);
+    if (positions.empty() && plan.rewrites().empty())
+      positions.push_back(0);
+    for (const auto position : positions)
+      declaration_positions.push_back(combined.rewrites().size() + position);
+    for (const auto &edit : plan.rewrites())
+      *combined.add_rewrites() = edit.SharedCopy();
+    combined.ref_required_opset_imports() = plan.required_opset_imports();
+    combined.ref_added_functions() = plan.added_functions().SharedCopy();
+    for (const auto &id : plan.replaced_function_ids())
+      if (replacements.insert(id).second)
+        combined.add_replaced_function_ids(id);
+  }
+  // Logical declaration steps are viewer metadata, not empty SDK graph edits.
+  SetRewritingDeclarationPositions(combined, declaration_positions);
+  return combined;
+}
+
+void CaptureRewritingPlan(ol::ModelProto &model, ol::RewritingProto &plan) {
+  if (!plan.replaced_function_ids().empty()) {
+    std::set<std::string> replacements(plan.replaced_function_ids().begin(),
+                                       plan.replaced_function_ids().end());
+    const auto canonical = ol::core::builder::GraphBuilder(model).ToModel(model.ir_version());
+    plan.clear_replaced_function_ids();
+    for (const auto &function : canonical.functions()) {
+      const auto key = ol::core::shapes::ShapesContext::LocalFunctionKey(
+          function.domain().value(), function.name().value(), function.overload().value());
+      if (replacements.erase(key))
+        plan.add_replaced_function_ids(key);
+    }
+  }
+  plan = ol::core::builder::GraphBuilder(model).CaptureRewritings(plan);
+}
+
 namespace {
 
 bool SameWeight(const ol::TensorProto &left, const ol::TensorProto &right) {
@@ -48,19 +137,8 @@ public:
         format_(format) {
     if (!include_rewritings) {
       snapshot_.clear_rewritings();
-    } else if (!source->fusion_plans.empty()) {
-      ol::RewritingProto combined;
-      std::set<std::string> replacements;
-      for (const auto &plan : source->fusion_plans) {
-        for (const auto &edit : plan.rewrites())
-          *combined.add_rewrites() = edit.SharedCopy();
-        // Each captured plan contains the complete declarations at that step.
-        combined.ref_required_opset_imports() = plan.required_opset_imports();
-        combined.ref_added_functions() = plan.added_functions().SharedCopy();
-        for (const auto &id : plan.replaced_function_ids())
-          if (replacements.insert(id).second)
-            combined.add_replaced_function_ids(id);
-      }
+    } else if (!source->fusion_plans.empty() && !source->rewriting_recorded) {
+      auto combined = CombineFusionPlans(*source);
       std::string name = "onnx-light-viewer.fusions";
       for (size_t suffix = 2; snapshot_.rewritings().contains(name); ++suffix)
         name = "onnx-light-viewer.fusions." + std::to_string(suffix);
@@ -76,20 +154,7 @@ public:
       RestoreModelPayloads(snapshot_, *source_, file_path_);
       if (!captured_plan_name_.empty()) {
         auto &plan = snapshot_.ref_rewritings().at(captured_plan_name_);
-        if (!plan.replaced_function_ids().empty()) {
-          std::set<std::string> replacements(plan.replaced_function_ids().begin(),
-                                             plan.replaced_function_ids().end());
-          const auto canonical =
-              ol::core::builder::GraphBuilder(snapshot_).ToModel(snapshot_.ir_version());
-          plan.clear_replaced_function_ids();
-          for (const auto &function : canonical.functions()) {
-            const auto key = ol::core::shapes::ShapesContext::LocalFunctionKey(
-                function.domain().value(), function.name().value(), function.overload().value());
-            if (replacements.erase(key))
-              plan.add_replaced_function_ids(key);
-          }
-        }
-        plan = ol::core::builder::GraphBuilder(snapshot_).CaptureRewritings(plan);
+        CaptureRewritingPlan(snapshot_, plan);
       }
       std::vector<ol::EncodedValueProto *> encoded;
       std::set<const ol::TensorProto *> layout_tensors;

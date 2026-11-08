@@ -269,6 +269,48 @@ export class PipelineModel implements NativeModel {
     return restored;
   };
 
+  fusionPrefix = async (
+    steps: number,
+    _sourceFilePath?: string,
+  ): Promise<NativeModel> => {
+    let current: PipelineModel = this;
+    let history = current.fusionHistory();
+    let count = history.reduce(
+      (sum, operation) => sum + operation.matches.length,
+      0,
+    );
+    if (!Number.isSafeInteger(steps) || steps < 0 || steps > count)
+      throw new Error("Invalid rewriting step count.");
+    while (count > steps) {
+      const last = history.at(-1)!;
+      const before = count - last.matches.length;
+      if (steps > before) {
+        const role = current.fusionOrder.at(-1)!;
+        const stage = current.models[role]!;
+        const stageCount = stage
+          .fusionHistory()
+          .reduce((sum, operation) => sum + operation.matches.length, 0);
+        // Stages retain their own source paths, not the container's path.
+        const edited = await stage.fusionPrefix(stageCount - (count - steps));
+        return new PipelineModel(
+          current.data,
+          current.fileName,
+          { ...current.models, [role]: edited },
+          current.previous,
+          current.fusionOrder,
+          current.undoDimensionEdits,
+        );
+      }
+      current = current.undoFusion();
+      history = current.fusionHistory();
+      count = history.reduce(
+        (sum, operation) => sum + operation.matches.length,
+        0,
+      );
+    }
+    return current.clone();
+  };
+
   summary = (inferShapes = false): GraphSummary => {
     const { name, inputs, outputs, initializerCount, tensors, nodes, opsets } =
       this.graph(inferShapes);
@@ -606,6 +648,50 @@ export class PipelineModel implements NativeModel {
       this,
       [...this.fusionOrder, stage.role],
     );
+  };
+
+  recordRewriting = async (
+    name: string,
+    append: boolean,
+    sourceFilePath?: string,
+    path: GraphPath = [],
+  ): Promise<NativeModel> => {
+    const stage = this.select(path);
+    this.rewritingScenarios(path);
+    const edited = await stage.model.recordRewriting(
+      name,
+      append,
+      sourceFilePath,
+    );
+    const replacement = this.replace(stage.role, edited);
+    const order = [
+      ...this.fusionOrder.filter((role) => role !== stage.role),
+      stage.role,
+    ];
+    const snapshots = [replacement.models];
+    let models = replacement.models;
+    for (const role of [...order].reverse()) {
+      const model = models[role];
+      if (!model) throw new Error("Invalid pipeline stage.");
+      models = { ...models, [role]: model.undoFusion() };
+      snapshots.push(models);
+    }
+    let rebuilt = new PipelineModel(
+      this.data,
+      this.fileName,
+      snapshots[order.length],
+      undefined,
+      [],
+    );
+    for (let i = order.length - 1; i >= 0; --i)
+      rebuilt = new PipelineModel(
+        this.data,
+        this.fileName,
+        snapshots[i],
+        rebuilt,
+        order.slice(0, order.length - i),
+      );
+    return rebuilt;
   };
 
   previewFusion = async (

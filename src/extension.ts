@@ -140,6 +140,26 @@ function viewerSettings(value: unknown): ViewerSettings {
   };
 }
 
+function rewritingStepCount(history: readonly FusionOperation[]): number {
+  return history.reduce(
+    (count, operation) => count + operation.matches.length,
+    0,
+  );
+}
+
+function pendingRewritingHistory(
+  history: readonly FusionOperation[],
+  applied: number,
+): FusionOperation[] {
+  return history.flatMap((operation) => {
+    const skip = Math.min(applied, operation.matches.length);
+    applied -= skip;
+    return skip < operation.matches.length
+      ? [{ ...operation, matches: operation.matches.slice(skip) }]
+      : [];
+  });
+}
+
 /**
  * Panel-local display state, independent of the recoverable native handle.
  * Reload uses a local path, original virtual-file bytes or a backend case ID.
@@ -1092,6 +1112,8 @@ async function configurePanel(
         previewId?: unknown;
         pattern?: unknown;
         scenario?: unknown;
+        append?: unknown;
+        discardPending?: unknown;
         patterns?: unknown;
         anchor?: unknown;
         anchors?: unknown;
@@ -1100,6 +1122,7 @@ async function configurePanel(
         backend?: unknown;
         match?: unknown;
         all?: unknown;
+        step?: unknown;
         location?: unknown;
         source?: unknown;
         target?: unknown;
@@ -3115,8 +3138,10 @@ async function configurePanel(
       } else if (
         message?.type === "undo-fusion" ||
         message?.type === "replay-rewritings" ||
+        message?.type === "refuse-next" ||
         message?.type === "apply-rewriting" ||
         message?.type === "select-rewriting" ||
+        message?.type === "record-rewriting" ||
         message?.type === "create-function-pattern" ||
         message?.type === "update-function-pattern" ||
         message?.type === "update-model-function" ||
@@ -3145,7 +3170,8 @@ async function configurePanel(
           (!(
             editsFunctionPattern ||
             loadsModelFunction ||
-            message.type === "select-rewriting"
+            message.type === "select-rewriting" ||
+            message.type === "record-rewriting"
           ) ||
             navigationRequest === navigation) &&
           (message.type === "undo-fusion"
@@ -3155,26 +3181,30 @@ async function configurePanel(
           await log.run(
             message.type === "undo-fusion"
               ? "Undo fusion"
-              : message.type === "replay-rewritings"
-                ? "Replay pending rewritings"
-                : message.type === "apply-optimization"
-                  ? "Optimize ONNX model"
-                  : message.type === "apply-rewriting" ||
-                      message.type === "select-rewriting"
-                    ? "Apply rewriting scenario"
-                    : message.type === "apply-fusion"
-                      ? "Apply fusion pattern"
-                      : message.type === "preview-fusion"
-                        ? "Preview fusion pattern"
-                        : message.type === "create-function-pattern"
-                          ? "Create function pattern"
-                          : message.type === "update-function-pattern"
-                            ? "Update function pattern"
-                            : updatesModelFunction
-                              ? "Update ONNX function"
-                              : loadsModelFunction
-                                ? "Load ONNX function"
-                                : "List fusion patterns",
+              : message.type === "refuse-next"
+                ? "Refuse next rewriting"
+                : message.type === "replay-rewritings"
+                  ? "Replay pending rewritings"
+                  : message.type === "apply-optimization"
+                    ? "Optimize ONNX model"
+                    : message.type === "apply-rewriting" ||
+                        message.type === "select-rewriting"
+                      ? "Apply rewriting scenario"
+                      : message.type === "record-rewriting"
+                        ? "Record optimization rewriting"
+                        : message.type === "apply-fusion"
+                          ? "Apply fusion pattern"
+                          : message.type === "preview-fusion"
+                            ? "Preview fusion pattern"
+                            : message.type === "create-function-pattern"
+                              ? "Create function pattern"
+                              : message.type === "update-function-pattern"
+                                ? "Update function pattern"
+                                : updatesModelFunction
+                                  ? "Update ONNX function"
+                                  : loadsModelFunction
+                                    ? "Load ONNX function"
+                                    : "List fusion patterns",
             async (id) => {
               const current = requireModel();
               if (loadsModelFunction) {
@@ -3208,6 +3238,11 @@ async function configurePanel(
                   typeof message.all !== "boolean"
                 )
                   throw new Error("Expected a boolean unfuse-all option.");
+                if (
+                  message.step !== undefined &&
+                  typeof message.step !== "boolean"
+                )
+                  throw new Error("Expected a boolean rewriting-step option.");
                 let edited = await nativeModel(
                   current,
                   log,
@@ -3219,6 +3254,14 @@ async function configurePanel(
                   (edited.fusionCount() ? edited.clone() : undefined);
                 if (message.all === true) {
                   while (edited.fusionCount()) edited = edited.undoFusion();
+                } else if (message.step) {
+                  edited = await edited.fusionPrefix(
+                    rewritingStepCount(edited.fusionHistory()) - 1,
+                    current.source?.uri.scheme === "file"
+                      ? current.source.uri.fsPath
+                      : undefined,
+                  );
+                  if (!isCurrent()) return;
                 } else {
                   edited = edited.undoFusion();
                 }
@@ -3230,8 +3273,12 @@ async function configurePanel(
                     : [];
                 const graph = edited.graph(false, path);
                 const retained = edited.clone();
-                const pending =
-                  replay?.fusionHistory(true).slice(edited.fusionCount()) ?? [];
+                const pending = replay
+                  ? pendingRewritingHistory(
+                      replay.fusionHistory(true),
+                      rewritingStepCount(edited.fusionHistory()),
+                    )
+                  : [];
                 model = {
                   ...current,
                   native: edited,
@@ -3347,6 +3394,86 @@ async function configurePanel(
                   "Return to a model's main graph to apply fusion patterns.",
                 );
               const path = current.graph.breadcrumbs.at(-1)?.path ?? [];
+              if (message.type === "record-rewriting") {
+                if (
+                  typeof message.name !== "string" ||
+                  !message.name.trim() ||
+                  typeof message.append !== "boolean"
+                )
+                  throw new Error(
+                    "Choose a rewriting name and a create or append action.",
+                  );
+                const name = message.name.trim();
+                if (message.append && current.rewritingState?.selected !== name)
+                  throw new Error(
+                    "Append only to the currently selected rewriting.",
+                  );
+                if (current.rewritingQueue)
+                  throw new Error(
+                    "Reapply or discard pending rewritings before recording.",
+                  );
+                const native = await nativeModel(
+                  current,
+                  log,
+                  () => void sendStatus(),
+                );
+                if (!isCurrent()) return;
+                const sourcePath =
+                  current.source?.uri.scheme === "file"
+                    ? current.source.uri.fsPath
+                    : undefined;
+                const edited = path.length
+                  ? await native.recordRewriting(
+                      name,
+                      message.append,
+                      sourcePath,
+                      path,
+                    )
+                  : await native.recordRewriting(
+                      name,
+                      message.append,
+                      sourcePath,
+                    );
+                if (!isCurrent()) return;
+                const retained = edited.clone();
+                const replacement: LoadedModel = {
+                  ...current,
+                  native: edited,
+                  nativeReload: undefined,
+                  graph: edited.graph(false, path),
+                  metadata: undefined,
+                  fusionCount: edited.fusionCount(),
+                  fusionHistory: edited.fusionHistory(true),
+                  rewritingQueue: undefined,
+                  rewritingSelections: new Map(current.rewritingSelections).set(
+                    rewritingSelectionKey(path),
+                    name,
+                  ),
+                  reload: () => retained.clone(),
+                };
+                model = replacement;
+                graphRevision++;
+                navigationRequest++;
+                await sendGraph(undefined, message.requestId);
+                if (
+                  !active ||
+                  model !== replacement ||
+                  fusionRequest !== generation + 1
+                )
+                  return;
+                await postMessage({
+                  type: "rewriting-recorded",
+                  requestId: message.requestId,
+                  name,
+                  append: message.append,
+                  patterns: edited.fusionPatterns(path),
+                  optimizationPatterns: edited.optimizationPatterns(path),
+                  functions: edited.modelFunctionDescriptors(path),
+                  scenarios: edited.rewritingScenarios(path),
+                  optimizationReport: edited.optimizationReport(path),
+                });
+                return;
+              }
               if (editsFunctionPattern) {
                 if (updatesModelFunction) {
                   if (
@@ -3520,10 +3647,58 @@ async function configurePanel(
                 });
                 return;
               }
-              if (message.type === "replay-rewritings") {
-                if (!current.rewritingQueue)
+              if (
+                message.type === "replay-rewritings" ||
+                message.type === "refuse-next"
+              ) {
+                const next = message.type === "refuse-next";
+                const queue = current.rewritingQueue;
+                if (!queue && !next)
                   throw new Error("No pending rewritings to apply.");
-                const edited = current.rewritingQueue.model.clone();
+                let edited: NativeModel;
+                let remaining: LoadedModel["rewritingQueue"];
+                const name = current.rewritingState?.selected;
+                if (next && name && !queue) {
+                  const native = await nativeModel(
+                    current,
+                    log,
+                    () => void sendStatus(),
+                  );
+                  if (!isCurrent()) return;
+                  edited = await native.applyRewritingScenario(
+                    name,
+                    false,
+                    current.source?.uri.scheme === "file"
+                      ? current.source.uri.fsPath
+                      : undefined,
+                    path,
+                  );
+                  if (!isCurrent()) return;
+                } else {
+                  if (!queue)
+                    throw new Error("No pending rewritings to apply.");
+                  edited = queue.model.clone();
+                  if (next) {
+                    const target =
+                      rewritingStepCount(current.fusionHistory ?? []) + 1;
+                    edited = await queue.model.fusionPrefix(
+                      target,
+                      current.source?.uri.scheme === "file"
+                        ? current.source.uri.fsPath
+                        : undefined,
+                    );
+                    if (!isCurrent()) return;
+                    const operations = pendingRewritingHistory(
+                      queue.model.fusionHistory(true),
+                      target,
+                    );
+                    if (operations.length)
+                      remaining = {
+                        model: queue.model,
+                        operations,
+                      };
+                  }
+                }
                 const retained = edited.clone();
                 const replacement: LoadedModel = {
                   ...current,
@@ -3533,7 +3708,7 @@ async function configurePanel(
                   metadata: undefined,
                   fusionCount: edited.fusionCount(),
                   fusionHistory: edited.fusionHistory(true),
-                  rewritingQueue: undefined,
+                  rewritingQueue: remaining,
                   reload: () => retained.clone(),
                 };
                 model = replacement;
@@ -3548,11 +3723,12 @@ async function configurePanel(
                 )
                   return;
                 await postMessage({
-                  type: "optimization-info",
+                  type: next ? "rewriting-info" : "optimization-info",
+                  name: name ?? null,
                   requestId: message.requestId,
                   operation: "Replay pending rewritings",
                   changed: true,
-                  matches: current.rewritingQueue.operations.flatMap(
+                  matches: (queue?.operations ?? []).flatMap(
                     (operation) => operation.matches,
                   ),
                   optimizationReport: edited.optimizationReport(path),
@@ -3861,6 +4037,7 @@ async function configurePanel(
                   metadata: undefined,
                   fusionCount: edited.fusionCount(),
                   fusionHistory: edited.fusionHistory(true),
+                  rewritingQueue: undefined,
                   reload: () => retained.clone(),
                 };
                 model = replacement;
@@ -3893,8 +4070,13 @@ async function configurePanel(
                 () => void sendStatus(),
               );
               if (!isCurrent()) return;
+              if (
+                message.discardPending !== undefined &&
+                typeof message.discardPending !== "boolean"
+              )
+                throw new Error("Expected a boolean discard-pending option.");
               const queued =
-                message.type === "preview-fusion"
+                message.type === "preview-fusion" && !message.discardPending
                   ? current.rewritingQueue
                   : undefined;
               const replaying = queued !== undefined;

@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <limits>
 #include <map>
 #include <onnx_core/builder/graph_graph.h>
 #include <onnx_core/builder/pattern_registry.h>
@@ -518,9 +519,61 @@ bool HasRewritingChanges(const ol::RewritingProto &plan) {
          !plan.required_opset_imports().empty();
 }
 
-size_t RewritingStepCount(const ol::RewritingProto &plan) {
-  return plan.rewrites().empty() ? static_cast<size_t>(HasRewritingChanges(plan))
-                                 : plan.rewrites().size();
+std::vector<size_t> RewritingStepEnds(const ol::RewritingProto &plan,
+                                      std::vector<size_t> *prefix_declarations = nullptr,
+                                      size_t prefix_steps = std::numeric_limits<size_t>::max()) {
+  const auto declarations = RewritingDeclarationPositions(plan);
+  std::vector<size_t> ends;
+  ends.reserve(plan.rewrites().size() + declarations.size());
+  size_t declaration = 0;
+  for (size_t i = 0; i <= plan.rewrites().size(); ++i) {
+    while (declaration < declarations.size() && declarations[declaration] == i) {
+      if (prefix_declarations && ends.size() < prefix_steps)
+        prefix_declarations->push_back(i);
+      ends.push_back(i);
+      ++declaration;
+    }
+    if (i == plan.rewrites().size())
+      break;
+    const auto &name = plan.rewrites(i).pattern_name().value();
+    // Viewer-generated finalization edits replay with their preceding logical match.
+    if (!ends.empty() && (name == "Finalize fusion node order" || name == "Finalize node moves"))
+      ends.back() = i + 1;
+    else
+      ends.push_back(i + 1);
+  }
+  if (ends.empty() && HasRewritingChanges(plan)) {
+    ends.push_back(0);
+    if (prefix_declarations && prefix_steps)
+      prefix_declarations->push_back(0);
+  }
+  return ends;
+}
+
+size_t RewritingStepCount(const ol::RewritingProto &plan) { return RewritingStepEnds(plan).size(); }
+
+void TraceFusionStep(const ol::RewritingProto &plan, size_t begin, size_t end,
+                     RewritingTrace &trace,
+                     std::vector<std::vector<StoredModel::FusionMatch>> &history) {
+  if (begin == end) {
+    history.back().push_back({"Stored declarations and node moves", {}});
+    return;
+  }
+  const auto &edit = plan.rewrites(begin);
+  auto impact = trace.Impact(edit);
+  auto nodes = trace.Apply(edit);
+  history.back().push_back(
+      {edit.pattern_name().empty() ? "Stored rewriting" : edit.pattern_name().value(),
+       std::move(nodes), std::move(impact)});
+  for (size_t i = begin + 1; i < end; ++i)
+    trace.Apply(plan.rewrites(i));
+}
+
+size_t FusionStepCount(const StoredModel &model) {
+  size_t count = 0;
+  for (const auto &batch : model.fusion_history)
+    count += batch.size();
+  return count;
 }
 
 ol::core::builder::GraphBuilder CaptureNodeMoves(const ol::ModelProto &original,
@@ -633,16 +686,22 @@ public:
   FusionWorker(Napi::Env env, std::shared_ptr<StoredModel> source,
                std::vector<std::string> patterns, std::optional<std::vector<size_t>> anchors,
                std::string path, std::string scenario = "", bool all = false,
-               std::string operation = "", std::optional<size_t> diagnostic_anchor = std::nullopt)
+               std::string operation = "", std::optional<size_t> diagnostic_anchor = std::nullopt,
+               bool append_rewriting = false, std::shared_ptr<StoredModel> prefix_source = nullptr,
+               size_t prefix_steps = 0)
       : Napi::AsyncWorker(env), started_(std::chrono::steady_clock::now()),
         deferred_(Napi::Promise::Deferred::New(env)), source_(std::move(source)),
-        canonical_(!scenario.empty() && source_->rewriting_base ? source_->rewriting_base
-                                                                : source_),
+        canonical_(operation == "RecordRewriting" && source_->fusion_base ? source_->fusion_base
+                   : !scenario.empty() && source_->rewriting_base         ? source_->rewriting_base
+                                                                          : source_),
         snapshot_(canonical_->model->SharedCopy()), patterns_(std::move(patterns)),
         anchors_(std::move(anchors)), path_(std::move(path)), history_(source_->fusion_history),
         scenario_(std::move(scenario)), all_(all), operation_(std::move(operation)),
-        diagnostic_anchor_(diagnostic_anchor) {
-    for (const auto &weight : canonical_->external_weights)
+        diagnostic_anchor_(diagnostic_anchor), append_rewriting_(append_rewriting),
+        prefix_source_(std::move(prefix_source)), prefix_steps_(prefix_steps) {
+    const auto &retained_weights =
+        operation_ == "RecordRewriting" ? source_->external_weights : canonical_->external_weights;
+    for (const auto &weight : retained_weights)
       weights_.push_back({weight.reference.SharedCopy(), weight.value.SharedCopy()});
     for (const auto &[name, functions] : *source_->function_patterns)
       function_patterns_.emplace(
@@ -665,7 +724,33 @@ public:
           return;
         }
       }
+      if (operation_ == "RecordRewriting") {
+        recorded_source_ = source_;
+        RecordScenario();
+        if (plan_.hash_after() !=
+            ol::core::builder::GraphBuilder(*recorded_source_->model).RewritingHash())
+          throw std::runtime_error(
+              "The recorded rewriting does not reproduce the optimized graph.");
+        snapshot_ = recorded_source_->model->SharedCopy();
+        return;
+      }
       RestoreModelPayloads(snapshot_, *canonical_, path_);
+      if (!canonical_->skipped.empty()) {
+        // Share restored payloads with the undo base instead of reloading them for partial replay.
+        auto complete = CloneStoredModel(canonical_);
+        complete->model = std::make_shared<ol::ModelProto>(snapshot_.SharedCopy());
+        complete->skipped.clear();
+        if (source_ == canonical_)
+          source_ = complete;
+        canonical_ = std::move(complete);
+      }
+      if (prefix_source_) {
+        if (scenario_.empty())
+          ApplyPrefix();
+        else
+          ApplyScenario();
+        return;
+      }
       if (operation_ != "Optimize") {
         std::vector<ol::EncodedValueProto *> encoded;
         std::set<const ol::TensorProto *> layout_tensors;
@@ -805,66 +890,56 @@ public:
       if (accepted.size() != requested.size())
         throw std::runtime_error("The selected fusion preview is no longer applicable.");
       ol::RewritingProto plan;
-      auto *edit = plan.add_rewrites();
-      edit->set_pattern_name(patterns_.size() == 1 ? patterns_[0] : "Selected fusion patterns");
-      for (const auto position : removed)
-        edit->add_matched_nodes(position);
-      const auto initializer_count = graph.Initializers().size();
-      std::map<size_t, std::vector<std::pair<ol::NodeProto, size_t>>> insertions;
-      std::vector<StoredModel::FusionMatch> operation;
+      RewritingTrace trace(snapshot_.graph());
+      history_.emplace_back();
+      // Prefix deltas map original match indices to independently replayable edits.
+      std::vector<ptrdiff_t> deltas(graph.Nodes().size() + 2);
+      const auto position_of = [&](size_t original) {
+        ptrdiff_t delta = 0;
+        for (size_t i = original + 1; i; i -= i & -i)
+          delta += deltas[i];
+        return static_cast<size_t>(static_cast<ptrdiff_t>(original) + delta);
+      };
+      const auto shift = [&](size_t original, ptrdiff_t delta) {
+        for (size_t i = original + 1; i < deltas.size(); i += i & -i)
+          deltas[i] += delta;
+      };
       for (const auto &[pattern, match] : accepted) {
-        const auto match_id = operation.size();
-        auto impact = std::make_shared<StoredModel::FusionMatch::Impact>();
+        auto *edit = plan.add_rewrites();
+        edit->set_pattern_name(pattern->Name());
+        std::set<size_t> matched;
         for (const auto *node : match.nodes)
           if (node)
-            impact->before.push_back(ImpactNode(NodeOrderKey(*node), index.Position(*node)));
-        operation.push_back({pattern->Name(), {}, impact});
+            matched.insert(index.Position(*node));
+        for (const auto original : matched)
+          edit->add_matched_nodes(position_of(original));
         size_t position = graph.Nodes().size();
         if (match.insert_at)
           position = index.Position(*match.insert_at);
         else
-          for (const auto *node : match.nodes)
-            if (node)
-              position = std::min(position, index.Position(*node));
+          position = *matched.begin();
+        size_t insertion = position_of(position);
+        for (const auto original : matched)
+          if (original < position)
+            --insertion;
         const auto initializers_before = graph.Initializers().size();
         auto replacement = pattern->Apply(index, match.nodes);
-        impact->added_initializers = graph.Initializers().size() - initializers_before;
-        for (const auto &node : replacement)
-          impact->after.push_back(ImpactNode(NodeOrderKey(node)));
-        for (const auto &node : replacement)
-          insertions[position].emplace_back(node.SharedCopy(), match_id);
-      }
-      std::vector<std::vector<size_t>> destinations(graph.Nodes().size());
-      std::vector<FusionNodeKey> inserted_order;
-      size_t output_position = 0;
-      for (size_t i = 0; i <= graph.Nodes().size(); ++i) {
-        for (const auto &[node, match_id] : insertions[i]) {
-          operation[match_id].nodes.push_back(output_position);
-          inserted_order.push_back(NodeOrderKey(node));
+        for (const auto &node : replacement) {
           *edit->add_added_nodes() = node.SharedCopy();
-          edit->add_added_nodes_positions(output_position++);
+          edit->add_added_nodes_positions(insertion++);
         }
-        if (i < graph.Nodes().size() && !removed.contains(i)) {
-          inserted_order.push_back(NodeOrderKey(graph.Nodes()[i]));
-          destinations[i].push_back(output_position++);
+        for (size_t i = initializers_before; i < graph.Initializers().size(); ++i) {
+          *edit->add_added_initializers() = graph.Initializers()[i].SharedCopy();
+          edit->add_added_initializer_positions(i);
         }
+        auto impact = trace.Impact(*edit);
+        auto nodes = trace.Apply(*edit);
+        history_.back().push_back({pattern->Name(), std::move(nodes), std::move(impact)});
+        for (const auto original : matched)
+          shift(original + 1, -1);
+        shift(position, static_cast<ptrdiff_t>(replacement.size()));
       }
-      for (size_t i = 0; i < accepted.size(); ++i)
-        for (const auto *node : accepted[i].second.nodes)
-          if (node)
-            destinations[index.Position(*node)] = operation[i].nodes;
-      for (auto &previous : history_)
-        for (auto &match : previous) {
-          std::set<size_t> nodes;
-          for (const auto node : match.nodes)
-            nodes.insert(destinations.at(node).begin(), destinations.at(node).end());
-          match.nodes.assign(nodes.begin(), nodes.end());
-        }
-      history_.push_back(std::move(operation));
-      for (size_t i = initializer_count; i < graph.Initializers().size(); ++i) {
-        *edit->add_added_initializers() = graph.Initializers()[i].SharedCopy();
-        edit->add_added_initializer_positions(i);
-      }
+      const auto inserted_order = trace.Finish(history_);
       auto declarations = graph.ToModel(snapshot_.ir_version());
       plan.ref_added_functions() = declarations.functions().SharedCopy();
       plan.ref_required_opset_imports() = declarations.opset_import();
@@ -909,7 +984,7 @@ public:
       return;
     }
     auto stored = std::make_shared<StoredModel>();
-    stored->backing = source_;
+    stored->backing = recorded_source_ ? recorded_source_ : source_;
     stored->model = std::make_shared<ol::ModelProto>(std::move(snapshot_));
     stored->file_name = source_->file_name;
     stored->file_path = path_;
@@ -920,6 +995,14 @@ public:
     stored->function_patterns = source_->function_patterns;
     stored->optimization_report = std::move(optimization_report_);
     if (!scenario_.empty()) {
+      if (operation_ == "RecordRewriting") {
+        stored->rewriting_recorded = true;
+        stored->optimization_report = source_->optimization_report;
+        stored->optimization_wall_time_ns = source_->optimization_wall_time_ns;
+      } else if (prefix_source_) {
+        stored->optimization_report = prefix_source_->optimization_report;
+        stored->optimization_wall_time_ns = prefix_source_->optimization_wall_time_ns;
+      }
       stored->fusion_base = canonical_;
       stored->fusion_previous = source_;
       stored->fusion_plans.push_back(std::move(plan_));
@@ -935,12 +1018,23 @@ public:
       stored->fusion_base = source_->fusion_base ? source_->fusion_base : source_;
       stored->fusion_previous = source_;
       stored->fusion_plans.push_back(std::move(plan_));
+      if (prefix_source_) {
+        stored->optimization_report = prefix_source_->optimization_report;
+        stored->optimization_wall_time_ns = prefix_source_->optimization_wall_time_ns;
+        stored->rewriting_base = prefix_source_->rewriting_base;
+        stored->rewriting_name = prefix_source_->rewriting_name;
+        if (!stored->rewriting_name.empty()) {
+          stored->rewriting_batches = source_->rewriting_batches;
+          stored->rewriting_batches.push_back(FusionStepCount(*stored));
+        }
+      }
       ResolveModel(stored);
       return;
     }
     stored->rewriting_base = source_->rewriting_base;
     stored->rewriting_name = source_->rewriting_name;
     stored->rewriting_batches = source_->rewriting_batches;
+    stored->rewriting_recorded = source_->rewriting_recorded;
     stored->optimization_report = source_->optimization_report;
     stored->optimization_wall_time_ns = source_->optimization_wall_time_ns;
     auto result = Napi::Object::New(Env());
@@ -1135,16 +1229,104 @@ private:
       CaptureNodeMoves(original, source, plan_);
     RewritingTrace trace(original.graph());
     history_.emplace_back();
-    for (const auto &edit : plan_.rewrites()) {
-      auto impact = trace.Impact(edit);
-      auto nodes = trace.Apply(edit);
-      history_.back().push_back({edit.pattern_name().value(), std::move(nodes), std::move(impact)});
+    size_t begin = 0;
+    for (const auto end : RewritingStepEnds(plan_)) {
+      TraceFusionStep(plan_, begin, end, trace, history_);
+      begin = end;
     }
     const auto order = trace.Finish(history_);
     auto replayed = source.ApplyRewritings(plan_);
     snapshot_ = replayed.ToModel(original.ir_version());
     ol::VerifyModel(snapshot_);
     if (FinalizeCapturedPlan(snapshot_, plan_, history_, order, replayed)) {
+      plan_.clear_hash_before();
+      plan_.clear_hash_after();
+      plan_ = source.CaptureRewritings(plan_);
+    }
+  }
+
+  void RecordScenario() {
+    if (source_->fusion_plans.empty())
+      throw std::runtime_error("There are no native edits to record as a rewriting.");
+    auto combined = CombineFusionPlans(*source_);
+    const auto found = snapshot_.rewritings().find(scenario_);
+    if (append_rewriting_) {
+      if (found == snapshot_.rewritings().end())
+        throw std::runtime_error("Unknown rewriting scenario: " + scenario_);
+      const auto &existing = found->second;
+      const auto is_prefix = [](const ol::RewritingProto &prefix, const ol::RewritingProto &plan) {
+        const auto prefix_ends = RewritingStepEnds(prefix);
+        const auto ends = RewritingStepEnds(plan);
+        return prefix_ends.size() <= ends.size() &&
+               std::equal(prefix_ends.begin(), prefix_ends.end(), ends.begin()) &&
+               prefix.rewrites().size() <= plan.rewrites().size() &&
+               std::equal(prefix.rewrites().begin(), prefix.rewrites().end(),
+                          plan.rewrites().begin(),
+                          [](const auto &left, const auto &right) { return left.Equals(right); });
+      };
+      const bool extends_applied_prefix =
+          source_->fusion_plans.size() > 1 && is_prefix(source_->fusion_plans.front(), existing);
+      if (!is_prefix(existing, combined) && !extends_applied_prefix)
+        throw std::runtime_error(
+            "Apply the complete selected rewriting before appending optimized edits.");
+      snapshot_.ref_rewritings().erase(scenario_);
+    } else if (found != snapshot_.rewritings().end()) {
+      throw std::runtime_error("Rewriting name already exists: " + scenario_);
+    }
+    CaptureRewritingPlan(snapshot_, combined);
+    plan_ = combined.SharedCopy();
+    batches_ = {RewritingStepCount(plan_)};
+    std::vector<StoredModel::FusionMatch> recorded_history;
+    for (auto &batch : history_)
+      for (auto &match : batch)
+        recorded_history.push_back(std::move(match));
+    history_.clear();
+    history_.push_back(std::move(recorded_history));
+    snapshot_.ref_rewritings().emplace(scenario_, std::move(combined));
+    auto canonical = CloneStoredModel(canonical_);
+    canonical->model = std::make_shared<ol::ModelProto>(std::move(snapshot_));
+    canonical->fusion_base.reset();
+    canonical->fusion_previous.reset();
+    canonical->fusion_plans.clear();
+    canonical->fusion_history.clear();
+    canonical->rewriting_base.reset();
+    canonical->rewriting_name.clear();
+    canonical->rewriting_batches.clear();
+    canonical->rewriting_recorded = false;
+    canonical->optimization_report = source_->optimization_report;
+    canonical->optimization_wall_time_ns = source_->optimization_wall_time_ns;
+    canonical->function_patterns = source_->function_patterns;
+    canonical_ = canonical;
+    source_ = std::move(canonical);
+  }
+
+  void ApplyPrefix() {
+    plan_ = prefix_source_->fusion_plans.back().SharedCopy();
+    std::vector<size_t> declarations;
+    const auto ends = RewritingStepEnds(plan_, &declarations, prefix_steps_);
+    SetRewritingDeclarationPositions(plan_, declarations);
+    const auto target = ends.at(prefix_steps_ - 1);
+    auto edits = plan_.rewrites().SharedCopy();
+    plan_.clear_rewrites();
+    for (size_t i = 0; i < target; ++i)
+      *plan_.add_rewrites() = edits.at(i).SharedCopy();
+    plan_.clear_moved_nodes();
+    plan_.clear_hash_before();
+    plan_.clear_hash_after();
+    ol::core::builder::GraphBuilder source(snapshot_);
+    plan_ = source.CaptureRewritings(plan_);
+    auto rewritten = source.ApplyRewritings(plan_);
+    RewritingTrace trace(snapshot_.graph());
+    history_.emplace_back();
+    size_t begin = 0;
+    for (size_t i = 0; i < prefix_steps_; ++i) {
+      TraceFusionStep(plan_, begin, ends[i], trace, history_);
+      begin = ends[i];
+    }
+    const auto order = trace.Finish(history_);
+    snapshot_ = rewritten.ToModel(snapshot_.ir_version());
+    ol::VerifyModel(snapshot_);
+    if (FinalizeCapturedPlan(snapshot_, plan_, history_, order, rewritten)) {
       plan_.clear_hash_before();
       plan_.clear_hash_after();
       plan_ = source.CaptureRewritings(plan_);
@@ -1160,11 +1342,14 @@ private:
     const auto &scenario = found->second;
     const size_t applied =
         source_->rewriting_batches.empty() ? 0 : source_->rewriting_batches.back();
-    const auto step_count = RewritingStepCount(scenario);
+    const auto scenario_ends = RewritingStepEnds(scenario);
+    const auto step_count = scenario_ends.size();
     if (applied >= step_count)
       throw std::runtime_error("No remaining steps in this rewriting scenario.");
-    const size_t target = all_ ? step_count : applied + 1;
-    const auto ordinary_target = std::min(target, scenario.rewrites().size());
+    const size_t target = prefix_source_ ? applied + prefix_steps_
+                          : all_         ? step_count
+                                         : applied + 1;
+    const auto ordinary_target = scenario_ends.at(target - 1);
     batches_ = source_->rewriting_batches;
     batches_.push_back(target);
     plan_ = scenario.SharedCopy();
@@ -1172,6 +1357,9 @@ private:
     if (target != step_count) {
       // Validate the complete saved hashes before replacing them with prefix hashes.
       source.ApplyRewritings(scenario);
+      std::vector<size_t> declarations;
+      RewritingStepEnds(scenario, &declarations, target);
+      SetRewritingDeclarationPositions(plan_, declarations);
       plan_.clear_rewrites();
       for (size_t i = 0; i < ordinary_target; ++i)
         *plan_.add_rewrites() = scenario.rewrites(i).SharedCopy();
@@ -1182,27 +1370,25 @@ private:
     }
     auto rewritten = plan_.moved_nodes().empty() ? source.ApplyRewritings(plan_)
                                                  : CaptureNodeMoves(snapshot_, source, plan_);
-    std::vector<FusionNodeKey> order;
-    for (const auto &node : snapshot_.graph().node())
-      order.push_back(NodeOrderKey(node));
+    RewritingTrace trace(snapshot_.graph());
+    const auto plan_ends = RewritingStepEnds(plan_);
     history_.clear();
     size_t step = 0;
+    size_t begin = 0;
     for (const auto end : batches_) {
       history_.emplace_back();
-      for (; step < std::min(end, scenario.rewrites().size()); ++step) {
-        const auto &edit = scenario.rewrites(step);
-        auto impact = CaptureFusionImpact(
-            edit, [&](size_t index) -> const FusionNodeKey & { return order.at(index); });
-        auto nodes = TraceRewriting(edit, order, history_);
-        history_.back().push_back(
-            {edit.pattern_name().empty() ? "Stored rewriting" : edit.pattern_name().value(),
-             std::move(nodes), std::move(impact)});
+      for (; step < end; ++step) {
+        if (!scenario.rewrites().empty()) {
+          TraceFusionStep(plan_, begin, plan_ends.at(step), trace, history_);
+        } else {
+          history_.back().push_back({"Stored declarations and node moves", {}});
+          for (size_t i = begin; i < plan_ends.at(step); ++i)
+            trace.Apply(plan_.rewrites(i));
+        }
+        begin = plan_ends[step];
       }
-      if (scenario.rewrites().empty())
-        history_.back().push_back({"Stored declarations and node moves", {}});
     }
-    for (size_t i = ordinary_target; i < plan_.rewrites().size(); ++i)
-      TraceRewriting(plan_.rewrites(i), order, history_);
+    const auto order = trace.Finish(history_);
     snapshot_ = rewritten.ToModel(snapshot_.ir_version());
     ol::VerifyModel(snapshot_);
     if (FinalizeCapturedPlan(snapshot_, plan_, history_, order, rewritten)) {
@@ -1230,6 +1416,7 @@ private:
   Napi::Promise::Deferred deferred_;
   std::shared_ptr<StoredModel> source_;
   std::shared_ptr<StoredModel> canonical_;
+  std::shared_ptr<StoredModel> recorded_source_;
   ol::ModelProto snapshot_;
   std::vector<std::string> patterns_;
   std::optional<std::vector<size_t>> anchors_;
@@ -1250,6 +1437,9 @@ private:
   std::string diagnostic_file_;
   uint_least32_t diagnostic_line_ = 0;
   FunctionPatterns function_patterns_;
+  bool append_rewriting_;
+  std::shared_ptr<StoredModel> prefix_source_;
+  size_t prefix_steps_;
 };
 
 FunctionPatterns ReadFunctionPatterns(const Napi::CallbackInfo &call,
@@ -1638,7 +1828,8 @@ void AddFusionMethods(Napi::Env env, Napi::Object result, std::shared_ptr<Stored
                                                          : model;
                  auto scenarios = Napi::Array::New(call.Env());
                  for (const auto &[name, plan] : base->model->rewritings()) {
-                   const auto step_count = RewritingStepCount(plan);
+                   const auto step_ends = RewritingStepEnds(plan);
+                   const auto step_count = step_ends.size();
                    auto item = Napi::Object::New(call.Env());
                    item.Set("name", name);
                    const size_t applied =
@@ -1657,16 +1848,16 @@ void AddFusionMethods(Napi::Env env, Napi::Object result, std::shared_ptr<Stored
                        for (const auto &match : operation)
                          selections.at(index++) = match.nodes;
                    }
-                   if (available && applied < plan.rewrites().size() &&
-                       plan.rewrites(applied).graph_path().empty()) {
-                     std::vector<FusionNodeKey> order;
-                     for (const auto &node : base->model->graph().node())
-                       order.push_back(NodeOrderKey(node));
+                   const auto next_begin = applied ? step_ends.at(applied - 1) : 0;
+                   if (available && next_begin < step_ends.at(applied) &&
+                       plan.rewrites(next_begin).graph_path().empty()) {
+                     RewritingTrace trace(base->model->graph());
                      std::vector<std::vector<StoredModel::FusionMatch>> history;
-                     for (size_t i = 0; i < applied; ++i)
-                       TraceRewriting(plan.rewrites(i), order, history);
+                     for (size_t i = 0; i < next_begin; ++i)
+                       trace.Apply(plan.rewrites(i));
+                     const auto order = trace.Finish(history);
                      const auto permutation = FinalizedNodeOrder(*model->model, order);
-                     const auto &matched = plan.rewrites(applied).matched_nodes();
+                     const auto &matched = plan.rewrites(next_begin).matched_nodes();
                      if (std::all_of(matched.begin(), matched.end(),
                                      [&](const auto node) { return node < permutation.size(); }))
                        for (const auto node : matched)
@@ -1674,9 +1865,12 @@ void AddFusionMethods(Napi::Env env, Napi::Object result, std::shared_ptr<Stored
                      std::sort(selections[applied].begin(), selections[applied].end());
                    }
                    auto steps = Napi::Array::New(call.Env(), step_count);
+                   RewritingTrace impact_trace(base->model->graph());
+                   std::string inspection_error;
                    for (uint32_t i = 0; i < step_count; ++i) {
                      auto step = Napi::Object::New(call.Env());
-                     const auto *edit = i < plan.rewrites().size() ? &plan.rewrites(i) : nullptr;
+                     const auto begin = i ? step_ends[i - 1] : 0;
+                     const auto *edit = begin < step_ends[i] ? &plan.rewrites(begin) : nullptr;
                      step.Set("pattern", !edit ? "Stored declarations and node moves"
                                          : edit->pattern_name().empty()
                                              ? "Stored rewriting"
@@ -1690,12 +1884,57 @@ void AddFusionMethods(Napi::Env env, Napi::Object result, std::shared_ptr<Stored
                      for (uint32_t j = 0; j < selections[i].size(); ++j)
                        nodes.Set(j, Napi::Number::New(call.Env(), selections[i][j]));
                      step.Set("nodes", nodes);
+                     if (edit) {
+                       if (inspection_error.empty()) {
+                         try {
+                           const auto impact = impact_trace.Impact(*edit);
+                           step.Set("impact", FusionImpactValue(call.Env(), *impact));
+                           for (size_t j = begin; j < step_ends[i]; ++j)
+                             impact_trace.Apply(plan.rewrites(j));
+                         } catch (const std::out_of_range &error) {
+                           inspection_error = error.what();
+                         } catch (const std::runtime_error &error) {
+                           inspection_error = error.what();
+                         }
+                       }
+                       if (!inspection_error.empty())
+                         step.Set("inspectionError", inspection_error);
+                     }
                      steps.Set(i, step);
                    }
                    item.Set("steps", steps);
                    scenarios.Set(scenarios.Length(), item);
                  }
                  return scenarios;
+               } catch (const std::exception &error) {
+                 Napi::Error::New(call.Env(), error.what()).ThrowAsJavaScriptException();
+                 return call.Env().Undefined();
+               }
+             }));
+  result.Set("recordRewriting",
+             Napi::Function::New(env, [model](const Napi::CallbackInfo &call) -> Napi::Value {
+               try {
+                 if (call.Length() < 2 || call.Length() > 3 || !call[0].IsString() ||
+                     !call[1].IsBoolean() || (!call[2].IsUndefined() && !call[2].IsString()))
+                   throw std::runtime_error(
+                       "Expected a rewriting name, append choice and source path.");
+                 const auto name = call[0].As<Napi::String>().Utf8Value();
+                 if (name.empty() || name.find('\0') != std::string::npos ||
+                     name.find_first_not_of(" \t\r\n") == std::string::npos)
+                   throw std::runtime_error("Expected a non-empty rewriting name.");
+                 const auto path =
+                     call[2].IsString() ? call[2].As<Napi::String>().Utf8Value() : model->file_path;
+                 if (path.find('\0') != std::string::npos)
+                   throw std::runtime_error("Invalid source model file path.");
+                 ol::onnx_shapes::RegisterShapeFunctions();
+                 ol::onnx_kernels::RegisterKernelFunctions();
+                 auto worker = std::make_unique<FusionWorker>(
+                     call.Env(), model, std::vector<std::string>{}, std::nullopt, path, name, true,
+                     "RecordRewriting", std::nullopt, call[1].As<Napi::Boolean>().Value());
+                 const auto promise = worker->Promise();
+                 worker->Queue();
+                 worker.release();
+                 return promise;
                } catch (const std::exception &error) {
                  Napi::Error::New(call.Env(), error.what()).ThrowAsJavaScriptException();
                  return call.Env().Undefined();
@@ -1765,6 +2004,48 @@ void AddFusionMethods(Napi::Env env, Napi::Object result, std::shared_ptr<Stored
                  auto restored = CloneStoredModel(model->fusion_previous);
                  restored->function_patterns = model->function_patterns;
                  return ModelHandle(call.Env(), restored);
+               } catch (const std::exception &error) {
+                 Napi::Error::New(call.Env(), error.what()).ThrowAsJavaScriptException();
+                 return call.Env().Undefined();
+               }
+             }));
+  result.Set("fusionPrefix",
+             Napi::Function::New(env, [model](const Napi::CallbackInfo &call) -> Napi::Value {
+               try {
+                 if (call.Length() < 1 || call.Length() > 2 || !call[0].IsNumber() ||
+                     (!call[1].IsUndefined() && !call[1].IsString()))
+                   throw std::runtime_error("Expected a rewriting step count and source path.");
+                 const auto count = call[0].As<Napi::Number>().DoubleValue();
+                 if (!std::isfinite(count) || count < 0 || std::floor(count) != count ||
+                     count > FusionStepCount(*model))
+                   throw std::runtime_error("Invalid rewriting step count.");
+                 const auto target = static_cast<size_t>(count);
+                 auto current = model;
+                 while (FusionStepCount(*current) > target) {
+                   const auto before =
+                       FusionStepCount(*current) - current->fusion_history.back().size();
+                   if (!current->fusion_previous)
+                     throw std::runtime_error("Invalid captured rewriting history.");
+                   if (target > before) {
+                     const auto path = call[1].IsString() ? call[1].As<Napi::String>().Utf8Value()
+                                                          : current->file_path;
+                     if (path.find('\0') != std::string::npos)
+                       throw std::runtime_error("Invalid source model file path.");
+                     auto worker = std::make_unique<FusionWorker>(
+                         call.Env(), current->fusion_previous, std::vector<std::string>{},
+                         std::nullopt, path, current->rewriting_name, false,
+                         current->rewriting_name.empty() ? "FusionPrefix" : "", std::nullopt, false,
+                         current, target - before);
+                     const auto promise = worker->Promise();
+                     worker->Queue();
+                     worker.release();
+                     return promise;
+                   }
+                   current = current->fusion_previous;
+                 }
+                 auto deferred = Napi::Promise::Deferred::New(call.Env());
+                 deferred.Resolve(ModelHandle(call.Env(), CloneStoredModel(current)));
+                 return deferred.Promise();
                } catch (const std::exception &error) {
                  Napi::Error::New(call.Env(), error.what()).ThrowAsJavaScriptException();
                  return call.Env().Undefined();
