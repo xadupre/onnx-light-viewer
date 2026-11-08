@@ -18,6 +18,9 @@ std::vector<ol::TensorProto *>
 ModelSaveTensors(ol::ModelProto &model, std::vector<ol::EncodedValueProto *> *encoded = nullptr,
                  std::set<const ol::TensorProto *> *layout_tensors = nullptr);
 ol::RewritingProto CombineFusionPlans(const StoredModel &model);
+std::vector<size_t> RewritingDeclarationPositions(const ol::RewritingProto &plan);
+void SetRewritingDeclarationPositions(ol::RewritingProto &plan,
+                                      const std::vector<size_t> &positions);
 void CaptureRewritingPlan(ol::ModelProto &model, ol::RewritingProto &plan);
 
 } // namespace onnx_light_viewer

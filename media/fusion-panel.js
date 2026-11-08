@@ -622,8 +622,15 @@ function createFusionPanel({
       duplicateName ? "This rewriting name already exists." : "",
     );
     const hasPending = pendingRewritings.length > 0;
+    const hasAppliedEdits = optimizationHistory.some(
+      (operation) => operation.stage === stage,
+    );
     const canRecord =
-      optimizationFinished && canFuse() && undoCount && !busy && !hasPending;
+      optimizationFinished &&
+      canFuse() &&
+      hasAppliedEdits &&
+      !busy &&
+      !hasPending;
     byId("optimization-rewriting-name").disabled = !canRecord;
     byId("create-optimization-rewriting").disabled =
       !canRecord || !rewritingName || duplicateName;
@@ -631,15 +638,16 @@ function createFusionPanel({
     const workingName = byId("working-rewriting-name").value.trim();
     const workingDuplicate = rewritingState.names.includes(workingName);
     byId("working-rewriting-name-field").hidden =
-      !!selectedRewriting || !undoCount;
-    byId("working-rewriting-name").disabled = busy || !canFuse() || !undoCount;
+      !!selectedRewriting || !hasAppliedEdits;
+    byId("working-rewriting-name").disabled =
+      busy || !canFuse() || !hasAppliedEdits;
     byId("working-rewriting-name").setCustomValidity(
       workingDuplicate ? "This rewriting name already exists." : "",
     );
     byId("record-working-rewriting").disabled =
       busy ||
       !canFuse() ||
-      !undoCount ||
+      !hasAppliedEdits ||
       hasPending ||
       (!selectedRewriting && (!workingName || workingDuplicate));
     byId("record-working-rewriting").textContent = selectedRewriting

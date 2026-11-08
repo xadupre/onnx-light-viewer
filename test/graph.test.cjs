@@ -6166,7 +6166,7 @@ test("loads independent EP1 and EP2 rewriting plans and preserves their replay a
 });
 
 test("replays opset-only scenarios as one undoable step and preserves them on save", async () => {
-  const original = memoryTestModel([1]);
+  const original = loadModel(modelBytes("fusion.onnx"), "opset-only");
   const bytes = captureRewritingPlans(
     Buffer.concat([
       Buffer.from(await original.serialize()),
@@ -6213,7 +6213,150 @@ test("replays opset-only scenarios as one undoable step and preserves them on sa
       loadModel(plan.bytes, "replayed").graph(),
       applied.graph(),
     );
+    const declarationOnly = await applied.recordRewriting(
+      "Declarations alone",
+      false,
+    );
+    const declarationsReloaded = loadModel(
+      await declarationOnly.serialize(undefined, undefined, true),
+      "Saved declaration-only steps",
+    );
+    const replayedDeclarations =
+      await declarationsReloaded.applyRewritingScenario(
+        "Declarations alone",
+        all,
+      );
+    assert.deepEqual(replayedDeclarations.graph(), applied.graph());
+    assert.equal(replayedDeclarations.fusionHistory()[0].matches.length, 1);
+    const fused = await applied.applyFusion("TransposeTranspose", [0]);
+    const recorded = await fused.recordRewriting(
+      "Declarations and fusion",
+      false,
+    );
+    const recordedScenario = recorded
+      .rewritingScenarios()
+      .find((item) => item.name === "Declarations and fusion");
+    assert.equal(recordedScenario.steps.length, 2);
+    assert.equal(recordedScenario.applied, 2);
+    assert.deepEqual(recordedScenario.steps[0].nodes, []);
+    assert.deepEqual((await recorded.fusionPrefix(1)).graph(), applied.graph());
+    assert.deepEqual((await recorded.fusionPrefix(0)).graph(), saved.graph());
+    const reloaded = loadModel(
+      await recorded.serialize(undefined, undefined, true),
+      "Saved declaration and fusion steps",
+    );
+    const pending = reloaded
+      .rewritingScenarios()
+      .find((item) => item.name === "Declarations and fusion");
+    assert.equal(
+      pending.steps[0].pattern,
+      "Stored declarations and node moves",
+    );
+    assert.deepEqual(pending.steps[0].nodes, []);
+    assert.equal(pending.steps[0].impact, undefined);
+    const declared = await reloaded.applyRewritingScenario(
+      "Declarations and fusion",
+      false,
+    );
+    assert.deepEqual(declared.graph(), applied.graph());
+    const replayed = await declared.applyRewritingScenario(
+      "Declarations and fusion",
+      false,
+    );
+    assert.deepEqual(replayed.graph(), fused.graph());
+    assert.deepEqual(replayed.undoFusion().graph(), declared.graph());
+    assert.deepEqual(
+      (
+        await reloaded.applyRewritingScenario("Declarations and fusion", true)
+      ).graph(),
+      fused.graph(),
+    );
+    const rerecorded = await (
+      await declared.applyFusion("TransposeTranspose", [0])
+    ).recordRewriting("Recorded again", false);
+    assert.equal(
+      rerecorded
+        .rewritingScenarios()
+        .find((item) => item.name === "Recorded again").steps.length,
+      2,
+    );
   }
+});
+
+test("preserves consecutive declaration-only boundaries through recording and prefixes", async () => {
+  const original = memoryTestModel([1]);
+  const saved = loadModel(
+    captureRewritingPlans(
+      Buffer.concat([
+        Buffer.from(await original.serialize()),
+        bytesField(
+          1001,
+          Buffer.concat([
+            bytesField(1, "Declarations"),
+            bytesField(
+              2,
+              Buffer.concat([
+                bytesField(
+                  2,
+                  Buffer.concat([
+                    bytesField(1, "scenario.custom"),
+                    varintField(2, 1),
+                  ]),
+                ),
+                bytesField(
+                  3,
+                  Buffer.concat([
+                    bytesField(
+                      1,
+                      "onnx-light-viewer.declaration-step-positions",
+                    ),
+                    bytesField(2, "0,0"),
+                  ]),
+                ),
+              ]),
+            ),
+          ]),
+        ),
+      ]),
+    ),
+    "Consecutive declarations",
+  );
+  const applied = await saved.applyRewritingScenario("Declarations", true);
+  assert.equal(applied.fusionHistory()[0].matches.length, 2);
+  const recorded = await applied.recordRewriting(
+    "Recorded declarations",
+    false,
+  );
+  const prefix = await recorded.fusionPrefix(1);
+  assert.equal(prefix.fusionHistory()[0].matches.length, 1);
+  const rerecorded = await prefix.recordRewriting("First declaration", false);
+  assert.equal(
+    rerecorded
+      .rewritingScenarios()
+      .find((item) => item.name === "First declaration").steps.length,
+    1,
+  );
+  const reloaded = loadModel(
+    await recorded.serialize(undefined, undefined, true),
+    "Reloaded declarations",
+  );
+  const first = await reloaded.applyRewritingScenario(
+    "Recorded declarations",
+    false,
+  );
+  assert.equal(
+    first
+      .rewritingScenarios()
+      .find((item) => item.name === "Recorded declarations").applied,
+    1,
+  );
+  const second = await first.applyRewritingScenario(
+    "Recorded declarations",
+    false,
+  );
+  assert.equal(second.fusionCount(), 2);
+  assert.deepEqual(second.graph(), applied.graph());
+  assert.deepEqual(second.undoFusion().graph(), first.graph());
 });
 
 test("validates saved scenario hashes before recapturing a strict prefix", async () => {

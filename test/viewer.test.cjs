@@ -7728,6 +7728,114 @@ test("keeps deleted impacted nodes inspectable when no result nodes survive", as
   assert.match(details.querySelectorAll("pre")[1].textContent, /No nodes/);
 });
 
+test("recording uses the displayed pipeline stage's applied history, including no-op optimization", async (t) => {
+  const { PipelineModel } = require("../dist/pipeline");
+  const { document, window, messages } = openViewer(t);
+  const source = new PipelineModel(
+    {
+      name: "Stage recording",
+      metadata: [],
+      models: {
+        prefill: loadModel(
+          readFileSync(require.resolve("./models/fusion.onnx")),
+          "prefill",
+        ),
+        decode: loadModel(
+          readFileSync(require.resolve("./models/relu.onnx")),
+          "decode",
+        ),
+      },
+      assemble: async () => {
+        throw new Error("This test does not serialize the pipeline.");
+      },
+    },
+    "recording.pipe-onnx",
+  );
+  const edited = await source.applyFusion(
+    "TransposeTranspose",
+    [0],
+    [{ pipeline: "prefill" }],
+  );
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  for (const [stage, hasEdits] of [
+    ["decode", false],
+    ["prefill", true],
+  ]) {
+    const path = [{ pipeline: stage }];
+    const load = (model, requestId) =>
+      send({
+        type: "graph",
+        graph: model.graph(false, path),
+        fusionRequestId: requestId,
+        file: {
+          fusionCount: model.fusionCount(),
+          fusionHistory: model.fusionHistory(true),
+          rewriting: model.rewritingState(path),
+        },
+      });
+    const catalog = (model, type, requestId, extra = {}) =>
+      send({
+        type,
+        requestId,
+        patterns: model.fusionPatterns(path),
+        optimizationPatterns: model.optimizationPatterns(path),
+        scenarios: model.rewritingScenarios(path),
+        optimizationReport: model.optimizationReport(path),
+        ...extra,
+      });
+    load(edited);
+    document.getElementById("fuse-pattern").click();
+    catalog(edited, "fusion-patterns", messages.at(-1).requestId);
+    const workingName = document.getElementById("working-rewriting-name");
+    workingName.value = "Stage";
+    workingName.dispatchEvent(new window.Event("input"));
+    assert.equal(
+      document.getElementById("record-working-rewriting").disabled,
+      !hasEdits,
+    );
+    assert.equal(document.getElementById("unfuse-last").disabled, false);
+    document.getElementById("optimize-model").click();
+    catalog(edited, "fusion-patterns", messages.at(-1).requestId);
+    document.getElementById("clear-optimization-patterns").click();
+    document
+      .querySelector('#optimization-patterns input[value="MatMulScaleFusion"]')
+      .click();
+    document.getElementById("run-optimization").click();
+    const request = messages.at(-1);
+    assert.equal(request.type, "apply-optimization");
+    const noOp = await edited.optimize(
+      request.patterns,
+      "Optimize",
+      undefined,
+      path,
+    );
+    assert.equal(noOp.fusionCount(), edited.fusionCount());
+    load(noOp, request.requestId);
+    catalog(noOp, "optimization-info", request.requestId, {
+      operation: "Optimize",
+      changed: false,
+      matches: [],
+    });
+    const optimizedName = document.getElementById(
+      "optimization-rewriting-name",
+    );
+    optimizedName.value = "Noop";
+    optimizedName.dispatchEvent(new window.Event("input"));
+    workingName.value = "Stage";
+    workingName.dispatchEvent(new window.Event("input"));
+    assert.equal(
+      document.getElementById("create-optimization-rewriting").disabled,
+      !hasEdits,
+    );
+    assert.equal(
+      document.getElementById("record-working-rewriting").disabled,
+      !hasEdits,
+    );
+    assert.equal(document.getElementById("unfuse-last").disabled, false);
+  }
+});
+
 test("opens tabular optimization reports only on request, including no-op runs and reopened Optimize", async (t) => {
   if (sdkReplaySkip) return t.skip(sdkReplaySkip);
   const { document, window, messages, load } = openViewer(t);
