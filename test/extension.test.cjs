@@ -7810,16 +7810,19 @@ test("selects optimization groups and previews global passes through the real we
   );
   assert.ok(checked(fusionPatterns).length > 0);
   chooseGroup("fusion-pattern-group", "onnx-light-cpu");
-  chooseGroup("fusion-pattern-group", "Layer");
-  assert.deepEqual(checked(fusionPatterns), ["RepeatedLayer"]);
+  assert.equal(
+    document.querySelector('#fusion-pattern-group input[value="Layer"]'),
+    null,
+  );
+  for (const name of ["RepeatedLayer", "PartitionGroup"])
+    assert.equal(fusionPatterns.querySelector(`input[value="${name}"]`), null);
   chooseGroup("fusion-pattern-group", "Default");
-  assert.equal(groupInput("fusion-pattern-group", "Layer").checked, true);
   assert.deepEqual(
     checked(fusionPatterns),
-    members("Default", "Layer").filter((name) => available.includes(name)),
+    members("Default").filter((name) => available.includes(name)),
   );
   chooseGroup("fusion-pattern-group", "Default");
-  assert.deepEqual(checked(fusionPatterns), ["RepeatedLayer"]);
+  assert.deepEqual(checked(fusionPatterns), []);
   chooseGroup("fusion-pattern-group", "all");
   assert.deepEqual(
     checked(fusionPatterns),
@@ -7836,7 +7839,7 @@ test("selects optimization groups and previews global passes through the real we
     ),
   );
   chooseGroup("fusion-pattern-group", "all");
-  assert.deepEqual(checked(fusionPatterns), ["RepeatedLayer"]);
+  assert.deepEqual(checked(fusionPatterns), []);
   document.getElementById("clear-patterns").click();
   const selectPass = (name) =>
     document.querySelector(`#fusion-pattern input[value="${name}"]`).click();
@@ -8052,7 +8055,205 @@ test("selects optimization groups and previews global passes through the real we
   assert.deepEqual(extension.errors, []);
 });
 
-test("Rewritings exposes four actions, appends one match and refuses one next step", async (t) => {
+test("Partition validates its pattern and records native rewritings that undo and survive saving", async (t) => {
+  const { loadModel } = require("../dist/graph");
+  const extension = await openExtension(undefined, undefined, true);
+  t.after(() => extension.dispose());
+  const source = require.resolve("../examples/optimization.onnx");
+  await extension.openFile(source);
+  const graph = () =>
+    extension.messages.findLast(({ type }) => type === "graph");
+  const original = graph().graph;
+  for (const pattern of [undefined, "TransposeTranspose", ["RepeatedLayer"]]) {
+    await extension.receive({
+      type: "partition-model",
+      pattern,
+      requestId: 10,
+    });
+    assert.equal(extension.messages.at(-1).type, "fusion-error");
+    assert.match(
+      extension.messages.at(-1).error,
+      /RepeatedLayer or PartitionGroup/,
+    );
+    assert.deepEqual(graph().graph, original);
+  }
+  const errorCount = extension.errors.length;
+  const directory = await mkdtemp(path.join(tmpdir(), "viewer-partition-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  for (const pattern of ["RepeatedLayer", "PartitionGroup"]) {
+    await extension.openFile(source);
+    await extension.receive({
+      type: "partition-model",
+      pattern,
+      requestId: 11,
+    });
+    const info = extension.messages.at(-1);
+    assert.equal(info.type, "fusion-info");
+    assert.equal(info.operation, pattern);
+    assert.equal(info.requestId, 11);
+    assert.equal(info.changed, true);
+    const partitioned = graph().graph;
+    assert.notDeepEqual(partitioned, original);
+    assert.ok(info.matches.length > 0);
+    assert.ok(
+      info.matches.every(
+        (match) =>
+          match.pattern === pattern || match.pattern === "RemoveUnusedNodes",
+      ),
+    );
+    if (pattern === "PartitionGroup")
+      assert.ok(
+        partitioned.nodes.some((node) =>
+          node.opType.startsWith("PartitionGroup_"),
+        ),
+      );
+    else
+      assert.ok(partitioned.nodes.some((node) => node.opType === "Transpose"));
+    const destination = path.join(directory, `${pattern}.onnx`);
+    await extension.receive({
+      type: "save",
+      location: destination,
+      overwrite: false,
+      includeRewritings: true,
+    });
+    const saved = loadModel(await readFile(destination), pattern);
+    const [name] = saved.rewritingState().names;
+    assert.ok(name);
+    assert.deepEqual(
+      (await saved.applyRewritingScenario(name, true)).graph().nodes,
+      partitioned.nodes,
+    );
+    await extension.receive({ type: "undo-fusion" });
+    assert.deepEqual(graph().graph, original);
+  }
+  assert.equal(extension.errors.length, errorCount);
+});
+
+test("Rewritings removes identities introduced by patterns and keeps replayable undo and save steps", async (t) => {
+  const { loadModel } = require("../dist/graph");
+  const extension = await openExtension("fusion.onnx", undefined, true);
+  t.after(() => extension.dispose());
+  const dom = new JSDOM(extension.webview.html, {
+    runScripts: "outside-only",
+    pretendToBeVisual: true,
+  });
+  t.after(() => dom.window.close());
+  const { window } = dom;
+  const { document } = window;
+  window.structuredClone = structuredClone;
+  window.HTMLCanvasElement.prototype.getContext = () => ({
+    font: "",
+    measureText: (text) => ({ width: text.length * 8 }),
+  });
+  const requests = [];
+  window.acquireVsCodeApi = () => ({
+    postMessage: (message) => requests.push(extension.receive(message)),
+  });
+  extension.connect((data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data })),
+  );
+  for (const script of document.querySelectorAll("script[src]"))
+    window.eval(readFileSync(new URL(script.src), "utf8"));
+  const flush = async () => {
+    while (requests.length) await Promise.all(requests.splice(0));
+  };
+  const graph = () =>
+    extension.messages.findLast(({ type }) => type === "graph");
+  const appendPair = async () => {
+    document.getElementById("clear-patterns").click();
+    document
+      .querySelector('#fusion-pattern input[value="TransposeTranspose"]')
+      .click();
+    document.getElementById("append-new").click();
+    await flush();
+  };
+  await flush();
+  document.getElementById("fuse-pattern").click();
+  await flush();
+  const remove = document.getElementById("remove-identities");
+  assert.equal(remove.disabled, false);
+  remove.click();
+  assert.equal(remove.disabled, true);
+  await flush();
+  assert.equal(graph().file.fusionCount, 0);
+  assert.match(
+    document.getElementById("fusion-status").textContent,
+    /no changes/,
+  );
+  await appendPair();
+  const outputIdentity = graph().graph;
+  assert.ok(outputIdentity.nodes.some((node) => node.opType === "Identity"));
+  remove.click();
+  await flush();
+  assert.deepEqual(graph().graph, outputIdentity);
+  assert.equal(graph().file.fusionCount, 1);
+  assert.match(
+    document.getElementById("fusion-status").textContent,
+    /no changes/,
+  );
+  await extension.openFile(require.resolve("../examples/optimization.onnx"));
+  await flush();
+  document.getElementById("fuse-pattern").click();
+  await flush();
+  await appendPair();
+  const fused = graph().graph;
+  assert.ok(fused.nodes.some((node) => node.opType === "Identity"));
+  remove.click();
+  await flush();
+  const cleaned = graph().graph;
+  assert.ok(!cleaned.nodes.some((node) => node.opType === "Identity"));
+  assert.equal(graph().file.fusionCount, 2);
+  assert.ok(
+    graph()
+      .file.fusionHistory.at(-1)
+      .matches.every((match) => match.pattern === "IdentityRemoval"),
+  );
+  assert.match(
+    document.getElementById("rewriting-steps").textContent,
+    /IdentityRemoval/,
+  );
+  assert.equal(document.getElementById("fusion-panel").hidden, false);
+  assert.equal(document.getElementById("optimization-panel").hidden, true);
+  remove.click();
+  await flush();
+  assert.equal(graph().file.fusionCount, 2);
+  assert.deepEqual(graph().graph, cleaned);
+  assert.match(
+    document.getElementById("fusion-status").textContent,
+    /no changes/,
+  );
+  document.getElementById("unfuse-last").click();
+  await flush();
+  assert.deepEqual(graph().graph, fused);
+  assert.match(
+    document.querySelector("#rewriting-steps .rewriting-pending").textContent,
+    /IdentityRemoval/,
+  );
+  document.getElementById("refuse-next").click();
+  await flush();
+  assert.deepEqual(graph().graph, cleaned);
+  const directory = await mkdtemp(
+    path.join(tmpdir(), "viewer-identity-rewriting-"),
+  );
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const destination = path.join(directory, "cleaned.onnx");
+  await extension.receive({
+    type: "save",
+    location: destination,
+    overwrite: false,
+    includeRewritings: true,
+  });
+  const saved = loadModel(await readFile(destination), "Identity cleanup");
+  const [name] = saved.rewritingState().names;
+  assert.ok(name);
+  assert.deepEqual(
+    (await saved.applyRewritingScenario(name, true)).graph().nodes,
+    cleaned.nodes,
+  );
+  assert.deepEqual(extension.errors, []);
+});
+
+test("Rewritings exposes six actions, appends one match and refuses one next step", async (t) => {
   const extension = await openExtension("fusion.onnx", undefined, true);
   t.after(() => extension.dispose());
   const dom = new JSDOM(extension.webview.html, {
@@ -8102,7 +8303,14 @@ test("Rewritings exposes four actions, appends one match and refuses one next st
     [...document.querySelectorAll("#rewriting-actions button")]
       .filter((button) => !button.closest("[hidden]"))
       .map((button) => button.textContent),
-    ["Unfuse Last", "Refuse Next", "Append New", "Create rewriting"],
+    [
+      "Unfuse Last",
+      "Refuse Next",
+      "Append New",
+      "Remove identities",
+      "Partition",
+      "Create rewriting",
+    ],
   );
   assert.equal(document.getElementById("refuse-next").disabled, true);
   await append();
@@ -8117,7 +8325,14 @@ test("Rewritings exposes four actions, appends one match and refuses one next st
     [...document.querySelectorAll("#rewriting-actions button")]
       .filter((button) => !button.closest("[hidden]"))
       .map((button) => button.textContent),
-    ["Unfuse Last", "Refuse Next", "Append New", "Create rewriting"],
+    [
+      "Unfuse Last",
+      "Refuse Next",
+      "Append New",
+      "Remove identities",
+      "Partition",
+      "Create rewriting",
+    ],
   );
   document.getElementById("unfuse-last").click();
   await flush();

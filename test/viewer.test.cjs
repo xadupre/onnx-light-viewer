@@ -8213,7 +8213,7 @@ test("renders report details safely and closes the report immediately on navigat
   );
 });
 
-test("optimization excludes RepeatedLayer and PartitionGroup without hiding them from Fuse", (t) => {
+test("partition patterns are outside the Rewritings and Optimize selectors and use the Partition action", (t) => {
   const { document, window, messages, load } = openViewer(t);
   load(demoGraph);
   document.getElementById("optimize-model").click();
@@ -8237,7 +8237,10 @@ test("optimization excludes RepeatedLayer and PartitionGroup without hiding them
   const patterns = document.getElementById("optimization-patterns");
   for (const name of ["RepeatedLayer", "PartitionGroup"]) {
     assert.equal(patterns.querySelector(`input[value="${name}"]`), null);
-    assert.ok(document.querySelector(`#fusion-pattern input[value="${name}"]`));
+    assert.equal(
+      document.querySelector(`#fusion-pattern input[value="${name}"]`),
+      null,
+    );
   }
   assert.equal(
     document.querySelector('#optimization-pattern-group input[value="Layer"]'),
@@ -8249,6 +8252,32 @@ test("optimization excludes RepeatedLayer and PartitionGroup without hiding them
   assert.deepEqual(Array.from(messages.at(-1).patterns), [
     "TransposeTranspose",
   ]);
+  const clearBusy = () =>
+    window.dispatchEvent(
+      new window.MessageEvent("message", {
+        data: {
+          type: "fusion-error",
+          requestId: messages.at(-1).requestId,
+          error: "Stopped",
+        },
+      }),
+    );
+  clearBusy();
+  const picker = document.getElementById("partition-pattern");
+  assert.deepEqual(
+    Array.from(picker.options, (option) => option.value),
+    ["RepeatedLayer", "PartitionGroup"],
+  );
+  for (const pattern of ["RepeatedLayer", "PartitionGroup"]) {
+    picker.value = pattern;
+    document.getElementById("partition-model").click();
+    assert.equal(messages.at(-1).type, "partition-model");
+    assert.equal(messages.at(-1).pattern, pattern);
+    assert.equal(picker.disabled, true);
+    assert.equal(document.getElementById("remove-identities").disabled, true);
+    clearBusy();
+    assert.equal(picker.disabled, false);
+  }
 });
 
 test("uses the same filtered priority picker for Rewritings and Optimize without changing selections", (t) => {

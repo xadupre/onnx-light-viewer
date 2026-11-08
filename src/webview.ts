@@ -474,6 +474,9 @@ export function webviewHtml(
               <button id="unfuse-last" disabled>Unfuse Last</button>
               <button id="refuse-next" disabled>Refuse Next</button>
               <button id="append-new" disabled>Append New</button>
+              <button id="remove-identities" disabled title="Remove Identity nodes and add the corresponding rewriting steps">Remove identities</button>
+              <select id="partition-pattern" aria-label="Partition pattern" disabled><option value="RepeatedLayer">RepeatedLayer</option><option value="PartitionGroup">PartitionGroup</option></select>
+              <button id="partition-model" disabled title="Apply the selected partition pattern and add the corresponding rewriting steps">Partition</button>
               <button id="record-working-rewriting" disabled>Create rewriting</button>
             </div>
             <div id="working-rewriting-name-field" class="form-grid" hidden><label for="working-rewriting-name">New rewriting name</label><input id="working-rewriting-name" type="text" autocomplete="off"></div>
