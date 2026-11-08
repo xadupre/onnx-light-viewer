@@ -8213,8 +8213,10 @@ test("renders report details safely and closes the report immediately on navigat
   );
 });
 
-test("partition patterns are outside the Rewritings and Optimize selectors and use the Partition action", (t) => {
+test("Global Rewriting exposes identity removal and partitions outside the pattern selectors", (t) => {
   const { document, window, messages, load } = openViewer(t);
+  const global = document.getElementById("global-rewriting");
+  assert.equal(global.disabled, true);
   load(demoGraph);
   document.getElementById("optimize-model").click();
   const names = ["RepeatedLayer", "PartitionGroup", "TransposeTranspose"];
@@ -8263,21 +8265,45 @@ test("partition patterns are outside the Rewritings and Optimize selectors and u
       }),
     );
   clearBusy();
-  const picker = document.getElementById("partition-pattern");
+  const picker = document.getElementById("global-rewriting-operation");
+  const dialog = document.getElementById("global-rewriting-dialog");
   assert.deepEqual(
     Array.from(picker.options, (option) => option.value),
-    ["RepeatedLayer", "PartitionGroup"],
+    ["IdentityRemoval", "RepeatedLayer", "PartitionGroup"],
   );
-  for (const pattern of ["RepeatedLayer", "PartitionGroup"]) {
+  const requestCount = messages.length;
+  global.click();
+  assert.equal(dialog.open, true);
+  document.getElementById("close-global-rewriting").click();
+  assert.equal(dialog.open, false);
+  assert.equal(messages.length, requestCount);
+  for (const pattern of [
+    "IdentityRemoval",
+    "RepeatedLayer",
+    "PartitionGroup",
+  ]) {
+    global.click();
+    assert.equal(dialog.open, true);
     picker.value = pattern;
-    document.getElementById("partition-model").click();
-    assert.equal(messages.at(-1).type, "partition-model");
-    assert.equal(messages.at(-1).pattern, pattern);
+    document.getElementById("apply-global-rewriting").click();
+    assert.equal(dialog.open, false);
+    assert.equal(
+      messages.at(-1).type,
+      pattern === "IdentityRemoval" ? "remove-identities" : "partition-model",
+    );
+    assert.equal(
+      messages.at(-1).pattern,
+      pattern === "IdentityRemoval" ? undefined : pattern,
+    );
     assert.equal(picker.disabled, true);
-    assert.equal(document.getElementById("remove-identities").disabled, true);
+    assert.equal(global.disabled, true);
     clearBusy();
     assert.equal(picker.disabled, false);
   }
+  global.click();
+  assert.equal(dialog.open, true);
+  load(demoGraph);
+  assert.equal(dialog.open, false);
 });
 
 test("uses the same filtered priority picker for Rewritings and Optimize without changing selections", (t) => {

@@ -595,8 +595,11 @@ function createFusionPanel({
       busy ||
       !canFuse() ||
       !byId("fusion-pattern").querySelector("input[data-pattern]:checked");
-    byId("remove-identities").disabled = busy || !canFuse();
-    for (const id of ["partition-pattern", "partition-model"])
+    for (const id of [
+      "global-rewriting",
+      "global-rewriting-operation",
+      "apply-global-rewriting",
+    ])
       byId(id).disabled = busy || !canFuse();
     for (const button of byId("unfuse-history").querySelectorAll("button"))
       button.disabled = busy || button.dataset.nodeCount === "0";
@@ -1492,22 +1495,31 @@ function createFusionPanel({
     });
   byId("preview-fusion").addEventListener("click", () => previewFusion());
   byId("append-new").addEventListener("click", () => previewFusion(true));
-  byId("remove-identities").addEventListener("click", () => {
-    if (byId("remove-identities").disabled) return;
-    clearFusionPreview();
-    fusionControls(true, "Removing Identity nodes…");
-    requestAction("remove-identities", "Remove Identity nodes", {
-      requestId: ++fusionRequest,
-    });
+  byId("global-rewriting").addEventListener("click", () => {
+    if (byId("global-rewriting").disabled) return;
+    byId("global-rewriting-dialog").showModal();
   });
-  byId("partition-model").addEventListener("click", () => {
-    if (byId("partition-model").disabled) return;
+  byId("close-global-rewriting").addEventListener("click", () =>
+    byId("global-rewriting-dialog").close(),
+  );
+  byId("apply-global-rewriting").addEventListener("click", () => {
+    if (byId("apply-global-rewriting").disabled) return;
+    const operation = byId("global-rewriting-operation").value;
+    const identity = operation === "IdentityRemoval";
+    byId("global-rewriting-dialog").close();
     clearFusionPreview();
-    fusionControls(true, "Partitioning the graph…");
-    requestAction("partition-model", "Partition ONNX model", {
-      requestId: ++fusionRequest,
-      pattern: byId("partition-pattern").value,
-    });
+    fusionControls(
+      true,
+      identity ? "Removing Identity nodes…" : "Partitioning the graph…",
+    );
+    requestAction(
+      identity ? "remove-identities" : "partition-model",
+      identity ? "Remove Identity nodes" : "Partition ONNX model",
+      {
+        requestId: ++fusionRequest,
+        ...(identity ? {} : { pattern: operation }),
+      },
+    );
   });
   byId("refuse-next").addEventListener("click", () => {
     clearFusionPreview();
@@ -1937,6 +1949,8 @@ function createFusionPanel({
     return true;
   }
   function reset(graph, operationRequestId, file) {
+    if (byId("global-rewriting-dialog").open)
+      byId("global-rewriting-dialog").close();
     const keepFusion = undoBusy && !byId("fusion-panel").hidden;
     undoBusy = false;
     if (operationRequestId !== fusionRequest) restoreFunctionEditor = false;

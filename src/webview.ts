@@ -474,9 +474,7 @@ export function webviewHtml(
               <button id="unfuse-last" disabled>Unfuse Last</button>
               <button id="refuse-next" disabled>Refuse Next</button>
               <button id="append-new" disabled>Append New</button>
-              <button id="remove-identities" disabled title="Remove Identity nodes and add the corresponding rewriting steps">Remove identities</button>
-              <select id="partition-pattern" aria-label="Partition pattern" disabled><option value="RepeatedLayer">RepeatedLayer</option><option value="PartitionGroup">PartitionGroup</option></select>
-              <button id="partition-model" disabled title="Apply the selected partition pattern and add the corresponding rewriting steps">Partition</button>
+              <button id="global-rewriting" disabled aria-haspopup="dialog" aria-controls="global-rewriting-dialog">Global Rewriting</button>
               <button id="record-working-rewriting" disabled>Create rewriting</button>
             </div>
             <div id="working-rewriting-name-field" class="form-grid" hidden><label for="working-rewriting-name">New rewriting name</label><input id="working-rewriting-name" type="text" autocomplete="off"></div>
@@ -516,6 +514,12 @@ export function webviewHtml(
             </details>
             </div>
           </section>
+          <dialog id="global-rewriting-dialog" aria-labelledby="global-rewriting-title">
+            <header class="inspector-heading"><h2 id="global-rewriting-title">Global Rewriting</h2><button id="close-global-rewriting">Close</button></header>
+            <div class="form-grid"><label for="global-rewriting-operation">Operation</label><select id="global-rewriting-operation"><option value="IdentityRemoval">IdentityRemoval</option><optgroup label="Partition"><option value="RepeatedLayer">RepeatedLayer</option><option value="PartitionGroup">PartitionGroup</option></optgroup></select></div>
+            <p>Apply the selected operation to the graph and add its rewriting steps. Use Unfuse to undo; save a copy to keep changes.</p>
+            <div class="fusion-selection-controls"><button id="apply-global-rewriting" class="primary" disabled>Apply</button></div>
+          </dialog>
           <section id="open-panel" class="inspector-panel file-panel" aria-labelledby="open-title" hidden>
             <h2 id="open-title" class="eyebrow panel-title">Open model</h2>
             <div id="open-source" class="source-picker" role="group" aria-label="Model source">

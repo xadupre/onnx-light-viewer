@@ -8170,9 +8170,27 @@ test("Rewritings removes identities introduced by patterns and keeps replayable 
   await flush();
   document.getElementById("fuse-pattern").click();
   await flush();
-  const remove = document.getElementById("remove-identities");
+  const remove = document.getElementById("global-rewriting");
+  const globalDialog = document.getElementById("global-rewriting-dialog");
+  globalDialog.showModal = () => {
+    globalDialog.open = true;
+  };
+  globalDialog.close = () => {
+    globalDialog.open = false;
+  };
+  const removeIdentities = () => {
+    remove.click();
+    assert.equal(document.getElementById("global-rewriting-dialog").open, true);
+    document.getElementById("global-rewriting-operation").value =
+      "IdentityRemoval";
+    document.getElementById("apply-global-rewriting").click();
+    assert.equal(
+      document.getElementById("global-rewriting-dialog").open,
+      false,
+    );
+  };
   assert.equal(remove.disabled, false);
-  remove.click();
+  removeIdentities();
   assert.equal(remove.disabled, true);
   await flush();
   assert.equal(graph().file.fusionCount, 0);
@@ -8183,7 +8201,7 @@ test("Rewritings removes identities introduced by patterns and keeps replayable 
   await appendPair();
   const outputIdentity = graph().graph;
   assert.ok(outputIdentity.nodes.some((node) => node.opType === "Identity"));
-  remove.click();
+  removeIdentities();
   await flush();
   assert.deepEqual(graph().graph, outputIdentity);
   assert.equal(graph().file.fusionCount, 1);
@@ -8198,7 +8216,7 @@ test("Rewritings removes identities introduced by patterns and keeps replayable 
   await appendPair();
   const fused = graph().graph;
   assert.ok(fused.nodes.some((node) => node.opType === "Identity"));
-  remove.click();
+  removeIdentities();
   await flush();
   const cleaned = graph().graph;
   assert.ok(!cleaned.nodes.some((node) => node.opType === "Identity"));
@@ -8214,7 +8232,7 @@ test("Rewritings removes identities introduced by patterns and keeps replayable 
   );
   assert.equal(document.getElementById("fusion-panel").hidden, false);
   assert.equal(document.getElementById("optimization-panel").hidden, true);
-  remove.click();
+  removeIdentities();
   await flush();
   assert.equal(graph().file.fusionCount, 2);
   assert.deepEqual(graph().graph, cleaned);
@@ -8253,7 +8271,7 @@ test("Rewritings removes identities introduced by patterns and keeps replayable 
   assert.deepEqual(extension.errors, []);
 });
 
-test("Rewritings exposes six actions, appends one match and refuses one next step", async (t) => {
+test("Rewritings exposes five actions, appends one match and refuses one next step", async (t) => {
   const extension = await openExtension("fusion.onnx", undefined, true);
   t.after(() => extension.dispose());
   const dom = new JSDOM(extension.webview.html, {
@@ -8307,8 +8325,7 @@ test("Rewritings exposes six actions, appends one match and refuses one next ste
       "Unfuse Last",
       "Refuse Next",
       "Append New",
-      "Remove identities",
-      "Partition",
+      "Global Rewriting",
       "Create rewriting",
     ],
   );
@@ -8329,8 +8346,7 @@ test("Rewritings exposes six actions, appends one match and refuses one next ste
       "Unfuse Last",
       "Refuse Next",
       "Append New",
-      "Remove identities",
-      "Partition",
+      "Global Rewriting",
       "Create rewriting",
     ],
   );
