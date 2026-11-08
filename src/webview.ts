@@ -474,8 +474,15 @@ export function webviewHtml(
               <button id="unfuse-last" disabled>Unfuse Last</button>
               <button id="refuse-next" disabled>Refuse Next</button>
               <button id="append-new" disabled>Append New</button>
+              <button id="global-rewriting" disabled aria-expanded="false" aria-controls="global-rewriting-panel">Global Rewriting</button>
               <button id="record-working-rewriting" disabled>Create rewriting</button>
             </div>
+            <section id="global-rewriting-panel" class="fusion-picker" aria-labelledby="global-rewriting-title" hidden>
+              <h3 id="global-rewriting-title">Global Rewriting</h3>
+              <div class="form-grid"><label for="global-rewriting-operation">Operation</label><select id="global-rewriting-operation"><option value="IdentityRemoval">IdentityRemoval</option><optgroup label="Partition"><option value="RepeatedLayer">RepeatedLayer</option><option value="PartitionGroup">PartitionGroup</option></optgroup></select></div>
+              <p>Apply the selected operation to the graph and add its rewriting steps. Use Unfuse to undo; save a copy to keep changes.</p>
+              <div class="fusion-selection-controls"><button id="apply-global-rewriting" class="primary" disabled>Apply</button></div>
+            </section>
             <div id="working-rewriting-name-field" class="form-grid" hidden><label for="working-rewriting-name">New rewriting name</label><input id="working-rewriting-name" type="text" autocomplete="off"></div>
             <fieldset id="fusion-pattern-group" disabled aria-label="Native pattern groups"><legend>Select pattern groups</legend></fieldset>
             <input id="fusion-filter" type="search" placeholder="Filter patterns..." aria-label="Filter rewriting patterns" aria-controls="fusion-pattern" autocomplete="off">

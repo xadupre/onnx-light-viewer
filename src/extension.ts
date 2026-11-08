@@ -3149,6 +3149,8 @@ async function configurePanel(
         message?.type === "fusion-patterns" ||
         message?.type === "preview-fusion" ||
         message?.type === "apply-optimization" ||
+        message?.type === "remove-identities" ||
+        message?.type === "partition-model" ||
         message?.type === "apply-fusion"
       ) {
         const owner = model;
@@ -3185,8 +3187,14 @@ async function configurePanel(
                 ? "Refuse next rewriting"
                 : message.type === "replay-rewritings"
                   ? "Replay pending rewritings"
-                  : message.type === "apply-optimization"
-                    ? "Optimize ONNX model"
+                  : message.type === "apply-optimization" ||
+                      message.type === "remove-identities" ||
+                      message.type === "partition-model"
+                    ? message.type === "remove-identities"
+                      ? "Remove Identity nodes"
+                      : message.type === "partition-model"
+                        ? "Partition ONNX model"
+                        : "Optimize ONNX model"
                     : message.type === "apply-rewriting" ||
                         message.type === "select-rewriting"
                       ? "Apply rewriting scenario"
@@ -3739,14 +3747,21 @@ async function configurePanel(
                 });
                 return;
               }
-              if (message.type === "apply-optimization") {
+              if (
+                message.type === "apply-optimization" ||
+                message.type === "remove-identities" ||
+                message.type === "partition-model"
+              ) {
+                const removeIdentities = message.type === "remove-identities";
+                const partition = message.type === "partition-model";
+                const rewritingAction = removeIdentities || partition;
                 if (
                   message.backend !== undefined &&
                   message.backend !== "onnx-light" &&
                   message.backend !== "onnxscript"
                 )
                   throw new Error("Choose a supported optimization backend.");
-                if (message.backend === "onnxscript") {
+                if (message.backend === "onnxscript" && !rewritingAction) {
                   if (
                     message.operation !== "Optimize" ||
                     !Array.isArray(message.patterns) ||
@@ -3847,24 +3862,35 @@ async function configurePanel(
                   current.rewritingQueue?.model.clone() ??
                   (await nativeModel(current, log, () => void sendStatus()));
                 if (!isCurrent()) return;
-                const chosen: unknown = message.patterns;
-                const catalog = native.optimizationPatterns(path);
-                if (
-                  message.operation !== "Optimize" ||
-                  !Array.isArray(chosen) ||
-                  !chosen.length ||
-                  !chosen.every(
-                    (name: unknown) =>
-                      typeof name === "string" &&
-                      catalog.some((pattern) => pattern.name === name),
-                  ) ||
-                  new Set(chosen).size !== chosen.length
-                )
-                  throw new Error("Choose registered optimization patterns.");
+                let patterns: string[] = [];
+                if (partition) {
+                  if (
+                    message.pattern !== "RepeatedLayer" &&
+                    message.pattern !== "PartitionGroup"
+                  )
+                    throw new Error("Choose RepeatedLayer or PartitionGroup.");
+                  patterns = [message.pattern];
+                } else if (!removeIdentities) {
+                  const chosen: unknown = message.patterns;
+                  const catalog = native.optimizationPatterns(path);
+                  if (
+                    message.operation !== "Optimize" ||
+                    !Array.isArray(chosen) ||
+                    !chosen.length ||
+                    !chosen.every(
+                      (name: unknown) =>
+                        typeof name === "string" &&
+                        catalog.some((pattern) => pattern.name === name),
+                    ) ||
+                    new Set(chosen).size !== chosen.length
+                  )
+                    throw new Error("Choose registered optimization patterns.");
+                  patterns = chosen;
+                }
                 fusionPreview = undefined;
                 const edited = await native.optimize(
-                  chosen,
-                  "Optimize",
+                  patterns,
+                  removeIdentities ? "IdentityRemoval" : "Optimize",
                   current.source?.uri.scheme === "file"
                     ? current.source.uri.fsPath
                     : undefined,
@@ -3904,10 +3930,17 @@ async function configurePanel(
                 )
                   return;
                 await postMessage({
-                  type: "optimization-info",
+                  type: rewritingAction ? "fusion-info" : "optimization-info",
                   requestId: message.requestId,
-                  operation: "Optimize",
-                  optimizationReport: edited.optimizationReport(path),
+                  operation: removeIdentities
+                    ? "IdentityRemoval"
+                    : partition
+                      ? patterns[0]
+                      : "Optimize",
+                  count: matches.length,
+                  optimizationReport: rewritingAction
+                    ? null
+                    : edited.optimizationReport(path),
                   changed,
                   matches,
                   patterns: edited.fusionPatterns(path),
