@@ -3182,7 +3182,7 @@ async function configurePanel(
             message.type === "undo-fusion"
               ? "Undo fusion"
               : message.type === "refuse-next"
-                ? "Reapply next rewriting"
+                ? "Refuse next rewriting"
                 : message.type === "replay-rewritings"
                   ? "Replay pending rewritings"
                   : message.type === "apply-optimization"
