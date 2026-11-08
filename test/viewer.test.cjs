@@ -8770,6 +8770,7 @@ test("explains the selected pattern/node and distinguishes rejection, missing di
     [...picker.options].map((option) => option.value),
     source
       .fusionPatterns()
+      .filter((name) => name !== "RepeatedLayer" && name !== "PartitionGroup")
       .filter((name) =>
         source.optimizationPatterns().some((pattern) => pattern.name === name),
       )

@@ -8957,7 +8957,13 @@ test("matches multiple patterns and fuses checked candidates through the real we
   const actual = [...list.querySelectorAll("input[data-pattern]")]
     .map((input) => input.value)
     .sort();
-  const expected = extension.nativeModels.at(-1).fusionPatterns().sort();
+  const selectablePatterns = (patterns) =>
+    patterns.filter(
+      (name) => name !== "RepeatedLayer" && name !== "PartitionGroup",
+    );
+  const expected = selectablePatterns(
+    extension.nativeModels.at(-1).fusionPatterns(),
+  ).sort();
   assert.ok(actual.length > 0);
   assert.deepEqual(actual, expected);
   assert.ok(actual.includes("TransposeTranspose"));
@@ -9015,7 +9021,7 @@ test("matches multiple patterns and fuses checked candidates through the real we
     [...list.querySelectorAll("input[data-pattern]")]
       .map((input) => input.value)
       .sort(),
-    [...refreshed.patterns].sort(),
+    selectablePatterns(refreshed.patterns).sort(),
   );
   assert.equal(document.querySelectorAll("#fusion-matches li").length, 0);
   assert.equal(list.querySelectorAll("input:checked").length, 0);
