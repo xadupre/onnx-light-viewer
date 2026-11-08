@@ -682,7 +682,6 @@ export class PipelineModel implements NativeModel {
       snapshots[order.length],
       undefined,
       [],
-      this.undoDimensionEdits,
     );
     for (let i = order.length - 1; i >= 0; --i)
       rebuilt = new PipelineModel(
@@ -691,7 +690,6 @@ export class PipelineModel implements NativeModel {
         snapshots[i],
         rebuilt,
         order.slice(0, order.length - i),
-        this.undoDimensionEdits,
       );
     return rebuilt;
   };

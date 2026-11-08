@@ -573,6 +573,25 @@ test("pipeline dimension edits use one prefix and preserve stage undo and Save",
     assert.deepEqual(shape(edited.model.undoFusion()), shape(edited.model));
     assert.match(shape(source)[0], /^component/);
   }
+  const recorded = await edited.model.recordRewriting(
+    "Shortened",
+    false,
+    undefined,
+    stage,
+  );
+  const restoredRecording = await recorded.fusionPrefix(0);
+  const shortenedSource = source.shortenDimensionNames().model;
+  for (const role of ["embedding", "prefill"]) {
+    const path = [{ pipeline: role }];
+    assert.deepEqual(
+      recorded.undoFusion().graph(false, path),
+      shortenedSource.graph(false, path),
+    );
+    assert.deepEqual(
+      restoredRecording.graph(false, path),
+      shortenedSource.graph(false, path),
+    );
+  }
   const saved = Buffer.from(
     await edited.model.serialize(undefined, undefined, true),
   );
@@ -596,6 +615,23 @@ test("pipeline dimension edits use one prefix and preserve stage undo and Save",
       restored.graph(false, [{ pipeline: role }]),
       expected.graph(false, [{ pipeline: role }]),
     );
+  const equalities = [{ source: "batch", target: "sequence_len" }];
+  const merged = next.mergeDimensionsBatch(equalities).model;
+  const recordedMerged = await merged.recordRewriting(
+    "Merged",
+    false,
+    undefined,
+    prefill,
+  );
+  const uneditedMerged = expected.mergeDimensionsBatch(equalities).model;
+  const restoredMerged = await recordedMerged.fusionPrefix(0);
+  for (const role of ["embedding", "prefill"]) {
+    const path = [{ pipeline: role }];
+    assert.deepEqual(
+      restoredMerged.graph(false, path),
+      uneditedMerged.graph(false, path),
+    );
+  }
   const mixed = loadModel(
     pipelineBytes({
       embedding: await memoryTestModel(["shared.embedding.batch"]).serialize(),
@@ -4392,6 +4428,14 @@ test("keeps local function replacements with and without root rewrites through u
     assert.equal(applied.rewritingScenarios()[0].available, false);
     assert.equal(applied.undoFusion().rewritingScenarios()[0].available, true);
     if (!rootRewrite) {
+      assert.equal(optimized.fusionHistory()[0].matches.length, 1);
+      const undone = await optimized.fusionPrefix(0);
+      assert.deepEqual(undone.graph(), source.graph());
+      assert.deepEqual(functionGraph(undone), functionGraph(source));
+      assert.deepEqual(
+        functionGraph(await optimized.fusionPrefix(1)),
+        functionGraph(optimized),
+      );
       const stepwise = await saved.applyRewritingScenario(scenario.name, false);
       assert.deepEqual(functionGraph(stepwise), functionGraph(optimized));
       await assert.rejects(
@@ -6284,7 +6328,7 @@ test("replays opset-only scenarios as one undoable step and preserves them on sa
 });
 
 test("preserves consecutive declaration-only boundaries through recording and prefixes", async () => {
-  const original = memoryTestModel([1]);
+  const original = loadModel(modelBytes("fusion.onnx"), "Declaration branches");
   const saved = loadModel(
     captureRewritingPlans(
       Buffer.concat([
@@ -6344,6 +6388,16 @@ test("preserves consecutive declaration-only boundaries through recording and pr
     "Recorded declarations",
     false,
   );
+  await assert.rejects(
+    first.recordRewriting("Recorded declarations", true),
+    /complete selected/,
+  );
+  assert.equal(
+    first
+      .rewritingScenarios()
+      .find((item) => item.name === "Recorded declarations").steps.length,
+    2,
+  );
   assert.equal(
     first
       .rewritingScenarios()
@@ -6357,6 +6411,18 @@ test("preserves consecutive declaration-only boundaries through recording and pr
   assert.equal(second.fusionCount(), 2);
   assert.deepEqual(second.graph(), applied.graph());
   assert.deepEqual(second.undoFusion().graph(), first.graph());
+  const branched = await first.applyFusion("TransposeTranspose", [0]);
+  const updated = await branched.recordRewriting("Recorded declarations", true);
+  const savedBranch = loadModel(
+    await updated.serialize(undefined, undefined, true),
+    "Declaration branch",
+  );
+  assert.deepEqual(
+    (
+      await savedBranch.applyRewritingScenario("Recorded declarations", true)
+    ).graph(),
+    branched.graph(),
+  );
 });
 
 test("validates saved scenario hashes before recapturing a strict prefix", async () => {

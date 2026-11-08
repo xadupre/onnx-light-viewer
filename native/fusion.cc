@@ -1231,8 +1231,7 @@ private:
     history_.emplace_back();
     size_t begin = 0;
     for (const auto end : RewritingStepEnds(plan_)) {
-      if (end > begin)
-        TraceFusionStep(plan_, begin, end, trace, history_);
+      TraceFusionStep(plan_, begin, end, trace, history_);
       begin = end;
     }
     const auto order = trace.Finish(history_);
@@ -1255,15 +1254,19 @@ private:
       if (found == snapshot_.rewritings().end())
         throw std::runtime_error("Unknown rewriting scenario: " + scenario_);
       const auto &existing = found->second;
-      const auto is_prefix = [](const auto &prefix, const auto &edits) {
-        return prefix.size() <= edits.size() &&
-               std::equal(prefix.begin(), prefix.end(), edits.begin(),
+      const auto is_prefix = [](const ol::RewritingProto &prefix, const ol::RewritingProto &plan) {
+        const auto prefix_ends = RewritingStepEnds(prefix);
+        const auto ends = RewritingStepEnds(plan);
+        return prefix_ends.size() <= ends.size() &&
+               std::equal(prefix_ends.begin(), prefix_ends.end(), ends.begin()) &&
+               prefix.rewrites().size() <= plan.rewrites().size() &&
+               std::equal(prefix.rewrites().begin(), prefix.rewrites().end(),
+                          plan.rewrites().begin(),
                           [](const auto &left, const auto &right) { return left.Equals(right); });
       };
       const bool extends_applied_prefix =
-          source_->fusion_plans.size() > 1 &&
-          is_prefix(source_->fusion_plans.front().rewrites(), existing.rewrites());
-      if (!is_prefix(existing.rewrites(), combined.rewrites()) && !extends_applied_prefix)
+          source_->fusion_plans.size() > 1 && is_prefix(source_->fusion_plans.front(), existing);
+      if (!is_prefix(existing, combined) && !extends_applied_prefix)
         throw std::runtime_error(
             "Apply the complete selected rewriting before appending optimized edits.");
       snapshot_.ref_rewritings().erase(scenario_);
