@@ -3044,7 +3044,10 @@ test("opens outside-workspace models and saves encrypted copies through an optio
     "onnxLightViewer.open",
     true,
   );
-  const dom = new JSDOM(extension.webview.html, { runScripts: "outside-only" });
+  const dom = new JSDOM(extension.webview.html, {
+    runScripts: "outside-only",
+    pretendToBeVisual: true,
+  });
   t.after(() => dom.window.close());
   const { window } = dom;
   window.structuredClone = structuredClone;
@@ -4308,7 +4311,10 @@ test("pattern-library restore conflicts, malformed files and failed saves preser
 test("FunctionPattern creation prevents duplicate names through the real webview bridge", async (t) => {
   const extension = await openExtension("fusion.onnx", undefined, true);
   t.after(() => extension.dispose());
-  const dom = new JSDOM(extension.webview.html, { runScripts: "outside-only" });
+  const dom = new JSDOM(extension.webview.html, {
+    runScripts: "outside-only",
+    pretendToBeVisual: true,
+  });
   t.after(() => dom.window.close());
   const { window } = dom;
   window.structuredClone = structuredClone;
@@ -7426,6 +7432,7 @@ for (const [type, buttonId, errorType, infoType] of [
 
     const dom = new JSDOM(extension.webview.html, {
       runScripts: "outside-only",
+      pretendToBeVisual: true,
     });
     t.after(() => dom.window.close());
     const { window } = dom;
@@ -7657,9 +7664,14 @@ test("selects optimization groups and previews global passes through the real we
     true,
   );
   t.after(() => extension.dispose());
-  const dom = new JSDOM(extension.webview.html, { runScripts: "outside-only" });
+  const dom = new JSDOM(extension.webview.html, {
+    runScripts: "outside-only",
+    pretendToBeVisual: true,
+  });
   t.after(() => dom.window.close());
   const { window } = dom;
+  assert.equal(typeof window.requestAnimationFrame, "function");
+  assert.equal(typeof window.cancelAnimationFrame, "function");
   window.structuredClone = structuredClone;
   const { document } = window;
   const requests = [];
@@ -8504,7 +8516,10 @@ test("keeps unfused steps dim and discards them only when adding new patterns", 
   const { loadModel } = require("../dist/graph");
   const extension = await openExtension("fusion.onnx", undefined, true);
   t.after(() => extension.dispose());
-  const dom = new JSDOM(extension.webview.html, { runScripts: "outside-only" });
+  const dom = new JSDOM(extension.webview.html, {
+    runScripts: "outside-only",
+    pretendToBeVisual: true,
+  });
   t.after(() => dom.window.close());
   const { window } = dom;
   const { document } = window;
@@ -8925,9 +8940,14 @@ test("the header keeps EP1 and EP2 selected through Unfuse, Fuse and Optimize un
 
 test("matches multiple patterns and fuses checked candidates through the real webview bridge", async (t) => {
   const extension = await openExtension("fusion-scaled.onnx");
-  const dom = new JSDOM(extension.webview.html, { runScripts: "outside-only" });
+  const dom = new JSDOM(extension.webview.html, {
+    runScripts: "outside-only",
+    pretendToBeVisual: true,
+  });
   t.after(() => dom.window.close());
   const { window } = dom;
+  assert.equal(typeof window.requestAnimationFrame, "function");
+  assert.equal(typeof window.cancelAnimationFrame, "function");
   window.structuredClone = structuredClone;
   const { document } = window;
   const requests = [];
@@ -9076,7 +9096,10 @@ test("matches multiple patterns and fuses checked candidates through the real we
 
 test("keeps operation logs quiet and exposes real native exception recovery in Status", async (t) => {
   const extension = await openExtension();
-  const dom = new JSDOM(extension.webview.html, { runScripts: "outside-only" });
+  const dom = new JSDOM(extension.webview.html, {
+    runScripts: "outside-only",
+    pretendToBeVisual: true,
+  });
   t.after(() => dom.window.close());
   const { window } = dom;
   window.structuredClone = structuredClone;
@@ -9215,7 +9238,10 @@ test("keeps operation logs quiet and exposes real native exception recovery in S
 
 test("shows missing-graph loading errors in the canvas even before the webview is ready", async (t) => {
   const extension = await openExtension("missing-graph.onnx");
-  const dom = new JSDOM(extension.webview.html, { runScripts: "outside-only" });
+  const dom = new JSDOM(extension.webview.html, {
+    runScripts: "outside-only",
+    pretendToBeVisual: true,
+  });
   t.after(() => dom.window.close());
   const { window } = dom;
   window.structuredClone = structuredClone;
@@ -9270,7 +9296,10 @@ test("reports a file deleted after history display as soon as opening fails and 
   t.after(() => extension.dispose());
   await extension.openFile(deleted);
   const history = structuredClone(preferences.get("pathHistory"));
-  const dom = new JSDOM(extension.webview.html, { runScripts: "outside-only" });
+  const dom = new JSDOM(extension.webview.html, {
+    runScripts: "outside-only",
+    pretendToBeVisual: true,
+  });
   t.after(() => dom.window.close());
   const { window } = dom;
   const { document } = window;
