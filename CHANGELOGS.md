@@ -3,7 +3,7 @@ Changelogs
 
 Notable changes to ONNX Light Viewer, newest first.
 
-0.2.7 (unreleased)
+0.2.8 (unreleased)
 ------------------
 
 - Show original affected and replacement node and initializer counts in applied
