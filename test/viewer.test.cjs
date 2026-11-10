@@ -1137,7 +1137,7 @@ test("tensor icons open data directly while the tensor browser lists metadata an
   load(graph);
   const tabs = [...document.querySelectorAll(".viewer-tabs button")];
   assert.equal(
-    tabs[tabs.indexOf(document.getElementById("prompt-tab")) - 1].id,
+    tabs[tabs.indexOf(document.getElementById("patterns-tab")) - 1].id,
     "tensors-tab",
   );
   const group = document.querySelector('[data-id="node-0"]');
@@ -9589,12 +9589,12 @@ test("tab keyboard order is preserved without group headings", (t) => {
       "statistics-tab",
       "memory-tab",
       "tensors-tab",
+      "patterns-tab",
       "prompt-tab",
       "logs-tab",
       "status-tab",
       "controls-tab",
       "repositories-tab",
-      "patterns-tab",
       "settings-tab",
     ],
   );
@@ -12338,11 +12338,9 @@ for (const initialTab of ["model", "logs"]) {
     });
     tab.focus();
     for (const [key, expected] of [
-      ["ArrowRight", "patterns"],
       ["ArrowRight", "settings"],
       ["ArrowRight", "model"],
       ["ArrowLeft", "settings"],
-      ["ArrowLeft", "patterns"],
       ["ArrowLeft", "repositories"],
       ["ArrowLeft", "controls"],
       ["ArrowRight", "repositories"],
@@ -12447,11 +12445,9 @@ for (const initialTab of ["model", "logs"]) {
     tab.focus();
     for (const [key, expected] of [
       ["ArrowRight", "repositories"],
-      ["ArrowRight", "patterns"],
       ["ArrowRight", "settings"],
       ["ArrowRight", "model"],
       ["ArrowLeft", "settings"],
-      ["ArrowLeft", "patterns"],
       ["ArrowLeft", "repositories"],
       ["ArrowLeft", "controls"],
       ["ArrowLeft", "status"],
