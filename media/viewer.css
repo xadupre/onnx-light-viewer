@@ -891,6 +891,22 @@ li > .tensor-info {
   stroke-width: 2;
   fill: #193b3a;
 }
+.graph-node.compute-heavy rect {
+  fill: #452a31;
+  stroke: #a85c69;
+}
+.graph-node.compute-heavy:hover rect {
+  fill: #59323b;
+  stroke: var(--mint);
+}
+.graph-node.custom-domain rect {
+  fill: #342c4b;
+  stroke: #8069b0;
+}
+.graph-node.custom-domain:hover rect {
+  fill: #453760;
+  stroke: var(--mint);
+}
 .operator-label {
   fill: #effff9;
   font-size: 16px;

@@ -17232,6 +17232,35 @@ test("fits operator types and middle-truncates long names without reducing their
   assert.equal(groups[1].getAttribute("aria-pressed"), "true");
 });
 
+test("colors compute-heavy and non-standard-domain operators distinctly at fit scale", (t) => {
+  const { document, window, load } = openViewer(t);
+  const nodes = chainGraph(6).nodes;
+  nodes[1].opType = "MatMul";
+  nodes[2].opType = "Attention";
+  nodes[3].opType = "Conv";
+  nodes[4].domain = "ai.onnx";
+  nodes[5].opType = "Attention";
+  nodes[5].domain = "com.microsoft";
+  load({ ...demoGraph, nodes });
+  document.getElementById("zoom-fit").click();
+
+  const groups = document.querySelectorAll(".graph-node");
+  const fills = [...groups].map(
+    (group) => window.getComputedStyle(group.querySelector("rect")).fill,
+  );
+  assert.equal(groups[1].classList.contains("compute-heavy"), true);
+  assert.equal(groups[2].classList.contains("compute-heavy"), true);
+  assert.equal(groups[3].classList.contains("compute-heavy"), true);
+  assert.equal(groups[4].classList.contains("custom-domain"), false);
+  assert.equal(groups[5].classList.contains("compute-heavy"), true);
+  assert.equal(groups[5].classList.contains("custom-domain"), true);
+  assert.equal(fills[1], "rgb(69, 42, 49)");
+  assert.equal(fills[2], "rgb(69, 42, 49)");
+  assert.equal(fills[3], "rgb(69, 42, 49)");
+  assert.equal(fills[4], "rgb(22, 44, 49)");
+  assert.equal(fills[5], "rgb(52, 44, 75)");
+});
+
 test("clicking an arc highlights its full route and both endpoints without starting a drag", (t) => {
   const { document, window, load, pointer } = openViewer(t);
   const model = chainGraph(5);

@@ -2822,8 +2822,13 @@ function render(graph, metadata) {
     const { storedInputs } = size;
     const create = (position) => {
       const top = position.y - size.height / 2;
+      const classes = ["graph-node"];
+      if (/(MatMul|Gemm|Conv|Attention)/.test(node.opType))
+        classes.push("compute-heavy");
+      if (node.domain && node.domain !== "ai.onnx")
+        classes.push("custom-domain");
       const group = element("g", {
-        class: "graph-node",
+        class: classes.join(" "),
         "aria-label": `${node.opType}: ${node.name}`,
       });
       group.append(
