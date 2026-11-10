@@ -356,8 +356,8 @@ void AddMemoryProfileMethods(Napi::Env env, Napi::Object result,
             dimensions.emplace(dimension.key, static_cast<int64_t>(number));
           }
           ol::onnx_shapes::RegisterShapeFunctions();
-          ol::onnx_shapes::RegisterPeakMemoryFunctions();
-          ol::onnx_kernels::RegisterKernelFunctions();
+          ol::onnx_kernels::RegisterPeakMemoryFunctions();
+          // Kernel registration here would replace CPU-specific estimators.
           auto worker = new MemoryWorker(call.Env(), model, std::move(dimensions));
           const auto promise = worker->Promise();
           worker->Queue();

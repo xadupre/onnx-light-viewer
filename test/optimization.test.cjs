@@ -228,7 +228,7 @@ test(
       Buffer.from([0xc0, 0xa3, 0x09, 0x01]),
     ]);
     for (const bytes of [
-      await readFile(require.resolve("../examples/quantized-2bit.onnx")),
+      await readFile(require.resolve("../examples/quantized-4bit.onnx")),
       extended,
     ]) {
       await assert.rejects(

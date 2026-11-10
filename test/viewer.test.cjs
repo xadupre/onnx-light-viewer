@@ -14538,15 +14538,15 @@ test("exports from the right panel without a loaded model and shows commands, pr
 test("shows stored encoded field values and folds nested layouts without dequantizing weights", (t) => {
   const { document, load } = openViewer(t);
   const graph = decodeGraph(
-    readFileSync(require.resolve("../examples/quantized-3bit.onnx")),
-    "quantized-3bit.onnx",
+    readFileSync(require.resolve("../examples/quantized-8bit.onnx")),
+    "quantized-8bit.onnx",
   );
   load(graph);
   const parameters = document.getElementById("node-initializers");
   assert.match(parameters.textContent, /weight \(FLOAT\).*Shape: \[8, 4\]/s);
   assert.match(
     parameters.textContent,
-    /Encoding: STRUCT.*quantization.v1\/q3_k/s,
+    /Encoding: STRUCT.*quantization.v1\/int8/s,
   );
   assert.match(parameters.textContent, /Storage: embedded/);
   assert.doesNotMatch(parameters.textContent, /Values:|raw_data:/);
@@ -14562,10 +14562,10 @@ test("shows stored encoded field values and folds nested layouts without dequant
     }),
   );
   const code = rows["blocks.run_0.Element [0].codes"];
-  assert.equal(code.cells[1].textContent, "UINT8 [12]");
+  assert.equal(code.cells[1].textContent, "UINT8 [32]");
   assert.equal(
     code.cells[2].textContent,
-    "[255, 255, 255, 0, 0, 0, 0, 0, 0, 72, 146, 36]",
+    "[255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0] ... (first 15 of 32 elements)",
   );
   const scale = rows["blocks.run_0.Element [0].scale"];
   assert.equal(scale.cells[1].textContent, "DOUBLE []");
@@ -15180,8 +15180,8 @@ test("model inspection lists dense, sparse and encoded weights and clears them o
   assert.equal(document.getElementById("scope-initializers").hidden, true);
   assert.equal(document.getElementById("node-parameters").hidden, true);
   const encoded = decodeGraph(
-    readFileSync(require.resolve("../examples/quantized-2bit.onnx")),
-    "quantized-2bit.onnx",
+    readFileSync(require.resolve("../examples/quantized-4bit.onnx")),
+    "quantized-4bit.onnx",
   );
   load(encoded);
   inspectModel();
