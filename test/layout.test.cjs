@@ -90,7 +90,8 @@ function assertRouteAvoidsNodes(
     !!route?.length,
   );
   for (const point of points) {
-    assert.ok(point.x >= 0 && point.x <= result.bounds.width);
+    const left = result.bounds.x ?? 0;
+    assert.ok(point.x >= left && point.x <= left + result.bounds.width);
     assert.ok(point.y >= 0 && point.y <= result.bounds.height);
   }
   for (const item of nodes) {
@@ -193,8 +194,8 @@ function shortSkipFixture(span, blocked, offsets = false, barrier = false) {
     }),
     ...Array.from({ length: span - 1 }, (_, index) =>
       node(`obstacle${index}`, [], {
-        width: barrier ? 1900 : 140 + index * 80,
-        height: 88 + index * 20,
+        width: barrier ? 1900 : 140 + Math.min(index, 2) * 80,
+        height: 88 + Math.min(index, 2) * 20,
       }),
     ),
     node("target", offsets ? ["tensor", "weight"] : ["tensor"]),
@@ -233,7 +234,12 @@ function shortSkipFixture(span, blocked, offsets = false, barrier = false) {
       nodes.flatMap(({ id, outputs }) => outputs.map((name) => [name, id])),
     ),
     routes: new Map([["target", new Map([["source", route]])]]),
-    bounds: { x: 0, y: 0, width: 2200, height: 2000 },
+    bounds: {
+      x: 0,
+      y: 0,
+      width: 2200,
+      height: Math.max(2000, 400 + span * 196),
+    },
   };
   return { nodes, sizes, result, route };
 }
@@ -284,16 +290,56 @@ for (const span of [2, 3, 4]) {
   });
 }
 
-test("keeps exterior lanes for blocked short skips and leaves longer skips unchanged", () => {
+test("keeps exterior lanes for blocked short skips", () => {
   const blocked = shortSkipFixture(4, true, false, true);
   routeGraphPorts({ nodes: blocked.nodes }, blocked.sizes, blocked.result);
   const route = blocked.result.portRoutes.get("target")[0];
   assert.ok(route.some(({ x }) => x < 50 || x > 1950));
   blocked.result.routes.get("target").set("source", route);
   assertRouteAvoidsNodes(blocked.result, blocked.nodes, "source", "target");
-  const longer = shortSkipFixture(5, false);
-  routeGraphPorts({ nodes: longer.nodes }, longer.sizes, longer.result);
-  assert.deepEqual(longer.result.portRoutes.get("target")[0], longer.route);
+});
+
+test("spaces exterior tensor-port routes farther from the center as their rank span grows on either side", () => {
+  for (const side of ["left", "right"]) {
+    let previous = 0;
+    for (const span of [5, 8, 12]) {
+      const { nodes, sizes, result, route } = shortSkipFixture(span, false);
+      if (side === "left")
+        for (const point of route) if (point.x === 1980) point.x = 0;
+      routeGraphPorts({ nodes }, sizes, result);
+      const points = result.portRoutes.get("target")[0];
+      const exterior = points[1].x;
+      const distance = side === "left" ? 110 - exterior : exterior - 1870;
+      assert.ok(
+        distance > previous,
+        `${side}: span ${span} must be farther out`,
+      );
+      previous = distance;
+      result.routes.get("target").set("source", points);
+      assertRouteAvoidsNodes(result, nodes, "source", "target");
+    }
+  }
+});
+
+test("fallback exterior lanes depend on rank span rather than source insertion order", () => {
+  const nodes = Array.from({ length: 10 }, (_, index) =>
+    node(`chain${index}`, index ? [`chain${index - 1}`] : []),
+  );
+  const spans = [2, 3, 4, 8];
+  for (const span of spans) nodes[span].inputs.push("chain0");
+  for (let index = 0; index < 2000; index++) nodes.push(node(`extra${index}`));
+  const sizes = new Map(
+    nodes.map(({ id }) => [id, { width: 140, height: 88 }]),
+  );
+  const result = layeredGraphLayout({ nodes }, sizes);
+  let previous = 0;
+  for (const span of spans) {
+    const route = result.routes.get(`chain${span}`).get("chain0");
+    const distance = Math.abs(route[1].x - result.bounds.width / 2);
+    assert.ok(distance > previous, `span ${span} must be farther out`);
+    previous = distance;
+    assertRouteAvoidsNodes(result, nodes, "chain0", `chain${span}`);
+  }
 });
 
 test("rounds detour corners without pulling the exterior run into operator rows", () => {

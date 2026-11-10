@@ -794,6 +794,17 @@ body.resizing-sidebar {
   stroke-width: 1.5;
   marker-end: url(#arrow);
 }
+.crossing-edge {
+  marker-end: none;
+}
+.connection-arrows {
+  fill: #536e83;
+  stroke: none;
+  pointer-events: none;
+}
+.connection-arrows.released {
+  fill: #e2b77a;
+}
 .node-port {
   fill: none;
   stroke: #536e83;

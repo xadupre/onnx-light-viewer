@@ -1,5 +1,6 @@
 /* global dagre */
 const graphRouteRadius = 16;
+const graphRouteLaneSpacing = 12;
 
 function sugiyamaLayout(graph, sizes) {
   const dimensions = new Map(sizes);
@@ -134,6 +135,19 @@ function routeGraphPorts(graph, sizes, result) {
     }
     return true;
   };
+  const spaceExteriorRoute = (points, span, exit, entry) => {
+    const leftEdge = leftLane + graphRouteRadius + 1;
+    const rightEdge = rightLane - graphRouteRadius - 1;
+    const exterior = points.find(({ x }) => x < leftEdge || x > rightEdge);
+    if (!exterior) return points;
+    const offset = Math.max(1, Math.abs(span)) * graphRouteLaneSpacing;
+    const x = exterior.x < leftEdge ? leftLane - offset : rightLane + offset;
+    const left = Math.min(result.bounds.x, x - 20);
+    const right = Math.max(result.bounds.x + result.bounds.width, x + 20);
+    result.bounds.x = left;
+    result.bounds.width = right - left;
+    return [exit, { x, y: exit.y }, { x, y: entry.y }, entry];
+  };
   for (const node of graph.nodes) {
     const inputs = [...node.inputs, ...(node.captures ?? [])];
     const routes = [];
@@ -175,6 +189,14 @@ function routeGraphPorts(graph, sizes, result) {
       const fromRow = rows.get(from.y);
       const toRow = rows.get(to.y);
       const span = toRow.index - fromRow.index;
+      const exit = {
+        x: start.x,
+        y: fromRow.bottom + graphRouteRadius + 8,
+      };
+      const entry = {
+        x: end.x,
+        y: toRow.top - graphRouteRadius - 8,
+      };
       if (span >= 2 && span <= 4) {
         const budget = { remaining: 256 };
         const blockers = new Set();
@@ -182,14 +204,6 @@ function routeGraphPorts(graph, sizes, result) {
           routes[index] = [];
           return;
         }
-        const exit = {
-          x: start.x,
-          y: fromRow.bottom + graphRouteRadius + 8,
-        };
-        const entry = {
-          x: end.x,
-          y: toRow.top - graphRouteRadius - 8,
-        };
         const lanes = new Set([start.x, end.x, (start.x + end.x) / 2]);
         const tried = new Set();
         const distance = (x) => Math.abs(start.x - x) + Math.abs(end.x - x);
@@ -224,13 +238,18 @@ function routeGraphPorts(graph, sizes, result) {
           if (
             clear(source, node.id, local.slice(2, 4), false, budget, blockers)
           ) {
-            routes[index] = local.slice(1, -1);
+            routes[index] = spaceExteriorRoute(
+              local.slice(1, -1),
+              span,
+              exit,
+              entry,
+            );
             return;
           }
         }
       }
       if (!fromOffset && !toOffset) {
-        routes[index] = route;
+        routes[index] = spaceExteriorRoute(route, span, exit, entry);
         return;
       }
       if (
@@ -238,26 +257,22 @@ function routeGraphPorts(graph, sizes, result) {
         toRow.top - fromRow.bottom >= (graphRouteRadius + 8) * 2
       ) {
         // Adjacent rows have an empty corridor; shorter boxes need vertical port approaches.
-        routes[index] =
+        routes[index] = spaceExteriorRoute(
           start.y === fromRow.bottom &&
-          end.y === toRow.top &&
-          points.every(({ y }) => y >= start.y && y <= end.y)
+            end.y === toRow.top &&
+            points.every(({ y }) => y >= start.y && y <= end.y)
             ? points.slice(1, -1)
             : [
                 { x: start.x, y: fromRow.bottom + graphRouteRadius + 8 },
                 { x: end.x, y: toRow.top - graphRouteRadius - 8 },
-              ];
+              ],
+          span,
+          exit,
+          entry,
+        );
         return;
       }
       if (!clear(source, node.id, points, !!route.length)) {
-        const exit = {
-          x: start.x,
-          y: fromRow.bottom + graphRouteRadius + 8,
-        };
-        const entry = {
-          x: end.x,
-          y: toRow.top - graphRouteRadius - 8,
-        };
         // Row-gap rails and an exterior lane stay clear even when the query budget expires.
         const lane =
           Math.abs(start.x - leftLane) + Math.abs(end.x - leftLane) <=
@@ -272,15 +287,13 @@ function routeGraphPorts(graph, sizes, result) {
           entry,
           end,
         ];
-        const left = Math.min(result.bounds.x, lane - 20);
-        const right = Math.max(
-          result.bounds.x + result.bounds.width,
-          lane + 20,
-        );
-        result.bounds.x = left;
-        result.bounds.width = right - left;
       }
-      routes[index] = points.slice(1, -1);
+      routes[index] = spaceExteriorRoute(
+        points.slice(1, -1),
+        span,
+        exit,
+        entry,
+      );
     });
   }
 }
@@ -915,7 +928,7 @@ function layeredGraphLayout(graph, sizes) {
     top += heights[rank] + rankSeparation;
   });
   const routes = new Map();
-  const lanes = new Map();
+  let laneMargin = 0;
   let obstacles;
   const obstructed = (source, target, start, end) => {
     obstacles ??= graphSpatialIndex(graphNodeBoxes(graph, sizes, positions));
@@ -967,8 +980,8 @@ function layeredGraphLayout(graph, sizes) {
           { x: to.x, y: y1 },
         ];
       } else {
-        if (!lanes.has(parent)) lanes.set(parent, lanes.size % 16);
-        const lane = lanes.get(parent) * 12;
+        const lane = (ranks[index] - ranks[parent]) * graphRouteLaneSpacing;
+        laneMargin = Math.max(laneMargin, lane);
         const x = from.x + to.x < width ? -20 - lane : width + 20 + lane;
         const y2 = to.y - heights[ranks[index]] / 2 - rankSeparation / 2;
         points = [
@@ -982,8 +995,8 @@ function layeredGraphLayout(graph, sizes) {
       routes.get(target).set(source, points);
     }
   }
-  if (lanes.size) {
-    const margin = 40 + Math.min(lanes.size - 1, 15) * 12;
+  if (laneMargin) {
+    const margin = 40 + laneMargin;
     for (const position of positions.values()) position.x += margin;
     for (const targets of routes.values())
       for (const points of targets.values())

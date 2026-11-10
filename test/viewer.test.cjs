@@ -17424,6 +17424,57 @@ test("arc selection preserves area zoom gestures and works on virtualized connec
   assert.equal(document.getElementById("connection-highlight"), null);
 });
 
+test("draws an arrival arrow for every batched exterior arc and overview connection", (t) => {
+  const { document, window, load } = openViewer(t);
+  const model = chainGraph(600);
+  for (const target of [597, 598, 599])
+    model.nodes[target].inputs.push("tensor_0");
+  load(model);
+  const coordinates = (data) =>
+    data.match(/-?\d+(?:\.\d+)?(?:e[+-]?\d+)?/gi).map(Number);
+  const assertArrows = (id) => {
+    const paths = ["", "-weight", "-shape"].flatMap((suffix) =>
+      (document.getElementById(id + suffix).getAttribute("d") ?? "")
+        .split(/(?=M)/)
+        .filter((path) => path.trim()),
+    );
+    const heads =
+      (document.getElementById(`${id}-arrows`).getAttribute("d") ?? "").match(
+        /M[^Z]+Z/g,
+      ) ?? [];
+    assert.ok(paths.length >= 3);
+    assert.equal(heads.length, paths.length);
+    assert.deepEqual(
+      heads.map((head) => coordinates(head).slice(0, 2).join(",")).sort(),
+      paths.map((path) => coordinates(path).slice(-2).join(",")).sort(),
+    );
+    for (const head of heads) {
+      const [, tipY, , firstY, , secondY] = coordinates(head);
+      assert.ok(tipY > firstY && tipY > secondY, "Arrival arrows point down");
+    }
+  };
+  assertArrows("crossing-edges");
+  assert.equal(
+    window.getComputedStyle(document.getElementById("crossing-edges"))
+      .markerEnd,
+    "none",
+  );
+  assert.match(
+    window.getComputedStyle(document.querySelector(".edge")).markerEnd,
+    /^url\(["']?#arrow["']?\)$/,
+  );
+  document.getElementById("zoom-fit").click();
+  assertArrows("overview-edges");
+  assert.equal(
+    document.getElementById("crossing-edges-arrows").getAttribute("d"),
+    "",
+  );
+  load(chainGraph(600));
+  assert.ok(
+    !document.getElementById("overview-edges-arrows").getAttribute("d"),
+  );
+});
+
 test("preserves result arc tags in crossing batches, released paths, overview and newly mounted connections", (t) => {
   const { document, window, load } = openViewer(t);
   const model = chainGraph(600);
@@ -17479,6 +17530,22 @@ test("preserves result arc tags in crossing batches, released paths, overview an
         .getAttribute("d"),
     );
   }
+  const releasedArrows = document.getElementById(
+    "released-crossing-edges-arrows",
+  );
+  assert.ok(releasedArrows.getAttribute("d"));
+  assert.equal(
+    window.getComputedStyle(releasedArrows).fill,
+    window.getComputedStyle(
+      document.getElementById("released-crossing-edges-weight"),
+    ).stroke,
+  );
+  assert.notEqual(
+    window.getComputedStyle(releasedArrows).strokeDasharray,
+    window.getComputedStyle(
+      document.getElementById("released-crossing-edges-weight"),
+    ).strokeDasharray,
+  );
   document.getElementById("zoom-fit").click();
   assert.equal(document.querySelectorAll(".connection").length, 0);
   assert.ok(document.getElementById("overview-edges-weight").getAttribute("d"));
@@ -18788,6 +18855,13 @@ test("virtualizes 20,000 nodes, finds distant operators and uses a batched overv
     document.getElementById("overview-nodes").getAttribute("d").match(/M/g)
       .length,
     20_002,
+  );
+  assert.equal(
+    document
+      .getElementById("overview-edges-arrows")
+      .getAttribute("d")
+      .match(/Z/g).length,
+    20_001,
   );
   document.getElementById("zoom-readable").click();
   assert.equal(
