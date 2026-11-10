@@ -10,6 +10,7 @@ Napi::Value LoadModel(const Napi::CallbackInfo &info);
 Napi::Value LoadModelFile(const Napi::CallbackInfo &info);
 Napi::Value LoadPipeline(const Napi::CallbackInfo &info);
 Napi::Value LoadPipelineFile(const Napi::CallbackInfo &info);
+Napi::Value DiffModels(const Napi::CallbackInfo &info);
 Napi::Value ListBackendTests(const Napi::CallbackInfo &info);
 Napi::Value LoadBackendTest(const Napi::CallbackInfo &info);
 Napi::Value RunNativePrompt(const Napi::CallbackInfo &info);

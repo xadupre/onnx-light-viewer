@@ -30,6 +30,7 @@ const {
   demoGraph,
   loadModel,
   loadModelFile,
+  diffModels,
   listBackendTests,
   loadBackendTest,
   isEncryptedModel,
@@ -113,6 +114,214 @@ function memoryTestModel(
     "memory.onnx",
   );
 }
+
+test("model comparison uses SDK rewrites, including changed attributes, without changing either model", async () => {
+  const source = loadModel(modelBytes("fusion.onnx"), "fusion.onnx");
+  const target = loadModel(
+    modelBytes("fusion-scaled.onnx"),
+    "fusion-scaled.onnx",
+  );
+  const sourceGraph = source.graph();
+  const targetGraph = target.graph();
+  assert.deepEqual(await diffModels(source, source), {
+    steps: [],
+    moves: [],
+    opsets: [],
+    functions: [],
+    replacedFunctions: [],
+  });
+  const result = await diffModels(source, target);
+  assert.ok(
+    result.steps.some((step) => step.addedInitializers.includes("scale")),
+  );
+  const step = result.steps.find((entry) =>
+    entry.impact.before.some((node) => node.opType === "MatMul"),
+  );
+  assert.deepEqual(
+    step.impact.after.map((node) => node.opType),
+    ["MatMul", "Mul"],
+  );
+  assert.deepEqual(source.graph(), sourceGraph);
+  assert.deepEqual(target.graph(), targetGraph);
+
+  const transpose = (permutation) =>
+    Buffer.concat([
+      bytesField(1, "x"),
+      bytesField(2, "y"),
+      bytesField(4, "Transpose"),
+      bytesField(
+        5,
+        Buffer.concat([
+          bytesField(1, "perm"),
+          ...permutation.map((index) => varintField(8, index)),
+          varintField(20, 7),
+        ]),
+      ),
+    ]);
+  const before = memoryTestModel([2, 2], { nodes: [transpose([0, 1])] });
+  const after = memoryTestModel([2, 2], { nodes: [transpose([1, 0])] });
+  const changed = await diffModels(before, after);
+  assert.deepEqual(changed.steps[0].impact.before[0].attributes, [
+    { name: "perm", value: "[0, 1]" },
+  ]);
+  assert.deepEqual(changed.steps[0].impact.after[0].attributes, [
+    { name: "perm", value: "[1, 0]" },
+  ]);
+});
+
+test("model comparison restores omitted inline weights and reads external weights from each model directory", async (t) => {
+  const directories = [
+    mkdtempSync(path.join(tmpdir(), "model-diff-source-")),
+    mkdtempSync(path.join(tmpdir(), "model-diff-target-")),
+  ];
+  t.after(() => {
+    for (const directory of directories)
+      rmSync(directory, { recursive: true, force: true });
+  });
+  const model = (byte) =>
+    memoryTestModel([128], {
+      nodes: [
+        Buffer.concat([
+          bytesField(1, "x"),
+          bytesField(1, "weight"),
+          bytesField(2, "y"),
+          bytesField(4, "Add"),
+        ]),
+      ],
+      initializers: [
+        Buffer.concat([
+          varintField(1, 128),
+          varintField(2, 1),
+          bytesField(8, "weight"),
+          bytesField(9, Buffer.alloc(512, byte)),
+        ]),
+      ],
+    });
+  const inline = [model(0x3f), model(0x40)];
+  const paths = directories.map((directory) =>
+    path.join(directory, "inline.onnx"),
+  );
+  for (let i = 0; i < paths.length; i++)
+    writeFileSync(paths[i], await inline[i].serialize());
+  const loaded = await Promise.all(
+    paths.map((file) => loadModelFile(file, "inline.onnx")),
+  );
+  const snapshots = loaded.map((value) => value.graph());
+  const changed = await diffModels(loaded[0], loaded[1]);
+  assert.ok(
+    changed.steps.some(
+      (step) =>
+        step.removedInitializers.includes(0) &&
+        step.addedInitializers.includes("weight"),
+    ),
+  );
+  assert.deepEqual(
+    loaded.map((value) => value.graph()),
+    snapshots,
+  );
+  assert.deepEqual(await diffModels(loaded[0], loaded[0]), {
+    steps: [],
+    moves: [],
+    opsets: [],
+    functions: [],
+    replacedFunctions: [],
+  });
+
+  const externalFiles = await Promise.all(
+    inline.map((value) => value.serializeFiles(512, "weights.bin")),
+  );
+  const externalPaths = directories.map((directory) =>
+    path.join(directory, "external.onnx"),
+  );
+  for (let i = 0; i < externalPaths.length; i++) {
+    writeFileSync(externalPaths[i], externalFiles[i].model);
+    for (const weight of externalFiles[i].weights)
+      writeFileSync(path.join(directories[i], weight.name), weight.bytes);
+  }
+  const external = await Promise.all(
+    externalPaths.map((file) => loadModelFile(file, "external.onnx")),
+  );
+  const externalDiff = await diffModels(external[0], external[1]);
+  assert.ok(
+    externalDiff.steps.some((step) =>
+      step.addedInitializers.includes("weight"),
+    ),
+  );
+  const weightName = externalFiles[0].weights[0].name;
+  assert.equal(externalFiles[1].weights[0].name, weightName);
+  assert.deepEqual(external[0].externalDataLocations(), [weightName]);
+  const virtual = loadModel(externalFiles[0].model, "virtual.onnx");
+  await assert.rejects(
+    diffModels(virtual, virtual),
+    /external weights requires a local path/i,
+  );
+
+  const unsafe = Buffer.from(externalFiles[0].model);
+  const offset = unsafe.indexOf(weightName);
+  assert.ok(offset >= 0);
+  unsafe.write(`../${"x".repeat(weightName.length - 3)}`, offset);
+  const unsafePath = path.join(directories[0], "unsafe.onnx");
+  writeFileSync(unsafePath, unsafe);
+  await assert.rejects(
+    diffModels(await loadModelFile(unsafePath, "unsafe.onnx"), external[1]),
+    /safe relative path/,
+  );
+
+  writeFileSync(
+    paths[0],
+    Buffer.concat([readFileSync(paths[0]), Buffer.of(0)]),
+  );
+  await assert.rejects(diffModels(loaded[0], loaded[1]), /changed on disk/);
+});
+
+test("model comparison reports unsupported interfaces and pipeline containers", async () => {
+  const source = loadModel(modelBytes("fusion.onnx"), "fusion.onnx");
+  const incompatible = loadModel(modelBytes("relu.onnx"), "relu.onnx");
+  await assert.rejects(
+    diffModels(source, incompatible),
+    /interface|input|output/i,
+  );
+  const pipeline = loadModel(modelBytes("tiny.pipe-onnx"), "tiny.pipe-onnx");
+  assert.throws(() => diffModels(source, pipeline), /PipelineProto/);
+});
+
+test("model comparison reports nested graph rewrites, moves and added opsets", async (t) => {
+  if (sdkReplaySkip) return t.skip(sdkReplaySkip);
+  const source = loadModel(nestedOptimizationModelBytes(1), "nested.onnx");
+  const optimized = await source.optimize(["MatMulAdd"], "Optimize");
+  const nested = await diffModels(source, optimized);
+  const changedScopes = nested.steps.filter((step) => step.impact.scope.length);
+  assert.ok(changedScopes.length > 0);
+  assert.ok(
+    changedScopes.some((step) =>
+      step.impact.before.some((node) => node.opType === "MatMul"),
+    ),
+  );
+  assert.ok(
+    changedScopes.some((step) =>
+      step.impact.after.some((node) => node.opType === "Gemm"),
+    ),
+  );
+
+  const node = (op, inputs, output) =>
+    Buffer.concat([
+      ...inputs.map((input) => bytesField(1, input)),
+      bytesField(2, output),
+      bytesField(4, op),
+    ]);
+  const first = node("Relu", ["x"], "first");
+  const second = node("Relu", ["x"], "second");
+  const last = node("Add", ["first", "second"], "y");
+  const original = memoryTestModel([2], { nodes: [first, second, last] });
+  const reordered = memoryTestModel([2], { nodes: [second, first, last] });
+  const moved = await diffModels(original, reordered);
+  assert.ok(moved.moves.length > 0);
+
+  const addedOpset = memoryTestModel([2], { extraOpsets: [["example", 1]] });
+  const plain = memoryTestModel([2]);
+  const declarations = await diffModels(plain, addedOpset);
+  assert.deepEqual(declarations.opsets, [{ domain: "example", version: "1" }]);
+});
 
 test("lists atomic dimensions and replaces their occurrences inside expressions without changing the original", async () => {
   const original = memoryTestModel([

@@ -488,8 +488,22 @@ export function webviewHtml(
               <button id="refuse-next" disabled>Refuse Next</button>
               <button id="append-new" disabled>Append New</button>
               <button id="global-rewriting" disabled aria-expanded="false" aria-controls="global-rewriting-panel">Global Rewriting</button>
+              <button id="show-comparison" disabled title="Compare the current model with another model" aria-expanded="false" aria-controls="comparison-panel">Compare</button>
               <button id="record-working-rewriting" disabled>Create rewriting</button>
             </div>
+            <section id="comparison-panel" class="fusion-picker" aria-labelledby="comparison-title" hidden>
+              <h3 id="comparison-title">Compare models</h3>
+              <p>Compare the entire current model, including unsaved edits, with a target model. Neither model is changed.</p>
+              <button id="compare-choose" disabled>Choose target model…</button>
+              <p id="compare-status" role="status">Open a model to compare.</p>
+              <div id="compare-result" hidden>
+                <p id="compare-models"></p>
+                <p id="compare-summary"></p>
+                <ol id="compare-steps" aria-label="Rewriting differences"></ol>
+                <button id="compare-more" hidden>Show more steps</button>
+                <div id="compare-declarations"></div>
+              </div>
+            </section>
             <section id="global-rewriting-panel" class="fusion-picker" aria-labelledby="global-rewriting-title" hidden>
               <h3 id="global-rewriting-title">Global Rewriting</h3>
               <div class="form-grid"><label for="global-rewriting-operation">Operation</label><select id="global-rewriting-operation"><option value="IdentityRemoval">IdentityRemoval</option><optgroup label="Partition"><option value="RepeatedLayer">RepeatedLayer</option><option value="PartitionGroup">PartitionGroup</option></optgroup></select></div>
@@ -1319,6 +1333,7 @@ export function webviewHtml(
   <script nonce="${nonce}" src="${resource("inspector.js")}"></script>
   <script nonce="${nonce}" src="${resource("metadata-panel.js")}"></script>
   <script nonce="${nonce}" src="${resource("fusion-panel.js")}"></script>
+  <script nonce="${nonce}" src="${resource("comparison-panel.js")}"></script>
   <script nonce="${nonce}" src="${resource("pattern-panel.js")}"></script>
   <script nonce="${nonce}" src="${resource("settings-panel.js")}"></script>
   <script nonce="${nonce}" src="${resource("memory-panel.js")}"></script>

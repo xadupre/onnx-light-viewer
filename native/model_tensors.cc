@@ -8,7 +8,8 @@ namespace onnx_light_viewer {
 /** Includes sparse components, which the native generic tensor iterator omits. */
 std::vector<ol::TensorProto *> ModelSaveTensors(ol::ModelProto &model,
                                                 std::vector<ol::EncodedValueProto *> *encoded,
-                                                std::set<const ol::TensorProto *> *layout_tensors) {
+                                                std::set<const ol::TensorProto *> *layout_tensors,
+                                                bool include_rewritings) {
   std::vector<ol::TensorProto *> tensors;
   std::unordered_set<const ol::TensorProto *> visited;
   std::unordered_set<const ol::EncodedValueProto *> visited_encoded;
@@ -118,15 +119,16 @@ std::vector<ol::TensorProto *> ModelSaveTensors(ol::ModelProto &model,
   if (model.has_graph())
     graph(model.ref_graph());
   functions(model.ref_functions());
-  for (auto &[name, plan] : model.ref_rewritings()) {
-    functions(plan.ref_added_functions());
-    for (auto &edit : plan.ref_rewrites()) {
-      nodes(edit.ref_added_nodes());
-      nodes(edit.ref_initializer_calls());
-      for (auto &item : edit.ref_added_initializers())
-        tensor(item);
+  if (include_rewritings)
+    for (auto &[name, plan] : model.ref_rewritings()) {
+      functions(plan.ref_added_functions());
+      for (auto &edit : plan.ref_rewrites()) {
+        nodes(edit.ref_added_nodes());
+        nodes(edit.ref_initializer_calls());
+        for (auto &item : edit.ref_added_initializers())
+          tensor(item);
+      }
     }
-  }
   return tensors;
 }
 

@@ -24,6 +24,7 @@ function createFusionPanel({
   let optimizationHistory = [];
   let pendingRewritings = [];
   let undoCount = 0;
+  let comparisonAvailable = false;
   let restoreRequest;
   let restoreNotice = "";
   let scenarios = [];
@@ -697,19 +698,26 @@ function createFusionPanel({
     ])
       byId(id).setAttribute("aria-busy", String(busy));
     const patterns = byId("fusion-pattern");
-    patterns.disabled = busy || !patterns.querySelector("input");
+    patterns.disabled = busy || !canFuse() || !patterns.querySelector("input");
     byId("fusion-pattern-group").disabled =
       patterns.disabled || !byId("fusion-pattern-group").querySelector("input");
     byId("select-patterns").disabled = patterns.disabled;
     byId("clear-patterns").disabled =
-      busy || !patterns.querySelector("input[data-pattern]:checked");
+      patterns.disabled ||
+      !patterns.querySelector("input[data-pattern]:checked");
     byId("preview-fusion").disabled =
-      busy || !patterns.querySelector("input[data-pattern]:checked");
-    byId("select-fusions").disabled = busy || !fusionPreview?.matches.length;
-    byId("clear-fusions").disabled = busy || !fusionSelection().length;
-    byId("apply-fusion").disabled = busy || !fusionSelection().length;
+      patterns.disabled ||
+      !patterns.querySelector("input[data-pattern]:checked");
+    byId("select-fusions").disabled =
+      busy || !canFuse() || !fusionPreview?.matches.length;
+    byId("clear-fusions").disabled =
+      busy || !canFuse() || !fusionSelection().length;
+    byId("apply-fusion").disabled =
+      busy || !canFuse() || !fusionSelection().length;
     byId("fuse-pattern").disabled =
-      undoBusy || creatingPattern || !(canFuse() || undoCount);
+      undoBusy ||
+      creatingPattern ||
+      !(canFuse() || comparisonAvailable || undoCount);
     byId("optimize-model").disabled = creatingPattern || !canFuse();
     const optimization = byId("optimization-patterns");
     optimization.disabled =
@@ -1031,8 +1039,11 @@ function createFusionPanel({
                 const index = node.index === undefined ? "" : `#${node.index} `;
                 const name = node.name ? `${node.name}: ` : "";
                 const domain = node.domain ? `${node.domain}::` : "";
+                const attributes = node.attributes?.length
+                  ? ` [${node.attributes.map((attribute) => `${attribute.name}=${attribute.value}`).join(", ")}]`
+                  : "";
                 return node.opType
-                  ? `${index}${name}${domain}${node.opType}(${node.inputs.join(", ")}) -> ${node.outputs.join(", ")}`
+                  ? `${index}${name}${domain}${node.opType}(${node.inputs.join(", ")}) -> ${node.outputs.join(", ")}${attributes}`
                   : `${index}Node`;
               })
               .join("\n")
@@ -2028,9 +2039,12 @@ function createFusionPanel({
       }
     }
   }
-  function setEnabled(enabled) {
+  function setEnabled(enabled, canCompare) {
+    comparisonAvailable = canCompare;
     byId("fuse-pattern").disabled =
-      undoBusy || creatingPattern || !(enabled || undoCount);
+      undoBusy ||
+      creatingPattern ||
+      !(enabled || comparisonAvailable || undoCount);
     byId("optimize-model").disabled = creatingPattern || !enabled;
     for (const id of [
       "optimization-unfuse-last",

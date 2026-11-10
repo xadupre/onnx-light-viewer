@@ -1,5 +1,5 @@
 /* global acquireVsCodeApi, createSidebar, createFilePanels, createInspector,
-          createMetadataPanel, createFusionPanel, createSettingsPanel, createExportPanel,
+          createMetadataPanel, createFusionPanel, createComparisonPanel, createSettingsPanel, createExportPanel,
           createMemoryPanel, createTensorListPanel, createTensorStatisticsPanel, sugiyamaLayout, graphPathSegments,
           flattenGraphPath, graphPointDistance, graphPortOffset, graphSpatialIndex */
 const vscode = acquireVsCodeApi();
@@ -203,6 +203,14 @@ const fusionPanel = createFusionPanel({
       .filter((id) => nodeViews.get(id)?.node)
       .map((id) => Number(id.slice(5))),
   focusNodes,
+});
+const comparisonPanel = createComparisonPanel({
+  byId,
+  postMessage: (message) => vscode.postMessage(message),
+  requestAction,
+  revealPanel: sidebar.revealPanel,
+  impactSummary: fusionPanel.impactSummary,
+  appendImpactDetails: fusionPanel.appendImpactDetails,
 });
 const patternPanel = createPatternPanel({
   byId,
@@ -571,6 +579,17 @@ function requestAction(type, action, parameters = {}) {
     )
   )
     fusionPanel.invalidate();
+  if (
+    [
+      "open",
+      "export",
+      "navigate",
+      "undo-fusion",
+      "select-fusion",
+      "refresh-shapes",
+    ].includes(type)
+  )
+    comparisonPanel.invalidate();
   const entry = newAction(action);
   pendingActions.set(entry.id, type);
   if (type === "open" || type === "export") {
@@ -640,7 +659,9 @@ function setLoading(pending, message = "") {
     !pending &&
       hasModel &&
       (displayedGraph?.canFuse ?? displayedGraph?.breadcrumbs?.length === 1),
+    !pending && hasModel && !displayedGraph?.pipeline,
   );
+  comparisonPanel.setAvailable(!pending && hasModel);
   if (!pending && wasLoading) requestSymbolicDimensions();
 }
 
@@ -3407,6 +3428,7 @@ window.addEventListener("message", (event) => {
     exportPanel.handleMessage(event.data) ||
     filePanels.handleMessage(event.data) ||
     patternPanel.handleMessage(event.data) ||
+    comparisonPanel.handleMessage(event.data) ||
     fusionPanel.handleMessage(event.data)
   )
     return;
@@ -3510,6 +3532,7 @@ window.addEventListener("message", (event) => {
     byId("unfuse-panel").hidden = !fusionUndoCount;
     filePanels.reset();
     displayedGraph = event.data.graph;
+    comparisonPanel.setGraph(displayedGraph, event.data.file?.pipeline);
     tensorListPanel.setGraph(displayedGraph);
     promptReloadPending = false;
     promptPanel.reset();
@@ -3576,6 +3599,7 @@ window.addEventListener("message", (event) => {
   } else if (event.data?.type === "dimension-info") {
     if (event.data.graph) {
       displayedGraph = event.data.graph;
+      comparisonPanel.setGraph(displayedGraph);
       updateTensorInformation(displayedGraph.tensors);
       tensorListPanel.setGraph(displayedGraph);
       for (const node of displayedGraph.nodes) {

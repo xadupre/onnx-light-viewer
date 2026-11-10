@@ -9,26 +9,9 @@
 #include <system_error>
 
 namespace onnx_light_viewer {
-namespace {
 
-template <typename Proto>
-void LoadExternalTensorImpl(Proto &tensor, const std::filesystem::path &directory) {
-  const auto location = ExternalDataLocation(tensor);
-  int64_t offset = 0;
-  int64_t length = -1;
-  const auto number = [](std::string_view text) {
-    int64_t value;
-    const auto parsed = std::from_chars(text.data(), text.data() + text.size(), value);
-    if (parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size())
-      throw std::runtime_error("Invalid external weight offset or length.");
-    return value;
-  };
-  for (const auto &entry : tensor.external_data()) {
-    if (entry.key() == "offset")
-      offset = number(std::string_view(entry.value()));
-    else if (entry.key() == "length" || entry.key() == "size")
-      length = number(std::string_view(entry.value()));
-  }
+std::filesystem::path CheckedExternalWeightPath(const std::string &location,
+                                                const std::filesystem::path &directory) {
   const auto relative = ModelFilePath(location);
   const auto normalized = relative.lexically_normal();
   size_t components = 0;
@@ -55,6 +38,30 @@ void LoadExternalTensorImpl(Proto &tensor, const std::filesystem::path &director
     throw std::runtime_error("External weight file resolves outside the model directory.");
   if (std::filesystem::hard_link_count(path) > 1)
     throw std::runtime_error("External weight files must not have multiple hard links.");
+  return path;
+}
+
+namespace {
+
+template <typename Proto>
+void LoadExternalTensorImpl(Proto &tensor, const std::filesystem::path &directory) {
+  const auto location = ExternalDataLocation(tensor);
+  int64_t offset = 0;
+  int64_t length = -1;
+  const auto number = [](std::string_view text) {
+    int64_t value;
+    const auto parsed = std::from_chars(text.data(), text.data() + text.size(), value);
+    if (parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size())
+      throw std::runtime_error("Invalid external weight offset or length.");
+    return value;
+  };
+  for (const auto &entry : tensor.external_data()) {
+    if (entry.key() == "offset")
+      offset = number(std::string_view(entry.value()));
+    else if (entry.key() == "length" || entry.key() == "size")
+      length = number(std::string_view(entry.value()));
+  }
+  const auto path = CheckedExternalWeightPath(location, directory);
   const auto utf8_path = path.u8string();
   FileDescriptor file(OpenModelFile(std::string(utf8_path.begin(), utf8_path.end())));
   if (file.get() < 0)

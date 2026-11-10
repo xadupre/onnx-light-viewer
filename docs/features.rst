@@ -632,6 +632,28 @@ The matching Model graph shows reported in-place reuse as background port links.
 
    Estimate memory for concrete input dimensions without executing the model.
 
+Compare models
+^^^^^^^^^^^^^^
+
+In **Rewritings**, open **Compare** and choose a target model to inspect the
+onnx-light rewriting diff from the entire current model, including unsaved edits. Expand a step to
+see its before/after nodes and attribute previews; initializer positions refer
+to the graph immediately before that step. Node moves and function and opset
+declarations are listed separately. Neither model is changed.
+
+.. figure:: _static/feature-model-comparison.png
+   :alt: Compare models panel showing initializer and operator rewriting differences between two ONNX models.
+   :width: 100%
+
+   Inspect the native source-to-target rewriting plan.
+
+The SDK requires compatible model interfaces and existing opset imports, and
+may reject other unsupported changes. Pipeline containers are not supported.
+An empty plan is not a byte-for-byte equality check: some metadata is outside
+the SDK comparison. Comparison restores omitted inline weights and may read
+external weights, so time and memory can grow with model size. External weights
+require local model paths; payloads are not sent to the webview.
+
 Optimizer backends
 ^^^^^^^^^^^^^^^^^^
 

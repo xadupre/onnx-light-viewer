@@ -108,33 +108,31 @@ TraceRewriting(const ol::LocalRewritingProto &edit, std::vector<FusionNodeKey> &
 // Keep stable node identities in an implicit treap; resolve replacement ancestry only once.
 class RewritingTrace {
 public:
-  explicit RewritingTrace(const ol::GraphProto &graph) {
-    entries_.reserve(graph.node().size());
-    for (const auto &node : graph.node())
+  explicit RewritingTrace(const ol::GraphProto &graph) : RewritingTrace(graph.node()) {}
+
+  explicit RewritingTrace(const ol::utils::RepeatedProtoField<ol::NodeProto> &nodes,
+                          std::vector<const ol::NodeProto *> *tracked_nodes = nullptr)
+      : tracked_nodes_(tracked_nodes) {
+    entries_.reserve(nodes.size());
+    for (const auto &node : nodes)
       root_ = Merge(root_, Add(node));
   }
 
   std::shared_ptr<const StoredModel::FusionMatch::Impact>
   Impact(const ol::LocalRewritingProto &edit) const {
     return CaptureFusionImpact(edit, [&](size_t position) -> const FusionNodeKey & {
-      auto id = root_;
-      while (id != none) {
-        const auto left = Size(entries_[id].left);
-        if (position == left)
-          return entries_[id].key;
-        if (position < left)
-          id = entries_[id].left;
-        else {
-          position -= left + 1;
-          id = entries_[id].right;
-        }
-      }
-      throw std::runtime_error("Invalid impacted node index.");
+      return entries_[NodeId(position)].key;
     });
   }
 
-  std::vector<size_t> Apply(const ol::LocalRewritingProto &edit) {
-    if (!edit.graph_path().empty())
+  const ol::NodeProto &NodeAt(size_t position) const {
+    if (!tracked_nodes_)
+      throw std::runtime_error("Rewriting nodes were not retained.");
+    return *tracked_nodes_->at(NodeId(position));
+  }
+
+  std::vector<size_t> Apply(const ol::LocalRewritingProto &edit, bool scoped = false) {
+    if (!scoped && !edit.graph_path().empty())
       return {};
     const std::set<size_t> removed(edit.matched_nodes().begin(), edit.matched_nodes().end());
     if (removed.size() > Size(root_) || (!removed.empty() && *removed.rbegin() >= Size(root_)))
@@ -242,7 +240,25 @@ private:
     priority = (priority ^ (priority >> 27)) * UINT64_C(0x94d049bb133111eb);
     priority ^= priority >> 31;
     entries_.push_back({NodeOrderKey(node), priority, none, none, 1, nullptr});
+    if (tracked_nodes_)
+      tracked_nodes_->push_back(&node);
     return id;
+  }
+
+  size_t NodeId(size_t position) const {
+    auto id = root_;
+    while (id != none) {
+      const auto left = Size(entries_[id].left);
+      if (position == left)
+        return id;
+      if (position < left)
+        id = entries_[id].left;
+      else {
+        position -= left + 1;
+        id = entries_[id].right;
+      }
+    }
+    throw std::runtime_error("Invalid impacted node index.");
   }
 
   size_t Size(size_t id) const { return id == none ? 0 : entries_[id].size; }
@@ -283,6 +299,7 @@ private:
 
   std::vector<Entry> entries_;
   size_t root_ = none;
+  std::vector<const ol::NodeProto *> *tracked_nodes_;
 };
 
 } // namespace onnx_light_viewer

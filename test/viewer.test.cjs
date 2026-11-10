@@ -146,6 +146,95 @@ function submitOpen(document, window) {
     .dispatchEvent(new window.Event("submit", { cancelable: true }));
 }
 
+test("comparison inside Rewritings renders safe details, paginates steps and discards stale results", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const byId = (id) => document.getElementById(id);
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  assert.equal(byId("show-comparison").disabled, true);
+  assert.equal(
+    byId("sidebar-controls").contains(byId("show-comparison")),
+    false,
+  );
+  assert.equal(
+    byId("show-comparison").closest("#fusion-panel"),
+    byId("fusion-panel"),
+  );
+  assert.equal(
+    byId("comparison-panel").closest("#fusion-panel"),
+    byId("fusion-panel"),
+  );
+  load(demoGraph);
+  byId("fuse-pattern").click();
+  assert.equal(byId("fusion-panel").hidden, false);
+  byId("show-comparison").click();
+  assert.equal(byId("comparison-panel").hidden, false);
+  byId("compare-choose").click();
+  const request = messages.at(-1);
+  assert.equal(request.type, "compare-model");
+  assert.equal(byId("compare-choose").disabled, true);
+  const node = {
+    name: "<img src=x>",
+    opType: "Transpose",
+    domain: "",
+    inputs: ["x"],
+    outputs: ["y"],
+    attributes: [{ name: "perm", value: "<script>unsafe</script>" }],
+  };
+  const step = {
+    pattern: "<img src=x>",
+    impact: {
+      before: [{ ...node, index: 0 }],
+      after: [node],
+      scope: [],
+      removedInitializers: 1,
+      addedInitializers: 1,
+    },
+    removedInitializers: [0],
+    removedExtendedInitializers: [],
+    addedInitializers: ["<script>weight</script>"],
+    preparedInitializers: [],
+  };
+  send({
+    type: "compare-result",
+    requestId: request.requestId,
+    source: "<img>",
+    target: "target.onnx",
+    diff: {
+      steps: Array.from({ length: 101 }, () => step),
+      moves: [{ from: 0, to: 1, scope: [], function: "" }],
+      opsets: [],
+      functions: [],
+      replacedFunctions: [],
+    },
+  });
+  assert.equal(byId("compare-result").hidden, false);
+  assert.equal(byId("compare-steps").children.length, 100);
+  assert.equal(byId("compare-result").querySelector("img, script"), null);
+  const details = byId("compare-steps").querySelector("details");
+  details.open = true;
+  details.dispatchEvent(new window.Event("toggle"));
+  assert.match(details.textContent, /<script>unsafe<\/script>/);
+  assert.match(
+    byId("compare-steps").textContent,
+    /Removed initializer positions.*#0/,
+  );
+  byId("compare-more").click();
+  assert.equal(byId("compare-steps").children.length, 101);
+  assert.equal(byId("compare-more").hidden, true);
+
+  byId("compare-choose").click();
+  const stale = messages.at(-1);
+  byId("fuse-pattern").click();
+  assert.equal(byId("fusion-panel").hidden, true);
+  assert.equal(messages.at(-1).type, "cancel-comparison");
+  send({ type: "compare-error", requestId: stale.requestId, error: "stale" });
+  assert.doesNotMatch(byId("compare-status").textContent, /stale/);
+  load({ ...demoGraph, pipeline: true });
+  assert.equal(byId("compare-choose").disabled, true);
+  assert.match(byId("compare-status").textContent, /Pipeline containers/);
+});
+
 test("Symbolic lists safe labels, declares equalities and discards stale lists", (t) => {
   const { document, window, messages, load } = openViewer(t);
   const byId = (id) => document.getElementById(id);
@@ -10020,7 +10109,14 @@ test("runs matching explicitly, highlights candidates and fuses only checked mat
     ...graph,
     breadcrumbs: [...graph.breadcrumbs, { name: "nested", path: [] }],
   });
-  assert.equal(button.disabled, true);
+  assert.equal(button.disabled, false);
+  button.click();
+  assert.equal(document.getElementById("preview-fusion").disabled, true);
+  assert.equal(document.getElementById("append-new").disabled, true);
+  assert.equal(document.getElementById("show-comparison").disabled, false);
+  document.getElementById("show-comparison").click();
+  document.getElementById("compare-choose").click();
+  assert.equal(messages.at(-1).type, "compare-model");
 });
 
 test("selects multiple patterns, reruns matching from scratch and ignores old previews", async (t) => {
