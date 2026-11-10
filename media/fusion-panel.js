@@ -489,7 +489,11 @@ function createFusionPanel({
       const label = document.createElement("button");
       label.className = "rewriting-step";
       label.disabled = fusionBusy;
-      label.textContent = `${step.pattern}${step.path.length ? ` [${step.path.join(" / ")}]` : ""}`;
+      const scope = step.path.length ? ` [${step.path.join(" / ")}]` : "";
+      const impact = step.impact
+        ? ` (${step.applied ? "" : "pending: "}${impactSummary(step)})`
+        : "";
+      label.textContent = `${step.pattern}${scope}${impact}`;
       label.setAttribute(
         "aria-current",
         String(

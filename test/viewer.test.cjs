@@ -7728,6 +7728,100 @@ test("keeps deleted impacted nodes inspectable when no result nodes survive", as
   assert.match(details.querySelectorAll("pre")[1].textContent, /No nodes/);
 });
 
+test("shows optimizer impact on applied and pending rewriting steps", async (t) => {
+  const { document, window, messages } = openViewer(t);
+  const source = loadModel(
+    readFileSync(require.resolve("../examples/optimization.onnx")),
+    "optimization",
+  );
+  const cleaning = await source.previewFusion("RemoveUnusedNodes");
+  const cleaned = await cleaning.model.applyFusion("RemoveUnusedNodes", [0]);
+  const folding = await cleaned.previewFusion("ConstantFolding");
+  const folded = await folding.model.applyFusion("ConstantFolding", [0]);
+  const optimized = await folded.optimize(["TransposeTranspose"], "Optimize");
+  const history = optimized.fusionHistory(true);
+  const operation = history.at(-1);
+  const replacement = operation.matches.find(
+    (match) => match.pattern === "TransposeTranspose",
+  );
+  const cleanup = operation.matches.find(
+    (match) => match.pattern === "RemoveUnusedNodes",
+  );
+  assert.equal(replacement.nodes.length, 1);
+  assert.deepEqual(cleanup.nodes, []);
+  assert.deepEqual(cleanup.impact.before, []);
+  assert.deepEqual(cleanup.impact.after, []);
+  assert.equal(cleanup.impact.removedInitializers, 2);
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  send({
+    type: "graph",
+    graph: optimized.graph(),
+    file: { fusionCount: optimized.fusionCount(), fusionHistory: history },
+  });
+  document.getElementById("fuse-pattern").click();
+  send({
+    type: "fusion-patterns",
+    requestId: messages.at(-1).requestId,
+    patterns: optimized.fusionPatterns(),
+    optimizationReport: optimized.optimizationReport(),
+  });
+  const labels = () => [
+    ...document.querySelectorAll("#rewriting-steps .rewriting-step"),
+  ];
+  const replacementLabel = labels().find((label) =>
+    label.textContent.startsWith("TransposeTranspose"),
+  );
+  const cleanupLabel = labels().findLast((label) =>
+    label.textContent.startsWith("RemoveUnusedNodes"),
+  );
+  assert.equal(
+    replacementLabel.textContent,
+    "TransposeTranspose (2 impacted nodes; 1 replacement node)",
+  );
+  assert.equal(
+    cleanupLabel.textContent,
+    "RemoveUnusedNodes (0 impacted nodes; 2 initializers removed)",
+  );
+  replacementLabel.click();
+  assert.deepEqual(
+    [...document.querySelectorAll(".graph-node.selected")].map(
+      (node) => node.dataset.id,
+    ),
+    replacement.nodes.map((index) => `node-${index}`),
+  );
+  cleanupLabel.click();
+  assert.equal(document.querySelectorAll(".graph-node.selected").length, 0);
+  assert.deepEqual(
+    [...cleanupLabel.parentElement.querySelectorAll(".fusion-impact pre")].map(
+      (element) => element.textContent,
+    ),
+    ["No nodes.", "No nodes."],
+  );
+  assert.equal(
+    document.getElementById("show-optimization-report").disabled,
+    false,
+  );
+  send({
+    type: "graph",
+    graph: folded.graph(),
+    file: {
+      fusionCount: folded.fusionCount(),
+      fusionHistory: folded.fusionHistory(true),
+      pendingRewritings: [operation],
+    },
+  });
+  const pendingCleanup = [
+    ...document.querySelectorAll(
+      "#rewriting-steps .rewriting-pending .rewriting-step",
+    ),
+  ].find((label) => label.textContent.startsWith("RemoveUnusedNodes"));
+  assert.equal(
+    pendingCleanup.textContent,
+    "RemoveUnusedNodes (pending: 0 impacted nodes; 2 initializers removed)",
+  );
+});
+
 test("recording uses the displayed pipeline stage's applied history, including no-op optimization", async (t) => {
   const { PipelineModel } = require("../dist/pipeline");
   const { document, window, messages } = openViewer(t);
