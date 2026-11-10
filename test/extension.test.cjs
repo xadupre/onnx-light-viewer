@@ -8535,8 +8535,8 @@ test("Rewritings exposes its actions, appends one match and refuses one next ste
       "Refuse Next",
       "Append New",
       "Global Rewriting",
-      "Create rewriting",
       "Compare",
+      "Create rewriting",
     ],
   );
   assert.equal(document.getElementById("refuse-next").disabled, true);
@@ -8557,8 +8557,8 @@ test("Rewritings exposes its actions, appends one match and refuses one next ste
       "Refuse Next",
       "Append New",
       "Global Rewriting",
-      "Create rewriting",
       "Compare",
+      "Create rewriting",
     ],
   );
   document.getElementById("unfuse-last").click();

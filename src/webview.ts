@@ -488,8 +488,8 @@ export function webviewHtml(
               <button id="refuse-next" disabled>Refuse Next</button>
               <button id="append-new" disabled>Append New</button>
               <button id="global-rewriting" disabled aria-expanded="false" aria-controls="global-rewriting-panel">Global Rewriting</button>
-              <button id="record-working-rewriting" disabled>Create rewriting</button>
               <button id="show-comparison" disabled title="Compare the current model with another model" aria-expanded="false" aria-controls="comparison-panel">Compare</button>
+              <button id="record-working-rewriting" disabled>Create rewriting</button>
             </div>
             <section id="comparison-panel" class="fusion-picker" aria-labelledby="comparison-title" hidden>
               <h3 id="comparison-title">Compare models</h3>
