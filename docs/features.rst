@@ -704,6 +704,24 @@ Previewing does not modify the graph. See :doc:`features/fusion_patterns`.
 
    Inspect and select native matches before applying them.
 
+Model partitioning
+^^^^^^^^^^^^^^^^^^
+
+Open **Rewritings → Global Rewriting**, choose ``RepeatedLayer`` or
+``PartitionGroup`` under **Operation**, then click **Apply**. The SDK replaces
+matched regions with model-local function calls. Click a node's **Function**
+link to inspect its body.
+
+.. figure:: _static/feature-model-partition.png
+   :alt: Qwen3-0.6B partitioned with RepeatedLayer, showing Layer_MatMul_0 function calls and the applied rewriting steps.
+   :width: 100%
+
+   RepeatedLayer partitions a Qwen3-0.6B model exported with Mobius.
+
+**Unfuse Last** undoes the operation; **Save** keeps a copy of the result.
+Partitioning changes the in-memory graph, not the source file, and does not
+export separate model files. See :doc:`features/fusion_patterns`.
+
 Patterns from node selections
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
