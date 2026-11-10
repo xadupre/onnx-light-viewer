@@ -6,6 +6,9 @@ Notable changes to ONNX Light Viewer, newest first.
 0.2.9 (unreleased)
 ------------------
 
+- Fix release packaging by pinning VS Code type definitions to the minimum
+  supported VS Code version
+  (`#366 <https://github.com/xadupre/onnx-light-viewer/pull/366>`_).
 - Show original affected and replacement node and initializer counts in applied
   and pending rewriting steps, including initializer-only cleanup, while
   highlighting surviving results

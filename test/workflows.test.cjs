@@ -52,6 +52,19 @@ test("extension release versions stay consistent", () => {
   assert.equal(changelog.match(/^(\d+\.\d+\.\d+) \(/m)[1], manifest.version);
 });
 
+test("VS Code types stay pinned to the minimum supported engine for release packaging", () => {
+  const manifest = JSON.parse(
+    readFileSync(path.resolve(__dirname, "..", "package.json"), "utf8"),
+  );
+  const lock = JSON.parse(
+    readFileSync(path.resolve(__dirname, "..", "package-lock.json"), "utf8"),
+  );
+  const version = manifest.engines.vscode.replace(/^\^/, "");
+  assert.equal(manifest.devDependencies["@types/vscode"], version);
+  assert.equal(lock.packages[""].devDependencies["@types/vscode"], version);
+  assert.equal(lock.packages["node_modules/@types/vscode"].version, version);
+});
+
 test("native builds use onnx-light 0.2.7 with pinned checksums", () => {
   const cmake = readFileSync(
     path.resolve(__dirname, "..", "CMakeLists.txt"),

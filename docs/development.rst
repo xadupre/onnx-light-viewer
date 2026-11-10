@@ -122,6 +122,18 @@ Git. Documentation dependencies are separate from the extension's dependencies.
 The documentation uses PyData Sphinx Theme, like onnx-light, with a light/dark
 theme switcher in the navigation bar. By default, it follows the system theme.
 
+Refreshing screenshots
+^^^^^^^^^^^^^^^^^^^^^^
+
+After changing visible controls, launch the current viewer with ``./start.sh``
+and recapture the affected feature in ``docs/_static/``. Keep the existing image
+filename so the overview and linked guides both receive the update.
+Use bundled examples or test models, and real execution results for result
+panels; do not draw replacement controls over an older screenshot.
+Check the matching alt text and caption against the captured state, then build
+the documentation with the warning-as-error command above. Inspect the rendered
+page for readable labels, clipped controls and obsolete navigation.
+
 Source layout
 -------------
 
