@@ -156,6 +156,7 @@ export function webviewHtml(
           <button id="statistics-tab" role="tab" aria-controls="statistics-view" aria-selected="false" tabindex="-1">Statistics</button>
           <button id="memory-tab" role="tab" aria-controls="memory-view" aria-selected="false" tabindex="-1">Memory</button>
           <button id="tensors-tab" role="tab" aria-controls="tensors-view" aria-selected="false" tabindex="-1"><svg class="tensor-statistics-icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M4 3v17h17M8 16v-5m5 5V6m5 10V9"/></svg>Tensors</button>
+          <button id="patterns-tab" role="tab" aria-controls="patterns-view" aria-selected="false" tabindex="-1">Patterns</button>
           <button id="prompt-tab" role="tab" aria-controls="prompt-view" aria-selected="false" tabindex="-1"><svg class="tensor-statistics-icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="m8 5 11 7-11 7Z"/></svg>Run</button>
         </div>
       </div>
@@ -165,7 +166,6 @@ export function webviewHtml(
           <button id="status-tab" role="tab" aria-controls="status-view" aria-selected="false" tabindex="-1">Status</button>
           <button id="controls-tab" role="tab" aria-controls="controls-view" aria-selected="false" tabindex="-1">Controls</button>
           <button id="repositories-tab" role="tab" aria-controls="repositories-view" aria-selected="false" tabindex="-1">ONNX</button>
-          <button id="patterns-tab" role="tab" aria-controls="patterns-view" aria-selected="false" tabindex="-1">Patterns</button>
           <button id="settings-tab" role="tab" aria-controls="settings-view" aria-selected="false" tabindex="-1">Settings</button>
         </div>
       </div>
