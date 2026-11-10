@@ -42,6 +42,7 @@ for (const initialTab of ["model", "logs"]) {
         "statistics-tab",
         "memory-tab",
         "tensors-tab",
+        "patterns-tab",
         "prompt-tab",
       ],
       [
@@ -49,7 +50,6 @@ for (const initialTab of ["model", "logs"]) {
         "status-tab",
         "controls-tab",
         "repositories-tab",
-        "patterns-tab",
         "settings-tab",
       ],
     ]);

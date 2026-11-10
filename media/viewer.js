@@ -74,12 +74,12 @@ const tabs = [
   "statistics",
   "memory",
   "tensors",
+  "patterns",
   "prompt",
   "logs",
   "status",
   "controls",
   "repositories",
-  "patterns",
   "settings",
 ];
 
