@@ -3,9 +3,10 @@ Changelogs
 
 Notable changes to ONNX Light Viewer, newest first.
 
-0.2.5 (unreleased)
+0.2.7 (unreleased)
 ------------------
 
+- Use onnx-light 0.2.7 and onnx-light-cpu 0.2.7.
 - Select saved rewriting alternatives beside the graph name, with **None** as
   the default original graph. Show their steps and fusion undo controls together
   in **Fuse / Unfuse**.
