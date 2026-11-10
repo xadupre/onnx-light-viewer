@@ -44,9 +44,10 @@ its models, preserving different versions of the same domain.
 
 Open **Symbolic** for **Refresh shapes**, **Refresh metadata**,
 **Refresh positions**, **Verify** and **Shorten dimension names**.
-The panel also lists symbolic dimension labels across the whole model. Select
-**Replace** and **Keep**, then **Declare equal** to merge two labels. This changes
-exact stored names, not expressions containing them. **Save** persists the edit.
+Choose **Make dimensions equivalent** to list symbolic labels across the whole
+model. Select a dimension and its destination, or drag it to the right of the
+equals sign beside the name to keep, then choose **Apply replacements**.
+This updates names and dimension expressions. **Save** persists the edit.
 The application logo links to the repository, immediately before the **Model** tab.
 
 Use **Verify** in **Symbolic** to run onnx-light's ``VerifyModel``
@@ -206,7 +207,7 @@ Renaming reads metadata only, without loading weight payloads, and preserves
 selection, node positions and zoom.
 
 .. figure:: ../_static/feature-symbolic.png
-   :alt: Symbolic panel with Refresh and Verify controls and shortened dynamic dimensions.
+   :alt: Symbolic panel with Refresh and Verify controls and editable dimension equivalences.
    :width: 100%
 
-   Shorten stored dimension names, then Save to keep the edit.
+   Inspect symbolic dimensions and declare valid equivalences; Save keeps edits.

@@ -2,16 +2,15 @@ Subgraphs
 =========
 
 .. image:: ../_static/subgraphs.png
-   :alt: An If operator with entries for its nested graphs and graph navigation breadcrumbs.
+   :alt: An If operator with entries for its nested graphs and the current graph-name button.
    :width: 480px
 
 Explore graph attributes of operators such as **If**, **Loop** and **Scan**.
 Click a subgraph entry inside the operator's rectangle, or **Open** in the
 inspector. Entries support Tab followed by Enter or Space; dragging the
 operator's header still moves it. Each graph in a graph-list attribute has its
-own entry. The breadcrumb bar remains visible on the main graph, showing the
-model's root name. Subgraph and function names are appended as you navigate;
-click an ancestor to return to it.
+own entry. The current graph-name button remains in the compact graph header.
+Open its menu to choose child graphs, functions or an ancestor.
 
 Nested graphs retain enclosing opsets and captured tensor/initializer
 information. Captured values appear as input ports; captured initializers stay
@@ -30,7 +29,7 @@ model.
 
 Nodes calling a function defined in the model have a **Function** entry and an
 **Open function** inspector button. Open either to explore the definition, then
-use breadcrumbs to return to the caller. Nested function calls and graph
+use the graph-name menu to return to the caller. Nested function calls and graph
 attributes inside functions use the same navigation. Definitions are matched by
 domain, name and overload.
 

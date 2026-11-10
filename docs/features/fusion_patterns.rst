@@ -1,7 +1,7 @@
 Fusion patterns
 ===============
 
-**Fuse / Unfuse**, at the top of the right sidebar, opens the native onnx-light pattern
+**Rewritings**, at the top of the right sidebar, opens the native onnx-light pattern
 matcher on the main graph.
 The list keeps patterns whose anchor operator occurs in that graph, plus patterns
 without an anchor restriction. Manual matching does not run model inference.
@@ -345,7 +345,7 @@ Saved rewriting scenarios
 The **Rewriting** dropdown between the graph name and node counts starts at
 **None**: opening a model never applies its saved ``RewritingProto`` variants.
 Choose a name to display that complete rewriting and open its ordered patterns
-in **Fuse / Unfuse → Saved rewriting scenarios**. Choose **None** to restore the
+in **Rewritings**. Choose **None** to restore the
 original graph without queued rewritings. Switching alternatives replaces
 current native fusion edits; it never changes the source file.
 
@@ -386,7 +386,7 @@ select nodes in the main graph.
 Unfuse and rewriting plans
 ----------------------------
 
-**Fuse / Unfuse → Applied fusions** offers **Unfuse last** and **Unfuse all**.
+**Rewritings** offers **Unfuse Last** and **Unfuse all**.
 Unfuse last restores the model before the last fusion or scenario operation:
 one step reverses all candidates, optimization iterations or global-pass edits
 applied together. The choices remain open so
