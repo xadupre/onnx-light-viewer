@@ -7,10 +7,11 @@ const {
   sugiyamaLayout,
   layeredGraphLayout,
   shortenGraphRoutes,
+  routeGraphPorts,
   graphPathSegments,
   flattenGraphPath,
 } = runInNewContext(
-  `${readFileSync(require.resolve("../media/graph-layout.js"), "utf8")}\n({ sugiyamaLayout, layeredGraphLayout, shortenGraphRoutes, graphPathSegments, flattenGraphPath });`,
+  `${readFileSync(require.resolve("../media/graph-layout.js"), "utf8")}\n({ sugiyamaLayout, layeredGraphLayout, shortenGraphRoutes, routeGraphPorts, graphPathSegments, flattenGraphPath });`,
   { dagre: require("@dagrejs/dagre") },
 );
 
@@ -89,7 +90,8 @@ function assertRouteAvoidsNodes(
     !!route?.length,
   );
   for (const point of points) {
-    assert.ok(point.x >= 0 && point.x <= result.bounds.width);
+    const left = result.bounds.x ?? 0;
+    assert.ok(point.x >= left && point.x <= left + result.bounds.width);
     assert.ok(point.y >= 0 && point.y <= result.bounds.height);
   }
   for (const item of nodes) {
@@ -181,6 +183,162 @@ test("keeps port-adjusted shortcuts outside unrelated operators", () => {
         }
       }
     }
+  }
+});
+
+function shortSkipFixture(span, blocked, offsets = false, barrier = false) {
+  const nodes = [
+    node("source", [], {
+      width: 180,
+      outputs: offsets ? ["unused", "tensor"] : ["tensor"],
+    }),
+    ...Array.from({ length: span - 1 }, (_, index) =>
+      node(`obstacle${index}`, [], {
+        width: barrier ? 1900 : 140 + Math.min(index, 2) * 80,
+        height: 88 + Math.min(index, 2) * 20,
+      }),
+    ),
+    node("target", offsets ? ["tensor", "weight"] : ["tensor"]),
+    node("distant-sibling"),
+  ];
+  const sizes = new Map(
+    nodes.map(({ id, width = 140, height = 88 }) => [id, { width, height }]),
+  );
+  const positions = new Map(
+    nodes.map(({ id }, index) => [
+      id,
+      {
+        x:
+          id === "distant-sibling"
+            ? 1800
+            : id.startsWith("obstacle")
+              ? barrier
+                ? 1000
+                : blocked
+                  ? 200
+                  : 600
+              : 200,
+        y: id === "distant-sibling" ? 396 : 200 + index * 196,
+      },
+    ]),
+  );
+  const route = [
+    { x: 200, y: 284 },
+    { x: 1980, y: 284 },
+    { x: 1980, y: positions.get("target").y - 84 },
+    { x: 200, y: positions.get("target").y - 84 },
+  ];
+  const result = {
+    positions,
+    producers: new Map(
+      nodes.flatMap(({ id, outputs }) => outputs.map((name) => [name, id])),
+    ),
+    routes: new Map([["target", new Map([["source", route]])]]),
+    bounds: {
+      x: 0,
+      y: 0,
+      width: 2200,
+      height: Math.max(2000, 400 + span * 196),
+    },
+  };
+  return { nodes, sizes, result, route };
+}
+
+for (const span of [2, 3, 4]) {
+  test(`routes N to N+${span} directly or through a local corridor at the actual tensor ports`, () => {
+    for (const blocked of [false, true]) {
+      for (const offsets of [false, true]) {
+        const { nodes, sizes, result } = shortSkipFixture(
+          span,
+          blocked,
+          offsets,
+        );
+        routeGraphPorts({ nodes }, sizes, result);
+        const route = result.portRoutes.get("target")[0];
+        if (blocked) {
+          assert.ok(route.length);
+          assert.ok(route.every(({ x }) => x < 500));
+        } else assert.equal(route.length, 0);
+        const points = flattenGraphPath(
+          [
+            { x: 200 + (offsets ? 30 : 0), y: 244 },
+            ...route,
+            {
+              x: 200 - (offsets ? 140 / 6 : 0),
+              y: result.positions.get("target").y - 44,
+            },
+          ],
+          !!route.length,
+        );
+        for (const obstacle of nodes) {
+          if (obstacle.id === "source" || obstacle.id === "target") continue;
+          for (let index = 1; index < points.length; index++)
+            assert.equal(
+              segmentEntersBox(
+                points[index - 1],
+                points[index],
+                result.positions.get(obstacle.id),
+                sizes.get(obstacle.id).width,
+                sizes.get(obstacle.id).height,
+              ),
+              false,
+              `N+${span}, offsets=${offsets} crosses ${obstacle.id}`,
+            );
+        }
+      }
+    }
+  });
+}
+
+test("keeps exterior lanes for blocked short skips", () => {
+  const blocked = shortSkipFixture(4, true, false, true);
+  routeGraphPorts({ nodes: blocked.nodes }, blocked.sizes, blocked.result);
+  const route = blocked.result.portRoutes.get("target")[0];
+  assert.ok(route.some(({ x }) => x < 50 || x > 1950));
+  blocked.result.routes.get("target").set("source", route);
+  assertRouteAvoidsNodes(blocked.result, blocked.nodes, "source", "target");
+});
+
+test("spaces exterior tensor-port routes farther from the center as their rank span grows on either side", () => {
+  for (const side of ["left", "right"]) {
+    let previous = 0;
+    for (const span of [5, 8, 12]) {
+      const { nodes, sizes, result, route } = shortSkipFixture(span, false);
+      if (side === "left")
+        for (const point of route) if (point.x === 1980) point.x = 0;
+      routeGraphPorts({ nodes }, sizes, result);
+      const points = result.portRoutes.get("target")[0];
+      const exterior = points[1].x;
+      const distance = side === "left" ? 110 - exterior : exterior - 1870;
+      assert.ok(
+        distance > previous,
+        `${side}: span ${span} must be farther out`,
+      );
+      previous = distance;
+      result.routes.get("target").set("source", points);
+      assertRouteAvoidsNodes(result, nodes, "source", "target");
+    }
+  }
+});
+
+test("fallback exterior lanes depend on rank span rather than source insertion order", () => {
+  const nodes = Array.from({ length: 10 }, (_, index) =>
+    node(`chain${index}`, index ? [`chain${index - 1}`] : []),
+  );
+  const spans = [2, 3, 4, 8];
+  for (const span of spans) nodes[span].inputs.push("chain0");
+  for (let index = 0; index < 2000; index++) nodes.push(node(`extra${index}`));
+  const sizes = new Map(
+    nodes.map(({ id }) => [id, { width: 140, height: 88 }]),
+  );
+  const result = layeredGraphLayout({ nodes }, sizes);
+  let previous = 0;
+  for (const span of spans) {
+    const route = result.routes.get(`chain${span}`).get("chain0");
+    const distance = Math.abs(route[1].x - result.bounds.width / 2);
+    assert.ok(distance > previous, `span ${span} must be farther out`);
+    previous = distance;
+    assertRouteAvoidsNodes(result, nodes, "chain0", `chain${span}`);
   }
 });
 

@@ -1945,13 +1945,22 @@ function drawTaggedConnections(id, connections) {
     ["weight", []],
     ["shape", []],
   ]);
-  for (const connection of connections)
-    groups.get(connectionTag(connection)).push(connectionPath(connection));
+  const arrows = [];
+  for (const connection of connections) {
+    const points = connectionPoints(connection);
+    groups
+      .get(connectionTag(connection))
+      .push(connectionPath(connection, points));
+    arrows.push(connectionArrow(connection, points));
+  }
   for (const [tag, segments] of groups) {
     const path = byId(tag ? `${id}-${tag}` : id);
     const data = segments.join(" ");
     if (path.getAttribute("d") !== data) path.setAttribute("d", data);
   }
+  const path = byId(`${id}-arrows`);
+  const data = arrows.join(" ");
+  if (path.getAttribute("d") !== data) path.setAttribute("d", data);
 }
 
 function drawCrossingConnections() {
@@ -2347,9 +2356,29 @@ function arrangeConnectionLabels() {
   if (camera && virtualized) drawCrossingConnections();
 }
 
-function connectionPath(connection) {
+function connectionArrow(connection, points) {
+  const end = points.at(-1);
+  let dx = 0;
+  let dy = end.y - points[0].y;
+  if (connection.route || !dy) {
+    for (let index = points.length - 2; index >= 0; index--) {
+      dx = end.x - points[index].x;
+      dy = end.y - points[index].y;
+      if (dx || dy) break;
+    }
+  }
+  const length = Math.hypot(dx, dy);
+  if (!length) return "";
+  const size = connectionTag(connection) === "weight" ? 18 : 9;
+  const x = end.x - (dx / length) * size;
+  const y = end.y - (dy / length) * size;
+  const halfX = (dy / length) * size * 0.5;
+  const halfY = (dx / length) * size * 0.5;
+  return `M${end.x},${end.y} L${x + halfX},${y - halfY} L${x - halfX},${y + halfY}Z`;
+}
+
+function connectionPath(connection, points = connectionPoints(connection)) {
   if (connection.route) {
-    const points = connectionPoints(connection);
     let path = `M${points[0].x},${points[0].y}`;
     for (const segment of graphPathSegments(points, true)) {
       const end = segment.at(-1);
@@ -2361,7 +2390,7 @@ function connectionPath(connection) {
     }
     return path;
   }
-  const [start, end] = connectionPoints(connection);
+  const [start, end] = points;
   const middle = (start.y + end.y) / 2;
   return `M${start.x},${start.y} C${start.x},${middle} ${end.x},${middle} ${end.x},${end.y}`;
 }
@@ -2656,6 +2685,7 @@ function render(graph, metadata) {
     "overview-edges",
     "overview-edges-weight",
     "overview-edges-shape",
+    "overview-edges-arrows",
   ])
     byId(id).removeAttribute("d");
   for (const path of byId("overview-nodes").children) path.removeAttribute("d");
