@@ -778,6 +778,14 @@ body.resizing-sidebar {
 #graph.overview #graph-overview path {
   vector-effect: non-scaling-stroke;
 }
+#graph.overview .graph-node:not(.selected) > rect,
+#graph.overview .overview-node {
+  paint-order: stroke fill;
+}
+#graph.distant .graph-node:not(.selected) > rect,
+#graph.distant .overview-node {
+  stroke: currentColor;
+}
 .selection-rectangle {
   fill: var(--mint);
   fill-opacity: 0.12;
@@ -843,7 +851,7 @@ body.resizing-sidebar {
 .edge-shape {
   stroke-dasharray: 4 3;
 }
-#overview-nodes {
+#overview-nodes [data-category="port"] {
   fill: #16212e;
   stroke: #536e83;
   stroke-width: 1;
@@ -874,8 +882,11 @@ li > .tensor-info {
 .port {
   cursor: grab;
 }
-.graph-node rect {
-  fill: #162c31;
+.graph-node rect,
+.overview-node,
+.operator-legend-sample {
+  color: #162c31;
+  fill: currentColor;
   stroke: #397363;
   stroke-width: 1.5;
 }
@@ -889,7 +900,27 @@ li > .tensor-info {
 .graph-node:hover rect {
   stroke: var(--mint);
   stroke-width: 2;
-  fill: #193b3a;
+  color: #193b3a;
+}
+.graph-node.compute-heavy rect,
+.overview-node.compute-heavy,
+.operator-legend-sample.compute-heavy {
+  color: #452a31;
+  stroke: #a85c69;
+}
+.graph-node.compute-heavy:hover rect {
+  color: #59323b;
+  stroke: var(--mint);
+}
+.graph-node.custom-domain rect,
+.overview-node.custom-domain,
+.operator-legend-sample.custom-domain {
+  color: #342c4b;
+  stroke: #8069b0;
+}
+.graph-node.custom-domain:hover rect {
+  color: #453760;
+  stroke: var(--mint);
 }
 .operator-label {
   fill: #effff9;
@@ -965,15 +996,117 @@ li > .tensor-info {
   stroke-width: 3;
   vector-effect: non-scaling-stroke;
 }
-.zoom-controls {
+.graph-controls {
   position: absolute;
-  left: 18px;
-  bottom: 18px;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0;
+  container-type: inline-size;
+  pointer-events: none;
+}
+.navigation-controls {
+  max-width: 100%;
+  color: #c2d1df;
+  background: #16212e;
+  border: 1px solid #354757;
+  border-bottom: 0;
+  border-radius: 6px 6px 0 0;
+  font-size: 10px;
+  line-height: 1.3;
+  pointer-events: auto;
+}
+.navigation-controls[open] > summary {
+  border-bottom: 1px solid #354757;
+}
+.zoom-controls {
+  flex: none;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  border: 1px solid #354757;
-  border-radius: 6px;
+  max-width: 100%;
   overflow: hidden;
+  pointer-events: auto;
+}
+#operator-legend {
+  flex: none;
+  display: flex;
+  align-items: center;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+  color: #c2d1df;
+  background: #16212e;
+  border: 1px solid #354757;
+  border-radius: 0 6px 0 0;
+  font-size: 10px;
+  line-height: 1.3;
+  pointer-events: auto;
+}
+#operator-legend summary,
+.navigation-controls > summary {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-width: 24px;
+  min-height: 22px;
+  padding: 4px 7px;
+  background: #16212e;
+  cursor: pointer;
+  font-weight: 600;
+  white-space: nowrap;
+}
+#operator-legend[open] summary {
+  border-right: 1px solid #354757;
+}
+#operator-legend summary::after,
+.navigation-controls > summary::after {
+  content: "";
+  border-left: 3px solid transparent;
+  border-right: 3px solid transparent;
+  border-top: 4px solid currentColor;
+}
+#operator-legend:not([open]) summary::after,
+.navigation-controls:not([open]) > summary::after {
+  transform: rotate(-90deg);
+}
+#operator-legend summary:focus-visible,
+.navigation-controls > summary:focus-visible {
+  outline: 2px solid var(--mint);
+  outline-offset: -2px;
+}
+@container (max-width: 180px) {
+  #operator-legend summary {
+    gap: 0;
+    font-size: 0;
+  }
+}
+.operator-legend-items {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 7px;
+  white-space: nowrap;
+}
+.operator-legend-item {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 5px;
+}
+.operator-legend-item svg {
+  flex: none;
+  width: 14px;
+  height: 14px;
 }
 #find-node {
   margin: 12px 0 0;
@@ -1996,7 +2129,10 @@ button:disabled {
 }
 @media (forced-colors: active) {
   .graph-node rect,
-  .port rect {
+  .port rect,
+  #graph #overview-nodes path,
+  #operator-legend .operator-legend-sample,
+  #graph.distant .graph-node:not(.selected) > rect {
     fill: Canvas;
     stroke: CanvasText;
   }
