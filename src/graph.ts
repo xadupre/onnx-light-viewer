@@ -210,6 +210,33 @@ export interface FusionImpactNode {
   outputs: string[];
 }
 
+/** Metadata projected from the SDK's source-to-target rewriting plan. */
+export interface ModelDiff {
+  steps: {
+    pattern: string;
+    impact: {
+      before: (FusionImpactNode & {
+        attributes: { name: string; value: string }[];
+      })[];
+      after: (FusionImpactNode & {
+        attributes: { name: string; value: string }[];
+      })[];
+      scope: string[];
+      removedInitializers: number;
+      addedInitializers: number;
+    };
+    /** Zero-based positions in the graph immediately before this step. */
+    removedInitializers: number[];
+    removedExtendedInitializers: number[];
+    addedInitializers: string[];
+    preparedInitializers: string[];
+  }[];
+  moves: { from: number; to: number; scope: string[]; function: string }[];
+  opsets: { domain: string; version: string }[];
+  functions: string[];
+  replacedFunctions: string[];
+}
+
 export interface FusionOperation {
   matches: {
     pattern: string;
@@ -713,6 +740,7 @@ const native: {
   ): Promise<NativeModel>;
   loadPipeline(bytes: Uint8Array, fileName: string): PipelineData;
   loadPipelineFile(filePath: string, fileName: string): Promise<PipelineData>;
+  diffModels(source: NativeModel, target: NativeModel): Promise<ModelDiff>;
   preparePromptPipeline(
     prefill: string,
     embedding: string,
@@ -729,6 +757,16 @@ export const onnxLightVersion = native.onnxLightVersion;
 export const tensorStatisticsFromProto = native.tensorStatisticsFromProto;
 export const validateFunctionPatterns = native.validateFunctionPatterns;
 export const preparePromptPipeline = native.preparePromptPipeline;
+
+/** Compares independent ONNX snapshots; pipeline containers are not supported. */
+export function diffModels(
+  source: NativeModel,
+  target: NativeModel,
+): Promise<ModelDiff> {
+  if (source instanceof PipelineModel || target instanceof PipelineModel)
+    throw new Error("Comparing PipelineProto containers is not supported.");
+  return native.diffModels(source, target);
+}
 
 /** Minimal Relu snapshot with native schema documentation, requiring no model file. */
 export const demoGraph: Graph = {

@@ -14,9 +14,12 @@ template <typename Proto> std::string ExternalDataLocation(const Proto &tensor) 
 
 void LoadExternalTensor(ol::TensorProto &tensor, const std::filesystem::path &directory);
 void LoadExternalTensor(ol::EncodedValueProto &tensor, const std::filesystem::path &directory);
+std::filesystem::path CheckedExternalWeightPath(const std::string &location,
+                                                const std::filesystem::path &directory);
 std::vector<ol::TensorProto *>
 ModelSaveTensors(ol::ModelProto &model, std::vector<ol::EncodedValueProto *> *encoded = nullptr,
-                 std::set<const ol::TensorProto *> *layout_tensors = nullptr);
+                 std::set<const ol::TensorProto *> *layout_tensors = nullptr,
+                 bool include_rewritings = true);
 ol::RewritingProto CombineFusionPlans(const StoredModel &model);
 std::vector<size_t> RewritingDeclarationPositions(const ol::RewritingProto &plan);
 void SetRewritingDeclarationPositions(ol::RewritingProto &plan,

@@ -12,6 +12,7 @@ import {
   loadBackendTest,
   loadModel,
   loadModelFile,
+  diffModels,
   isEncryptedModel,
   onnxLightVersion,
   Graph,
@@ -641,6 +642,8 @@ async function configurePanel(
   let navigationRequest = 0;
   let statisticsRequest = 0;
   let tensorStatisticsRequest = 0;
+  let comparisonRequest = 0;
+  let comparisonInFlight = false;
   let promptController: AbortController | undefined;
   let releaseController: AbortController | undefined;
   let promptResult: { owner: LoadedModel; result: PromptResult } | undefined;
@@ -1447,6 +1450,93 @@ async function configurePanel(
         }
       } else if (message?.type === "interaction") {
         log.interaction(message.entry);
+      } else if (message?.type === "cancel-comparison") {
+        comparisonRequest++;
+      } else if (message?.type === "compare-model") {
+        const owner = model;
+        const revision = graphRevision;
+        const generation = ++comparisonRequest;
+        const alreadyRunning = comparisonInFlight;
+        if (!alreadyRunning) comparisonInFlight = true;
+        const isCurrent = () =>
+          active &&
+          model === owner &&
+          graphRevision === revision &&
+          comparisonRequest === generation;
+        try {
+          const result = await log.run(
+            "Compare ONNX models",
+            async (id) => {
+              if (
+                typeof message.requestId !== "number" ||
+                !Number.isSafeInteger(message.requestId) ||
+                message.requestId <= 0
+              )
+                throw new Error("Invalid comparison request.");
+              if (alreadyRunning)
+                throw new Error(
+                  "A previous comparison is still finishing. Try again when it completes.",
+                );
+              const current = requireModel();
+              if (current.graph.pipeline)
+                throw new Error(
+                  "Comparing PipelineProto containers is not supported.",
+                );
+              const selection = await pickLocalModel();
+              if (!isCurrent()) return;
+              if (!selection?.[0]) {
+                log.record("CANCELLED", "Compare ONNX models", id);
+                return { cancelled: true };
+              }
+              const target = await readGraph(
+                selection[0],
+                log,
+                undefined,
+                undefined,
+                undefined,
+                archives,
+              );
+              if (!isCurrent()) return;
+              if (!target) {
+                log.record("CANCELLED", "Compare ONNX models", id);
+                return { cancelled: true };
+              }
+              if (target.graph.pipeline)
+                throw new Error(
+                  "Comparing PipelineProto containers is not supported.",
+                );
+              const sourceNative = await nativeModel(current, log, () => {
+                void sendStatus();
+              });
+              if (!isCurrent()) return;
+              if (!target.native)
+                throw new Error("The target model is unavailable.");
+              const diff = await diffModels(sourceNative, target.native);
+              if (!isCurrent()) return;
+              return {
+                diff,
+                source: current.fileName ?? current.graph.name,
+                target: locationText(selection[0]),
+              };
+            },
+            message.actionId,
+          );
+          if (isCurrent() && result)
+            await postMessage({
+              type: "compare-result",
+              requestId: message.requestId,
+              ...result,
+            });
+        } catch (error) {
+          if (!isCurrent()) return;
+          await postMessage({
+            type: "compare-error",
+            requestId: message.requestId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        } finally {
+          if (!alreadyRunning) comparisonInFlight = false;
+        }
       } else if (
         message?.type === "memory-inputs" ||
         message?.type === "memory-profile"
@@ -4913,6 +5003,7 @@ async function configurePanel(
           );
         }
       } else if (message?.type === "refresh-shapes") {
+        comparisonRequest++;
         const requestedModel = model;
         const requestedGraphRevision = graphRevision;
         let refreshed: Graph;

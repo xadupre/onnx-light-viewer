@@ -38,6 +38,189 @@ function selectionHistory(history) {
   }));
 }
 
+test("comparison host reports real model differences, cancellation and unsupported inputs", async (t) => {
+  const extension = await openExtension("fusion.onnx", undefined, true);
+  t.after(() => extension.dispose());
+  await extension.receive({ type: "ready" });
+  const original = extension.messages.findLast(
+    ({ type }) => type === "graph",
+  ).graph;
+  extension.setOpenSelection(require.resolve("./models/fusion-scaled.onnx"));
+  await extension.receive({ type: "compare-model", requestId: 1 });
+  const result = extension.messages.findLast(
+    ({ type }) => type === "compare-result",
+  );
+  assert.equal(result.requestId, 1);
+  assert.ok(
+    result.diff.steps.some((step) => step.addedInitializers.includes("scale")),
+  );
+  assert.deepEqual(
+    extension.messages.findLast(({ type }) => type === "graph").graph,
+    original,
+  );
+  assert.equal(JSON.stringify(result.diff).includes("raw_data"), false);
+
+  extension.setOpenSelection(undefined);
+  await extension.receive({ type: "compare-model", requestId: 2 });
+  assert.deepEqual(extension.messages.at(-1), {
+    type: "compare-result",
+    requestId: 2,
+    cancelled: true,
+  });
+  extension.setOpenSelection(require.resolve("./models/relu.onnx"));
+  await extension.receive({ type: "compare-model", requestId: 3 });
+  assert.equal(extension.messages.at(-1).type, "compare-error");
+  assert.match(extension.messages.at(-1).error, /interface|input|output/i);
+  extension.setOpenSelection(require.resolve("./models/tiny.pipe-onnx"));
+  await extension.receive({ type: "compare-model", requestId: 4 });
+  assert.equal(extension.messages.at(-1).type, "compare-error");
+  assert.match(extension.messages.at(-1).error, /PipelineProto/);
+  await extension.receive({ type: "compare-model", requestId: -1 });
+  assert.match(extension.messages.at(-1).error, /Invalid comparison request/);
+
+  const pipeline = await openExtension("tiny.pipe-onnx", undefined, true);
+  t.after(() => pipeline.dispose());
+  await pipeline.receive({ type: "compare-model", requestId: 1 });
+  assert.match(pipeline.messages.at(-1).error, /PipelineProto/);
+  assert.equal(pipeline.openDialogs.length, 0);
+});
+
+test("comparison uses the current unsaved fusion rather than reloading the source", async (t) => {
+  if (sdkReplaySkip) return t.skip(sdkReplaySkip);
+  const extension = await openExtension("fusion.onnx", undefined, true);
+  t.after(() => extension.dispose());
+  await extension.receive({
+    type: "preview-fusion",
+    pattern: "TransposeTranspose",
+    requestId: 1,
+  });
+  const preview = extension.messages.findLast(
+    ({ type }) => type === "fusion-preview",
+  );
+  assert.ok(preview.matches.length);
+  await extension.receive({
+    type: "apply-fusion",
+    previewId: preview.previewId,
+    candidates: [0],
+    requestId: 2,
+  });
+  assert.equal(extension.messages.at(-1).type, "fusion-info");
+  const modified = extension.messages.findLast(({ type }) => type === "graph");
+  assert.equal(modified.file.fusionCount, 1);
+  extension.setOpenSelection(require.resolve("./models/fusion.onnx"));
+  await extension.receive({ type: "compare-model", requestId: 3 });
+  const result = extension.messages.findLast(
+    ({ type }) => type === "compare-result",
+  );
+  assert.equal(result.requestId, 3);
+  assert.ok(result.diff.steps.length > 0);
+  assert.equal(
+    extension.messages.findLast(({ type }) => type === "graph"),
+    modified,
+  );
+});
+
+test("comparison prevents overlapping unfinished operations after cancellation", async (t) => {
+  const extension = await openExtension("fusion.onnx", undefined, true);
+  t.after(() => extension.dispose());
+  extension.setOpenSelection(require.resolve("./models/fusion-scaled.onnx"));
+  const choice = extension.pauseNextOpenDialog();
+  t.after(choice.release);
+  const first = extension.receive({ type: "compare-model", requestId: 1 });
+  await choice.opened;
+  await extension.receive({ type: "cancel-comparison" });
+  const dialogs = extension.openDialogs.length;
+  await extension.receive({ type: "compare-model", requestId: 2 });
+  assert.equal(extension.messages.at(-1).type, "compare-error");
+  assert.match(extension.messages.at(-1).error, /still finishing/);
+  assert.equal(extension.openDialogs.length, dialogs);
+  choice.release();
+  await first;
+  await extension.receive({ type: "compare-model", requestId: 3 });
+  assert.equal(extension.messages.at(-1).type, "compare-result");
+});
+
+test("comparison ignores stale choices, worker results and errors after model changes or disposal", async (t) => {
+  const extension = await openExtension("fusion.onnx", undefined, true);
+  t.after(() => extension.dispose());
+  extension.setOpenSelection(require.resolve("./models/fusion-scaled.onnx"));
+  const choice = extension.pauseNextOpenDialog();
+  t.after(choice.release);
+  const pendingChoice = extension.receive({
+    type: "compare-model",
+    requestId: 11,
+  });
+  await choice.opened;
+  await extension.openBytes(
+    "replacement.onnx",
+    readFileSync(require.resolve("./models/fusion.onnx")),
+  );
+  choice.release();
+  await pendingChoice;
+  const responses = () =>
+    extension.messages.filter(({ type }) =>
+      ["compare-result", "compare-error"].includes(type),
+    );
+  assert.equal(
+    responses().some(({ requestId }) => requestId === 11),
+    false,
+  );
+
+  const realDiff = extension.graph.diffModels;
+  let release, arrived;
+  let gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  let started = new Promise((resolve) => {
+    arrived = resolve;
+  });
+  t.after(() => release());
+  extension.graph.diffModels = async (...args) => {
+    const result = await realDiff(...args);
+    arrived();
+    await gate;
+    return result;
+  };
+  extension.setOpenSelection(require.resolve("./models/fusion.onnx"));
+  const pendingResult = extension.receive({
+    type: "compare-model",
+    requestId: 12,
+  });
+  await started;
+  await extension.receive({ type: "refresh-shapes" });
+  release();
+  await pendingResult;
+  assert.equal(
+    responses().some(({ requestId }) => requestId === 12),
+    false,
+  );
+
+  gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  started = new Promise((resolve) => {
+    arrived = resolve;
+  });
+  extension.graph.diffModels = async (...args) => {
+    await realDiff(...args);
+    arrived();
+    await gate;
+    throw new Error("late comparison failure");
+  };
+  const pendingError = extension.receive({
+    type: "compare-model",
+    requestId: 13,
+  });
+  await started;
+  extension.dispose();
+  release();
+  await pendingError;
+  assert.equal(
+    responses().some(({ requestId }) => requestId === 13),
+    false,
+  );
+});
+
 test("device inspection is trust-gated, correlated and uses the requested Python executable", async (t) => {
   const extension = await openExtension();
   t.after(() => extension.dispose());
@@ -645,6 +828,7 @@ async function openExtension(
     Promise.all([...receivers].map((callback) => callback(message)));
   let selection;
   let openDialogFailure;
+  let openDialogGate;
   let clipboardText = "";
   let clipboardFailure;
   const clipboardWrites = [];
@@ -859,7 +1043,14 @@ async function openExtension(
           openDialogFailure = undefined;
           throw error;
         }
-        return selection;
+        const selected = selection;
+        const gate = openDialogGate;
+        openDialogGate = undefined;
+        if (gate) {
+          gate.arrived();
+          await gate.wait;
+        }
+        return selected;
       },
       showInputBox: async (options) => {
         if (!options.password) return huggingFaceInput;
@@ -1001,6 +1192,7 @@ async function openExtension(
   }
   return {
     messages,
+    graph,
     errors,
     warnings,
     setWarningChoices: (...choices) => warningChoices.push(...choices),
@@ -1057,6 +1249,17 @@ async function openExtension(
     },
     failNextOpenDialog: (message) => {
       openDialogFailure = new Error(message);
+    },
+    pauseNextOpenDialog: () => {
+      let release, arrived;
+      const wait = new Promise((resolve) => {
+        release = resolve;
+      });
+      const opened = new Promise((resolve) => {
+        arrived = resolve;
+      });
+      openDialogGate = { wait, arrived };
+      return { opened, release };
     },
     setClipboard: (text, error) => {
       clipboardText = text;
@@ -8277,7 +8480,7 @@ test("Rewritings removes identities introduced by patterns and keeps replayable 
   assert.deepEqual(extension.errors, []);
 });
 
-test("Rewritings exposes five actions, appends one match and refuses one next step", async (t) => {
+test("Rewritings exposes its actions, appends one match and refuses one next step", async (t) => {
   const extension = await openExtension("fusion.onnx", undefined, true);
   t.after(() => extension.dispose());
   const dom = new JSDOM(extension.webview.html, {
@@ -8333,6 +8536,7 @@ test("Rewritings exposes five actions, appends one match and refuses one next st
       "Append New",
       "Global Rewriting",
       "Create rewriting",
+      "Compare",
     ],
   );
   assert.equal(document.getElementById("refuse-next").disabled, true);
@@ -8354,6 +8558,7 @@ test("Rewritings exposes five actions, appends one match and refuses one next st
       "Append New",
       "Global Rewriting",
       "Create rewriting",
+      "Compare",
     ],
   );
   document.getElementById("unfuse-last").click();
