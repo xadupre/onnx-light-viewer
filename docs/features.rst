@@ -20,7 +20,7 @@ application tabs are available without loading a model.
 See :doc:`features/navigation`.
 
 .. figure:: _static/feature-themes.png
-   :alt: Graph name, node and initializer counts, and pending rewritings on one line, without duplicate version labels.
+   :alt: Single-row viewer tabs above the graph name, rewriting selector and node and initializer counts.
    :width: 100%
 
    Keep the graph header compact without removing controls or Status details.
@@ -557,11 +557,11 @@ In-memory only; unsupported operators may fail.
 Symbolic dimension names and equalities
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Open **Symbolic** to list all distinct stored symbolic dimension labels, including
-nested graphs, functions and pipeline stages. To declare two dimensions equal,
-select the name to **Replace**, select the name to **Keep**, then choose
-**Declare equal**. Every exact occurrence of the replaced label becomes the kept
-label; expressions containing that label as a substring are not rewritten.
+Open **Symbolic → Make dimensions equivalent** to list distinct symbolic dimension
+labels, including nested graphs, functions and pipeline stages. Select a dimension,
+then its destination, or drag it to the right of the equals sign on the line of
+the name to keep. Choose **Apply replacements** to update the names throughout
+the model, including in dimension expressions.
 Only declare an equality you know is valid for your model.
 
 Choose **Shorten dimension names** to remove a common namespace prefix, such as
@@ -571,7 +571,7 @@ No weight payloads are read during renaming.
 See :doc:`features/inspection`.
 
 .. figure:: _static/feature-symbolic.png
-   :alt: Symbolic panel listing dimension labels with Replace and Keep selectors to declare an equality.
+   :alt: Symbolic panel with Make dimensions equivalent expanded, dimension names and equality drop targets.
    :width: 100%
 
    List symbolic dimensions and choose which name to keep when declaring an equality.
@@ -721,17 +721,17 @@ Unfuse (undo native edits)
 
 Choose a saved rewriting in the dropdown between the graph name and node counts.
 **None** is the default and displays the original graph. Selecting a name applies
-that alternative and opens its ordered steps in **Fuse / Unfuse**; selecting
+that alternative and opens its ordered steps in **Rewritings**; selecting
 **None** again restores the original graph without a pending replay.
 Switching alternatives replaces current native fusion edits, not the source file.
 
 .. figure:: _static/feature-rewriting-selector.png
-   :alt: Header rewriting selector showing a saved scenario, with its ordered steps and Unfuse actions together in the Fuse / Unfuse panel.
+   :alt: Header rewriting selector showing a saved scenario, with applied and pending steps and Unfuse actions in Rewritings.
    :width: 100%
 
    Select a named rewriting from the header; inspect and undo it in one panel.
 
-Open **Fuse / Unfuse** to undo
+Open **Rewritings** to undo
 native edits without changing the source file. **Unfuse last** reverses one
 complete operation: a batch of selected matches, a global optimization, a
 global pass or an applied rewriting-scenario step/batch. Repeat to go back
