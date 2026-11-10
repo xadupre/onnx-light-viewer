@@ -105,25 +105,32 @@ function routeGraphPorts(graph, sizes, result) {
         row.index = index;
       });
   };
-  const clear = (source, target, points, routed) => {
+  const clear = (
+    source,
+    target,
+    points,
+    routed,
+    budget = { remaining: 256 },
+    blockers,
+  ) => {
     obstacles ??= graphSpatialIndex(boxes);
     const curve = flattenGraphPath(points, routed);
-    const budget = { remaining: 256 };
     for (let index = 1; index < curve.length; index++) {
       if (--budget.remaining < 0) return false;
       const start = curve[index - 1];
       const end = curve[index];
-      if (
-        obstacles.find(
-          graphSegmentBounds(start, end, 1),
-          (node) =>
-            node.id !== source &&
-            node.id !== target &&
-            graphSegmentHitsBox(start, end, node.bounds, 1),
-          budget,
-        )
-      )
+      const hit = obstacles.find(
+        graphSegmentBounds(start, end, 1),
+        (node) =>
+          node.id !== source &&
+          node.id !== target &&
+          graphSegmentHitsBox(start, end, node.bounds, 1),
+        budget,
+      );
+      if (hit) {
+        if (hit.bounds) blockers?.add(hit);
         return false;
+      }
     }
     return true;
   };
@@ -143,7 +150,7 @@ function routeGraphPorts(graph, sizes, result) {
         inputs.length,
       );
       const route = result.routes.get(node.id)?.get(source) ?? [];
-      if (!fromOffset && !toOffset) {
+      if (!fromOffset && !toOffset && !route.length) {
         routes[index] = route;
         return;
       }
@@ -167,6 +174,65 @@ function routeGraphPorts(graph, sizes, result) {
       prepareRows();
       const fromRow = rows.get(from.y);
       const toRow = rows.get(to.y);
+      const span = toRow.index - fromRow.index;
+      if (span >= 2 && span <= 4) {
+        const budget = { remaining: 256 };
+        const blockers = new Set();
+        if (clear(source, node.id, [start, end], false, budget, blockers)) {
+          routes[index] = [];
+          return;
+        }
+        const exit = {
+          x: start.x,
+          y: fromRow.bottom + graphRouteRadius + 8,
+        };
+        const entry = {
+          x: end.x,
+          y: toRow.top - graphRouteRadius - 8,
+        };
+        const lanes = new Set([start.x, end.x, (start.x + end.x) / 2]);
+        const tried = new Set();
+        const distance = (x) => Math.abs(start.x - x) + Math.abs(end.x - x);
+        // Discover nearby corridors without searching every node or expanding long edges.
+        for (let attempt = 0; attempt < 8 && budget.remaining > 0; attempt++) {
+          for (const { bounds } of blockers) {
+            lanes.add(bounds.left - graphRouteRadius - 1);
+            lanes.add(bounds.right + graphRouteRadius + 1);
+          }
+          const lane = [...lanes]
+            .filter(
+              (x) =>
+                !tried.has(x) &&
+                x >= result.bounds.x &&
+                x <= result.bounds.x + result.bounds.width &&
+                ![...blockers].some(
+                  ({ bounds }) => x >= bounds.left - 1 && x <= bounds.right + 1,
+                ),
+            )
+            .sort((a, b) => distance(a) - distance(b) || a - b)[0];
+          if (lane === undefined) break;
+          tried.add(lane);
+          const local = [
+            start,
+            exit,
+            { x: lane, y: exit.y },
+            { x: lane, y: entry.y },
+            entry,
+            end,
+          ];
+          // Rounded bends stay in the empty row gaps; only the lane spans operator rows.
+          if (
+            clear(source, node.id, local.slice(2, 4), false, budget, blockers)
+          ) {
+            routes[index] = local.slice(1, -1);
+            return;
+          }
+        }
+      }
+      if (!fromOffset && !toOffset) {
+        routes[index] = route;
+        return;
+      }
       if (
         toRow.index === fromRow.index + 1 &&
         toRow.top - fromRow.bottom >= (graphRouteRadius + 8) * 2
