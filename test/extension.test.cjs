@@ -3117,7 +3117,10 @@ test("opens outside-workspace models and saves encrypted copies through an optio
   submit("memory-form");
   await flush();
   assert.equal(document.getElementById("memory-results").hidden, false);
-  assert.equal(document.getElementById("memory-peak").textContent, "928 bytes");
+  assert.equal(
+    document.getElementById("memory-peak").textContent,
+    "1.6 KiB (1,664 bytes)",
+  );
   assert.match(
     document.getElementById("memory-status").textContent,
     /5 estimated node events/,

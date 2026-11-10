@@ -102,11 +102,11 @@ explicitly instead of expanding indefinitely.
 This reads the physical layout only: it does not run decoder functions or
 dequantize packed bytes into logical model weights.
 
-Open ``examples/quantized-2bit.onnx`` or ``examples/quantized-3bit.onnx`` and select
-**Dequantize** to inspect portable Q2_K/Q3_K weight layouts. The 2-bit example
-uses an inline declaration; the 3-bit example uses a model-scoped type reference.
+Open ``examples/quantized-4bit.onnx`` or ``examples/quantized-8bit.onnx`` and select
+**Dequantize** to inspect portable INT4/INT8 weight layouts. The 4-bit example
+uses an inline declaration; the 8-bit example uses a model-scoped type reference.
 These are onnx-light extensions, not standard ONNX or GGUF storage formats.
-With onnx-light 0.2.1 Python bindings and their dependencies available, regenerate
+With onnx-light 0.2.7 Python bindings and their dependencies available, regenerate
 both examples from the repository root:
 
 .. code-block:: sh

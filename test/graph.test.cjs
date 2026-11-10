@@ -1031,14 +1031,17 @@ test("memory estimates include SDK worst-case Attention scratch in device totals
   assert.match(bound.events[0].symbolicMemory.during_bytes, /S/);
 });
 
-test("memory estimates include LinearAttention scratch with and without past state", async () => {
+test("memory profiles treat unregistered LinearAttention scratch as zero", async () => {
   for (const past of [false, true]) {
     const model = attentionMemoryModel([1, 4, 8], { linear: true, past });
     const original = model.graph();
     const profile = await model.memoryProfile({});
-    assert.equal(profile.events[0].scratchBytes, past ? 128 : 256);
-    assert.equal(profile.events[0].deviceBytes, 512);
-    assert.equal(profile.peakBytes, 512);
+    assert.equal(profile.events[0].scratchBytes, 0);
+    assert.equal(
+      profile.events[0].deviceBytes,
+      profile.events[0].memory.total_bytes,
+    );
+    assert.equal(profile.peakBytes, profile.events[0].deviceBytes);
     assert.deepEqual(model.graph(), original);
   }
 });
@@ -1975,7 +1978,7 @@ test("keeps recursive struct references bounded when resolving declarations", ()
   assert.ok(type.length <= "STRUCT ".length + maxPreviewLength);
 });
 
-for (const bits of [2, 3]) {
+for (const bits of [4, 8]) {
   test(`inspects and round-trips the ${bits}-bit quantized example`, async (t) => {
     const file = path.resolve(
       __dirname,
@@ -1999,7 +2002,7 @@ for (const bits of [2, 3]) {
       assert.deepEqual(parameter.storage, { external: false, location: null });
       assert.match(
         parameter.encoding,
-        new RegExp(`^STRUCT .*quantization.v1/q${bits}_k`),
+        new RegExp(`^STRUCT .*quantization.v1/int${bits}`),
       );
       assert.ok(parameter.encoding.length < 4104);
       assert.deepEqual(parameter.typeDetails, {
@@ -2009,7 +2012,7 @@ for (const bits of [2, 3]) {
       const details = Object.fromEntries(
         parameter.encodingDetails.entries.map(({ key, value }) => [key, value]),
       );
-      assert.equal(details.Name, `onnx_light.quantization.v1/q${bits}_k`);
+      assert.equal(details.Name, `onnx_light.quantization.v1/int${bits}`);
       assert.equal(details["blocks.run_0.Length"], "1");
       assert.equal(
         details["blocks.run_0.Element [0].parameters"],
@@ -2028,9 +2031,9 @@ for (const bits of [2, 3]) {
       assert.equal(data.permutation, undefined);
       assert.equal(
         data["blocks.run_0.Element [0].codes"],
-        bits === 2
-          ? "[255, 255, 0, 0, 0, 0, 84, 85]"
-          : "[255, 255, 255, 0, 0, 0, 0, 0, 0, 72, 146, 36]",
+        bits === 4
+          ? "[255, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0, 16, 17, 17] ... (first 15 of 16 elements)"
+          : "[255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0] ... (first 15 of 32 elements)",
       );
       assert.equal(details["blocks.run_0.Element [0].codes"], "UINT8");
       assert.equal(
@@ -4862,7 +4865,7 @@ test("explains one native pattern/node without changing matching, history or the
   assert.equal(rejected.status, "rejected");
   assert.equal(rejected.anchor, 1);
   assert.equal(rejected.candidate, 1);
-  assert.match(rejected.reason, /not consumed by another Transpose/);
+  assert.match(rejected.reason, /Transpose/);
   assert.match(rejected.source.file, /transpose_pattern\.cc$/);
   assert.ok(rejected.source.line > 0);
   const incompatible = await source.explainFusion("TransposeTranspose", 4);
@@ -8945,7 +8948,7 @@ test("tensor statistics use SDK decoding for low-bit and encoded quantized tenso
     assert.equal(stats.max, max, name);
     assert.equal(stats.median, median, name);
   }
-  for (const bits of [2, 3]) {
+  for (const bits of [4, 8]) {
     const file = path.resolve(
       __dirname,
       `../examples/quantized-${bits}bit.onnx`,

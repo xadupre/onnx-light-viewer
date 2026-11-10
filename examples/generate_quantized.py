@@ -1,4 +1,4 @@
-"""Generate small models with portable onnx-light 2-bit and 3-bit weights."""
+"""Generate small models with portable onnx-light 4-bit and 8-bit weights."""
 
 from pathlib import Path
 
@@ -17,7 +17,7 @@ from onnx_light.onnx_core.quantization import (
 )
 
 
-for bits, profile in ((2, QuantizationFormat.Q2_K), (3, QuantizationFormat.Q3_K)):
+for bits, profile in ((4, QuantizationFormat.INT4), (8, QuantizationFormat.INT8)):
     weight = oh.make_tensor(
         "weight", TensorProto.FLOAT, [8, 4], [(index - 16) / 16 for index in range(32)]
     )
@@ -46,7 +46,7 @@ for bits, profile in ((2, QuantizationFormat.Q2_K), (3, QuantizationFormat.Q3_K)
         producer_name="onnx-light-viewer",
         opset_imports=[oh.make_opsetid("", 21), oh.make_opsetid("ai.rt", 1)],
     )
-    if bits == 3:
+    if bits == 8:
         declaration = model.struct_types.add()
         declaration.CopyFrom(encoded.struct_type)
         declaration.type_id = 1
