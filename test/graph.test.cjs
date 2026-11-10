@@ -1,5 +1,5 @@
 const assert = require("node:assert/strict");
-const { execFileSync } = require("node:child_process");
+const { execFileSync, spawnSync } = require("node:child_process");
 const { createCipheriv, createDecipheriv, pbkdf2Sync } = require("node:crypto");
 const {
   readFileSync,
@@ -2884,6 +2884,8 @@ test("saves complete streamed weights, inferred shapes and authenticated encrypt
 });
 
 test("ORT serialization restores streamed and external weights without mutating the retained model", async (t) => {
+  const ortAvailable =
+    spawnSync(python, ["-c", "import numpy, onnxruntime"]).status === 0;
   const directory = mkdtempSync(path.join(tmpdir(), "viewer-ort-weights-"));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const payload = Buffer.alloc(256);
@@ -2932,22 +2934,28 @@ test("ORT serialization restores streamed and external weights without mutating 
         await restored.serialize(undefined, undefined, false, "ort"),
       );
     }
-    const output = execFileSync(
-      python,
-      [
-        "-c",
-        `import json, sys
+    await t.test(
+      `Python ONNX Runtime executes restored weights from tensor field ${field}`,
+      { skip: !ortAvailable && "Install numpy and onnxruntime." },
+      () => {
+        const output = execFileSync(
+          python,
+          [
+            "-c",
+            `import json, sys
 import numpy as np
 import onnxruntime as ort
 options = ort.SessionOptions()
 options.intra_op_num_threads = 1
 session = ort.InferenceSession(sys.argv[1], sess_options=options, providers=["CPUExecutionProvider"])
 print(json.dumps(session.run(None, {"x": np.ones((1, 8), dtype=np.float32)})[0].tolist()))`,
-        ortFile,
-      ],
-      { encoding: "utf8" },
+            ortFile,
+          ],
+          { encoding: "utf8" },
+        );
+        assert.deepEqual(JSON.parse(output), [Array(8).fill(8)]);
+      },
     );
-    assert.deepEqual(JSON.parse(output), [Array(8).fill(8)]);
   }
   const relu = loadModel(modelBytes("relu.onnx"), "relu");
   assert.throws(
