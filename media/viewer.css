@@ -1513,6 +1513,19 @@ button:disabled {
 .fusion-picker summary {
   cursor: pointer;
 }
+#fusion-panel > .fusion-picker,
+#fusion-panel > #fusion-pattern-group,
+#rewriting-actions {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+#rewriting-steps > li {
+  padding: 8px 0;
+}
+#rewriting-steps > li + li {
+  border-top: 1px solid var(--border);
+}
 #fusion-diagnostics[aria-disabled="true"] summary {
   cursor: default;
   opacity: 0.5;

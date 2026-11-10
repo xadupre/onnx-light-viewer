@@ -5,6 +5,58 @@ const { JSDOM } = require("jsdom");
 const { huggingFaceTasks } = require("../dist/huggingFaceTasks");
 const { webviewHtml } = require("../dist/webview");
 
+test("rewritings separates sections and steps without affecting other panels", (t) => {
+  const dom = new JSDOM(
+    webviewHtml((name) => name, "test-source", "test-nonce"),
+  );
+  t.after(() => dom.window.close());
+  const { document } = dom.window;
+  const stylesheet = document.createElement("style");
+  stylesheet.textContent = readFileSync(
+    require.resolve("../media/viewer.css"),
+    "utf8",
+  );
+  document.head.append(stylesheet);
+  const style = (element) => dom.window.getComputedStyle(element);
+  const separator = [...stylesheet.sheet.cssRules].find((rule) =>
+    rule.selectorText?.includes("#fusion-panel > .fusion-picker"),
+  );
+  assert.equal(separator.style.borderTop, "1px solid var(--border)");
+  const panel = document.getElementById("fusion-panel");
+  assert.equal(style(panel).display, "none");
+  panel.hidden = false;
+  for (const id of [
+    "rewriting-actions",
+    "comparison-panel",
+    "global-rewriting-panel",
+    "fusion-pattern-group",
+  ]) {
+    const section = document.getElementById(id);
+    if (section.hidden) {
+      assert.equal(style(section).display, "none");
+      section.hidden = false;
+    }
+    assert.ok(section.matches(separator.selectorText), id);
+    assert.equal(style(section).marginTop, "16px", id);
+    assert.equal(style(section).paddingTop, "12px", id);
+  }
+  const steps = document.getElementById("rewriting-steps");
+  steps.innerHTML = "<li>First rewriting</li><li>Second rewriting</li>";
+  const stepSeparator = [...stylesheet.sheet.cssRules].find(
+    (rule) => rule.selectorText === "#rewriting-steps > li + li",
+  );
+  assert.equal(stepSeparator.style.borderTop, "1px solid var(--border)");
+  assert.equal(steps.children[0].matches(stepSeparator.selectorText), false);
+  assert.equal(style(steps.children[0]).paddingTop, "8px");
+  assert.equal(steps.children[1].matches(stepSeparator.selectorText), true);
+  assert.equal(
+    document
+      .getElementById("optimization-pattern-group")
+      .matches(separator.selectorText),
+    false,
+  );
+});
+
 for (const initialTab of ["model", "logs"]) {
   test(`keeps controls and model header compact when opening ${initialTab}`, (t) => {
     const dom = new JSDOM(
