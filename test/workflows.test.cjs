@@ -46,7 +46,7 @@ test("extension release versions stay consistent", () => {
     path.resolve(__dirname, "..", "CHANGELOGS.md"),
     "utf8",
   );
-  assert.equal(manifest.version, "0.2.9");
+  assert.equal(manifest.version, "0.3.0");
   assert.equal(lock.version, manifest.version);
   assert.equal(lock.packages[""].version, manifest.version);
   assert.equal(changelog.match(/^(\d+\.\d+\.\d+) \(/m)[1], manifest.version);

@@ -3,7 +3,7 @@ Changelogs
 
 Notable changes to ONNX Light Viewer, newest first.
 
-0.2.9 (unreleased)
+0.3.0 (unreleased)
 ------------------
 
 - Fix release packaging by pinning VS Code type definitions to the minimum
