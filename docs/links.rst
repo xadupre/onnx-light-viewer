@@ -23,7 +23,7 @@ onnx-light projects
 * `onnx-light-viewer <https://github.com/xadupre/onnx-light-viewer>`_: this VS Code
   extension for inspecting ONNX graphs locally without executing models.
   **Specialized for:** VS Code model inspection with ``onnx-light``.
-  `Documentation <https://xadupre.github.io/docs/onnx-light-viewer/>`__.
+  :doc:`Documentation <index>`.
 * `onnx-light <https://github.com/xadupre/onnx-light>`_: ONNX without protobuf,
   used by this viewer to decode models locally.
   **Specialized for:** ONNX model I/O and graph analysis with ``onnx-light``.

@@ -180,6 +180,24 @@ test("documentation landing page displays the package version", () => {
   assert.match(index, /^Version: \|release\|$/m);
 });
 
+test("documentation uses relative paths for its own pages and CLI output examples", () => {
+  const links = readFileSync(
+    path.resolve(__dirname, "..", "docs", "links.rst"),
+    "utf8",
+  );
+  assert.match(links, /:doc:`Documentation <index>`/);
+  assert.doesNotMatch(
+    links,
+    /https:\/\/xadupre\.github\.io\/docs\/onnx-light-viewer\//,
+  );
+  const exporting = readFileSync(
+    path.resolve(__dirname, "..", "docs", "features", "exporting_models.rst"),
+    "utf8",
+  );
+  assert.match(exporting, /--output_path \.\/new-export/);
+  assert.doesNotMatch(exporting, /\/path\/to\//);
+});
+
 test("releases retain Linux and Windows packages while macOS builds are paused", () => {
   const source = workflow("release.yml");
   assert.match(source, /runs-on: \$\{\{ matrix\.os \}\}/);

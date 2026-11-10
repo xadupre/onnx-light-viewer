@@ -91,12 +91,13 @@ controls:
 Olive optimization is not forced offline: selected passes may fetch calibration
 datasets or other resources even when the checkpoint is local. Install the
 dependencies required by Olive and the chosen ONNX exporter yourself.
-The equivalent direct CLI invocation is:
+The equivalent direct CLI invocation writes to ``new-export`` relative to the
+current working directory:
 
 .. code-block:: bash
 
    python -m olive optimize -m Qwen/Qwen3-0.6B \
-       --output_path /path/to/new-export --precision fp32 \
+       --output_path ./new-export --precision fp32 \
        --device cpu --provider CPUExecutionProvider
 
 The viewer first caches the pinned checkpoint, then substitutes its absolute
