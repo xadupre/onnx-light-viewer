@@ -16821,6 +16821,13 @@ function nodePositions(document, selector = ".graph-node > rect") {
   });
 }
 
+function overviewNodeCount(document) {
+  return [...document.querySelectorAll("#overview-nodes > path")].reduce(
+    (count, path) => count + (path.getAttribute("d")?.match(/M/g)?.length ?? 0),
+    0,
+  );
+}
+
 test("connects ordered tensor slots, including repeated inputs and empty outputs", (t) => {
   const { document, load, pointer } = openViewer(t);
   load({
@@ -17230,6 +17237,251 @@ test("fits operator types and middle-truncates long names without reducing their
   pointer(graph, "pointermove", right - 2, y + 10);
   pointer(graph, "pointerup", right - 2, y + 10);
   assert.equal(groups[1].getAttribute("aria-pressed"), "true");
+});
+
+test("keeps operator colors at fit and extreme zoom in regular graphs", (t) => {
+  const { document, window, load, resize } = openViewer(t);
+  const nodes = chainGraph(6).nodes;
+  nodes[1].opType = "MatMul";
+  nodes[2].opType = "Attention";
+  nodes[3].opType = "Conv";
+  nodes[4].domain = "ai.onnx";
+  nodes[5].opType = "Attention";
+  nodes[5].domain = "com.microsoft";
+  load({ ...demoGraph, nodes });
+  document.getElementById("zoom-fit").click();
+
+  const groups = document.querySelectorAll(".graph-node");
+  const fills = [...groups].map(
+    (group) => window.getComputedStyle(group.querySelector("rect")).fill,
+  );
+  assert.equal(groups[1].classList.contains("compute-heavy"), true);
+  assert.equal(groups[2].classList.contains("compute-heavy"), true);
+  assert.equal(groups[3].classList.contains("compute-heavy"), true);
+  assert.equal(groups[4].classList.contains("custom-domain"), false);
+  assert.equal(groups[5].classList.contains("compute-heavy"), true);
+  assert.equal(groups[5].classList.contains("custom-domain"), true);
+  assert.equal(fills[1], "rgb(69, 42, 49)");
+  assert.equal(fills[2], "rgb(69, 42, 49)");
+  assert.equal(fills[3], "rgb(69, 42, 49)");
+  assert.equal(fills[4], "rgb(22, 44, 49)");
+  assert.equal(fills[5], "rgb(52, 44, 75)");
+
+  resize(1060, 70);
+  for (let step = 0; step < 50; step++)
+    document.getElementById("zoom-out").click();
+  const graph = document.getElementById("graph");
+  assert.ok(Number(graph.getAttribute("viewBox").split(" ")[3]) / 70 > 20);
+  for (let index = 1; index < groups.length; index++) {
+    const style = window.getComputedStyle(groups[index].querySelector("rect"));
+    assert.equal(style.fill, fills[index]);
+    assert.equal(style.stroke, fills[index]);
+    assert.equal(style.getPropertyValue("paint-order"), "stroke fill");
+  }
+  const selection = window.getComputedStyle(groups[0].querySelector("rect"));
+  assert.equal(selection.fill, fills[0]);
+  assert.equal(selection.stroke, "rgb(255, 209, 102)");
+
+  document.getElementById("zoom-readable").click();
+  for (let index = 1; index < groups.length; index++)
+    assert.equal(
+      window.getComputedStyle(groups[index].querySelector("rect")).fill,
+      fills[index],
+    );
+});
+
+test("shows a retractable, single-line operator legend at the bottom", (t) => {
+  const { document, window, load } = openViewer(t);
+  const legend = document.getElementById("operator-legend");
+  assert.ok(legend);
+  assert.equal(legend.tagName, "DETAILS");
+  assert.equal(legend.getAttribute("aria-label"), "Operator colors");
+  assert.equal(legend.open, true);
+  assert.equal(
+    legend.previousElementSibling,
+    document.querySelector(".navigation-controls"),
+  );
+  const dock = window.getComputedStyle(legend.parentElement);
+  assert.equal(dock.left, "0px");
+  assert.equal(dock.bottom, "0px");
+  assert.equal(dock.flexDirection, "column");
+  assert.equal(dock.pointerEvents, "none");
+  assert.equal(window.getComputedStyle(legend).pointerEvents, "auto");
+  assert.equal(
+    window.getComputedStyle(legend.previousElementSibling).pointerEvents,
+    "auto",
+  );
+  const row = legend.querySelector(".operator-legend-items");
+  const rowStyle = window.getComputedStyle(row);
+  assert.equal(rowStyle.display, "flex");
+  assert.equal(rowStyle.flexWrap, "nowrap");
+  assert.equal(rowStyle.whiteSpace, "nowrap");
+  const items = [...legend.querySelectorAll(".operator-legend-item")];
+  assert.deepEqual(
+    items.map((item) => item.textContent.trim()),
+    ["Other operators", "Compute-heavy", "Custom domain"],
+  );
+  assert.match(items[1].title, /MatMul.*Gemm.*Conv.*Attention/);
+  assert.match(items[2].title, /non-standard/i);
+
+  const nodes = chainGraph(4).nodes;
+  nodes[1].opType = "MatMul";
+  nodes[2].opType = "Attention";
+  nodes[2].domain = "com.microsoft";
+  load({ ...demoGraph, nodes });
+  for (const [item, id] of items.map((item, index) => [
+    item,
+    [3, 1, 2][index],
+  ])) {
+    const swatch = item.querySelector("svg");
+    assert.equal(swatch.getAttribute("aria-hidden"), "true");
+    const sample = window.getComputedStyle(swatch.querySelector("rect"));
+    const node = window.getComputedStyle(
+      document.querySelector(`[data-id="node-${id}"] > rect`),
+    );
+    assert.equal(sample.fill, node.fill);
+    assert.equal(sample.stroke, node.stroke);
+  }
+
+  const summary = legend.querySelector("summary");
+  assert.equal(summary.textContent, "Legend");
+  const graph = document.getElementById("graph");
+  const viewBox = graph.getAttribute("viewBox");
+  summary.click();
+  assert.equal(legend.open, false);
+  assert.equal(graph.getAttribute("viewBox"), viewBox);
+  load({ ...demoGraph, nodes });
+  assert.equal(legend.open, false);
+  summary.click();
+  assert.equal(legend.open, true);
+});
+
+test("retracts graph controls independently of the adjoining legend", (t) => {
+  const { document, window, load } = openViewer(t);
+  const controls = document.querySelector(".navigation-controls");
+  const legend = document.getElementById("operator-legend");
+  const summary = controls.querySelector("summary");
+  assert.equal(controls.tagName, "DETAILS");
+  assert.equal(controls.open, true);
+  assert.equal(controls.nextElementSibling, legend);
+  assert.equal(window.getComputedStyle(controls.parentElement).gap, "0px");
+  load(chainGraph(4));
+  const graph = document.getElementById("graph");
+  const viewBox = graph.getAttribute("viewBox");
+  summary.click();
+  assert.equal(controls.open, false);
+  assert.equal(legend.open, true);
+  assert.equal(graph.getAttribute("viewBox"), viewBox);
+  legend.querySelector("summary").click();
+  summary.click();
+  assert.equal(controls.open, true);
+  assert.equal(legend.open, false);
+  document.getElementById("zoom-in").click();
+  assert.notEqual(graph.getAttribute("viewBox"), viewBox);
+});
+
+test("preserves operator colors in batched overviews, including after moves and reloads", (t) => {
+  const { document, window, load, pointer } = openViewer(t);
+  const model = chainGraph(250);
+  const examples = [
+    ["normal_test", "Relu", "ai.onnx", "graph-node"],
+    ["matrix_test", "MatMul", "", "compute-heavy"],
+    ["attention_test", "Attention", "com.microsoft", "custom-domain"],
+    ["custom_test", "Relu", "example", "custom-domain"],
+    ["conv_test", "Conv", "ai.onnx", "compute-heavy"],
+    ["quantized_test", "QLinearMatMul", "", "compute-heavy"],
+  ];
+  for (const [index, [name, opType, domain]] of examples.entries())
+    Object.assign(model.nodes[index], { name, opType, domain });
+  load(model);
+  const graph = document.getElementById("graph");
+  const search = (name) => {
+    document.getElementById("node-search").value = name;
+    document
+      .getElementById("find-node")
+      .dispatchEvent(new window.Event("submit", { cancelable: true }));
+  };
+  const pathData = (group) => {
+    const rect = group.querySelector(":scope > rect");
+    const [dx, dy] = translationOffsets(group.getAttribute("transform"));
+    const x = Number(rect.getAttribute("x")) + dx;
+    const y = Number(rect.getAttribute("y")) + dy;
+    const width = Number(rect.getAttribute("width"));
+    const height = Number(rect.getAttribute("height"));
+    return `M${x},${y}h${width}v${height}h${-width}Z`;
+  };
+  const samples = examples.map(([name, , , category], index) => {
+    search(name);
+    graph.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape" }));
+    const group = document.querySelector(`[data-id="node-${index}"]`);
+    return {
+      name,
+      category,
+      path: pathData(group),
+      fill: window.getComputedStyle(group.querySelector(":scope > rect")).fill,
+    };
+  });
+  assert.equal(new Set(samples.map(({ fill }) => fill)).size, 3);
+
+  document.getElementById("zoom-fit").click();
+  assert.equal(
+    document.getElementById("graph-overview").getAttribute("display"),
+    "inline",
+  );
+  const paths = [...document.querySelectorAll("#overview-nodes > path")];
+  assert.deepEqual(
+    Object.fromEntries(
+      paths.map((path) => [
+        path.dataset.category,
+        path.getAttribute("d").match(/M/g)?.length ?? 0,
+      ]),
+    ),
+    { port: 2, "graph-node": 245, "compute-heavy": 3, "custom-domain": 2 },
+  );
+  for (const { name, category, path, fill } of samples) {
+    const batch = paths.find(
+      (candidate) => candidate.dataset.category === category,
+    );
+    assert.ok(batch.getAttribute("d").split(" ").includes(path), name);
+    assert.equal(window.getComputedStyle(batch).fill, fill, name);
+  }
+
+  for (let step = 0; step < 50; step++)
+    document.getElementById("zoom-out").click();
+  assert.ok(Number(graph.getAttribute("viewBox").split(" ")[3]) / 350 > 20);
+  for (const { category, fill } of samples) {
+    const batch = paths.find(
+      (candidate) => candidate.dataset.category === category,
+    );
+    const style = window.getComputedStyle(batch);
+    assert.equal(style.fill, fill);
+    assert.equal(style.stroke, fill);
+    assert.equal(style.getPropertyValue("paint-order"), "stroke fill");
+  }
+
+  search("matrix_test");
+  const moved = document.querySelector('[data-id="node-1"]');
+  const position = nodePositions(document, '[data-id="node-1"] > rect')[0];
+  const previous = pathData(moved);
+  pointer(moved, "pointerdown", position.x, position.y);
+  pointer(graph, "pointermove", position.x + 20, position.y + 10);
+  pointer(graph, "pointerup", position.x + 20, position.y + 10);
+  const updated = pathData(moved);
+  assert.notEqual(updated, previous);
+  document.getElementById("zoom-fit").click();
+  const heavy = paths.find((path) => path.dataset.category === "compute-heavy");
+  assert.ok(heavy.getAttribute("d").split(" ").includes(updated));
+  assert.ok(!heavy.getAttribute("d").split(" ").includes(previous));
+
+  load(chainGraph(250));
+  document.getElementById("zoom-fit").click();
+  assert.equal(heavy.getAttribute("d"), "");
+  assert.equal(
+    paths
+      .find((path) => path.dataset.category === "custom-domain")
+      .getAttribute("d"),
+    "",
+  );
 });
 
 test("clicking an arc highlights its full route and both endpoints without starting a drag", (t) => {
@@ -18233,10 +18485,11 @@ test("keyboard zoom shortcuts match controls and stay scoped to the graph canvas
 test("Top/Bottom buttons align model boundaries without changing zoom or node positions", (t) => {
   const { document, window, load, resize } = openViewer(t);
   const controls = document.querySelector(".zoom-controls");
-  const style = window.getComputedStyle(controls);
-  assert.equal(style.left, "18px");
-  assert.equal(style.bottom, "18px");
-  assert.equal(style.display, "grid");
+  const style = window.getComputedStyle(controls.parentElement.parentElement);
+  assert.equal(style.left, "0px");
+  assert.equal(style.bottom, "0px");
+  assert.equal(style.display, "flex");
+  assert.equal(window.getComputedStyle(controls).display, "grid");
   assert.deepEqual(
     [...controls.children].map((button) => [
       button.id,
@@ -18851,11 +19104,7 @@ test("virtualizes 20,000 nodes, finds distant operators and uses a batched overv
     document.getElementById("graph-overview").getAttribute("display"),
     "inline",
   );
-  assert.equal(
-    document.getElementById("overview-nodes").getAttribute("d").match(/M/g)
-      .length,
-    20_002,
-  );
+  assert.equal(overviewNodeCount(document), 20_002);
   assert.equal(
     document
       .getElementById("overview-edges-arrows")
@@ -18891,11 +19140,7 @@ test("virtualizes 20,000 nodes, finds distant operators and uses a batched overv
   load(chainGraph(1500));
   assert.ok(mounted() < 20);
   document.getElementById("zoom-fit").click();
-  assert.equal(
-    document.getElementById("overview-nodes").getAttribute("d").match(/M/g)
-      .length,
-    1502,
-  );
+  assert.equal(overviewNodeCount(document), 1502);
 });
 
 test("batches high-fanout connections without creating thousands of offscreen labels", async (t) => {
@@ -18988,11 +19233,7 @@ test("virtualizes models from 250 total nodes while preserving navigation and ca
     assert.equal(first.isConnected, true);
     document.getElementById("zoom-fit").click();
     assert.equal(mounted(), 0);
-    assert.equal(
-      document.getElementById("overview-nodes").getAttribute("d").match(/M/g)
-        .length,
-      length + 2,
-    );
+    assert.equal(overviewNodeCount(document), length + 2);
     document.getElementById("zoom-readable").click();
     assert.ok(mounted() > 0 && mounted() < 20);
   }

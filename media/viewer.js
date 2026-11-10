@@ -2158,6 +2158,8 @@ function fit() {
     height,
   };
   svg.classList.toggle("overview", scale > 2);
+  // A non-scaling outline can otherwise cover the fill of a distant node.
+  svg.classList.toggle("distant", scale > 20);
   overviewVisible = virtualized && scale > 2;
   byId("graph-overview").setAttribute(
     "display",
@@ -2395,15 +2397,23 @@ function connectionPath(connection, points = connectionPoints(connection)) {
 
 function drawOverview() {
   drawTaggedConnections("overview-edges", connections);
-  byId("overview-nodes").setAttribute(
-    "d",
-    [...nodeViews.values()]
-      .map(
-        ({ position, halfWidth, halfHeight }) =>
-          `M${position.x - halfWidth},${position.y - halfHeight}h${halfWidth * 2}v${halfHeight * 2}h${-halfWidth * 2}Z`,
-      )
-      .join(" "),
-  );
+  const batches = {
+    port: [],
+    "graph-node": [],
+    "compute-heavy": [],
+    "custom-domain": [],
+  };
+  for (const {
+    position,
+    halfWidth,
+    halfHeight,
+    overviewCategory,
+  } of nodeViews.values())
+    batches[overviewCategory ?? "port"].push(
+      `M${position.x - halfWidth},${position.y - halfHeight}h${halfWidth * 2}v${halfHeight * 2}h${-halfWidth * 2}Z`,
+    );
+  for (const path of byId("overview-nodes").children)
+    path.setAttribute("d", batches[path.dataset.category].join(" "));
   const labels = byId("overview-labels");
   labels.replaceChildren();
   for (const {
@@ -2678,7 +2688,7 @@ function render(graph, metadata) {
     "overview-edges-arrows",
   ])
     byId(id).removeAttribute("d");
-  byId("overview-nodes").removeAttribute("d");
+  for (const path of byId("overview-nodes").children) path.removeAttribute("d");
   byId("overview-labels").replaceChildren();
   graphMetadata = undefined;
   nodeMetadata = new Map();
@@ -2850,10 +2860,17 @@ function render(graph, metadata) {
     const position = positions.get(node.id);
     const size = sizes.get(node.id);
     const { storedInputs } = size;
+    const computeHeavy = /(MatMul|Gemm|Conv|Attention)/.test(node.opType);
+    const customDomain = node.domain && node.domain !== "ai.onnx";
+    const overviewCategory = customDomain
+      ? "custom-domain"
+      : computeHeavy
+        ? "compute-heavy"
+        : "graph-node";
     const create = (position) => {
       const top = position.y - size.height / 2;
       const group = element("g", {
-        class: "graph-node",
+        class: `graph-node${computeHeavy ? " compute-heavy" : ""}${customDomain ? " custom-domain" : ""}`,
         "aria-label": `${node.opType}: ${node.name}`,
       });
       group.append(
@@ -3022,6 +3039,7 @@ function render(graph, metadata) {
       position,
       halfWidth: size.width / 2,
       halfHeight: size.height / 2,
+      overviewCategory,
       typeFontSize: size.typeFontSize,
       subgraphs: size.subgraphs,
       parameterRows: size.parameterRows,
