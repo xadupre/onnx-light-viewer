@@ -175,7 +175,7 @@ test("documentation uses Python 3.13 for Sphinx 9.2 compatibility", () => {
   assert.match(documentation, /python-version: "3\.13"/);
 });
 
-test("documentation landing page displays the package version", () => {
+test("documentation landing page displays the package version and generation date", () => {
   const config = readFileSync(
     path.resolve(__dirname, "..", "docs", "conf.py"),
     "utf8",
@@ -191,6 +191,8 @@ test("documentation landing page displays the package version", () => {
   );
   assert.match(config, /\)\["version"\]/);
   assert.match(index, /^Version: \|release\|$/m);
+  assert.match(config, /^today_fmt = "%Y-%m-%d"$/m);
+  assert.match(index, /^Last generated: \|today\|$/m);
 });
 
 test("documentation uses relative paths for its own pages and CLI output examples", () => {

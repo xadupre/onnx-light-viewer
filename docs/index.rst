@@ -3,6 +3,8 @@ ONNX Light Viewer
 
 Version: |release|
 
+Last generated: |today|
+
 .. image:: ../media/onnx-badge.svg
    :target: https://onnx.ai/
    :alt: Uses ONNX
