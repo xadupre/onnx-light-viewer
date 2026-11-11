@@ -150,6 +150,8 @@ export interface TensorInformation {
 /** Display snapshot of one graph, not a recursive serialization of the model. */
 export interface Graph {
   name: string;
+  /** Model IR version as exact decimal text, or null if absent or no single model applies. */
+  irVersion: string | null;
   /** Declared imports, including unused domains; functions have their own imports. */
   opsets: { domain: string; version: string }[];
   /** Pipeline container or one of its stage graphs. */
@@ -175,7 +177,13 @@ export interface Graph {
 /** Root ports and counts without projecting individual operators, attributes or schemas. */
 export type GraphSummary = Pick<
   Graph,
-  "name" | "inputs" | "outputs" | "initializerCount" | "tensors" | "opsets"
+  | "name"
+  | "inputs"
+  | "outputs"
+  | "initializerCount"
+  | "tensors"
+  | "irVersion"
+  | "opsets"
 > & {
   nodeCount: number;
   functionCount?: number;
@@ -771,6 +779,7 @@ export function diffModels(
 /** Minimal Relu snapshot with native schema documentation, requiring no model file. */
 export const demoGraph: Graph = {
   name: "A first ONNX graph",
+  irVersion: "9",
   opsets: [{ domain: "ai.onnx", version: "13" }],
   breadcrumbs: [{ name: "A first ONNX graph", path: [] }],
   nodes: [

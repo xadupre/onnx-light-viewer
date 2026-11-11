@@ -164,6 +164,7 @@ test("Change versions validates optional integers, uses fusion busy lifecycle an
   };
   assert.equal(byId("change-versions").disabled, true);
   load(model.graph());
+  assert.equal(byId("node-ir-version").textContent, "9");
   byId("fuse-pattern").click();
   send({
     type: "fusion-patterns",
@@ -205,7 +206,7 @@ test("Change versions validates optional integers, uses fusion busy lifecycle an
   const next = messages.at(-1);
   assert.equal("opset" in next, false);
   assert.equal(next.irVersion, 10);
-  load(model.graph(), next.requestId);
+  load({ ...model.graph(), irVersion: "10" }, next.requestId);
   send({
     type: "versions-info",
     requestId: next.requestId,
@@ -214,6 +215,7 @@ test("Change versions validates optional integers, uses fusion busy lifecycle an
     opset: 13,
     irVersion: 10,
   });
+  assert.equal(byId("node-ir-version").textContent, "10");
   assert.equal(byId("fusion-panel").hidden, false);
   assert.equal(byId("versions-panel").hidden, false);
   assert.match(
@@ -242,6 +244,7 @@ test("Change versions validates optional integers, uses fusion busy lifecycle an
     irVersion: 99,
   });
   send({ type: "fusion-error", requestId: stale.requestId, error: "Obsolete" });
+  assert.equal(byId("node-ir-version").textContent, "9");
   assert.equal(byId("versions-status").textContent, "");
   assert.equal(byId("versions-panel").hidden, true);
   load({ ...model.graph(), pipeline: true });
@@ -14970,7 +14973,7 @@ test("shows actual attributes, connected initializer parameters and versioned de
     );
     assert.equal(
       document.getElementById("node-opset").textContent,
-      String(version),
+      `ai.onnx: ${version}`,
     );
     assert.match(attributes.textContent, /axis \(INT\) \[default\]/);
     assert.equal(attributes.querySelector("pre").textContent, axis);
@@ -16122,6 +16125,66 @@ test("replaces the demo with a no-operator graph and inspects its scope", (t) =>
   assert.equal(document.getElementById("node-name").textContent, "passthrough");
 });
 
+test("inspector shows model IR and domain-qualified opsets across selections", (t) => {
+  const { document, window, load } = openViewer(t);
+  const graph = {
+    ...demoGraph,
+    irVersion: "9007199254740993",
+    nodes: [
+      {
+        ...demoGraph.nodes[0],
+        domain: "com.example",
+        opset: "7",
+        outputs: ["middle"],
+      },
+      {
+        ...demoGraph.nodes[0],
+        id: "node-1",
+        domain: "custom.missing",
+        opset: null,
+        inputs: ["middle"],
+      },
+    ],
+  };
+  load(graph);
+  assert.equal(document.getElementById("node-domain"), null);
+  assert.deepEqual(
+    [...document.querySelectorAll("#node-details dl dt")].map(
+      (label) => label.textContent,
+    ),
+    ["NODE NAME", "OPSET", "IR VERSION"],
+  );
+  assert.equal(
+    document.getElementById("node-ir-version").textContent,
+    "9007199254740993",
+  );
+  assert.equal(
+    document.getElementById("node-opset").textContent,
+    "com.example: 7",
+  );
+  document
+    .querySelector('[data-id="node-1"]')
+    .dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter" }));
+  assert.equal(
+    document.getElementById("node-opset").textContent,
+    "custom.missing: —",
+  );
+  assert.equal(
+    document.getElementById("node-ir-version").textContent,
+    "9007199254740993",
+  );
+  document
+    .querySelector(".port:not(.output)")
+    .dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter" }));
+  assert.equal(document.getElementById("node-opset").textContent, "—");
+  assert.equal(
+    document.getElementById("node-ir-version").textContent,
+    "9007199254740993",
+  );
+  load({ ...graph, irVersion: null });
+  assert.equal(document.getElementById("node-ir-version").textContent, "—");
+});
+
 test("background selection inspects the current model, subgraph, function or pipeline", (t) => {
   const { document, window, load, pointer } = openViewer(t);
   const nested = loadModel(
@@ -16158,8 +16221,8 @@ test("background selection inspects the current model, subgraph, function or pip
     assert.equal(document.getElementById("node-title").textContent, kind);
     assert.equal(document.getElementById("node-name").textContent, graph.name);
     assert.equal(
-      document.getElementById("node-domain").textContent,
-      [...new Set(graph.opsets.map(({ domain }) => domain))].join(", "),
+      document.getElementById("node-ir-version").textContent,
+      graph.irVersion ?? "—",
     );
     assert.deepEqual(
       [...document.getElementById("node-opset").children].map(
@@ -16444,6 +16507,9 @@ test("pipeline model boxes show the stage identity and imports rather than opera
     "tiny.pipe-onnx",
   );
   const overview = pipeline.graph();
+  overview.nodes.forEach(({ pipelineModel }, index) => {
+    pipelineModel.irVersion = String(index + 7);
+  });
   load(overview);
   assert.match(
     document.getElementById("graph-summary").textContent,
@@ -16475,8 +16541,8 @@ test("pipeline model boxes show the stage identity and imports rather than opera
         .textContent.includes(`Contains ${model.nodeCount} operator`),
     );
     assert.equal(
-      document.getElementById("node-domain").textContent,
-      [...new Set(model.opsets.map(({ domain }) => domain))].join(", "),
+      document.getElementById("node-ir-version").textContent,
+      model.irVersion,
     );
     assert.deepEqual(
       [...document.getElementById("node-opset").children].map(
@@ -16489,6 +16555,7 @@ test("pipeline model boxes show the stage identity and imports rather than opera
   pointer(svg, "pointerdown", 0, 0);
   pointer(svg, "pointerup", 0, 0);
   assert.equal(document.getElementById("node-title").textContent, "Pipeline");
+  assert.equal(document.getElementById("node-ir-version").textContent, "—");
   assert.match(
     document.getElementById("node-description").textContent,
     /each box is a contained model, not an operator/,
@@ -16510,7 +16577,11 @@ test("pipeline model boxes show the stage identity and imports rather than opera
   );
   assert.equal(
     document.getElementById("node-opset").textContent,
-    stage.nodes[0].opset,
+    `${stage.nodes[0].domain}: ${stage.nodes[0].opset}`,
+  );
+  assert.equal(
+    document.getElementById("node-ir-version").textContent,
+    stage.irVersion,
   );
 });
 
@@ -20143,7 +20214,10 @@ test("drags graph inputs and outputs independently at zoom and updates their edg
     );
     assert.equal(document.getElementById("node-title").textContent, title);
     assert.equal(document.getElementById("node-name").textContent, name);
-    assert.equal(document.getElementById("node-domain").textContent, "—");
+    assert.equal(
+      document.getElementById("node-ir-version").textContent,
+      demoGraph.irVersion,
+    );
   }
 });
 

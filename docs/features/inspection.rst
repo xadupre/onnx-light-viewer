@@ -23,13 +23,13 @@ reopening, including after closing the application. Passwords and model data are
 not included in these preferences.
 
 .. image:: ../_static/inspection.png
-   :alt: Reshape inspector showing input and output tensor dimensions and an initializer.
+   :alt: Reshape inspector showing opset, IR version, tensor dimensions and an initializer.
    :width: 240px
 
-Select a node to see its name, domain, imported opset, inputs, outputs and typed
-attributes. Scalar and list values appear below the name/type heading without
-repeating the attribute name. Schema defaults are marked ``[default]``; long
-attribute arrays show a bounded preview.
+Select a node to see its name, domain-qualified opset, the model's IR version,
+inputs, outputs and typed attributes. Scalar and list values appear below the
+name/type heading without repeating the attribute name. Schema defaults are
+marked ``[default]``; long attribute arrays show a bounded preview.
 
 Click the background to inspect the current **Model**, **Graph**, **Function** or
 **Pipeline** instead of an operator. The inspector shows its name and ports.
@@ -39,8 +39,9 @@ and **Encoded initializers** separately, with counts, types, shapes and storage
 details. These lists include unused initializers declared in the current graph,
 not weights captured from a parent graph. For pipelines, open a model's graph
 to inspect its initializers.
-Functions show their own imports; a pipeline overview combines the imports of
-its models, preserving different versions of the same domain.
+Functions show their own imports and their containing model's IR version. A
+pipeline overview combines its models' imports, preserving different versions of
+the same domain; select a model to see that stage's IR version.
 
 Open **Symbolic** for **Refresh shapes**, **Refresh metadata**,
 **Refresh positions**, **Verify** and **Shorten dimension names**.

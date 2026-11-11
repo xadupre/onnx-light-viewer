@@ -31,6 +31,12 @@ Napi::Array OpsetImports(Napi::Env env, const auto &imports) {
   return result;
 }
 
+Napi::Value ModelIrVersion(Napi::Env env, const ol::ModelProto &model) {
+  if (!model.has_ir_version())
+    return env.Null();
+  return Text(env, std::to_string(model.ir_version()));
+}
+
 Napi::Array Dimensions(Napi::Env env, const ol::TensorShapeProto &shape) {
   auto result = Napi::Array::New(env);
   uint32_t index = 0;
@@ -865,6 +871,7 @@ Napi::Object ModelSummary(Napi::Env env, const ol::ModelProto &model,
   auto result = Napi::Object::New(env);
   result.Set("name", graph.name().empty() ? Text(env, file_name) : Text(env, graph.name()));
   result.Set("nodeCount", graph.node_size());
+  result.Set("irVersion", ModelIrVersion(env, model));
   result.Set("opsets", OpsetImports(env, model.opset_import()));
   result.Set("initializerCount", Napi::Number::New(env, initializers.size()));
   result.Set("denseInitializerCount", Napi::Number::New(env, dense_initializer_count));
@@ -1174,6 +1181,7 @@ Napi::Object ModelGraph(Napi::Env env, const ol::ModelProto &model, const std::s
   }
   auto result = Napi::Object::New(env);
   result.Set("name", graph.name().empty() ? Text(env, file_name) : Text(env, graph.name()));
+  result.Set("irVersion", ModelIrVersion(env, model));
   auto breadcrumbs = Napi::Array::New(env);
   GraphPath prefix;
   for (uint32_t depth = 0; depth < scopes.size(); ++depth) {

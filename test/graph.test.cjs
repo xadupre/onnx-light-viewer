@@ -1455,6 +1455,7 @@ test("pipeline statistics use summaries without projecting stages or repeating i
         outputs: [],
         initializerCount: 0,
         tensors: [],
+        irVersion: "9",
         opsets: [],
         nodeCount: 0,
         functionCount: 0,
@@ -1609,6 +1610,62 @@ test("pipeline metadata preserves present empty strings, exact integers and untr
   assert.equal(model.metadata().model[0].value, "Test pipeline");
 });
 
+test("projects exact model IR versions in graph scopes, summaries and pipeline stages", () => {
+  const functionsBytes = Buffer.concat([
+    modelBytes("functions.onnx"),
+    varintField(1, 8),
+  ]);
+  const nestedBytes = Buffer.concat([
+    modelBytes("subgraphs.onnx"),
+    varintField(1, 10),
+  ]);
+  const exactBytes = Buffer.concat([
+    modelBytes("relu.onnx"),
+    Buffer.from([8, 0x81, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x10]),
+  ]);
+  const functions = loadModel(functionsBytes, "functions.onnx");
+  const functionPath = functions.graph().nodes.find((node) => node.function)
+    .function.path;
+  assert.equal(functions.summary().irVersion, "8");
+  assert.equal(functions.graph(false, functionPath).irVersion, "8");
+
+  const nested = loadModel(nestedBytes, "subgraphs.onnx");
+  const nestedPath = nested
+    .graph()
+    .nodes.flatMap((node) =>
+      node.attributes.flatMap((item) => item.graphs ?? []),
+    )[0].path;
+  assert.equal(nested.graph().irVersion, "10");
+  assert.equal(nested.graph(false, nestedPath).irVersion, "10");
+
+  const exact = loadModel(exactBytes, "exact.onnx");
+  assert.equal(exact.graph().irVersion, "9007199254740993");
+  assert.equal(exact.summary().irVersion, "9007199254740993");
+
+  const pipeline = loadModel(
+    pipelineBytes({
+      embedding: functionsBytes,
+      prefill: nestedBytes,
+      decode: exactBytes,
+    }),
+    "versions.pipe-onnx",
+  );
+  const overview = pipeline.graph();
+  assert.equal(overview.irVersion, null);
+  assert.equal(pipeline.summary().irVersion, null);
+  for (const [index, [role, version]] of [
+    ["embedding", "8"],
+    ["prefill", "10"],
+    ["decode", "9007199254740993"],
+  ].entries()) {
+    assert.equal(overview.nodes[index].pipelineModel.irVersion, version);
+    assert.equal(
+      pipeline.graph(false, [{ pipeline: role }]).irVersion,
+      version,
+    );
+  }
+});
+
 test("projects all declared opsets, including unused domains and function-specific imports", () => {
   const bytes = Buffer.concat([
     modelBytes("custom.onnx"),
@@ -1685,6 +1742,7 @@ test("projects stage statistics without inspecting operator attributes or schema
     );
     assert.deepEqual(summary, {
       name: graph.name,
+      irVersion: graph.irVersion,
       opsets: graph.opsets,
       inputs: graph.inputs,
       outputs: graph.outputs,

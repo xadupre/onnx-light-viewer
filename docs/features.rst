@@ -466,13 +466,14 @@ sampling settings, while pipeline interface names and EOS defaults are preserved
 Inspection
 ^^^^^^^^^^
 
-Inspect types, symbolic shapes, attributes/schema defaults, dense/sparse/encoded
-initializer metadata, opaque/structured types, bounded previews and Markdown
-operator documentation. See :doc:`features/inspection`. External or omitted
-payloads are not read for previews; this is not a full tensor-data browser.
+Inspect the model's IR version, domain-qualified opsets, types, symbolic shapes,
+attributes/schema defaults, dense/sparse/encoded initializer metadata,
+opaque/structured types, bounded previews and Markdown operator documentation.
+See :doc:`features/inspection`. External or omitted payloads are not read for
+previews; this is not a full tensor-data browser.
 
 .. figure:: _static/feature-inspection.png
-   :alt: Reshape inspector showing input and output tensors, attributes and initializer details.
+   :alt: Reshape inspector showing domain-qualified opset, IR version, tensors and initializer details.
    :width: 100%
 
    Operator details accompany the selected graph node.

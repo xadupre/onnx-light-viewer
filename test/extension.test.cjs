@@ -3825,6 +3825,7 @@ test(
       /Pending rewritings reapplied/,
     );
     assert.equal(latest().fusionRequestId, 2);
+    assert.equal(latest().graph.irVersion, "11");
     const topology = (graph) =>
       graph.nodes.map(({ name, opType, inputs, outputs }) => ({
         name,

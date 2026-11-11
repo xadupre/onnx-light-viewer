@@ -407,7 +407,7 @@ export function webviewHtml(
             <h2 id="operator-title" class="eyebrow panel-title">INSPECTOR</h2>
             <div class="inspector-heading"><h2 id="node-title">No model loaded</h2><button id="show-doc" disabled aria-haspopup="dialog">Doc</button></div><p id="node-description">Open an ONNX model to explore its connections.</p>
             <button id="open-function" class="icon-button" hidden>Open function</button>
-            <div id="node-details"><dl><dt id="node-name-label">NODE NAME</dt><dd id="node-name">—</dd><dt>DOMAIN</dt><dd id="node-domain">—</dd><dt>OPSET</dt><dd id="node-opset">—</dd></dl>
+            <div id="node-details"><dl><dt id="node-name-label">NODE NAME</dt><dd id="node-name">—</dd><dt>OPSET</dt><dd id="node-opset">—</dd><dt>IR VERSION</dt><dd id="node-ir-version">—</dd></dl>
             <details class="inspector-section" open><summary>Inputs <span id="input-count">0</span></summary><ul id="node-inputs"></ul></details>
             <details class="inspector-section" open><summary>Outputs <span id="output-count">0</span></summary><ul id="node-outputs"></ul></details>
             <details id="node-captures" class="inspector-section" open hidden><summary>Captured inputs</summary><ul id="captured-inputs"></ul></details>
