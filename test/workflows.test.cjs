@@ -211,7 +211,7 @@ test("documentation uses relative paths for its own pages and CLI output example
   assert.doesNotMatch(exporting, /\/path\/to\//);
 });
 
-test("releases retain Linux and Windows packages while macOS builds are paused", () => {
+test("releases package Linux, Windows and macOS for x64 and ARM64", () => {
   const source = workflow("release.yml");
   assert.match(source, /runs-on: \$\{\{ matrix\.os \}\}/);
   for (const target of [
@@ -219,10 +219,13 @@ test("releases retain Linux and Windows packages while macOS builds are paused",
     "linux-arm64",
     "win32-x64",
     "win32-arm64",
+    "darwin-x64",
+    "darwin-arm64",
   ]) {
     assert.ok(source.includes(`target: ${target}`));
   }
-  assert.doesNotMatch(source, /os: macos-|target: darwin-/);
+  assert.match(source, /os: macos-15-intel\s+target: darwin-x64/);
+  assert.match(source, /os: macos-latest\s+target: darwin-arm64/);
   assert.doesNotMatch(source, /sphinx|setup-python/);
   assert.doesNotMatch(source, /vsce package[^\n]*--no-dependencies/);
 });
