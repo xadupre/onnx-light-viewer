@@ -654,6 +654,30 @@ the SDK comparison. Comparison restores omitted inline weights and may read
 external weights, so time and memory can grow with model size. External weights
 require local model paths; payloads are not sent to the webview.
 
+Changing model versions
+^^^^^^^^^^^^^^^^^^^^^^^
+
+Open **Rewritings → Change versions** to upgrade or downgrade the current
+model's default-domain ONNX opset and/or ``ir_version``. Enter positive integers;
+leave either field blank to retain its current value. **Apply versions** uses
+the official Python ``onnx.version_converter.convert_version`` for opset
+conversion, then sets ``ir_version`` and checks the result with ``onnx.checker``.
+It does not convert custom-domain opsets or change the onnx-light library.
+
+Requires a trusted workspace and ``onnx`` installed in **Application**'s
+configured Python interpreter. Conversion includes unsaved edits and reapplies
+pending rewritings first. A changed result cannot be undone and clears native
+version-dependent rewritings and history; save a copy to keep it. A no-op keeps
+native history. Unsupported converters, invalid versions, and unrecognized
+protobuf extensions fail without replacing the current model. Pipelines are
+not supported.
+
+.. figure:: _static/feature-change-versions.png
+   :alt: Rewritings with optional target opset and ir_version fields and the warning about clearing native undo history.
+   :width: 100%
+
+   Change model versions without changing the source file.
+
 Optimizer backends
 ^^^^^^^^^^^^^^^^^^
 

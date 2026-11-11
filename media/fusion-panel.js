@@ -46,6 +46,27 @@ function createFusionPanel({
   const selectionPatterns = new Map();
   const selectionPatternDrafts = new Map();
   const partitionPatterns = ["RepeatedLayer", "PartitionGroup"];
+  function versionValues() {
+    const versions = {};
+    for (const [id, name] of [
+      ["versions-opset", "opset"],
+      ["versions-ir", "irVersion"],
+    ]) {
+      const input = byId(id);
+      if (!input.validity.valid) return undefined;
+      if (!input.value.trim()) continue;
+      const value = Number(input.value);
+      if (!Number.isSafeInteger(value) || value < 1) return undefined;
+      versions[name] = value;
+    }
+    return Object.keys(versions).length ? versions : undefined;
+  }
+  function versionControls() {
+    const disabled = fusionBusy || !canFuse() || !!fusionGraph?.pipeline;
+    for (const id of ["change-versions", "versions-opset", "versions-ir"])
+      byId(id).disabled = disabled;
+    byId("apply-versions").disabled = disabled || !versionValues();
+  }
   function canOpenSelectionPattern() {
     return canFuse() && !fusionBusy && selectedNodes().length > 0;
   }
@@ -586,6 +607,7 @@ function createFusionPanel({
     busy ||= undoBusy;
     if (busy && diagnosticBusy) clearDiagnostic();
     fusionBusy = busy;
+    versionControls();
     for (const id of ["unfuse-last", "unfuse-all"])
       byId(id).disabled = busy || !undoCount;
     const path = fusionGraph?.breadcrumbs?.at(-1)?.path ?? [];
@@ -1519,6 +1541,30 @@ function createFusionPanel({
       String(!panel.hidden),
     );
   });
+  byId("change-versions").addEventListener("click", () => {
+    if (byId("change-versions").disabled) return;
+    const panel = byId("versions-panel");
+    panel.hidden = !panel.hidden;
+    byId("change-versions").setAttribute(
+      "aria-expanded",
+      String(!panel.hidden),
+    );
+    versionControls();
+  });
+  for (const id of ["versions-opset", "versions-ir"])
+    byId(id).addEventListener("input", versionControls);
+  byId("apply-versions").addEventListener("click", () => {
+    if (byId("apply-versions").disabled) return;
+    const versions = versionValues();
+    if (!versions) return;
+    clearFusionPreview();
+    byId("versions-status").textContent = "Changing ONNX versions…";
+    fusionControls(true, "Changing ONNX versions…");
+    requestAction("change-versions", "Change ONNX versions", {
+      requestId: ++fusionRequest,
+      ...versions,
+    });
+  });
   byId("apply-global-rewriting").addEventListener("click", () => {
     if (byId("apply-global-rewriting").disabled) return;
     const operation = byId("global-rewriting-operation").value;
@@ -1814,7 +1860,8 @@ function createFusionPanel({
       data?.type === "optimization-info" ||
       data?.type === "rewriting-info" ||
       data?.type === "rewriting-recorded" ||
-      data?.type === "fusion-info"
+      data?.type === "fusion-info" ||
+      data?.type === "versions-info"
     ) {
       if (data.type === "fusion-patterns" && data.requestId !== fusionRequest)
         return true;
@@ -1861,30 +1908,38 @@ function createFusionPanel({
         selectionChanged();
       if (data.type !== "fusion-patterns") {
         byId("fusion-status").textContent =
-          data.type === "optimization-info"
-            ? data.backend === "onnxscript"
-              ? data.changed
-                ? ""
-                : "ONNX Script: no changes."
-              : data.changed
-                ? `${data.operation}: applied ${data.matches.length} rewriting steps. The model remains optimized; record a named rewriting or save a copy.`
-                : `${data.operation}: no changes.`
-            : data.type === "rewriting-recorded"
-              ? `${data.append ? "Updated" : "Created"} rewriting ${data.name}. The model remains optimized.`
-              : data.type === "rewriting-info"
-                ? data.name === null
+          data.type === "versions-info"
+            ? `${data.changed ? "Changed ONNX versions" : "ONNX versions unchanged"}: default-domain opset ${data.opset ?? "not imported"}, ir_version ${data.irVersion}.${data.changed ? " Native rewritings and undo history cleared. Save a copy to keep changes." : " Existing native undo history is retained."}`
+            : data.type === "optimization-info"
+              ? data.backend === "onnxscript"
+                ? data.changed
                   ? ""
-                  : `Applied rewriting scenario ${data.name}. Use Unfuse to undo.`
-                : data.operation === "IdentityRemoval"
-                  ? data.changed
-                    ? `Removed Identity nodes: added ${data.count} rewriting steps. Use Unfuse to undo; save a copy to keep changes.`
-                    : "IdentityRemoval: no changes."
-                  : partitionPatterns.includes(data.operation)
+                  : "ONNX Script: no changes."
+                : data.changed
+                  ? `${data.operation}: applied ${data.matches.length} rewriting steps. The model remains optimized; record a named rewriting or save a copy.`
+                  : `${data.operation}: no changes.`
+              : data.type === "rewriting-recorded"
+                ? `${data.append ? "Updated" : "Created"} rewriting ${data.name}. The model remains optimized.`
+                : data.type === "rewriting-info"
+                  ? data.name === null
+                    ? ""
+                    : `Applied rewriting scenario ${data.name}. Use Unfuse to undo.`
+                  : data.operation === "IdentityRemoval"
                     ? data.changed
-                      ? `${data.operation}: applied ${data.count} rewriting steps. Use Unfuse to undo; save a copy to keep changes.`
-                      : `${data.operation}: no changes.`
-                    : `Applied ${data.count} fusion matches. Save a copy to keep changes.`;
+                      ? `Removed Identity nodes: added ${data.count} rewriting steps. Use Unfuse to undo; save a copy to keep changes.`
+                      : "IdentityRemoval: no changes."
+                    : partitionPatterns.includes(data.operation)
+                      ? data.changed
+                        ? `${data.operation}: applied ${data.count} rewriting steps. Use Unfuse to undo; save a copy to keep changes.`
+                        : `${data.operation}: no changes.`
+                      : `Applied ${data.count} fusion matches. Save a copy to keep changes.`;
         if (data.notice) byId("fusion-status").textContent += ` ${data.notice}`;
+        if (data.type === "versions-info") {
+          byId("versions-panel").hidden = false;
+          byId("change-versions").setAttribute("aria-expanded", "true");
+          byId("versions-status").textContent =
+            byId("fusion-status").textContent;
+        }
         updateScenario();
         revealPanel(
           byId(
@@ -1954,6 +2009,9 @@ function createFusionPanel({
         byId("selection-pattern-status").textContent =
           `Could not load patterns: ${data.error}`;
       byId("fusion-status").textContent = `Fusion failed: ${data.error}`;
+      if (!byId("versions-panel").hidden)
+        byId("versions-status").textContent =
+          `Version conversion failed: ${data.error}`;
       byId("optimization-rewriting-status").textContent = data.error;
       byId("working-rewriting-status").textContent = data.error;
       if (!byId("optimization-panel").hidden)
@@ -1984,6 +2042,11 @@ function createFusionPanel({
     restoreRequest = undefined;
     restoreNotice = "";
     fusionGraph = graph;
+    byId("versions-panel").hidden = true;
+    byId("change-versions").setAttribute("aria-expanded", "false");
+    byId("versions-status").textContent = "";
+    byId("versions-opset").value = "";
+    byId("versions-ir").value = "";
     optimizationFinished = false;
     byId("optimization-rewriting-status").textContent = "";
     byId("optimization-rewriting-name").value = "";
@@ -2056,6 +2119,7 @@ function createFusionPanel({
     diagnosticControls();
     selectionPatternControls();
     updateScenario();
+    versionControls();
   }
 
   return {

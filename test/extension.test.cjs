@@ -1192,6 +1192,9 @@ async function openExtension(
   }
   return {
     messages,
+    get title() {
+      return panel.title;
+    },
     graph,
     errors,
     warnings,
@@ -3683,6 +3686,308 @@ test("lists saved scenarios and applies one or all remaining steps with host und
   );
   assert.deepEqual(latestGraph().graph, full.graph());
 });
+
+test("Change versions host validates input and workspace trust without editing", async (t) => {
+  const directory = await mkdtemp(path.join(__dirname, "versions-host-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const extension = await openExtension(
+    "relu.onnx",
+    undefined,
+    true,
+    directory,
+    undefined,
+    new Map([
+      [
+        "applicationSettings",
+        {
+          downloadDirectory: directory,
+          pythonPath: path.join(directory, "missing-python"),
+        },
+      ],
+    ]),
+  );
+  t.after(() => extension.dispose());
+  const latest = () =>
+    extension.messages.findLast(({ type }) => type === "graph");
+  const original = latest();
+  for (const versions of [
+    {},
+    { opset: 0 },
+    { irVersion: 1.5 },
+    { opset: "18" },
+    { irVersion: null },
+  ]) {
+    await extension.receive({
+      type: "change-versions",
+      requestId: 377,
+      ...versions,
+    });
+    assert.equal(extension.messages.at(-1).type, "fusion-error");
+    assert.equal(latest(), original);
+  }
+  extension.setTrusted(false);
+  await extension.receive({
+    type: "change-versions",
+    opset: 18,
+    requestId: 377,
+  });
+  assert.match(extension.messages.at(-1).error, /Trust this workspace/);
+  extension.setTrusted(true);
+  await extension.receive({
+    type: "change-versions",
+    opset: 18,
+    requestId: 377,
+  });
+  assert.match(extension.messages.at(-1).error, /missing-python/);
+  assert.equal(extension.messages.at(-1).requestId, 377);
+  assert.equal(latest(), original);
+  assert.deepEqual(await readdir(directory), []);
+  await extension.openFile(require.resolve("./models/tiny.pipe-onnx"));
+  await extension.receive({
+    type: "change-versions",
+    opset: 18,
+    requestId: 378,
+  });
+  assert.match(extension.messages.at(-1).error, /single ONNX model|main graph/);
+});
+
+const versionsPython =
+  process.env.ONNX_SCRIPT_PYTHON ??
+  (process.platform === "win32" ? "python" : "python3");
+const hasVersionsPython =
+  spawnSync(versionsPython, ["-P", "-c", "import onnx"]).status === 0;
+
+test(
+  "Change versions uses current unsaved edits, clears native history, saves converted versions and retains reload snapshot",
+  {
+    skip: !hasVersionsPython && "Install onnx or set ONNX_SCRIPT_PYTHON.",
+  },
+  async (t) => {
+    const directory = await mkdtemp(path.join(__dirname, "versions-host-"));
+    t.after(() => rm(directory, { recursive: true, force: true }));
+    const source = path.join(directory, "source.onnx");
+    await copyFile(require.resolve("../examples/optimization.onnx"), source);
+    const extension = await openExtension(
+      undefined,
+      undefined,
+      true,
+      directory,
+      undefined,
+      new Map([
+        [
+          "applicationSettings",
+          {
+            downloadDirectory: directory,
+            pythonPath: versionsPython,
+          },
+        ],
+      ]),
+    );
+    t.after(() => extension.dispose());
+    await extension.openFile(source);
+    const latest = () =>
+      extension.messages.findLast(({ type }) => type === "graph");
+    await extension.receive({
+      type: "apply-optimization",
+      operation: "Optimize",
+      patterns: ["Identity"],
+      requestId: 1,
+    });
+    assert.equal(extension.messages.at(-1).type, "optimization-info");
+    assert.equal(latest().file.fusionCount, 1);
+    const edited = latest().graph;
+    await extension.receive({
+      type: "record-rewriting",
+      name: "OldVersions",
+      append: false,
+      requestId: 101,
+    });
+    assert.equal(extension.messages.at(-1).type, "rewriting-recorded");
+    await extension.receive({ type: "undo-fusion", all: true, requestId: 102 });
+    assert.ok(latest().file.pendingRewritings.length);
+    await writeFile(source, "source changed after load");
+    await extension.receive({
+      type: "change-versions",
+      opset: 19,
+      irVersion: 11,
+      requestId: 2,
+    });
+    assert.equal(
+      extension.messages.at(-1).type,
+      "versions-info",
+      JSON.stringify(extension.messages.at(-1)),
+    );
+    assert.equal(extension.messages.at(-1).changed, true);
+    assert.equal(extension.messages.at(-1).opset, 19);
+    assert.equal(extension.messages.at(-1).irVersion, 11);
+    assert.match(
+      extension.messages.at(-1).notice,
+      /Pending rewritings reapplied/,
+    );
+    assert.equal(latest().fusionRequestId, 2);
+    const topology = (graph) =>
+      graph.nodes.map(({ name, opType, inputs, outputs }) => ({
+        name,
+        opType,
+        inputs,
+        outputs,
+      }));
+    assert.deepEqual(topology(latest().graph), topology(edited));
+    assert.equal(latest().file.fusionCount, 0);
+    assert.deepEqual(latest().file.fusionHistory, []);
+    assert.deepEqual(extension.messages.at(-1).scenarios, []);
+    assert.match(extension.title, /\(modified\)/);
+    const converted = latest().graph;
+    extension.nativeModels.at(-1).metadata = () => {
+      throw new Error("Metadata failure after version conversion");
+    };
+    await extension.receive({ type: "metadata" });
+    assert.equal(extension.messages.at(-1).type, "metadata-error");
+    await extension.receive({
+      type: "change-versions",
+      irVersion: 11,
+      requestId: 3,
+    });
+    assert.equal(extension.messages.at(-1).changed, false);
+    assert.deepEqual(latest().graph, converted);
+    await extension.receive({
+      type: "apply-optimization",
+      operation: "Optimize",
+      patterns: ["Identity"],
+      requestId: 4,
+    });
+    assert.match(extension.title, /\(modified\)/);
+    await extension.receive({
+      type: "change-versions",
+      irVersion: 1,
+      requestId: 5,
+    });
+    assert.equal(extension.messages.at(-1).type, "fusion-error");
+    assert.deepEqual(latest().graph, converted);
+    const destination = path.join(directory, "converted.onnx");
+    await extension.save(destination);
+    assert.equal(extension.messages.at(-1).type, "save-info");
+    execFileSync(versionsPython, [
+      "-P",
+      "-c",
+      `
+import sys, onnx
+model = onnx.load(sys.argv[1])
+onnx.checker.check_model(model)
+assert model.ir_version == 11
+assert next(o.version for o in model.opset_import if o.domain in ("", "ai.onnx")) == 19
+assert not any(n.name == "unused_relu" for n in model.graph.node)
+`,
+      destination,
+    ]);
+    // A new native undo chain must return to the converted snapshot, not the source.
+    await extension.receive({
+      type: "apply-optimization",
+      operation: "Optimize",
+      patterns: ["MatMulAdd"],
+      requestId: 6,
+    });
+    assert.ok(latest().file.fusionCount > 0);
+    const history = latest().file.fusionHistory;
+    await extension.receive({
+      type: "change-versions",
+      irVersion: 11,
+      requestId: 103,
+    });
+    assert.equal(extension.messages.at(-1).changed, false);
+    assert.deepEqual(latest().file.fusionHistory, history);
+    await extension.receive({ type: "undo-fusion", all: true, requestId: 7 });
+    assert.deepEqual(latest().graph, converted);
+    assert.match(extension.title, /\(modified\)/);
+    assert.equal(await readFile(source, "utf8"), "source changed after load");
+    assert.equal(
+      (await readdir(directory)).some((name) => name.startsWith("versions-")),
+      false,
+    );
+  },
+);
+
+test(
+  "Change versions discards late Python success and errors after model replacement",
+  {
+    skip:
+      (!hasVersionsPython || process.platform === "win32") &&
+      "Requires ONNX and POSIX executable scripts.",
+  },
+  async (t) => {
+    const directory = await mkdtemp(path.join(__dirname, "versions-host-"));
+    t.after(() => rm(directory, { recursive: true, force: true }));
+    for (const fail of [false, true]) {
+      const marker = path.join(directory, `started-${fail}`);
+      const release = path.join(directory, `release-${fail}`);
+      const executable = path.join(directory, `python-${fail}`);
+      await writeFile(
+        executable,
+        `#!${process.execPath}
+const fs = require("node:fs");
+fs.writeFileSync(${JSON.stringify(marker)}, "");
+while (!fs.existsSync(${JSON.stringify(release)}))
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+if (${fail}) process.exit(3);
+const result = require("node:child_process").spawnSync(
+  ${JSON.stringify(versionsPython)}, process.argv.slice(2), { stdio: "inherit" });
+process.exit(result.status ?? 1);
+`,
+        { mode: 0o700 },
+      );
+      const extension = await openExtension(
+        "relu.onnx",
+        undefined,
+        true,
+        directory,
+        undefined,
+        new Map([
+          [
+            "applicationSettings",
+            {
+              downloadDirectory: directory,
+              pythonPath: executable,
+            },
+          ],
+        ]),
+      );
+      t.after(() => extension.dispose());
+      const pending = extension.receive({
+        type: "change-versions",
+        opset: 18,
+        requestId: 377,
+      });
+      try {
+        for (let attempt = 0; ; attempt++) {
+          try {
+            await stat(marker);
+            break;
+          } catch {
+            assert.ok(attempt < 500, "Version conversion never started.");
+            await new Promise((resolve) => setTimeout(resolve, 10));
+          }
+        }
+        await extension.openFile(require.resolve("./models/relu.onnx"));
+        const count = extension.messages.length;
+        const errors = extension.errors.length;
+        await writeFile(release, "");
+        await pending;
+        assert.equal(extension.messages.length, count);
+        assert.equal(extension.errors.length, errors);
+        assert.equal(
+          (await readdir(directory)).some((name) =>
+            name.startsWith("versions-"),
+          ),
+          false,
+        );
+      } finally {
+        await writeFile(release, "");
+        await pending;
+        extension.dispose();
+      }
+    }
+  },
+);
 
 test("validates ONNX Script requests and requires workspace trust without editing", async (t) => {
   const directory = await mkdtemp(path.join(__dirname, "onnxscript-host-"));
@@ -8535,6 +8840,7 @@ test("Rewritings exposes its actions, appends one match and refuses one next ste
       "Refuse Next",
       "Append New",
       "Global Rewriting",
+      "Change versions",
       "Compare",
       "Create rewriting",
     ],
@@ -8557,6 +8863,7 @@ test("Rewritings exposes its actions, appends one match and refuses one next ste
       "Refuse Next",
       "Append New",
       "Global Rewriting",
+      "Change versions",
       "Compare",
       "Create rewriting",
     ],
