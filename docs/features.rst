@@ -466,13 +466,14 @@ sampling settings, while pipeline interface names and EOS defaults are preserved
 Inspection
 ^^^^^^^^^^
 
-Inspect types, symbolic shapes, attributes/schema defaults, dense/sparse/encoded
-initializer metadata, opaque/structured types, bounded previews and Markdown
-operator documentation. See :doc:`features/inspection`. External or omitted
-payloads are not read for previews; this is not a full tensor-data browser.
+Inspect the model's IR version, domain-qualified opsets, types, symbolic shapes,
+attributes/schema defaults, dense/sparse/encoded initializer metadata,
+opaque/structured types, bounded previews and Markdown operator documentation.
+See :doc:`features/inspection`. External or omitted payloads are not read for
+previews; this is not a full tensor-data browser.
 
 .. figure:: _static/feature-inspection.png
-   :alt: Reshape inspector showing input and output tensors, attributes and initializer details.
+   :alt: Reshape inspector showing domain-qualified opset, IR version, tensors and initializer details.
    :width: 100%
 
    Operator details accompany the selected graph node.
@@ -658,8 +659,9 @@ Changing model versions
 ^^^^^^^^^^^^^^^^^^^^^^^
 
 Open **Rewritings → Change versions** to upgrade or downgrade the current
-model's default-domain ONNX opset and/or ``ir_version``. Enter positive integers;
-leave either field blank to retain its current value. **Apply versions** uses
+model's default-domain ONNX opset and/or ``ir_version``. Both fields start with
+the current model's values. Enter positive integers; leave either field blank
+to retain its current value. **Apply versions** uses
 the official Python ``onnx.version_converter.convert_version`` for opset
 conversion, then sets ``ir_version`` and checks the result with ``onnx.checker``.
 It does not convert custom-domain opsets or change the onnx-light library.

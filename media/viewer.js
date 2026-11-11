@@ -1667,6 +1667,7 @@ function inspectionScope(view) {
     graph: displayedGraph,
     kind,
     name: displayedGraph.name,
+    irVersion: displayedGraph.irVersion,
     opsets: displayedGraph.opsets,
     inputs: displayedGraph.inputs,
     outputs: displayedGraph.outputs,

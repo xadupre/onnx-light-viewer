@@ -76,13 +76,10 @@ function createInspector({
           : `${scope?.kind.toUpperCase() ?? "MODEL"} NAME`;
     byId("node-name").textContent =
       model?.name ?? node?.name ?? port?.name ?? scope?.name ?? "—";
+    byId("node-ir-version").textContent =
+      (model ? model.irVersion : scope?.irVersion) ?? "—";
     const opsets =
       model?.opsets ?? (!node && !port ? (scope?.opsets ?? []) : []);
-    const domains = [...new Set(opsets.map((opset) => opset.domain))].join(
-      ", ",
-    );
-    byId("node-domain").textContent =
-      (model ? domains : (node?.domain ?? domains)) || "—";
     byId("node-opset").replaceChildren();
     if (opsets.length) {
       for (const { domain, version } of opsets) {
@@ -90,8 +87,11 @@ function createInspector({
         entry.textContent = `${domain}: ${version}`;
         byId("node-opset").append(entry);
       }
+    } else if (node && !model) {
+      byId("node-opset").textContent =
+        `${node.domain || "ai.onnx"}: ${node.opset ?? "—"}`;
     } else {
-      byId("node-opset").textContent = node?.opset ?? "—";
+      byId("node-opset").textContent = "—";
     }
     if (inspectedNode !== node) {
       resetDocumentation();

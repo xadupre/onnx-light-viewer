@@ -2045,8 +2045,10 @@ function createFusionPanel({
     byId("versions-panel").hidden = true;
     byId("change-versions").setAttribute("aria-expanded", "false");
     byId("versions-status").textContent = "";
-    byId("versions-opset").value = "";
-    byId("versions-ir").value = "";
+    byId("versions-opset").value =
+      graph?.opsets?.find(({ domain }) => !domain || domain === "ai.onnx")
+        ?.version ?? "";
+    byId("versions-ir").value = graph?.irVersion ?? "";
     optimizationFinished = false;
     byId("optimization-rewriting-status").textContent = "";
     byId("optimization-rewriting-name").value = "";
