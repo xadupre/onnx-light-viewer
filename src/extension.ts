@@ -58,6 +58,7 @@ import {
 } from "./huggingface";
 import { OliveRecipes } from "./oliveRecipes";
 import { optimizeWithOnnxScript } from "./optimization";
+import { changeModelVersions, validateModelVersions } from "./versions";
 import { promptInfo, runPrompt, type PromptResult } from "./prompt";
 import { PromptSession } from "./promptSession";
 import {
@@ -182,6 +183,7 @@ interface LoadedModel {
   rewritingQueue?: { model: NativeModel; operations: FusionOperation[] };
   /** Materialized Python edits remain modified after undoing later native edits. */
   pythonOptimized?: boolean;
+  versionsChanged?: boolean;
   dimensionsRenamed?: boolean;
   functionsEdited?: boolean;
   source?: { uri: vscode.Uri };
@@ -1123,6 +1125,8 @@ async function configurePanel(
         candidates?: unknown;
         operation?: unknown;
         backend?: unknown;
+        opset?: unknown;
+        irVersion?: unknown;
         match?: unknown;
         all?: unknown;
         step?: unknown;
@@ -3239,6 +3243,7 @@ async function configurePanel(
         message?.type === "fusion-patterns" ||
         message?.type === "preview-fusion" ||
         message?.type === "apply-optimization" ||
+        message?.type === "change-versions" ||
         message?.type === "remove-identities" ||
         message?.type === "partition-model" ||
         message?.type === "apply-fusion"
@@ -3277,32 +3282,34 @@ async function configurePanel(
                 ? "Refuse next rewriting"
                 : message.type === "replay-rewritings"
                   ? "Replay pending rewritings"
-                  : message.type === "apply-optimization" ||
-                      message.type === "remove-identities" ||
-                      message.type === "partition-model"
-                    ? message.type === "remove-identities"
-                      ? "Remove Identity nodes"
-                      : message.type === "partition-model"
-                        ? "Partition ONNX model"
-                        : "Optimize ONNX model"
-                    : message.type === "apply-rewriting" ||
-                        message.type === "select-rewriting"
-                      ? "Apply rewriting scenario"
-                      : message.type === "record-rewriting"
-                        ? "Record optimization rewriting"
-                        : message.type === "apply-fusion"
-                          ? "Apply fusion pattern"
-                          : message.type === "preview-fusion"
-                            ? "Preview fusion pattern"
-                            : message.type === "create-function-pattern"
-                              ? "Create function pattern"
-                              : message.type === "update-function-pattern"
-                                ? "Update function pattern"
-                                : updatesModelFunction
-                                  ? "Update ONNX function"
-                                  : loadsModelFunction
-                                    ? "Load ONNX function"
-                                    : "List fusion patterns",
+                  : message.type === "change-versions"
+                    ? "Change ONNX versions"
+                    : message.type === "apply-optimization" ||
+                        message.type === "remove-identities" ||
+                        message.type === "partition-model"
+                      ? message.type === "remove-identities"
+                        ? "Remove Identity nodes"
+                        : message.type === "partition-model"
+                          ? "Partition ONNX model"
+                          : "Optimize ONNX model"
+                      : message.type === "apply-rewriting" ||
+                          message.type === "select-rewriting"
+                        ? "Apply rewriting scenario"
+                        : message.type === "record-rewriting"
+                          ? "Record optimization rewriting"
+                          : message.type === "apply-fusion"
+                            ? "Apply fusion pattern"
+                            : message.type === "preview-fusion"
+                              ? "Preview fusion pattern"
+                              : message.type === "create-function-pattern"
+                                ? "Create function pattern"
+                                : message.type === "update-function-pattern"
+                                  ? "Update function pattern"
+                                  : updatesModelFunction
+                                    ? "Update ONNX function"
+                                    : loadsModelFunction
+                                      ? "Load ONNX function"
+                                      : "List fusion patterns",
             async (id) => {
               const current = requireModel();
               if (loadsModelFunction) {
@@ -3396,7 +3403,7 @@ async function configurePanel(
                 };
                 graphRevision++;
                 navigationRequest++;
-                panel.title = `ONNX: ${current.fileName ?? graph.name}${model.pythonOptimized || model.dimensionsRenamed || model.functionsEdited || model.fusionCount ? " (modified)" : ""}`;
+                panel.title = `ONNX: ${current.fileName ?? graph.name}${model.versionsChanged || model.pythonOptimized || model.dimensionsRenamed || model.functionsEdited || model.fusionCount ? " (modified)" : ""}`;
                 await sendGraph(undefined, message.requestId);
                 return;
               }
@@ -3461,7 +3468,7 @@ async function configurePanel(
                 model = replacement;
                 graphRevision++;
                 navigationRequest++;
-                panel.title = `ONNX: ${current.fileName ?? graph.name}${replacement.pythonOptimized || replacement.dimensionsRenamed || replacement.functionsEdited || replacement.fusionCount ? " (modified)" : ""}`;
+                panel.title = `ONNX: ${current.fileName ?? graph.name}${replacement.versionsChanged || replacement.pythonOptimized || replacement.dimensionsRenamed || replacement.functionsEdited || replacement.fusionCount ? " (modified)" : ""}`;
                 await sendGraph(undefined, message.requestId);
                 if (
                   !active ||
@@ -3837,6 +3844,96 @@ async function configurePanel(
                 });
                 return;
               }
+              if (message.type === "change-versions") {
+                const versions = {
+                  opset: message.opset,
+                  irVersion: message.irVersion,
+                };
+                validateModelVersions(versions);
+                if (!vscode.workspace.isTrusted)
+                  throw new Error(
+                    "Trust this workspace before changing ONNX versions.",
+                  );
+                if (current.graph.pipeline)
+                  throw new Error(
+                    "Version conversion requires a single ONNX model.",
+                  );
+                const native =
+                  current.rewritingQueue?.model.clone() ??
+                  (await nativeModel(current, log, () => void sendStatus()));
+                if (!isCurrent()) return;
+                const bytes = await native.serialize(
+                  undefined,
+                  current.source?.uri.scheme === "file"
+                    ? current.source.uri.fsPath
+                    : undefined,
+                  false,
+                );
+                if (!isCurrent()) return;
+                const result = await changeModelVersions(
+                  bytes,
+                  versions,
+                  getApplicationSettings().pythonPath,
+                  context.globalStorageUri.fsPath,
+                );
+                if (!isCurrent()) return;
+                const edited = result.changed
+                  ? loadModel(result.bytes, current.graph.name)
+                  : native;
+                edited.verify();
+                let replacement = current;
+                if (result.changed || current.rewritingQueue) {
+                  const retained = edited.clone();
+                  replacement = {
+                    ...current,
+                    native: edited,
+                    nativeReload: undefined,
+                    graph: edited.graph(false),
+                    metadata: undefined,
+                    fusionCount: edited.fusionCount(),
+                    fusionHistory: edited.fusionHistory(true),
+                    rewritingQueue: undefined,
+                    rewritingState: result.changed
+                      ? undefined
+                      : current.rewritingState,
+                    rewritingSelections: result.changed
+                      ? undefined
+                      : current.rewritingSelections,
+                    versionsChanged: current.versionsChanged || result.changed,
+                    reload: () => retained.clone(),
+                  };
+                }
+                fusionPreview = undefined;
+                model = replacement;
+                graphRevision++;
+                navigationRequest++;
+                panel.title = `ONNX: ${current.fileName ?? replacement.graph.name}${replacement.versionsChanged || replacement.pythonOptimized || replacement.dimensionsRenamed || replacement.functionsEdited || replacement.fusionCount ? " (modified)" : ""}`;
+                await sendGraph(undefined, message.requestId);
+                if (
+                  !active ||
+                  model !== replacement ||
+                  fusionRequest !== generation + 1
+                )
+                  return;
+                await postMessage({
+                  type: "versions-info",
+                  requestId: message.requestId,
+                  changed: result.changed,
+                  opset: result.opset,
+                  irVersion: result.irVersion,
+                  notice: current.rewritingQueue
+                    ? "Pending rewritings reapplied before conversion."
+                    : undefined,
+                  patterns: edited.fusionPatterns(),
+                  optimizationPatterns: edited.optimizationPatterns(),
+                  functions: edited.modelFunctionDescriptors(),
+                  scenarios: edited.rewritingScenarios(),
+                  optimizationReport: result.changed
+                    ? null
+                    : edited.optimizationReport(),
+                });
+                return;
+              }
               if (
                 message.type === "apply-optimization" ||
                 message.type === "remove-identities" ||
@@ -3911,7 +4008,7 @@ async function configurePanel(
                   model = replacement;
                   graphRevision++;
                   navigationRequest++;
-                  panel.title = `ONNX: ${current.fileName ?? replacement.graph.name}${replacement.pythonOptimized || replacement.dimensionsRenamed || replacement.functionsEdited || replacement.fusionCount ? " (modified)" : ""}`;
+                  panel.title = `ONNX: ${current.fileName ?? replacement.graph.name}${replacement.versionsChanged || replacement.pythonOptimized || replacement.dimensionsRenamed || replacement.functionsEdited || replacement.fusionCount ? " (modified)" : ""}`;
                   await sendGraph(undefined, message.requestId);
                   if (
                     !active ||
@@ -4011,7 +4108,7 @@ async function configurePanel(
                 model = replacement;
                 graphRevision++;
                 navigationRequest++;
-                panel.title = `ONNX: ${current.fileName ?? graph.name}${replacement.pythonOptimized || replacement.dimensionsRenamed || replacement.functionsEdited || replacement.fusionCount ? " (modified)" : ""}`;
+                panel.title = `ONNX: ${current.fileName ?? graph.name}${replacement.versionsChanged || replacement.pythonOptimized || replacement.dimensionsRenamed || replacement.functionsEdited || replacement.fusionCount ? " (modified)" : ""}`;
                 await sendGraph(undefined, message.requestId);
                 if (
                   !active ||
@@ -4326,7 +4423,7 @@ async function configurePanel(
             error: detail,
           });
           await vscode.window.showErrorMessage(
-            `${message.type === "undo-fusion" ? "Could not undo fusion" : loadsModelFunction ? "Could not load ONNX function" : updatesModelFunction ? "Could not update ONNX function" : editsFunctionPattern ? "Could not save function pattern" : "Could not fuse ONNX model"}: ${detail}`,
+            `${message.type === "change-versions" ? "Could not change ONNX versions" : message.type === "undo-fusion" ? "Could not undo fusion" : loadsModelFunction ? "Could not load ONNX function" : updatesModelFunction ? "Could not update ONNX function" : editsFunctionPattern ? "Could not save function pattern" : "Could not fuse ONNX model"}: ${detail}`,
           );
         }
       } else if (message?.type === "save") {

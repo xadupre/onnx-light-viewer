@@ -146,6 +146,108 @@ function submitOpen(document, window) {
     .dispatchEvent(new window.Event("submit", { cancelable: true }));
 }
 
+test("Change versions validates optional integers, uses fusion busy lifecycle and ignores stale completions", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  const byId = (id) => document.getElementById(id);
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  const model = loadModel(
+    readFileSync(require.resolve("./models/relu.onnx")),
+    "versions",
+  );
+  const catalog = {
+    patterns: model.fusionPatterns(),
+    optimizationPatterns: model.optimizationPatterns(),
+    functions: model.modelFunctionDescriptors(),
+    scenarios: [],
+    optimizationReport: null,
+  };
+  assert.equal(byId("change-versions").disabled, true);
+  load(model.graph());
+  byId("fuse-pattern").click();
+  send({
+    type: "fusion-patterns",
+    requestId: messages.at(-1).requestId,
+    ...catalog,
+  });
+  byId("change-versions").click();
+  assert.equal(byId("versions-panel").hidden, false);
+  assert.match(byId("versions-panel").textContent, /cannot be undone/);
+  assert.match(byId("versions-panel").textContent, /default ONNX domain only/);
+  assert.equal(byId("apply-versions").disabled, true);
+  const input = (id, value) => {
+    byId(id).value = value;
+    byId(id).dispatchEvent(new window.Event("input"));
+  };
+  for (const invalid of ["0", "-1", "12.5", "9007199254740992"]) {
+    input("versions-opset", invalid);
+    assert.equal(byId("apply-versions").disabled, true);
+  }
+  input("versions-opset", "18");
+  assert.equal(byId("apply-versions").disabled, false);
+  byId("apply-versions").click();
+  const request = messages.at(-1);
+  assert.equal(request.type, "change-versions");
+  assert.equal(request.opset, 18);
+  assert.equal("irVersion" in request, false);
+  assert.equal(byId("change-versions").disabled, true);
+  assert.equal(byId("versions-opset").disabled, true);
+  send({
+    type: "fusion-error",
+    requestId: request.requestId,
+    error: "No adapter",
+  });
+  assert.match(byId("versions-status").textContent, /No adapter/);
+  assert.equal(byId("apply-versions").disabled, false);
+  input("versions-opset", "");
+  input("versions-ir", "10");
+  byId("apply-versions").click();
+  const next = messages.at(-1);
+  assert.equal("opset" in next, false);
+  assert.equal(next.irVersion, 10);
+  load(model.graph(), next.requestId);
+  send({
+    type: "versions-info",
+    requestId: next.requestId,
+    ...catalog,
+    changed: true,
+    opset: 13,
+    irVersion: 10,
+  });
+  assert.equal(byId("fusion-panel").hidden, false);
+  assert.equal(byId("versions-panel").hidden, false);
+  assert.match(
+    byId("versions-status").textContent,
+    /Changed ONNX versions.*opset 13, ir_version 10/,
+  );
+  assert.doesNotMatch(byId("versions-status").textContent, /fusion matches/);
+  assert.equal(byId("unfuse-last").disabled, true);
+  const success = byId("versions-status").textContent;
+  send({
+    type: "fusion-error",
+    requestId: request.requestId,
+    error: "Obsolete",
+  });
+  assert.equal(byId("versions-status").textContent, success);
+  input("versions-opset", "13");
+  byId("apply-versions").click();
+  const stale = messages.at(-1);
+  load(model.graph());
+  send({
+    type: "versions-info",
+    requestId: stale.requestId,
+    ...catalog,
+    changed: true,
+    opset: 99,
+    irVersion: 99,
+  });
+  send({ type: "fusion-error", requestId: stale.requestId, error: "Obsolete" });
+  assert.equal(byId("versions-status").textContent, "");
+  assert.equal(byId("versions-panel").hidden, true);
+  load({ ...model.graph(), pipeline: true });
+  assert.equal(byId("change-versions").disabled, true);
+});
+
 test("comparison inside Rewritings renders safe details, paginates steps and discards stale results", (t) => {
   const { document, window, messages, load } = openViewer(t);
   const byId = (id) => document.getElementById(id);

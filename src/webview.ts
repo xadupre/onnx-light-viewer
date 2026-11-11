@@ -488,9 +488,22 @@ export function webviewHtml(
               <button id="refuse-next" disabled>Refuse Next</button>
               <button id="append-new" disabled>Append New</button>
               <button id="global-rewriting" disabled aria-expanded="false" aria-controls="global-rewriting-panel">Global Rewriting</button>
+              <button id="change-versions" disabled aria-expanded="false" aria-controls="versions-panel">Change versions</button>
               <button id="show-comparison" disabled title="Compare the current model with another model" aria-expanded="false" aria-controls="comparison-panel">Compare</button>
               <button id="record-working-rewriting" disabled>Create rewriting</button>
             </div>
+            <section id="versions-panel" class="fusion-picker" aria-labelledby="versions-title" hidden>
+              <h3 id="versions-title">Change ONNX versions</h3>
+              <p>Upgrade or downgrade the current model, including unsaved edits. Blank fields keep the current version. Opset conversion uses Python ONNX's converter for the default ONNX domain only.</p>
+              <div class="form-grid">
+                <label for="versions-opset">Target opset (optional)</label><input id="versions-opset" type="number" min="1" step="1" placeholder="Keep current">
+                <label for="versions-ir">Target ir_version (optional)</label><input id="versions-ir" type="number" min="1" step="1" placeholder="Keep current">
+              </div>
+              <p>This cannot be undone. A changed model clears native version-dependent rewritings and undo history. Pending rewritings are reapplied first. Save a copy to keep changes.</p>
+              <p>Requires a trusted workspace and the onnx package in Application's configured Python interpreter. Unsupported conversions or invalid models leave the current model unchanged. Pipelines are not supported.</p>
+              <button id="apply-versions" class="primary" disabled>Apply versions</button>
+              <p id="versions-status" role="status"></p>
+            </section>
             <section id="comparison-panel" class="fusion-picker" aria-labelledby="comparison-title" hidden>
               <h3 id="comparison-title">Compare models</h3>
               <p>Compare the entire current model, including unsaved edits, with a target model. Neither model is changed.</p>
