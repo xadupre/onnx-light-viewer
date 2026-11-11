@@ -659,8 +659,9 @@ Changing model versions
 ^^^^^^^^^^^^^^^^^^^^^^^
 
 Open **Rewritings → Change versions** to upgrade or downgrade the current
-model's default-domain ONNX opset and/or ``ir_version``. Enter positive integers;
-leave either field blank to retain its current value. **Apply versions** uses
+model's default-domain ONNX opset and/or ``ir_version``. Both fields start with
+the current model's values. Enter positive integers; leave either field blank
+to retain its current value. **Apply versions** uses
 the official Python ``onnx.version_converter.convert_version`` for opset
 conversion, then sets ``ir_version`` and checks the result with ``onnx.checker``.
 It does not convert custom-domain opsets or change the onnx-light library.

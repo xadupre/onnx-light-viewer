@@ -496,8 +496,8 @@ export function webviewHtml(
               <h3 id="versions-title">Change ONNX versions</h3>
               <p>Upgrade or downgrade the current model, including unsaved edits. Blank fields keep the current version. Opset conversion uses Python ONNX's converter for the default ONNX domain only.</p>
               <div class="form-grid">
-                <label for="versions-opset">Target opset (optional)</label><input id="versions-opset" type="number" min="1" step="1" placeholder="Keep current">
-                <label for="versions-ir">Target ir_version (optional)</label><input id="versions-ir" type="number" min="1" step="1" placeholder="Keep current">
+                <label for="versions-opset">Target opset (optional)</label><input id="versions-opset" type="number" min="1" step="1">
+                <label for="versions-ir">Target ir_version (optional)</label><input id="versions-ir" type="number" min="1" step="1">
               </div>
               <p>This cannot be undone. A changed model clears native version-dependent rewritings and undo history. Pending rewritings are reapplied first. Save a copy to keep changes.</p>
               <p>Requires a trusted workspace and the onnx package in Application's configured Python interpreter. Unsupported conversions or invalid models leave the current model unchanged. Pipelines are not supported.</p>

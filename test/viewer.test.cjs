@@ -175,7 +175,9 @@ test("Change versions validates optional integers, uses fusion busy lifecycle an
   assert.equal(byId("versions-panel").hidden, false);
   assert.match(byId("versions-panel").textContent, /cannot be undone/);
   assert.match(byId("versions-panel").textContent, /default ONNX domain only/);
-  assert.equal(byId("apply-versions").disabled, true);
+  assert.equal(byId("versions-opset").value, "13");
+  assert.equal(byId("versions-ir").value, "9");
+  assert.equal(byId("apply-versions").disabled, false);
   const input = (id, value) => {
     byId(id).value = value;
     byId(id).dispatchEvent(new window.Event("input"));
@@ -190,7 +192,7 @@ test("Change versions validates optional integers, uses fusion busy lifecycle an
   const request = messages.at(-1);
   assert.equal(request.type, "change-versions");
   assert.equal(request.opset, 18);
-  assert.equal("irVersion" in request, false);
+  assert.equal(request.irVersion, 9);
   assert.equal(byId("change-versions").disabled, true);
   assert.equal(byId("versions-opset").disabled, true);
   send({
@@ -216,6 +218,8 @@ test("Change versions validates optional integers, uses fusion busy lifecycle an
     irVersion: 10,
   });
   assert.equal(byId("node-ir-version").textContent, "10");
+  assert.equal(byId("versions-opset").value, "13");
+  assert.equal(byId("versions-ir").value, "10");
   assert.equal(byId("fusion-panel").hidden, false);
   assert.equal(byId("versions-panel").hidden, false);
   assert.match(
@@ -245,10 +249,52 @@ test("Change versions validates optional integers, uses fusion busy lifecycle an
   });
   send({ type: "fusion-error", requestId: stale.requestId, error: "Obsolete" });
   assert.equal(byId("node-ir-version").textContent, "9");
+  assert.equal(byId("versions-ir").value, "9");
   assert.equal(byId("versions-status").textContent, "");
   assert.equal(byId("versions-panel").hidden, true);
   load({ ...model.graph(), pipeline: true });
   assert.equal(byId("change-versions").disabled, true);
+});
+
+test("Change versions prefills current model values without using custom-domain imports or stale edits", (t) => {
+  const { document, window, load } = openViewer(t);
+  const byId = (id) => document.getElementById(id);
+  for (const domain of ["", "ai.onnx"]) {
+    load({
+      ...demoGraph,
+      irVersion: "11",
+      opsets: [
+        { domain: "custom", version: "1" },
+        { domain, version: "19" },
+      ],
+    });
+    assert.equal(byId("versions-opset").value, "19");
+    assert.equal(byId("versions-ir").value, "11");
+    byId("versions-opset").value = "20";
+    byId("versions-ir").value = "12";
+    byId("change-versions").click();
+    byId("change-versions").click();
+    byId("change-versions").click();
+    assert.equal(byId("versions-opset").value, "20");
+    assert.equal(byId("versions-ir").value, "12");
+    window.dispatchEvent(
+      new window.MessageEvent("message", {
+        data: { type: "shape-info", tensors: [] },
+      }),
+    );
+    assert.equal(byId("versions-opset").value, "20");
+    assert.equal(byId("versions-ir").value, "12");
+  }
+  load({
+    ...demoGraph,
+    irVersion: null,
+    opsets: [{ domain: "custom", version: "1" }],
+  });
+  assert.equal(byId("versions-opset").value, "");
+  assert.equal(byId("versions-ir").value, "");
+  assert.equal(byId("versions-opset").placeholder, "");
+  assert.equal(byId("versions-ir").placeholder, "");
+  assert.equal(byId("apply-versions").disabled, true);
 });
 
 test("comparison inside Rewritings renders safe details, paginates steps and discards stale results", (t) => {
