@@ -38,9 +38,10 @@ subgraphs, without adding another header row.
 Opening models
 ^^^^^^^^^^^^^^
 
-Open local ``.onnx``, ``.ort`` and ``.pipe-onnx`` files, bundled demos or public Hugging Face
-models with persistent caching. See :doc:`features/opening_models`.
-No authentication or automatic external weight downloads.
+Open local ``.onnx``, ``.ort`` and ``.pipe-onnx`` files, bundled demos or public
+Hugging Face and Foundry Local models with persistent caching.
+See :doc:`features/opening_models`. Hugging Face downloads only the selected ONNX
+file, without authentication or automatic external weight downloads.
 Buttons below **Model path** offer the VS Code file picker and an in-app folder
 dialog for paths outside the workspace.
 
@@ -66,6 +67,27 @@ These checks do not certify runtime operator support.
    :width: 100%
 
    Identify a usable export before loading it; this screenshot uses a tiny test model.
+
+Foundry Local models
+^^^^^^^^^^^^^^^^^^^^
+
+**Open → Foundry Local** browses Microsoft's public catalogue directly over
+HTTPS: no Foundry SDK, CLI or service is required. Choose CPU, GPU or NPU, filter
+the variants, then **Download and open**. The complete package, including
+external weights and supporting assets, is cached locally.
+
+Variants whose estimated execution memory exceeds local RAM or known NVIDIA
+VRAM are hidden. Unknown estimates or GPU capacities remain visible but
+unverified. This is a capacity filter, not a guarantee of compatible hardware
+or sufficient runtime headroom; opening inspects the model without running it.
+See :ref:`foundry-local-models`.
+
+.. figure:: _static/feature-foundry-local.png
+   :alt: Foundry Local Open panel with GPU variants, local RAM and NVIDIA VRAM limits, hidden and unchecked variant counts, execution-memory estimates and Download and open.
+   :width: 650px
+
+   Select a variant after checking its estimated memory; capacities and counts
+   depend on the machine and current catalogue.
 
 ORT models and runtime packages
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

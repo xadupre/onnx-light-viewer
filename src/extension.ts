@@ -57,6 +57,7 @@ import {
   HuggingFaceSource,
 } from "./huggingface";
 import { OliveRecipes } from "./oliveRecipes";
+import { downloadFoundryModel, localFoundryModels } from "./foundry";
 import { optimizeWithOnnxScript } from "./optimization";
 import { changeModelVersions, validateModelVersions } from "./versions";
 import { promptInfo, runPrompt, type PromptResult } from "./prompt";
@@ -391,8 +392,13 @@ async function readGraph(
   suppliedPassword?: string,
   selectedPackageModel?: unknown,
   archives?: PackageArchiveStore,
+  cancellation?: {
+    signal: AbortSignal;
+    token: vscode.CancellationToken;
+  },
 ): Promise<LoadedModel | undefined> {
   return log.run(`Load model: ${uri.path}`, async (id) => {
+    cancellation?.signal.throwIfAborted();
     let sourcePackage: RuntimePackage | undefined;
     if (
       uri.scheme === "file" &&
@@ -408,11 +414,14 @@ async function readGraph(
           ? { archivePath: location.archivePath }
           : {}),
       };
+      cancellation?.signal.throwIfAborted();
       if (!selectedPackageModel && !sourcePackage.defaultModel) {
         const selection = await vscode.window.showQuickPick(
           sourcePackage.models.map((name) => ({ label: name })),
           { title: "Choose a model inside the runtime package" },
+          cancellation?.token,
         );
+        cancellation?.signal.throwIfAborted();
         if (!selection) {
           log.record("CANCELLED", `Load model: ${uri.path}`, id);
           return;
@@ -464,6 +473,7 @@ async function readGraph(
     const reload = retainedBytes
       ? () => loadModel(retainedBytes, fileName, password)
       : () => loadModelFile(source.uri.fsPath, fileName, password);
+    cancellation?.signal.throwIfAborted();
     const native = await reload();
     if (sourcePackage?.archivePath)
       assertPackageWeightLocations(
@@ -704,6 +714,8 @@ async function configurePanel(
     | undefined;
   let ready = false;
   let hubSearch: AbortController | undefined;
+  let foundryBrowse: AbortController | undefined;
+  let foundryDownload: AbortController | undefined;
   let showLogsRequested = false;
   let initialLoading = !!uri;
   let initialError: string | undefined;
@@ -1132,6 +1144,7 @@ async function configurePanel(
         step?: unknown;
         location?: unknown;
         source?: unknown;
+        device?: unknown;
         target?: unknown;
         equalities?: unknown;
         password?: unknown;
@@ -2785,6 +2798,7 @@ async function configurePanel(
           });
         }
       } else if (message?.type === "browse-files") {
+        foundryBrowse?.abort();
         const target = message.target;
         try {
           if (target !== "open" && target !== "save")
@@ -2792,14 +2806,37 @@ async function configurePanel(
           const source = target === "save" ? "local" : message.source;
           let location = "";
           let parent: string | undefined;
+          let foundryCatalog:
+            Awaited<ReturnType<typeof localFoundryModels>> | undefined;
           let entries: {
             name: string;
             path: string;
             directory: boolean;
             description?: string;
             size?: number;
+            memory?: number;
+            memoryLimit?: number;
           }[];
-          if (source === "backend") {
+          if (source === "foundry") {
+            if (typeof message.device !== "string")
+              throw new Error("Choose a Foundry Local device.");
+            const controller = new AbortController();
+            foundryBrowse = controller;
+            foundryCatalog = await localFoundryModels(
+              message.device,
+              controller.signal,
+            );
+            if (!active || controller.signal.aborted) return;
+            entries = foundryCatalog.models.map((model) => ({
+              name: model.name,
+              path: model.id,
+              directory: false,
+              size: model.size,
+              memory: model.memory,
+              memoryLimit: model.memoryLimit,
+              description: `${model.device.toUpperCase()} · ${model.provider} · License: ${model.license}`,
+            }));
+          } else if (source === "backend") {
             entries = listBackendTests().map((test) => ({
               name: test.name,
               path: String(test.id),
@@ -2851,6 +2888,13 @@ async function configurePanel(
             location,
             parent,
             entries,
+            ...(foundryCatalog
+              ? {
+                  memory: foundryCatalog.memory,
+                  hidden: foundryCatalog.hidden,
+                  unchecked: foundryCatalog.unchecked,
+                }
+              : {}),
           });
         } catch (error) {
           await postMessage({
@@ -2861,6 +2905,7 @@ async function configurePanel(
           });
         }
       } else if (message?.type === "open") {
+        foundryDownload?.abort();
         try {
           const loaded = await log.run(
             "Open ONNX model",
@@ -2870,7 +2915,9 @@ async function configurePanel(
                 inline &&
                 (typeof message.password !== "string" ||
                   typeof message.source !== "string" ||
-                  !["local", "huggingface", "backend"].includes(message.source))
+                  !["local", "huggingface", "backend", "foundry"].includes(
+                    message.source,
+                  ))
               )
                 throw new Error("Invalid inline model selection.");
               const location = inline
@@ -2879,6 +2926,7 @@ async function configurePanel(
                     [
                       { id: "local", label: "Local file" },
                       { id: "huggingface", label: "Hugging Face" },
+                      { id: "foundry", label: "Foundry Local" },
                       { id: "backend", label: "Backend test" },
                     ],
                     {
@@ -2889,6 +2937,127 @@ async function configurePanel(
               if (!location) {
                 log.record("CANCELLED", "Open ONNX model", id);
                 return;
+              }
+              if (location.id === "foundry") {
+                const controller = new AbortController();
+                foundryDownload = controller;
+                try {
+                  let input = message.location;
+                  if (!inline) {
+                    const catalog = await localFoundryModels(
+                      "cpu",
+                      controller.signal,
+                    );
+                    const selection = await vscode.window.showQuickPick(
+                      catalog.models.map((model) => ({
+                        label: model.name,
+                        description: `${model.provider} · ${model.license}`,
+                        id: model.id,
+                      })),
+                      {
+                        title: "Choose a Foundry Local CPU model",
+                        placeHolder: `${catalog.hidden} variants exceed local RAM; ${catalog.unchecked} have unknown memory requirements.`,
+                      },
+                    );
+                    if (!selection) {
+                      log.record("CANCELLED", "Open ONNX model", id);
+                      return;
+                    }
+                    input = selection.id;
+                  }
+                  if (typeof input !== "string")
+                    throw new Error("Choose a Foundry Local model.");
+                  return await vscode.window.withProgress(
+                    {
+                      location: vscode.ProgressLocation.Notification,
+                      title: "Foundry Local: download and open",
+                      cancellable: true,
+                    },
+                    async (progress, token) => {
+                      const cancellation = token.onCancellationRequested(() =>
+                        controller.abort(),
+                      );
+                      if (token.isCancellationRequested) controller.abort();
+                      try {
+                        await postMessage({
+                          type: "model-progress",
+                          target: "open",
+                          actionId: message.actionId,
+                          stage: "Resolving Foundry Local package",
+                        });
+                        let reported = 0;
+                        const directory = await downloadFoundryModel(
+                          input,
+                          getApplicationSettings().downloadDirectory,
+                          controller.signal,
+                          ({ received, total }) => {
+                            const percent = total
+                              ? Math.min(100, (received / total) * 100)
+                              : 0;
+                            progress.report({
+                              message: `Downloaded ${received.toLocaleString()} / ${(total ?? 0).toLocaleString()} bytes`,
+                              increment: percent - reported,
+                            });
+                            reported = percent;
+                            void postMessage({
+                              type: "model-progress",
+                              target: "open",
+                              actionId: message.actionId,
+                              stage: "Downloading Foundry Local package",
+                              received,
+                              total,
+                            });
+                          },
+                        );
+                        controller.signal.throwIfAborted();
+                        await postMessage({
+                          type: "model-progress",
+                          target: "open",
+                          actionId: message.actionId,
+                          stage: "Opening Foundry Local package",
+                        });
+                        const loadedModel = await readGraph(
+                          vscode.Uri.file(directory),
+                          log,
+                          undefined,
+                          inline ? String(message.password) : undefined,
+                          undefined,
+                          archives,
+                          { signal: controller.signal, token },
+                        );
+                        controller.signal.throwIfAborted();
+                        if (!loadedModel) {
+                          log.record("CANCELLED", "Open ONNX model", id);
+                          return;
+                        }
+                        return {
+                          model: loadedModel,
+                          name: loadedModel.graph.name || "Foundry Local model",
+                          history: historyEntries(
+                            "local",
+                            directory,
+                            dirname(directory),
+                          ),
+                        };
+                      } finally {
+                        cancellation.dispose();
+                      }
+                    },
+                  );
+                } catch (error) {
+                  if (
+                    controller.signal.aborted &&
+                    error instanceof Error &&
+                    error.name === "AbortError"
+                  ) {
+                    log.record("CANCELLED", "Open ONNX model", id);
+                    return;
+                  }
+                  throw error;
+                } finally {
+                  if (foundryDownload === controller)
+                    foundryDownload = undefined;
+                }
               }
               if (location.id === "backend") {
                 if (!inline) return chooseBackendTest(id, "Open ONNX model");
@@ -5179,6 +5348,8 @@ async function configurePanel(
       );
     promptResult = undefined;
     hubSearch?.abort();
+    foundryBrowse?.abort();
+    foundryDownload?.abort();
     exporting?.abort();
     recipeController.abort();
     model = undefined;

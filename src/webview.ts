@@ -565,6 +565,7 @@ export function webviewHtml(
             <div id="open-source" class="source-picker" role="group" aria-label="Model source">
               <button id="open-source-local" type="button" data-source="local" aria-pressed="true">Local file</button>
               <button id="open-source-huggingface" type="button" data-source="huggingface" aria-pressed="false">Hugging Face</button>
+              <button id="open-source-foundry" type="button" data-source="foundry" aria-pressed="false">Foundry Local</button>
               <button id="open-source-backend" type="button" data-source="backend" aria-pressed="false">Backend tests</button>
             </div>
             <section id="hf-discovery" aria-labelledby="hf-search-title" hidden>
@@ -579,6 +580,16 @@ export function webviewHtml(
               <h3 id="hf-results-title">Popular ONNX models</h3>
               <p id="hf-search-status" role="status"></p>
               <ul id="hf-search-results" class="file-list" aria-label="Hugging Face ONNX repositories"></ul>
+            </section>
+            <section id="foundry-discovery" aria-labelledby="foundry-title" hidden>
+              <h3 id="foundry-title">Foundry Local models</h3>
+              <p>Download directly from Microsoft's public catalog. No Foundry installation, SDK, CLI or Python is required. All package files, including external weights and tokenizer assets, are cached in the download directory configured in Settings.</p>
+              <label for="foundry-device">Model target</label>
+              <select id="foundry-device"><option value="cpu">CPU</option><option value="gpu">GPU</option><option value="npu">NPU</option><option value="">All devices</option></select>
+              <button id="foundry-refresh" type="button">Refresh catalog</button>
+              <p id="foundry-status" role="status"></p>
+              <p>Variants whose catalog memory estimate exceeds local RAM (CPU/NPU) or detected NVIDIA VRAM (CUDA/TensorRT) are hidden. Unknown requirements or GPU capacities remain visible and are marked unverified. Estimates are not guarantees: KV cache and runtime overhead may require additional memory. Hardware compatibility is not checked.</p>
+              <p>Select a variant, then click Download and open (or double-click it). Review its license before downloading. Opening does not run the model.</p>
             </section>
             <details id="open-browser" hidden><summary id="open-browser-title">Or enter a repository / URL</summary></details>
             <form id="open-form">

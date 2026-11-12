@@ -5227,7 +5227,7 @@ test("discovers popular ONNX repositories by task and searches before browsing m
   document.getElementById("open-model").click();
   document.getElementById("open-source-huggingface").click();
   assert.equal(document.querySelector("select#open-source"), null);
-  assert.equal(document.querySelectorAll("#open-source button").length, 3);
+  assert.equal(document.querySelectorAll("#open-source button").length, 4);
   assert.equal(
     document
       .getElementById("open-source-huggingface")
@@ -5463,6 +5463,77 @@ test("reports missing or unavailable repository sizes without accepting stale me
     error: "HTTP 429",
   });
   assert.match(label.textContent, /unavailable: HTTP 429/);
+});
+
+test("Foundry Local selects targets, ignores stale catalogs and downloads on double click", (t) => {
+  const { document, window, messages, load } = openViewer(t);
+  load(demoGraph);
+  const byId = (id) => document.getElementById(id);
+  const send = (data) =>
+    window.dispatchEvent(new window.MessageEvent("message", { data }));
+  byId("open-model").click();
+  byId("open-source-foundry").click();
+  const request = messages.at(-1);
+  assert.equal(request.type, "browse-files");
+  assert.equal(request.source, "foundry");
+  assert.equal(request.device, "cpu");
+  assert.equal(byId("foundry-discovery").hidden, false);
+  assert.equal(byId("hf-discovery").hidden, true);
+  assert.equal(byId("open-path-options").hidden, true);
+  assert.equal(byId("open-file").readOnly, true);
+  assert.equal(byId("open-submit").textContent, "Download and open");
+  byId("foundry-device").value = "gpu";
+  byId("foundry-device").dispatchEvent(new window.Event("change"));
+  const gpu = messages.at(-1);
+  assert.equal(gpu.device, "gpu");
+  const entry = {
+    name: "fixture:1",
+    path: "azureml://registries/azureml/models/fixture/versions/1",
+    directory: false,
+    size: 1024,
+    description: "GPU · CUDAExecutionProvider · License: MIT",
+    memory: 2 * 1024 ** 3,
+    memoryLimit: 8 * 1024 ** 3,
+  };
+  send({
+    type: "file-list",
+    target: "open",
+    requestId: request.requestId,
+    location: "",
+    entries: [entry],
+  });
+  assert.equal(byId("open-files").children.length, 0);
+  send({
+    type: "file-list",
+    target: "open",
+    requestId: gpu.requestId,
+    location: "",
+    entries: [entry],
+    memory: { ram: 32 * 1024 ** 3, nvidia: 8 * 1024 ** 3 },
+    hidden: 3,
+    unchecked: 0,
+  });
+  const button = byId("open-files").querySelector("button");
+  assert.match(button.textContent, /1 KiB/);
+  assert.match(button.textContent, /CUDAExecutionProvider.*MIT/);
+  assert.match(button.textContent, /Estimated execution memory: 2 GiB/);
+  assert.match(
+    byId("foundry-status").textContent,
+    /3 hidden.*RAM: 32 GiB.*VRAM: 8 GiB/,
+  );
+  button.click();
+  assert.equal(byId("open-file").value, entry.path);
+  button.dispatchEvent(new window.MouseEvent("dblclick", { bubbles: true }));
+  const open = messages.findLast(({ type }) => type === "open");
+  assert.equal(open.source, "foundry");
+  assert.equal(open.location, entry.path);
+  assert.equal(byId("open-progress").hidden, false);
+  send({ type: "load-error", error: "Download failed" });
+  assert.match(byId("open-error").textContent, /Download failed/);
+  byId("open-source-local").click();
+  assert.equal(byId("foundry-discovery").hidden, true);
+  assert.equal(byId("open-file").readOnly, false);
+  assert.equal(byId("open-submit").textContent, "Open model");
 });
 
 test("opens backend tests on double click while local file clicks only choose a path", (t) => {

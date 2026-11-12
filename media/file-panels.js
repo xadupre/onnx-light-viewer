@@ -50,7 +50,9 @@ function createFilePanels({
     byId("open-file-label").textContent =
       openSource === "local"
         ? "Model file or package path"
-        : "Model path, URL or backend test ID";
+        : openSource === "foundry"
+          ? "Selected Foundry Local model"
+          : "Model path, URL or backend test ID";
     byId("open-password").disabled = packageInput;
   }
   function changedOpenPath(directory = false) {
@@ -327,6 +329,10 @@ function createFilePanels({
   });
   function browseFiles(target) {
     if (target === "open") byId("open-file-list").hidden = false;
+    if (target === "open" && openSource === "foundry") {
+      byId("open-files").replaceChildren();
+      byId("foundry-status").textContent = "Loading Foundry Local catalog...";
+    }
     fileError(target).textContent = "";
     if (target === "open" && pathDialog.open) {
       selectedPath = undefined;
@@ -339,6 +345,9 @@ function createFilePanels({
       type: "browse-files",
       target,
       source: target === "open" ? openSource : "local",
+      ...(target === "open" && openSource === "foundry"
+        ? { device: byId("foundry-device").value }
+        : {}),
       location: byId(`${target}-location`).value,
       requestId: ++fileRequests[target],
     });
@@ -353,7 +362,8 @@ function createFilePanels({
       revealPanel(panel);
       fileError(target).textContent = "";
       postMessage({ type: "get-path-history", target });
-      if (target === "open" && openSource === "backend") browseFiles(target);
+      if (target === "open" && ["backend", "foundry"].includes(openSource))
+        browseFiles(target);
       else if (target === "open" && openSource === "huggingface") searchHub();
     } else {
       if (target === "open") {
@@ -420,6 +430,13 @@ function createFilePanels({
     invalidateHubSearch();
     byId("hf-search-results").replaceChildren();
     const hub = source === "huggingface";
+    const foundry = source === "foundry";
+    byId("foundry-discovery").hidden = !foundry;
+    byId("open-file").readOnly = foundry;
+    byId("open-file-history").hidden = foundry;
+    byId("open-submit").textContent = foundry
+      ? "Download and open"
+      : "Open model";
     byId("hf-discovery").hidden = !hub;
     byId("hf-files-title").hidden = !hub;
     byId("hf-files-help").hidden = !hub;
@@ -451,12 +468,20 @@ function createFilePanels({
     byId("open-parent").disabled = true;
     renderHistory();
     checkPipelines();
-    byId("open-browse").hidden = source === "backend";
-    if (source === "backend") browseFiles("open");
+    byId("open-browse").hidden = source === "backend" || foundry;
+    if (source === "backend" || foundry) browseFiles("open");
     else if (hub) searchHub();
   }
   for (const button of byId("open-source").querySelectorAll("button"))
     button.addEventListener("click", () => selectSource(button.dataset.source));
+  byId("foundry-device").addEventListener("change", () => {
+    byId("open-file").value = "";
+    browseFiles("open");
+  });
+  byId("foundry-refresh").addEventListener("click", () => {
+    byId("open-file").value = "";
+    browseFiles("open");
+  });
   function filterModelFiles() {
     const filter = byId("open-filter").value.toLocaleLowerCase();
     for (const item of byId("open-files").children)
@@ -812,6 +837,14 @@ function createFilePanels({
       const target = data.target;
       const list = byId(`${target}-files`);
       list.setAttribute("aria-busy", "false");
+      if (openSource === "foundry")
+        byId("foundry-status").textContent =
+          data.type === "file-list-error"
+            ? ""
+            : `${data.entries.length} model variants available.` +
+              (data.memory
+                ? ` ${data.hidden} hidden above memory limits. Local RAM: ${fileSize(data.memory.ram)}; NVIDIA VRAM: ${data.memory.nvidia === undefined ? "unknown" : fileSize(data.memory.nvidia)}. ${data.unchecked} variants cannot be memory-checked.${data.memory.warning ? ` ${data.memory.warning}` : ""}`
+                : "");
       if (data.type === "file-list-error") {
         list.replaceChildren();
         byId(`${target}-parent`).disabled = true;
@@ -843,6 +876,17 @@ function createFilePanels({
             button.append(size);
           }
           button.title = entry.path;
+          if (openSource === "foundry" && entry.description) {
+            const detail = document.createElement("span");
+            detail.className = "hub-model-details";
+            detail.textContent =
+              entry.description +
+              ` · Estimated execution memory: ${entry.memory === undefined ? "unknown" : fileSize(entry.memory)}` +
+              (entry.memory === undefined || entry.memoryLimit === undefined
+                ? " (not verified)"
+                : "");
+            button.append(detail);
+          }
           button.addEventListener("click", () => {
             if (entry.directory) {
               byId(`${target}-location`).value = entry.path;
@@ -867,7 +911,7 @@ function createFilePanels({
                 choosePath();
                 return;
               }
-              if (openSource !== "backend" && openSource !== "huggingface")
+              if (!["backend", "huggingface", "foundry"].includes(openSource))
                 return;
               byId("open-file").value = entry.path;
               changedOpenPath();
