@@ -153,10 +153,25 @@ test("CI runs unit tests on Linux, Windows and macOS ARM64 without building docu
   assert.match(source, /runs-on: \$\{\{ matrix\.os \}\}/);
   assert.match(source, /os: \[ubuntu-latest, windows-latest, macos-latest\]/);
   assert.match(source, /run: npm test/);
-  assert.match(source, /if: runner\.os == 'Linux'\s+run: clang-format/);
   assert.doesNotMatch(source, /sphinx/);
   assert.match(source, /uses: actions\/setup-python@/);
   assert.match(source, /python -m pip install -r test\/requirements\.txt/);
+});
+
+test("C++ formatting has a dedicated job with a pinned clang-format version", () => {
+  const source = workflow("tests.yml");
+  const formatting = source
+    .split("  clang-format:\n")[1]
+    .split("\n  tests:")[0];
+  assert.match(formatting, /runs-on: ubuntu-24\.04/);
+  assert.match(formatting, /uses: actions\/checkout@/);
+  assert.match(formatting, /sudo apt-get install -y clang-format-18/);
+  assert.match(
+    formatting,
+    /git ls-files -z '\*\.cc' '\*\.h' \| xargs -0 clang-format-18 --dry-run --Werror/,
+  );
+  assert.doesNotMatch(formatting, /npm|python|needs:/);
+  assert.doesNotMatch(source, /run: clang-format --dry-run/);
 });
 
 test("documentation runs weekly or manually in a Linux-only workflow", () => {

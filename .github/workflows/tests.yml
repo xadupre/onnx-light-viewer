@@ -10,6 +10,14 @@ permissions:
   contents: read
 
 jobs:
+  clang-format:
+    name: C++ formatting
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - run: sudo apt-get update && sudo apt-get install -y clang-format-18
+      - run: git ls-files -z '*.cc' '*.h' | xargs -0 clang-format-18 --dry-run --Werror
+
   tests:
     name: Unit tests and formatting (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -33,6 +41,4 @@ jobs:
       - run: python -c "import onnx_light_cpu; onnx_light_cpu.register_kernels()"
       - run: npm ci
       - run: npm run format:check
-      - if: runner.os == 'Linux'
-        run: clang-format --dry-run --Werror native/*.cc native/*.h
       - run: npm test
