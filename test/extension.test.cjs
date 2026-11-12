@@ -46,11 +46,14 @@ test("Foundry Local host browses, downloads and opens packages without a CLI or 
   oversized.properties.variantInfo.variantMetadata.vRamFootprintBytes =
     Number.MAX_SAFE_INTEGER;
   hub.state.catalogEntries = [hub.catalogEntry, oversized];
+  const downloadDirectory = path.join(hub.root, "cache-alias");
+  await symlink(
+    hub.root,
+    downloadDirectory,
+    process.platform === "win32" ? "junction" : "dir",
+  );
   const preferences = new Map([
-    [
-      "applicationSettings",
-      { downloadDirectory: hub.root, pythonPath: "unused-python" },
-    ],
+    ["applicationSettings", { downloadDirectory, pythonPath: "unused-python" }],
   ]);
   const extension = await openExtension(
     "relu.onnx",
@@ -94,13 +97,13 @@ test("Foundry Local host browses, downloads and opens packages without a CLI or 
     await readFile(path.join(directory, "v1/model.onnx.data")),
     hub.files.get("v1/model.onnx.data"),
   );
-  assert.ok(
+  const rememberedPaths = await Promise.all(
     preferences
       .get("pathHistory")
-      .open.some(
-        (entry) => entry.source === "local" && entry.path === directory,
-      ),
+      .open.filter((entry) => entry.source === "local" && entry.kind === "file")
+      .map((entry) => realpath(entry.path)),
   );
+  assert.ok(rememberedPaths.includes(directory));
   assert.ok(
     extension.events.some(
       (message) =>

@@ -5227,7 +5227,7 @@ test("discovers popular ONNX repositories by task and searches before browsing m
   document.getElementById("open-model").click();
   document.getElementById("open-source-huggingface").click();
   assert.equal(document.querySelector("select#open-source"), null);
-  assert.equal(document.querySelectorAll("#open-source button").length, 3);
+  assert.equal(document.querySelectorAll("#open-source button").length, 4);
   assert.equal(
     document
       .getElementById("open-source-huggingface")
