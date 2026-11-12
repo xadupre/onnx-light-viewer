@@ -6,6 +6,7 @@ release = json.loads(
 )["version"]
 
 project = "ONNX Light Viewer"
+today_fmt = "%Y-%m-%d"
 html_theme = "pydata_sphinx_theme"
 html_logo = "../media/logo.svg"
 html_favicon = "../media/logo.svg"
