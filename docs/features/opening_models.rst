@@ -6,8 +6,9 @@ Opening models
    :width: 200px
 
 * **Open** toggles an embedded file selector in the right sidebar, offering
-  **Local file**, **Hugging Face** or **Backend test**. Enter a model path or use
-  the buttons below it to choose a local file, then click **Open model**.
+  **Local file**, **Hugging Face**, **Foundry Local** or **Backend tests**.
+  Enter a model path or use the buttons below it to choose a local file, then
+  click **Open model**. Foundry Local uses **Download and open** instead.
   The panel closes after a successful opening;
   **Open** can show it again. Errors and cancellations keep the panel open.
   Opening an ``.onnx``, ``.ort``, ``.ortpackage`` or ``.pipe-onnx`` file in VS Code
@@ -47,8 +48,8 @@ or use **Parent folder**. Filter the list, select a model and click **Choose pat
 
 Opening the Open panel does not list local directories until browsing is requested.
 Selecting a recent local directory opens the dialog with that path but does not
-browse automatically. Hugging Face discovery and the backend catalogue remain
-in the sidebar.
+browse automatically. Hugging Face and Foundry Local discovery and the backend
+catalogue remain in the sidebar.
 
 .. figure:: ../_static/feature-open-path-dialog.png
    :alt: In-app path dialog browsing a directory outside the VS Code workspace, with a selected ONNX file and Choose path button.
@@ -119,7 +120,8 @@ Recent paths and progress
 
 Successful opens and saves remember their model paths and containing folders;
 Hugging Face opens remember the public model URL and repository instead of a
-cache filename. **Open** and **Save** keep separate, deduplicated histories,
+cache filename; Foundry Local opens remember the local cached package path.
+**Open** and **Save** keep separate, deduplicated histories,
 with the most recent entries first (up to 50 entries each). They persist in
 VS Code's user storage across viewer reloads and application restarts.
 Failed or cancelled operations and browsing alone do not add entries.
@@ -235,11 +237,51 @@ encoded payloads retain their external filenames. The loader does not generate
 the omission sentinel for encoded values (investigation: `#144
 <https://github.com/xadupre/onnx-light-viewer/issues/144>`_).
 
+.. _foundry-local-models:
+
+Foundry Local models
+--------------------
+
+Choose **Open → Foundry Local**, select a **Model target** (CPU, GPU or NPU), then
+filter the catalogue and select a variant. Click **Download and open**, or
+double-click the variant. The viewer accesses Microsoft's public catalogue and
+downloads directly over HTTPS, without authentication, Python, the Foundry SDK,
+CLI or a local service.
+
+.. figure:: ../_static/feature-foundry-local.png
+   :alt: Foundry Local catalogue filtered to GPU variants, showing estimated execution memory, local capacities and the Download and open control.
+   :width: 650px
+
+   Download size and estimated execution memory are separate measurements.
+
+The viewer downloads the **complete package**, including external weights,
+tokenizers and configuration files, into ``foundry/`` under the download
+directory configured in **Settings**. Valid cached packages are reused without
+downloading again. Packages containing several graphs may ask which model to
+open. Successful opens remember the local package directory, which can later
+be reopened through **Local file**. Downloads show cancellable progress;
+cancellation or failure leaves the previous model visible and does not retain
+an incomplete cache entry.
+
+**Memory filtering checks capacity, not compatibility.** The catalogue's
+estimated execution footprint is distinct from the download size. CPU and NPU
+estimates are compared with local RAM, capped by process/container limits when
+available. CUDA/TensorRT GPU estimates are compared with the largest single
+NVIDIA GPU's VRAM, detected through ``nvidia-smi``. Variants exceeding their known
+limit are hidden; the status shows local capacities and hidden/unchecked counts.
+Missing estimates, unavailable NVIDIA measurements and other GPU providers
+remain visible but explicitly unverified.
+
+These are total capacities, not currently free memory. Runtime overhead and
+generation caches can require additional space. Choosing NPU does not establish
+that an NPU or suitable execution provider is usable; choosing any variant does
+not start inference. In WSL, checks and downloads run in the extension host,
+not in a Windows-side inference service.
+
 Hugging Face models
 -------------------
 
-Choose **Open**, then use the **Local file**, **Hugging Face** or **Backend tests**
-source buttons. **Hugging Face** initially shows popular public ONNX repositories,
+Choose **Open → Hugging Face** to show popular public ONNX repositories,
 ranked by download count. Under **1. Find an ONNX model**, choose a **Task**
 (embeddings, generation, classification, vision, speech, etc.), enter a model
 name or author and click **Search** or press Enter. An empty search shows popular
