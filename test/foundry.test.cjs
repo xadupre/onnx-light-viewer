@@ -1,6 +1,7 @@
 const assert = require("node:assert/strict");
-const { readFile, readdir, writeFile } = require("node:fs/promises");
-const { join } = require("node:path");
+const { createHash } = require("node:crypto");
+const { mkdir, readFile, readdir, writeFile } = require("node:fs/promises");
+const { basename, join } = require("node:path");
 const { test } = require("node:test");
 const { loadModelFile } = require("../dist/graph");
 const { foundryHub } = require("./helpers/foundry-hub.cjs");
@@ -202,6 +203,80 @@ test("Foundry Local rejects unsafe paths, untrusted blob hosts and repeated blob
     false,
   );
 });
+
+test(
+  "Foundry Local concurrent downloads reuse the winning complete package",
+  { timeout: 10000 },
+  async (t) => {
+    const hub = await foundryHub(t);
+    let release;
+    const ready = new Promise((resolve) => {
+      release = resolve;
+    });
+    let arrivals = 0;
+    hub.state.beforeTransfer = async (name) => {
+      if (name !== "v1/model.onnx") return;
+      if (++arrivals === 2) release();
+      await ready;
+    };
+    const directories = await Promise.all([
+      hub.api.downloadFoundryModel(hub.asset, hub.root),
+      hub.api.downloadFoundryModel(hub.asset, hub.root),
+    ]);
+    assert.equal(arrivals, 2);
+    assert.equal(directories[0], directories[1]);
+    assert.deepEqual(await readdir(join(hub.root, "foundry")), [
+      basename(directories[0]),
+    ]);
+    for (const [file, bytes] of hub.files)
+      assert.deepEqual(await readFile(join(directories[0], file)), bytes);
+    const count = hub.requests.length;
+    assert.equal(
+      await hub.api.downloadFoundryModel(hub.asset, hub.root),
+      directories[0],
+    );
+    assert.equal(hub.requests.length, count);
+  },
+);
+
+test(
+  "Foundry Local publication collisions reject an invalid winning cache",
+  { timeout: 10000 },
+  async (t) => {
+    const hub = await foundryHub(t);
+    let arrived, release;
+    const started = new Promise((resolve) => {
+      arrived = resolve;
+    });
+    const ready = new Promise((resolve) => {
+      release = resolve;
+    });
+    hub.state.beforeTransfer = async () => {
+      arrived();
+      await ready;
+    };
+    const download = hub.api.downloadFoundryModel(hub.asset, hub.root);
+    const directory = join(
+      hub.root,
+      "foundry",
+      createHash("sha256").update(hub.asset).digest("hex"),
+    );
+    try {
+      await started;
+      await mkdir(directory);
+      await writeFile(
+        join(directory, ".viewer-download.json"),
+        JSON.stringify({ id: "another-model", files: [] }),
+      );
+    } finally {
+      release();
+    }
+    await assert.rejects(download, /Invalid Foundry Local cache manifest/);
+    assert.deepEqual(await readdir(join(hub.root, "foundry")), [
+      basename(directory),
+    ]);
+  },
+);
 
 test("Foundry Local never publishes failed, truncated or cancelled downloads", async (t) => {
   const hub = await foundryHub(t);

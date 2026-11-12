@@ -353,6 +353,23 @@ async function cacheExists(directory: string): Promise<boolean> {
   }
 }
 
+async function validateCache(directory: string, id: string): Promise<void> {
+  const manifest: unknown = JSON.parse(
+    await readFile(join(directory, ".viewer-download.json"), "utf8"),
+  );
+  if (!object(manifest) || manifest.id !== id || !Array.isArray(manifest.files))
+    throw new Error("Invalid Foundry Local cache manifest.");
+  for (const file of manifest.files) {
+    if (!object(file)) throw new Error("Invalid Foundry Local cached file.");
+    const info = await lstat(join(directory, modelPath(file.path)));
+    if (!info.isFile() || info.size !== file.size)
+      throw new Error(
+        "Incomplete Foundry Local cache. Remove this model's cache directory and retry.",
+      );
+  }
+  await inspectRuntimePackage(directory);
+}
+
 export async function downloadFoundryModel(
   input: string,
   cacheRoot: string,
@@ -364,24 +381,7 @@ export async function downloadFoundryModel(
   const root = join(cacheRoot, "foundry");
   const directory = join(root, createHash("sha256").update(id).digest("hex"));
   if (await cacheExists(directory)) {
-    const manifest: unknown = JSON.parse(
-      await readFile(join(directory, ".viewer-download.json"), "utf8"),
-    );
-    if (
-      !object(manifest) ||
-      manifest.id !== id ||
-      !Array.isArray(manifest.files)
-    )
-      throw new Error("Invalid Foundry Local cache manifest.");
-    for (const file of manifest.files) {
-      if (!object(file)) throw new Error("Invalid Foundry Local cached file.");
-      const info = await lstat(join(directory, modelPath(file.path)));
-      if (!info.isFile() || info.size !== file.size)
-        throw new Error(
-          "Incomplete Foundry Local cache. Remove this model's cache directory and retry.",
-        );
-    }
-    await inspectRuntimePackage(directory);
+    await validateCache(directory, id);
     signal?.throwIfAborted();
     return directory;
   }
@@ -439,7 +439,24 @@ export async function downloadFoundryModel(
       { flag: "wx" },
     );
     signal?.throwIfAborted();
-    await rename(temporary, directory);
+    try {
+      await rename(temporary, directory);
+    } catch (error) {
+      if (
+        !(
+          error instanceof Error &&
+          "code" in error &&
+          (error.code === "EEXIST" ||
+            error.code === "ENOTEMPTY" ||
+            (process.platform === "win32" &&
+              (error.code === "EPERM" || error.code === "EACCES")))
+        ) ||
+        !(await cacheExists(directory))
+      )
+        throw error;
+      await validateCache(directory, id);
+    }
+    signal?.throwIfAborted();
     onProgress?.({ received, total });
     return directory;
   } finally {

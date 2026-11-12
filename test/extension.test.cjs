@@ -154,6 +154,79 @@ test("Foundry Local host browses, downloads and opens packages without a CLI or 
   );
 });
 
+test(
+  "Foundry Local cancellation closes the package picker and prevents a selected graph from loading",
+  { timeout: 15000 },
+  async (t) => {
+    for (const selectFirst of [false, true]) {
+      await t.test(
+        selectFirst ? "selection races cancellation" : "cancel picker",
+        async (t) => {
+          const hub = await foundryHub(t);
+          hub.files.set("v1/second.onnx", hub.files.get("v1/model.onnx"));
+          const extension = await openExtension(
+            "relu.onnx",
+            undefined,
+            true,
+            undefined,
+            undefined,
+            new Map([
+              [
+                "applicationSettings",
+                { downloadDirectory: hub.root, pythonPath: "unused-python" },
+              ],
+            ]),
+            hub.api,
+          );
+          t.after(() => extension.dispose());
+          const nativeCount = extension.nativeModels.length;
+          const graphCount = extension.messages.filter(
+            ({ type }) => type === "graph",
+          ).length;
+          const choice = extension.pauseNextPackagePick();
+          const opening = extension.receive({
+            type: "open",
+            source: "foundry",
+            location: hub.asset,
+            password: "",
+          });
+          try {
+            const token = await Promise.race([
+              choice.opened,
+              opening.then(() =>
+                assert.fail(
+                  `Package picker was not shown: ${extension.errors.join("; ")}`,
+                ),
+              ),
+            ]);
+            if (selectFirst) choice.release({ label: "v1/model.onnx" });
+            extension.setDownloadCancellation(true);
+            assert.ok(
+              token,
+              "the package picker must receive a cancellation token",
+            );
+            assert.equal(token.isCancellationRequested, true);
+            await opening;
+          } finally {
+            choice.release();
+            await opening;
+          }
+          assert.equal(extension.nativeModels.length, nativeCount);
+          assert.equal(
+            extension.messages.filter(({ type }) => type === "graph").length,
+            graphCount,
+          );
+          assert.deepEqual(extension.errors, []);
+          assert.match(
+            extension.logs.join("\n"),
+            /\[CANCELLED\] Open ONNX model/,
+          );
+        },
+      );
+    }
+  },
+);
+
 test("comparison host reports real model differences, cancellation and unsupported inputs", async (t) => {
   const extension = await openExtension("fusion.onnx", undefined, true);
   t.after(() => extension.dispose());
@@ -955,6 +1028,8 @@ async function openExtension(
   const fileLoadGates = [];
   let huggingFaceInput;
   let cancelDownload = false;
+  const downloadCancellationListeners = new Set();
+  let packagePickGate;
   let modelSource = "local";
   let repositoryFiles;
   let repositoryFileSelection;
@@ -1188,12 +1263,39 @@ async function openExtension(
         work(
           { report() {} },
           {
-            isCancellationRequested: cancelDownload,
-            onCancellationRequested: disposable,
+            get isCancellationRequested() {
+              return cancelDownload;
+            },
+            onCancellationRequested: (callback) => {
+              downloadCancellationListeners.add(callback);
+              return {
+                dispose: () => downloadCancellationListeners.delete(callback),
+              };
+            },
           },
         ),
-      showQuickPick: async (items, options) => {
+      showQuickPick: async (items, options, token) => {
         picks.push({ items, options });
+        if (
+          options.title === "Choose a model inside the runtime package" &&
+          packagePickGate
+        ) {
+          const gate = packagePickGate;
+          packagePickGate = undefined;
+          gate.arrived(token);
+          let cancellation;
+          try {
+            return await Promise.race([
+              gate.wait,
+              new Promise((resolve) => {
+                cancellation = token?.onCancellationRequested(() => resolve());
+                if (token?.isCancellationRequested) resolve();
+              }),
+            ]);
+          } finally {
+            cancellation?.dispose();
+          }
+        }
         if (options.title === "Open an ONNX model")
           return items.find(({ id }) => id === modelSource);
         if (options.title === "Choose an ONNX file")
@@ -1383,6 +1485,17 @@ async function openExtension(
       openDialogGate = { wait, arrived };
       return { opened, release };
     },
+    pauseNextPackagePick: () => {
+      let release, arrived;
+      const wait = new Promise((resolve) => {
+        release = resolve;
+      });
+      const opened = new Promise((resolve) => {
+        arrived = resolve;
+      });
+      packagePickGate = { wait, arrived };
+      return { opened, release };
+    },
     setClipboard: (text, error) => {
       clipboardText = text;
       clipboardFailure = error ? new Error(error) : undefined;
@@ -1535,6 +1648,8 @@ async function openExtension(
     },
     setDownloadCancellation: (cancel) => {
       cancelDownload = cancel;
+      if (cancel)
+        for (const callback of downloadCancellationListeners) callback();
     },
     openFoundry: async (name) => {
       modelSource = "foundry";

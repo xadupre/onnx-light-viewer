@@ -392,8 +392,13 @@ async function readGraph(
   suppliedPassword?: string,
   selectedPackageModel?: unknown,
   archives?: PackageArchiveStore,
+  cancellation?: {
+    signal: AbortSignal;
+    token: vscode.CancellationToken;
+  },
 ): Promise<LoadedModel | undefined> {
   return log.run(`Load model: ${uri.path}`, async (id) => {
+    cancellation?.signal.throwIfAborted();
     let sourcePackage: RuntimePackage | undefined;
     if (
       uri.scheme === "file" &&
@@ -409,11 +414,14 @@ async function readGraph(
           ? { archivePath: location.archivePath }
           : {}),
       };
+      cancellation?.signal.throwIfAborted();
       if (!selectedPackageModel && !sourcePackage.defaultModel) {
         const selection = await vscode.window.showQuickPick(
           sourcePackage.models.map((name) => ({ label: name })),
           { title: "Choose a model inside the runtime package" },
+          cancellation?.token,
         );
+        cancellation?.signal.throwIfAborted();
         if (!selection) {
           log.record("CANCELLED", `Load model: ${uri.path}`, id);
           return;
@@ -465,6 +473,7 @@ async function readGraph(
     const reload = retainedBytes
       ? () => loadModel(retainedBytes, fileName, password)
       : () => loadModelFile(source.uri.fsPath, fileName, password);
+    cancellation?.signal.throwIfAborted();
     const native = await reload();
     if (sourcePackage?.archivePath)
       assertPackageWeightLocations(
@@ -3014,6 +3023,7 @@ async function configurePanel(
                           inline ? String(message.password) : undefined,
                           undefined,
                           archives,
+                          { signal: controller.signal, token },
                         );
                         controller.signal.throwIfAborted();
                         if (!loadedModel) {

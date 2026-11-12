@@ -114,6 +114,7 @@ async function foundryHub(t) {
         res.end();
         return;
       }
+      await state.beforeTransfer?.(name);
       res.writeHead(state.transferStatus, {
         "Content-Type": "application/octet-stream",
       });
