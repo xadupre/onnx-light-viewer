@@ -734,6 +734,14 @@ public:
         snapshot_ = recorded_source_->model->SharedCopy();
         return;
       }
+      CheckSourcePayloads(*canonical_, path_);
+      // Constant folding and selection FunctionPatterns compare values of large constants.
+      const bool value_dependent =
+          operation_ == "ConstantFolding" ||
+          std::any_of(patterns_.begin(), patterns_.end(),
+                      [&](const auto &name) { return function_patterns_.contains(name); });
+      if (!canonical_->skipped.empty() && !value_dependent && ExecuteDeferred())
+        return;
       RestoreModelPayloads(snapshot_, *canonical_, path_);
       if (!canonical_->skipped.empty()) {
         // Share restored payloads with the undo base instead of reloading them for partial replay.
@@ -744,6 +752,64 @@ public:
           source_ = complete;
         canonical_ = std::move(complete);
       }
+      Transform();
+    } catch (const std::exception &error) {
+      SetError(error.what());
+    }
+  }
+
+  /**
+   * Transforms the model while large omitted payloads stay in the source file. Small payloads
+   * are already loaded, so value-dependent rewrites see the same constants as an eager run.
+   * Returns false, with the initial state restored, when a rewrite needs an omitted payload.
+   */
+  bool ExecuteDeferred() {
+    const auto history = history_;
+    const auto operation = operation_;
+    const auto weights = weights_.size();
+    TagSkippedPayloads(snapshot_, canonical_->skipped);
+    try {
+      Transform();
+      if (!CapturesSkippedPayload()) {
+        auto skipped = UntagSkippedPayloads(snapshot_, *canonical_->model, canonical_->skipped);
+        if (skipped) {
+          skipped_ = std::move(*skipped);
+          return true;
+        }
+      }
+    } catch (const std::exception &) {
+      // Retry eagerly: the failure may come from an omitted payload.
+    }
+    snapshot_ = canonical_->model->SharedCopy();
+    history_ = history;
+    operation_ = operation;
+    weights_.resize(weights);
+    matches_.clear();
+    plan_ = ol::RewritingProto();
+    batches_.clear();
+    optimization_report_.reset();
+    return false;
+  }
+
+  /** Placeholders cannot be restored once copied into a rewriting plan or preview node. */
+  bool CapturesSkippedPayload() const {
+    const auto contains = [](const auto &message) {
+      std::string bytes;
+      if (!message.SerializeToString(bytes))
+        throw std::runtime_error("Could not serialize a native rewriting.");
+      return bytes.find(skippedPayloadTag) != std::string::npos;
+    };
+    if (contains(plan_))
+      return true;
+    for (const auto &match : matches_)
+      for (const auto &node : match.replacement)
+        if (contains(node))
+          return true;
+    return false;
+  }
+
+  void Transform() {
+    {
       if (prefix_source_) {
         if (scenario_.empty())
           ApplyPrefix();
@@ -763,7 +829,7 @@ public:
           }
         for (auto *tensor : tensors)
           if ((!layout_tensors.contains(tensor) || tensor->has_data_location()) &&
-              tensor->data_location() == ol::TensorProto::EXTERNAL) {
+              tensor->data_location() == ol::TensorProto::EXTERNAL && !IsPayloadOmitted(*tensor)) {
             if (path_.empty())
               throw std::runtime_error("Fusion needs a local source path for external weights.");
             auto reference = tensor->SharedCopy();
@@ -954,8 +1020,6 @@ public:
         plan = original.CaptureRewritings(plan);
       }
       plan_ = std::move(plan);
-    } catch (const std::exception &error) {
-      SetError(error.what());
     }
   }
   void OnOK() override {
@@ -988,6 +1052,13 @@ public:
     stored->model = std::make_shared<ol::ModelProto>(std::move(snapshot_));
     stored->file_name = source_->file_name;
     stored->file_path = path_;
+    if (!skipped_.empty()) {
+      const auto &origin = *canonical_;
+      stored->pipeline_stage = origin.pipeline_stage;
+      stored->source_size = origin.source_size;
+      stored->source_time = origin.source_time;
+      stored->skipped = std::move(skipped_);
+    }
     stored->external_weights = std::move(weights_);
     stored->fusion_base = source_->fusion_base;
     stored->fusion_previous = source_->fusion_previous;
@@ -1423,6 +1494,7 @@ private:
   std::string path_;
   std::vector<StoredModel::ExternalWeight> weights_;
   std::vector<Match> matches_;
+  std::vector<SkippedTensorPayload> skipped_;
   ol::RewritingProto plan_;
   std::vector<std::vector<StoredModel::FusionMatch>> history_;
   std::string scenario_;

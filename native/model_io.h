@@ -26,6 +26,11 @@ std::optional<std::string> ReadPassword(const Napi::Value &value);
 ol::TensorProto *FindTensor(ol::ModelProto &model, const SkippedTensorPayload &payload);
 void RestoreModelPayloads(ol::ModelProto &snapshot, const StoredModel &source,
                           const std::string &file_path);
+void CheckSourcePayloads(const StoredModel &source, const std::string &file_path);
+void TagSkippedPayloads(ol::ModelProto &model, const std::vector<SkippedTensorPayload> &skipped);
+std::optional<std::vector<SkippedTensorPayload>>
+UntagSkippedPayloads(ol::ModelProto &model, ol::ModelProto &canonical,
+                     const std::vector<SkippedTensorPayload> &skipped);
 void RestoreStatisticsPayloads(ol::ModelProto &snapshot, const StoredModel &source,
                                const std::string &file_path,
                                const std::vector<SkippedTensorPayload> &payloads);

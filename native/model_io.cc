@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <cerrno>
+#include <charconv>
 #include <cmath>
 #include <limits>
 #include <map>
@@ -721,38 +722,228 @@ void ReadSourceModel(ol::ModelProto &model, ol::utils::BinaryStream &stream,
   if (!found)
     throw std::runtime_error("Could not reopen the source pipeline stage.");
 }
+
+SkippedTensorPayload SourcePayload(const SkippedTensorPayload &payload) {
+  return {payload.source_path.empty() ? payload.path : payload.source_path, payload.fields};
+}
+
+/** Copies a source tensor while keeping the name chosen by a native transformation. */
+void RestorePayload(ol::TensorProto &target, const ol::TensorProto &source) {
+  const bool has_name = target.has_name();
+  const std::string name = target.str_name();
+  target = source.SharedCopy();
+  if (has_name)
+    target.set_name(name);
+  else
+    target.clear_name();
+}
+
+template <typename Visit>
+void VisitGraphTensors(ol::GraphProto &graph, std::vector<ProtoPathStep> &path, Visit &visit);
+
+template <typename Visit>
+void VisitSparseTensor(ol::SparseTensorProto &sparse, std::vector<ProtoPathStep> &path,
+                       Visit &visit) {
+  if (sparse.has_values()) {
+    path.push_back({1, 0});
+    visit(path, sparse.ref_values());
+    path.pop_back();
+  }
+  if (sparse.has_indices()) {
+    path.push_back({2, 0});
+    visit(path, sparse.ref_indices());
+    path.pop_back();
+  }
+}
+
+template <typename Visit>
+void VisitAttributeTensors(ol::AttributeProto &attribute, std::vector<ProtoPathStep> &path,
+                           Visit &visit) {
+  if (attribute.has_t()) {
+    path.push_back({5, 0});
+    visit(path, attribute.ref_t());
+    path.pop_back();
+  }
+  if (attribute.has_g()) {
+    path.push_back({6, 0});
+    VisitGraphTensors(attribute.ref_g(), path, visit);
+    path.pop_back();
+  }
+  for (size_t i = 0; i < attribute.tensors().size(); ++i) {
+    path.push_back({10, i});
+    visit(path, attribute.ref_tensors()[i]);
+    path.pop_back();
+  }
+  for (size_t i = 0; i < attribute.graphs().size(); ++i) {
+    path.push_back({11, i});
+    VisitGraphTensors(attribute.ref_graphs()[i], path, visit);
+    path.pop_back();
+  }
+  if (attribute.has_sparse_tensor()) {
+    path.push_back({22, 0});
+    VisitSparseTensor(attribute.ref_sparse_tensor(), path, visit);
+    path.pop_back();
+  }
+  for (size_t i = 0; i < attribute.sparse_tensors().size(); ++i) {
+    path.push_back({23, i});
+    VisitSparseTensor(attribute.ref_sparse_tensors()[i], path, visit);
+    path.pop_back();
+  }
+}
+
+template <typename Visit>
+void VisitNodeTensors(ol::NodeProto &node, std::vector<ProtoPathStep> &path, Visit &visit) {
+  for (size_t i = 0; i < node.attribute().size(); ++i) {
+    path.push_back({5, i});
+    VisitAttributeTensors(node.ref_attribute()[i], path, visit);
+    path.pop_back();
+  }
+}
+
+template <typename Visit>
+void VisitGraphTensors(ol::GraphProto &graph, std::vector<ProtoPathStep> &path, Visit &visit) {
+  for (size_t i = 0; i < graph.node().size(); ++i) {
+    path.push_back({1, i});
+    VisitNodeTensors(graph.ref_node()[i], path, visit);
+    path.pop_back();
+  }
+  for (size_t i = 0; i < graph.initializer().size(); ++i) {
+    path.push_back({5, i});
+    visit(path, graph.ref_initializer()[i]);
+    path.pop_back();
+  }
+  for (size_t i = 0; i < graph.sparse_initializer().size(); ++i) {
+    path.push_back({15, i});
+    VisitSparseTensor(graph.ref_sparse_initializer()[i], path, visit);
+    path.pop_back();
+  }
+}
+
+/** Visits every tensor at a location FindTensor can resolve. */
+template <typename Visit> void VisitModelTensors(ol::ModelProto &model, Visit visit) {
+  std::vector<ProtoPathStep> path;
+  if (model.has_graph()) {
+    path.push_back({7, 0});
+    VisitGraphTensors(model.ref_graph(), path, visit);
+    path.pop_back();
+  }
+  for (size_t i = 0; i < model.functions().size(); ++i) {
+    auto &function = model.ref_functions()[i];
+    path.push_back({25, i});
+    for (size_t j = 0; j < function.node().size(); ++j) {
+      path.push_back({7, j});
+      VisitNodeTensors(function.ref_node()[j], path, visit);
+      path.pop_back();
+    }
+    for (size_t j = 0; j < function.attribute_proto().size(); ++j) {
+      path.push_back({11, j});
+      VisitAttributeTensors(function.ref_attribute_proto()[j], path, visit);
+      path.pop_back();
+    }
+    path.pop_back();
+  }
+}
 } // namespace
 
-void RestoreModelPayloads(ol::ModelProto &snapshot, const StoredModel &source,
-                          const std::string &file_path) {
+void TagSkippedPayloads(ol::ModelProto &model, const std::vector<SkippedTensorPayload> &skipped) {
+  for (size_t i = 0; i < skipped.size(); ++i) {
+    auto *tensor = FindTensor(model, skipped[i]);
+    if (!tensor)
+      throw std::runtime_error("Could not locate an omitted tensor payload.");
+    auto *entry = tensor->add_external_data();
+    entry->set_key(std::string(skippedPayloadTag));
+    entry->set_value(std::to_string(i));
+  }
+}
+
+std::optional<std::vector<SkippedTensorPayload>>
+UntagSkippedPayloads(ol::ModelProto &model, ol::ModelProto &canonical,
+                     const std::vector<SkippedTensorPayload> &skipped) {
+  std::vector<std::pair<std::vector<ProtoPathStep>, ol::TensorProto *>> tagged;
+  VisitModelTensors(model, [&](const std::vector<ProtoPathStep> &path, ol::TensorProto &tensor) {
+    if (std::any_of(tensor.external_data().begin(), tensor.external_data().end(),
+                    [](const auto &entry) { return entry.key() == skippedPayloadTag; }))
+      tagged.emplace_back(path, &tensor);
+  });
+  std::vector<SkippedTensorPayload> result;
+  bool valid = true;
+  for (auto &[path, tensor] : tagged) {
+    std::optional<size_t> index;
+    std::vector<ol::StringStringEntryProto> entries;
+    for (const auto &entry : tensor->external_data()) {
+      if (entry.key() != skippedPayloadTag) {
+        entries.push_back(entry.SharedCopy());
+        continue;
+      }
+      const std::string value(entry.value());
+      size_t parsed = 0;
+      const auto end = std::from_chars(value.data(), value.data() + value.size(), parsed);
+      if (index || end.ec != std::errc() || end.ptr != value.data() + value.size() ||
+          parsed >= skipped.size())
+        valid = false;
+      else
+        index = parsed;
+    }
+    tensor->clear_external_data();
+    for (auto &entry : entries)
+      *tensor->add_external_data() = std::move(entry);
+    if (!index || !valid) {
+      valid = false;
+      continue;
+    }
+    const auto &original = skipped[*index];
+    const auto *before = FindTensor(canonical, original);
+    if (!before || before->data_type() != tensor->data_type() ||
+        before->dims().size() != tensor->dims().size() ||
+        !std::equal(before->dims().begin(), before->dims().end(), tensor->dims().begin())) {
+      valid = false;
+      continue;
+    }
+    result.push_back({path, original.fields, SourcePayload(original).path});
+  }
+  if (!valid)
+    return std::nullopt;
+  return result;
+}
+
+namespace {
+void CheckSourceFile(const StoredModel &source, const std::string &file_path) {
+  const auto path = ModelFilePath(file_path);
+  if (std::filesystem::file_size(path) != source.source_size ||
+      std::filesystem::last_write_time(path) != source.source_time)
+    throw std::runtime_error("The source model changed on disk. Reopen it before saving.");
+}
+} // namespace
+
+void CheckSourcePayloads(const StoredModel &source, const std::string &file_path) {
   if (source.has_training_info)
     throw std::runtime_error("Editing or saving models containing training_info is not supported "
                              "by onnx-light " ONNX_LIGHT_VERSION ".");
+  if (!source.skipped.empty())
+    CheckSourceFile(source, file_path);
+}
+
+void RestoreModelPayloads(ol::ModelProto &snapshot, const StoredModel &source,
+                          const std::string &file_path) {
+  CheckSourcePayloads(source, file_path);
   if (source.skipped.empty())
     return;
-  const auto path = ModelFilePath(file_path);
-  const auto check_source = [&] {
-    if (std::filesystem::file_size(path) != source.source_size ||
-        std::filesystem::last_write_time(path) != source.source_time)
-      throw std::runtime_error("The source model changed on disk. Reopen it before saving.");
-  };
-  check_source();
   FileDescriptor file(OpenModelFile(file_path));
   if (file.get() < 0)
     throw std::system_error(errno, std::generic_category(), "Could not reopen source model");
   ol::utils::FdReadStream stream(file.get());
   ol::ModelProto original;
   ReadSourceModel(original, stream, source, nullptr);
-  check_source();
+  CheckSourceFile(source, file_path);
   for (const auto &payload : source.skipped) {
     auto *target = FindTensor(snapshot, payload);
-    const auto *tensor = FindTensor(original, payload);
-    if (!target || !tensor || target->name() != tensor->name() ||
+    const auto *tensor = FindTensor(original, SourcePayload(payload));
+    if (!target || !tensor || (payload.source_path.empty() && target->name() != tensor->name()) ||
         target->data_type() != tensor->data_type() ||
         target->dims().size() != tensor->dims().size() ||
         !std::equal(target->dims().begin(), target->dims().end(), tensor->dims().begin()))
       throw std::runtime_error("Could not restore an omitted tensor payload.");
-    *target = tensor->SharedCopy();
+    RestorePayload(*target, *tensor);
   }
 }
 
@@ -788,13 +979,7 @@ void RestoreStatisticsPayloads(ol::ModelProto &snapshot, const StoredModel &sour
   if (targets.empty())
     return;
 
-  const auto path = ModelFilePath(file_path);
-  const auto check_source = [&] {
-    if (std::filesystem::file_size(path) != source.source_size ||
-        std::filesystem::last_write_time(path) != source.source_time)
-      throw std::runtime_error("The source model changed on disk. Reopen it before saving.");
-  };
-  check_source();
+  CheckSourceFile(source, file_path);
   FileDescriptor file(OpenModelFile(file_path));
   if (file.get() < 0)
     throw std::system_error(errno, std::generic_category(), "Could not reopen source model");
@@ -803,21 +988,22 @@ void RestoreStatisticsPayloads(ol::ModelProto &snapshot, const StoredModel &sour
   std::vector<SkippedTensorPayload> retained_paths;
   retained_paths.reserve(targets.size());
   for (const auto &target : targets)
-    retained_paths.push_back(target.payload);
+    retained_paths.push_back(SourcePayload(target.payload));
   ReadSourceModel(original, stream, source, &retained_paths);
-  check_source();
+  CheckSourceFile(source, file_path);
 
   for (const auto &target : targets) {
     auto *destination = FindTensor(snapshot, target.payload);
-    auto *tensor = FindTensor(original, target.payload);
+    auto *tensor = FindTensor(original, SourcePayload(target.payload));
+    const bool moved = !target.payload.source_path.empty();
     if (!destination || !tensor)
       throw std::runtime_error("Could not locate an omitted tensor payload.");
     if (destination->str_name() != target.name || destination->has_name() != target.has_name ||
-        tensor->str_name() != target.name || tensor->has_name() != target.has_name ||
+        (!moved && (tensor->str_name() != target.name || tensor->has_name() != target.has_name)) ||
         tensor->data_type() != target.data_type || tensor->dims().size() != target.dims.size() ||
         !std::equal(tensor->dims().begin(), tensor->dims().end(), target.dims.begin()))
       throw std::runtime_error("Could not restore an omitted tensor payload.");
-    *destination = tensor->SharedCopy();
+    RestorePayload(*destination, *tensor);
   }
 }
 
