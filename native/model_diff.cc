@@ -5,8 +5,11 @@
 #include "model_storage.h"
 #include "rewriting_trace.h"
 #include "tensor_preview.h"
+#include <algorithm>
 #include <map>
 #include <onnx_core/builder/graph_builder.h>
+#include <onnx_lib/common/constants.h>
+#include <onnx_lib/version_converter/convert.h>
 #include <set>
 #include <stdexcept>
 
@@ -40,6 +43,26 @@ struct ScopeTrace {
   std::vector<const ol::NodeProto *> nodes;
   RewritingTrace trace;
 };
+
+void AlignVersions(ol::ModelProto &source, ol::ModelProto &target) {
+  const auto default_opset = [](const ol::ModelProto &model) -> std::optional<int64_t> {
+    for (const auto &opset : model.opset_import())
+      if (ol::IsOnnxDomain(opset.domain().value()))
+        return opset.version();
+    return std::nullopt;
+  };
+  const auto source_opset = default_opset(source);
+  const auto target_opset = default_opset(target);
+  if (source_opset && target_opset && *source_opset != *target_opset) {
+    auto &older = *source_opset < *target_opset ? source : target;
+    const ol::version_conversion::DefaultVersionConverter converter;
+    older = converter.convert_version(older, ol::OpSetID(std::min(*source_opset, *target_opset)),
+                                      ol::OpSetID(std::max(*source_opset, *target_opset)));
+  }
+  const auto ir_version = std::max(source.ir_version(), target.ir_version());
+  source.set_ir_version(ir_version);
+  target.set_ir_version(ir_version);
+}
 
 std::string WeightDirectory(ol::ModelProto &model, const StoredModel &source) {
   std::vector<ol::EncodedValueProto *> encoded;
@@ -123,6 +146,7 @@ public:
       RestoreModelPayloads(target_snapshot_, *target_, target_->file_path);
       const auto source_dir = WeightDirectory(source_snapshot_, *source_);
       const auto target_dir = WeightDirectory(target_snapshot_, *target_);
+      AlignVersions(source_snapshot_, target_snapshot_);
       ol::core::builder::GraphBuilder source(source_snapshot_);
       plan_ = source.DiffRewritings(target_snapshot_, source_dir, target_dir);
       std::map<std::vector<std::string>, std::unique_ptr<ScopeTrace>> scopes;

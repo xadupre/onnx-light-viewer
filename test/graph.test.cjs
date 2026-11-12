@@ -55,6 +55,7 @@ function memoryTestModel(
     outputType = 1,
     outputDimensions = dimensions,
     opset = 18,
+    irVersion = 9,
     extraOpsets = [],
   } = {},
 ) {
@@ -84,7 +85,7 @@ function memoryTestModel(
     Buffer.concat([bytesField(1, name), bytesField(2, tensor(type, shape))]);
   return loadModel(
     Buffer.concat([
-      varintField(1, 9),
+      varintField(1, irVersion),
       bytesField(8, varintField(2, opset)),
       ...extraOpsets.map(([domain, version]) =>
         bytesField(
@@ -167,6 +168,99 @@ test("model comparison uses SDK rewrites, including changed attributes, without 
   assert.deepEqual(changed.steps[0].impact.after[0].attributes, [
     { name: "perm", value: "[1, 0]" },
   ]);
+});
+
+test("model comparison upgrades older opsets and IR versions without changing either model", async () => {
+  const softmax = (explicitAxis = false) =>
+    Buffer.concat([
+      bytesField(1, "x"),
+      bytesField(2, "y"),
+      bytesField(4, "Softmax"),
+      ...(!explicitAxis
+        ? []
+        : [
+            bytesField(
+              5,
+              Buffer.concat([
+                bytesField(1, "axis"),
+                Buffer.concat([
+                  varint(3 * 8),
+                  Buffer.from("ffffffffffffffffff01", "hex"),
+                ]),
+                varintField(20, 2),
+              ]),
+            ),
+          ]),
+    ]);
+  const empty = {
+    steps: [],
+    moves: [],
+    opsets: [],
+    functions: [],
+    replacedFunctions: [],
+  };
+  for (const [sourceOptions, targetOptions] of [
+    [{ opset: 17 }, { opset: 18 }],
+    [{ irVersion: 8 }, { irVersion: 10 }],
+    [
+      { opset: 17, irVersion: 10 },
+      { opset: 18, irVersion: 8 },
+    ],
+    [
+      { opset: 12, irVersion: 7, nodes: [softmax()] },
+      { opset: 13, irVersion: 8, nodes: [softmax(true)] },
+    ],
+  ]) {
+    const source = memoryTestModel([2, 2], sourceOptions);
+    const target = memoryTestModel([2, 2], targetOptions);
+    const sourceBytes = Buffer.from(await source.serialize());
+    const targetBytes = Buffer.from(await target.serialize());
+    assert.deepEqual(await diffModels(source, target), empty);
+    assert.deepEqual(await diffModels(target, source), empty);
+    assert.deepEqual(Buffer.from(await source.serialize()), sourceBytes);
+    assert.deepEqual(Buffer.from(await target.serialize()), targetBytes);
+  }
+  const source = memoryTestModel([2], { opset: 17 });
+  const changed = memoryTestModel([2], {
+    opset: 18,
+    nodes: [
+      Buffer.concat([
+        bytesField(1, "x"),
+        bytesField(2, "y"),
+        bytesField(4, "Sigmoid"),
+      ]),
+    ],
+  });
+  const diff = await diffModels(source, changed);
+  assert.ok(
+    diff.steps.some(
+      (step) =>
+        step.impact.before.some((node) => node.opType === "Relu") &&
+        step.impact.after.some((node) => node.opType === "Sigmoid"),
+    ),
+  );
+  const unsupported = memoryTestModel([2], { opset: 999 });
+  await assert.rejects(diffModels(source, unsupported), /invalid version/i);
+});
+
+test("model comparison preserves local functions when aligning opsets", async () => {
+  const bytes = modelBytes("functions.onnx");
+  const model = (opset) =>
+    loadModel(
+      Buffer.concat([bytes, bytesField(8, varintField(2, opset))]),
+      "functions.onnx",
+    );
+  const older = model(17);
+  const newer = model(18);
+  const empty = {
+    steps: [],
+    moves: [],
+    opsets: [],
+    functions: [],
+    replacedFunctions: [],
+  };
+  assert.deepEqual(await diffModels(older, newer), empty);
+  assert.deepEqual(await diffModels(newer, older), empty);
 });
 
 test("model comparison restores omitted inline weights and reads external weights from each model directory", async (t) => {
