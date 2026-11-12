@@ -25,6 +25,7 @@ const vm = require("node:vm");
 const { test } = require("node:test");
 const { JSDOM } = require("jsdom");
 const { exportHub } = require("./helpers/export-hub.cjs");
+const { foundryHub } = require("./helpers/foundry-hub.cjs");
 const { skipSdkReplay } = require("./helpers/sdk-replay.cjs");
 const sdkReplaySkip = skipSdkReplay(require("../dist/graph").onnxLightVersion);
 
@@ -37,6 +38,118 @@ function selectionHistory(history) {
     })),
   }));
 }
+
+test("Foundry Local host browses, downloads and opens packages without a CLI or SDK", async (t) => {
+  const hub = await foundryHub(t);
+  const oversized = structuredClone(hub.catalogEntry);
+  oversized.assetId = hub.asset.replace(/\/1$/, "/9");
+  oversized.properties.variantInfo.variantMetadata.vRamFootprintBytes =
+    Number.MAX_SAFE_INTEGER;
+  hub.state.catalogEntries = [hub.catalogEntry, oversized];
+  const preferences = new Map([
+    [
+      "applicationSettings",
+      { downloadDirectory: hub.root, pythonPath: "unused-python" },
+    ],
+  ]);
+  const extension = await openExtension(
+    "relu.onnx",
+    undefined,
+    true,
+    undefined,
+    undefined,
+    preferences,
+    hub.api,
+  );
+  t.after(() => extension.dispose());
+  await extension.receive({
+    type: "browse-files",
+    target: "open",
+    source: "foundry",
+    device: "cpu",
+    requestId: 7,
+  });
+  const listing = extension.messages.at(-1);
+  assert.equal(listing.type, "file-list");
+  assert.equal(listing.requestId, 7);
+  assert.equal(listing.entries[0].path, hub.asset);
+  assert.match(listing.entries[0].description, /CPU.*MIT/);
+  assert.equal(listing.entries.length, 1);
+  assert.equal(listing.entries[0].memory, 456);
+  assert.equal(listing.hidden, 1);
+  assert.equal(listing.unchecked, 0);
+  assert.ok(listing.memory.ram > 0);
+  await extension.receive({
+    type: "open",
+    source: "foundry",
+    location: hub.asset,
+    password: "",
+  });
+  assert.deepEqual(extension.errors, []);
+  const opened = extension.messages.findLast(({ type }) => type === "graph");
+  assert.equal(opened.graph.nodes[0].opType, "Relu");
+  assert.equal(opened.file.package.kind, "generic");
+  const directory = opened.file.package.directory;
+  assert.deepEqual(
+    await readFile(path.join(directory, "v1/model.onnx.data")),
+    hub.files.get("v1/model.onnx.data"),
+  );
+  assert.ok(
+    preferences
+      .get("pathHistory")
+      .open.some(
+        (entry) => entry.source === "local" && entry.path === directory,
+      ),
+  );
+  assert.ok(
+    extension.events.some(
+      (message) =>
+        message.type === "model-progress" &&
+        message.stage === "Opening Foundry Local package",
+    ),
+  );
+  await extension.receive({
+    type: "open",
+    source: "local",
+    location: directory,
+    password: "",
+  });
+  assert.deepEqual(extension.errors, []);
+  await extension.openFoundry("viewer-fixture:1");
+  assert.deepEqual(extension.errors, []);
+  assert.equal(
+    extension.picks.at(-1).options.title,
+    "Choose a Foundry Local CPU model",
+  );
+  extension.setDownloadCancellation(true);
+  const graphs = extension.messages.filter(
+    ({ type }) => type === "graph",
+  ).length;
+  await extension.receive({
+    type: "open",
+    source: "foundry",
+    location: hub.asset,
+    password: "",
+  });
+  assert.equal(
+    extension.messages.filter(({ type }) => type === "graph").length,
+    graphs,
+  );
+  assert.deepEqual(extension.errors, []);
+  extension.setDownloadCancellation(false);
+  hub.state.transferStatus = 403;
+  await extension.receive({
+    type: "open",
+    source: "foundry",
+    location: hub.asset.replace(/\/1$/, "/2"),
+    password: "",
+  });
+  assert.match(extension.errors.at(-1), /HTTP 403/);
+  assert.equal(
+    extension.messages.filter(({ type }) => type === "graph").length,
+    graphs,
+  );
+});
 
 test("comparison host reports real model differences, cancellation and unsupported inputs", async (t) => {
   const extension = await openExtension("fusion.onnx", undefined, true);
@@ -802,6 +915,7 @@ async function openExtension(
   storage,
   downloadUrl,
   preferences = new Map(),
+  foundry,
 ) {
   const messages = [];
   const errors = [];
@@ -1160,7 +1274,9 @@ async function openExtension(
           ? graph
           : name === "./huggingface"
             ? huggingface
-            : requireExtension(name),
+            : name === "./foundry" && foundry
+              ? foundry
+              : requireExtension(name),
     module,
     module.exports,
   );
@@ -1412,6 +1528,14 @@ async function openExtension(
       cancelDownload = cancel;
       repositoryFiles = repository?.files;
       repositoryFileSelection = repository?.selectedFile;
+      await receive({ type: "open" });
+    },
+    setDownloadCancellation: (cancel) => {
+      cancelDownload = cancel;
+    },
+    openFoundry: async (name) => {
+      modelSource = "foundry";
+      backendSelection = name;
       await receive({ type: "open" });
     },
     cancelOpen: async () => {
@@ -8053,7 +8177,7 @@ test("opens a cached Hugging Face model and preserves the display on invalid inp
   ]);
   assert.deepEqual(
     extension.picks.at(-1).items.map(({ label }) => label),
-    ["Local file", "Hugging Face", "Backend test"],
+    ["Local file", "Hugging Face", "Foundry Local", "Backend test"],
   );
   const graph = extension.messages.at(-1).graph;
   const repository = {
@@ -10288,7 +10412,7 @@ test("opens backend tests from the model source picker, preserves cancellation a
   assert.equal(extension.messages.at(-1), original);
   assert.deepEqual(
     extension.picks[0].items.map(({ label }) => label),
-    ["Local file", "Hugging Face", "Backend test"],
+    ["Local file", "Hugging Face", "Foundry Local", "Backend test"],
   );
   assert.ok(
     extension.logs.some((entry) =>
