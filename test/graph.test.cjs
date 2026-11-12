@@ -2,7 +2,6 @@ const assert = require("node:assert/strict");
 const { execFileSync, spawnSync } = require("node:child_process");
 const { createCipheriv, createDecipheriv, pbkdf2Sync } = require("node:crypto");
 const {
-  chmodSync,
   readFileSync,
   mkdtempSync,
   openSync,
@@ -5089,8 +5088,7 @@ test("optimization shares large initializer and Constant payloads across snapsho
             clearInterval(prefixSampling);
             assert.equal(prefix.fusionHistory()[0].matches.length, 1);
             assert.deepEqual(prefix.externalDataLocations(), lazyOptimized.externalDataLocations());
-            // Lazy snapshots keep omitted Constant payloads in the source file.
-            if (${JSON.stringify(storage !== "initializer")})
+            if (${JSON.stringify(external)})
               assert.deepEqual(
                 prefix.graph().nodes.map(({ opType, inputs, outputs }) => ({ opType, inputs, outputs })),
                 savedPrefix.graph().nodes.map(({ opType, inputs, outputs }) => ({ opType, inputs, outputs })),
@@ -5129,103 +5127,6 @@ test("optimization shares large initializer and Constant payloads across snapsho
       `${storage}: matching exceeded three seconds`,
     );
   }
-});
-
-test("optimization keeps omitted inline payloads in the source file until they are needed", async (t) => {
-  if (process.platform === "win32" || process.getuid?.() === 0) {
-    t.skip("POSIX file permissions are required to detect source reads.");
-    return;
-  }
-  const directory = mkdtempSync(path.join(tmpdir(), "deferred-payloads-"));
-  t.after(() => rmSync(directory, { recursive: true, force: true }));
-  const raw = Buffer.alloc(64 * 64 * 4);
-  for (let i = 0; i < raw.length / 4; ++i) raw.writeFloatLE(i % 7, i * 4);
-  const tensor = (name, data) =>
-    Buffer.concat([
-      varintField(1, 64),
-      varintField(1, 64),
-      varintField(2, 1),
-      bytesField(8, name),
-      bytesField(9, data),
-    ]);
-  const node = (op, inputs, output, attributes = []) =>
-    Buffer.concat([
-      ...inputs.map((name) => bytesField(1, name)),
-      bytesField(2, output),
-      bytesField(4, op),
-      ...attributes,
-    ]);
-  const perm = bytesField(
-    5,
-    Buffer.concat([
-      bytesField(1, "perm"),
-      varintField(8, 1),
-      varintField(8, 0),
-      varintField(20, 7),
-    ]),
-  );
-  const file = path.join(directory, "model.onnx");
-  writeFileSync(
-    file,
-    await memoryTestModel([64, 64], {
-      nodes: [
-        node("Transpose", ["x"], "t", [perm]),
-        node("Transpose", ["t"], "u", [perm]),
-        node("Constant", [], "c", [
-          bytesField(
-            5,
-            Buffer.concat([
-              bytesField(1, "value"),
-              bytesField(5, tensor("c", raw)),
-              varintField(20, 4),
-            ]),
-          ),
-        ]),
-        node("MatMul", ["u", "weight"], "m"),
-        node("Add", ["m", "c"], "y"),
-      ],
-      initializers: [tensor("weight", raw)],
-    }).serialize(),
-  );
-  const eager = await loadModel(readFileSync(file), "model.onnx").optimize(
-    ["TransposeTranspose"],
-    "Optimize",
-    file,
-  );
-  const lazy = await loadModelFile(file, "model.onnx");
-  chmodSync(file, 0o000);
-  let optimized;
-  try {
-    optimized = await lazy.optimize(["TransposeTranspose"], "Optimize", file);
-  } finally {
-    chmodSync(file, 0o600);
-  }
-  assert.equal(optimized.fusionCount(), 1);
-  const constant = (model) =>
-    model.graph().nodes.findIndex(({ opType }) => opType === "Constant");
-  assert.notEqual(constant(optimized), constant(lazy));
-  // Eager SDK snapshots may annotate loaded weights; compare the graph and values.
-  const saved = async (model) => {
-    const reloaded = loadModel(Buffer.from(await model.serialize()), "saved");
-    return {
-      nodes: reloaded
-        .graph()
-        .nodes.map(({ opType, inputs, outputs }) => [opType, inputs, outputs]),
-      values: [
-        await reloaded.tensorStatistics("weight"),
-        await reloaded.tensorStatistics("c"),
-      ],
-    };
-  };
-  assert.deepEqual(await saved(optimized), await saved(eager));
-  assert.deepEqual(
-    await optimized.tensorStatistics("c"),
-    await eager.tensorStatistics("c"),
-  );
-  assert.deepEqual(
-    await saved(optimized.undoFusion()),
-    await saved(eager.undoFusion()),
-  );
 });
 
 test("explains one native pattern/node without changing matching, history or the source model", async () => {

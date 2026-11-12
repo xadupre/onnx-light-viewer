@@ -26,8 +26,6 @@ namespace onnx_light_viewer {
 namespace ol = ONNX_LIGHT_NAMESPACE;
 
 inline constexpr std::string_view skippedPayloadLocation = "onnx-light-viewer:payload-omitted";
-// Temporarily identifies omitted payloads while a native transformation moves tensors.
-inline constexpr std::string_view skippedPayloadTag = "onnx-light-viewer:payload-index";
 
 struct ProtoPathStep {
   uint32_t field;
@@ -38,8 +36,6 @@ struct ProtoPathStep {
 struct SkippedTensorPayload {
   std::vector<ProtoPathStep> path;
   std::set<uint32_t> fields;
-  // Location in the source file when a transformation moved the tensor; empty means path.
-  std::vector<ProtoPathStep> source_path = {};
 };
 
 /**
