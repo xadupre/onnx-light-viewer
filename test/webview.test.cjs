@@ -231,8 +231,17 @@ test("action buttons use rounded neutral surfaces and distinct typography", (t) 
   );
   document.head.append(stylesheet);
   const rules = [...stylesheet.sheet.cssRules];
+  const normalizeSelector = (selector) =>
+    selector
+      .split(",")
+      .map((part) => part.trim())
+      .join(",");
   const rule = (selector) =>
-    rules.find((entry) => entry.selectorText === selector).style;
+    rules.find(
+      (entry) =>
+        entry.selectorText &&
+        normalizeSelector(entry.selectorText) === normalizeSelector(selector),
+    ).style;
   for (const id of [
     "rewriting-next",
     "rewriting-all",
@@ -279,6 +288,11 @@ test("Prompt and Settings align labels beside their controls, including session 
     "utf8",
   );
   document.head.append(stylesheet);
+  const gridTemplateColumns = (element) =>
+    dom.window
+      .getComputedStyle(element)
+      .gridTemplateColumns.replace(/\b0px\b/g, "0")
+      .replace(/\b160px\b/g, "10rem");
   for (const id of [
     "prompt-engine",
     "prompt-text",
@@ -295,7 +309,7 @@ test("Prompt and Settings align labels beside their controls, including session 
     const field = control.closest(".model-suggestion-field") ?? control;
     assert.equal(label.parentElement, field.parentElement, id);
     assert.equal(
-      dom.window.getComputedStyle(field.parentElement).gridTemplateColumns,
+      gridTemplateColumns(field.parentElement),
       "minmax(0, 1fr) minmax(0, 2fr)",
       id,
     );
@@ -312,7 +326,7 @@ test("Prompt and Settings align labels beside their controls, including session 
   )) {
     const explained = label.closest("#prompt-settings-genai") !== null;
     assert.equal(
-      dom.window.getComputedStyle(label).gridTemplateColumns,
+      gridTemplateColumns(label),
       explained
         ? "minmax(0, 1fr) minmax(0, 10rem) minmax(0, 1.5fr)"
         : "minmax(0, 1fr) minmax(0, 2fr)",
