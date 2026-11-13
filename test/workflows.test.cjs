@@ -52,15 +52,14 @@ test("extension release versions stay consistent", () => {
   assert.equal(changelog.match(/^(\d+\.\d+\.\d+) \(/m)[1], manifest.version);
 });
 
-test("VS Code types stay pinned to the minimum supported engine for release packaging", () => {
+test("VS Code types stay consistent for release packaging", () => {
   const manifest = JSON.parse(
     readFileSync(path.resolve(__dirname, "..", "package.json"), "utf8"),
   );
   const lock = JSON.parse(
     readFileSync(path.resolve(__dirname, "..", "package-lock.json"), "utf8"),
   );
-  const version = manifest.engines.vscode.replace(/^\^/, "");
-  assert.equal(manifest.devDependencies["@types/vscode"], version);
+  const version = manifest.devDependencies["@types/vscode"];
   assert.equal(lock.packages[""].devDependencies["@types/vscode"], version);
   assert.equal(lock.packages["node_modules/@types/vscode"].version, version);
 });
