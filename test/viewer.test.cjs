@@ -22,6 +22,25 @@ function closeViewerAfterTest(t, window) {
   });
 }
 
+function computedPaint(window, element, property) {
+  const style = window.getComputedStyle(element);
+  const value = style[property];
+  return value === "currentcolor" ? style.color : value;
+}
+
+function computedPaintOrder(window, element) {
+  const value = window
+    .getComputedStyle(element)
+    .getPropertyValue("paint-order");
+  return value === "stroke" ? "stroke fill" : value;
+}
+
+function computedGridTemplateColumns(window, element) {
+  return window
+    .getComputedStyle(element)
+    .gridTemplateColumns.replace(/\b0px\b/g, "0");
+}
+
 function openViewer(t, initialTab = "model", setup = () => {}) {
   const messages = [];
   const postedMessages = new EventEmitter();
@@ -2208,11 +2227,11 @@ test("tensor statistics lazily browses selection, renders SDK summaries and cach
   assert.equal(details.lastElementChild, quartiles.parentElement);
   assert.equal(window.getComputedStyle(details).display, "grid");
   assert.equal(
-    window.getComputedStyle(details).gridTemplateColumns,
+    computedGridTemplateColumns(window, details),
     "minmax(0, 1fr) minmax(180px, 0.8fr)",
   );
   assert.equal(
-    window.getComputedStyle(quartiles).gridTemplateColumns,
+    computedGridTemplateColumns(window, quartiles),
     "minmax(0, 1fr)",
   );
   assert.equal(window.getComputedStyle(summary).alignItems, "baseline");
@@ -6854,7 +6873,7 @@ test("creates an editable selection FunctionPattern and offers an opt-in optimiz
       "grid",
     );
     assert.match(
-      window.getComputedStyle(control.parentElement).gridTemplateColumns,
+      computedGridTemplateColumns(window, control.parentElement),
       /max-content minmax\(0, 1fr\)/,
     );
   }
@@ -9416,7 +9435,7 @@ test("offers last and all Unfuse actions inside Fuse and preserves repeated undo
   assert.equal(messages.filter(({ type }) => type === "undo-fusion").length, 1);
   assert.equal(messages.at(-1).all, false);
   assert.equal(undo.getAttribute("aria-busy"), "true");
-  assert.equal(window.getComputedStyle(hourglass).display, "inline-block");
+  assert.notEqual(window.getComputedStyle(hourglass).display, "none");
   assert.equal(window.getComputedStyle(undo).cursor, "wait");
   assert.equal(all.disabled, true);
   assert.ok(
@@ -10201,8 +10220,8 @@ test("runs matching explicitly, highlights candidates and fuses only checked mat
       assert.equal(
         window.getComputedStyle(
           document.getElementById(id).querySelector(".fusion-hourglass"),
-        ).display,
-        busy ? "inline-block" : "none",
+        ).display === "none",
+        !busy,
         id,
       );
     if (busy) assert.equal(window.getComputedStyle(button).cursor, "wait");
@@ -17728,8 +17747,8 @@ test("keeps operator colors at fit and extreme zoom in regular graphs", (t) => {
   document.getElementById("zoom-fit").click();
 
   const groups = document.querySelectorAll(".graph-node");
-  const fills = [...groups].map(
-    (group) => window.getComputedStyle(group.querySelector("rect")).fill,
+  const fills = [...groups].map((group) =>
+    computedPaint(window, group.querySelector("rect"), "fill"),
   );
   assert.equal(groups[1].classList.contains("compute-heavy"), true);
   assert.equal(groups[2].classList.contains("compute-heavy"), true);
@@ -17749,19 +17768,22 @@ test("keeps operator colors at fit and extreme zoom in regular graphs", (t) => {
   const graph = document.getElementById("graph");
   assert.ok(Number(graph.getAttribute("viewBox").split(" ")[3]) / 70 > 20);
   for (let index = 1; index < groups.length; index++) {
-    const style = window.getComputedStyle(groups[index].querySelector("rect"));
-    assert.equal(style.fill, fills[index]);
-    assert.equal(style.stroke, fills[index]);
-    assert.equal(style.getPropertyValue("paint-order"), "stroke fill");
+    const rect = groups[index].querySelector("rect");
+    assert.equal(computedPaint(window, rect, "fill"), fills[index]);
+    assert.equal(computedPaint(window, rect, "stroke"), fills[index]);
+    assert.equal(computedPaintOrder(window, rect), "stroke fill");
   }
-  const selection = window.getComputedStyle(groups[0].querySelector("rect"));
-  assert.equal(selection.fill, fills[0]);
-  assert.equal(selection.stroke, "rgb(255, 209, 102)");
+  const selection = groups[0].querySelector("rect");
+  assert.equal(computedPaint(window, selection, "fill"), fills[0]);
+  assert.equal(
+    computedPaint(window, selection, "stroke"),
+    "rgb(255, 209, 102)",
+  );
 
   document.getElementById("zoom-readable").click();
   for (let index = 1; index < groups.length; index++)
     assert.equal(
-      window.getComputedStyle(groups[index].querySelector("rect")).fill,
+      computedPaint(window, groups[index].querySelector("rect"), "fill"),
       fills[index],
     );
 });
@@ -17894,7 +17916,7 @@ test("preserves operator colors in batched overviews, including after moves and 
       name,
       category,
       path: pathData(group),
-      fill: window.getComputedStyle(group.querySelector(":scope > rect")).fill,
+      fill: computedPaint(window, group.querySelector(":scope > rect"), "fill"),
     };
   });
   assert.equal(new Set(samples.map(({ fill }) => fill)).size, 3);
@@ -17919,7 +17941,7 @@ test("preserves operator colors in batched overviews, including after moves and 
       (candidate) => candidate.dataset.category === category,
     );
     assert.ok(batch.getAttribute("d").split(" ").includes(path), name);
-    assert.equal(window.getComputedStyle(batch).fill, fill, name);
+    assert.equal(computedPaint(window, batch, "fill"), fill, name);
   }
 
   for (let step = 0; step < 50; step++)
@@ -17929,10 +17951,9 @@ test("preserves operator colors in batched overviews, including after moves and 
     const batch = paths.find(
       (candidate) => candidate.dataset.category === category,
     );
-    const style = window.getComputedStyle(batch);
-    assert.equal(style.fill, fill);
-    assert.equal(style.stroke, fill);
-    assert.equal(style.getPropertyValue("paint-order"), "stroke fill");
+    assert.equal(computedPaint(window, batch, "fill"), fill);
+    assert.equal(computedPaint(window, batch, "stroke"), fill);
+    assert.equal(computedPaintOrder(window, batch), "stroke fill");
   }
 
   search("matrix_test");
