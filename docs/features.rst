@@ -670,7 +670,10 @@ declarations are listed separately. Neither model is changed.
 
    Inspect the native source-to-target rewriting plan.
 
-The SDK requires compatible model interfaces and existing opset imports, and
+Before comparing, the model with the older default-domain opset is converted
+to the newer version when both models declare one, and their IR versions are
+aligned to the higher version. Conversion can fail if it is unsupported.
+The SDK requires compatible interfaces and other existing opset imports, and
 may reject other unsupported changes. Pipeline containers are not supported.
 An empty plan is not a byte-for-byte equality check: some metadata is outside
 the SDK comparison. Comparison restores omitted inline weights and may read
